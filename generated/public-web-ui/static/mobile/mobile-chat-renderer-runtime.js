@@ -1,3 +1,4 @@
+import { renderConnectionChatCards, wireConnectionChatCards } from '../features/connectors/connection-chat-card.js';
 import { compactMobileThreadCacheFileChanges as _compactMobileThreadCacheFileChanges } from './mobile-thread-cache-file-changes.js';
 import {
   coalesceToolActivityEntries,
@@ -2055,6 +2056,7 @@ export function createMobileChatRendererRuntime(context = {}) {
     } catch {}
     threadEl.querySelectorAll('[data-pm-approval-action][data-pm-approval-id]').forEach(_wireMobileApprovalActionButton);
     _wireMobileProcessRunActions(threadEl);
+    wireConnectionChatCards(threadEl, mobileGatewayFetch);
     _wireMobileChatEnhancements(threadEl);
     _scheduleMobileThreadCacheSave(sid);
     _renderMobileApprovalSheet();
@@ -2572,6 +2574,7 @@ export function createMobileChatRendererRuntime(context = {}) {
     const patchedEl = threadEl.querySelector(`[data-msg-index="${msgIndex}"]`) || nextEl;
     patchedEl.querySelectorAll('[data-pm-approval-action][data-pm-approval-id]').forEach(_wireMobileApprovalActionButton);
     _wireMobileProcessRunActions(patchedEl);
+    wireConnectionChatCards(patchedEl, mobileGatewayFetch);
     _wireMobileChatEnhancements(patchedEl);
     try {
       _markMobileLiveStreamMotion(patchedEl, String(__pmChat?.activeSessionId || ''));
@@ -3311,6 +3314,7 @@ function _renderMobileAgentChatBubble(message, options = {}) {
       : (streaming && !hasPendingImageGeneration && !hasLiveTrace ? (window.PROM_THEME_ENGINE?.thinkingDotsHtml(String(message?.id || message?.timestamp || '')) || '') : '');
     inner += attachmentHtml;
     inner += _renderMobileRichArtifacts({ ...turnPresentation, content: markdownText });
+    inner += renderConnectionChatCards(turnPresentation);
     if (!(Array.isArray(turnPresentation.richArtifacts) && turnPresentation.richArtifacts.some((artifact) => artifact?.type === 'products'))) {
       inner += _renderMobileProductCarousel(turnPresentation);
     }
@@ -4647,6 +4651,7 @@ function _renderMobileBackgroundSpawnDock(dock, sessionId = __pmChat.activeSessi
     _wireMobileApprovalActionButton(btn);
   });
   _wireMobileProcessRunActions(host);
+  wireConnectionChatCards(host, mobileGatewayFetch);
   host.querySelectorAll('.pm-background-spawn-lane[data-bg-id]').forEach((node) => {
     const id = String(node.getAttribute('data-bg-id') || '');
     const saved = previousScroll[id];

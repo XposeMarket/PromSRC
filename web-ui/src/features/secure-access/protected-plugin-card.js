@@ -62,18 +62,30 @@ export async function openProtectedPluginCard(fetchJson, options = {}) {
   let closed = false;
   let expiryTimer = null;
   const clear = () => inputs.forEach(input => { input.value = ''; });
-  const onHide = () => { if (document.visibilityState === 'hidden') close(); };
+  // App switching is not cancellation. Values remain only in mounted native inputs.
+  let hiddenAt = 0;
+  let hiddenTimer = null;
+  const onHide = () => {
+    if (document.visibilityState === 'hidden') {
+      hiddenAt = Date.now(); clearTimeout(hiddenTimer);
+      hiddenTimer = setTimeout(close, 5 * 60 * 1000);
+    } else {
+      clearTimeout(hiddenTimer);
+      if (hiddenAt && Date.now() - hiddenAt >= 5 * 60 * 1000) close();
+      hiddenAt = 0;
+    }
+  };
   function close() {
     if (closed) return;
-    closed = true; clear(); inputs.length = 0; clearTimeout(expiryTimer);
+    closed = true; clear(); inputs.length = 0; clearTimeout(expiryTimer); clearTimeout(hiddenTimer);
     root.remove();
-    window.removeEventListener('pagehide', close); document.removeEventListener('visibilitychange', onHide);
+    window.removeEventListener('pagehide', close); window.removeEventListener('hashchange', close); document.removeEventListener('visibilitychange', onHide);
     if (openCard?.close === close) openCard = null;
     options.onClose?.();
   }
   const handle = { close, get closed() { return closed; } };
   openCard = handle;
-  window.addEventListener('pagehide', close); document.addEventListener('visibilitychange', onHide);
+  window.addEventListener('pagehide', close); window.addEventListener('hashchange', close); document.addEventListener('visibilitychange', onHide);
   root.append(el('h3', { text: options.title || 'Add secret · protected entry' }), el('p', { class: 'sa-muted', text: 'Values go directly to this plugin’s protected storage, not the conversation, drafts or the model. Saving does not authorize posting or spending.' }));
   const error = el('p', { class: 'sa-err', role: 'alert' });
   const status = el('p', { class: 'sa-muted', role: 'status', 'aria-live': 'polite' });
@@ -83,7 +95,7 @@ export async function openProtectedPluginCard(fetchJson, options = {}) {
     const [st, catalog] = await Promise.all([fetchJson('/api/secure-access/status'), fetchJson('/api/protected-plugins')]);
     if (closed) return handle;
     // Fail closed before any input exists.
-    if (!st?.owner?.canApprove || catalog?.owner?.canApprove === false) { fail('OWNER_SURFACE_REQUIRED'); return handle; }
+    if (!(catalog?.setup?.canConfigure ?? (st?.owner?.canApprove && catalog?.owner?.canApprove !== false))) { fail('OWNER_SURFACE_REQUIRED'); return handle; }
     if (!catalog?.storageAvailable) { fail('PROTECTED_STORAGE_REQUIRED'); return handle; }
     const services = Array.isArray(catalog.services) ? catalog.services : [];
     const selector = el('select', { class: 'sa-input', 'aria-label': 'Destination plugin' });

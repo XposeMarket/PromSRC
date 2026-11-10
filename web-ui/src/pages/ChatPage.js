@@ -1,4 +1,5 @@
 import { foldMobileReasoningSummaryGroups, mobileReasoningSummaryTitle } from '../mobile/mobile-reasoning-summary-fold.js';
+import { agentAvatarHtml } from '../components/provider-logo.js';
 import { liveTraceSummaryKey, desktopTraceProgressSummary as formatDesktopTraceProgressSummary } from '../features/chat/trace-summary-presentation.js';
 
 import { formatContextDurationLabel, formatContextToolDurationSuffix, formatContextTokenCount } from '../chat-context-formatters.js';
@@ -13590,8 +13591,9 @@ function renderLiveTurnTrace(entries, { streaming = false, openLiveCurrent = fal
         : previews}</div>`;
     }
     const isLiveCurrent = streaming && index === latestToolGroupIndex && index === groups.length - 1;
-    // Lazily hydrate old groups, even during an active stream.
-    const lazyClosedGroup = !streaming || !isLiveCurrent;
+    // Closed current groups are lazy too; their hidden tool bodies need no
+    // per-token DOM, layout, or syntax highlighting. Toggle hydrates on demand.
+    const lazyClosedGroup = !(openLiveCurrent && isLiveCurrent);
     // Resolve progress only inside this tool group. This preserves earlier
     // groups and lets a summary that preceded the tool call remain attached
     // to the tool without resurrecting stale narration from another phase.
@@ -14746,21 +14748,15 @@ function toggleUnifiedDesktopComposerDictation(inputId, button = null) {
 
 function renderSessionThinkingBodyHtml(sessionId) {
   const st = getSessionStreamState(sessionId) || {};
-  const startupProgressPattern = /^(request received\. starting chat turn|preparing chat context|preparing prometheus runtime|building model context)/i;
-  const progressLines = (Array.isArray(st.currentProgressLines) ? st.currentProgressLines : [])
-    .filter((line) => !startupProgressPattern.test(String(line || '').trim()));
-  const progressHtml = progressLines.length
-    ? `<div style="margin:6px 0 8px 0;font-size:11px;line-height:1.6;color:var(--muted)">
-        ${progressLines.map((l) => `<div>• ${escHtml(l)}</div>`).join('')}
-      </div>`
-    : '';
+  // Transport/setup diagnostics are not conversation content. Match mobile:
+  // keep the three-dot placeholder until reasoning, tools or an answer arrive.
   const liveTraceHtml = renderLiveTurnTrace(st.liveTraceEntries || [], { streaming: true });
   const liveApprovalsHtml = renderStreamingApprovals(st.pendingApprovals || []);
   const inlinePlanHtml = renderInlineRuntimePlanHtml(st.runtimeProgressState);
   const answerStarted = !!(st.finalResponseStarted || String(st.streamingAIText || '').trim());
   const showAnswerText = answerStarted && !!String(st.streamingAIText || '');
   const showLiveTrace = !!liveTraceHtml;
-  const thinkingOnly = !showAnswerText && !progressHtml && !showLiveTrace && !liveApprovalsHtml && !inlinePlanHtml;
+  const thinkingOnly = !showAnswerText && !showLiveTrace && !liveApprovalsHtml && !inlinePlanHtml;
   const sess = getChatSessionById(sessionId);
   const startIndex = Number.isFinite(Number(st.currentTurnStartIndex)) ? Number(st.currentTurnStartIndex) : -1;
   const rawCurrentTurnEntries = startIndex >= 0 && Array.isArray(sess?.processLog) ? sess.processLog.slice(startIndex) : [];
@@ -14782,11 +14778,11 @@ function renderSessionThinkingBodyHtml(sessionId) {
             ${assistantWorkTimerHtml}
             ${assistantStatusDividerHtml}
             ${!thinkingOnly ? activeModelBadgeHtml : ''}
-            ${showLiveTrace ? liveTraceHtml : (!showAnswerText ? progressHtml : '')}
+            ${showLiveTrace ? liveTraceHtml : ''}
             ${pendingImageHtml}
             ${showAnswerText
               ? `<div id="streaming-text-content">${renderAssistantContent(st.streamingAIText)}</div>`
-              : (showLiveTrace || progressHtml || pendingImageHtml ? '' : (window.PROM_THEME_ENGINE?.thinkingDotsHtml(String(st.turnStartedAt || '')) || ''))
+              : (showLiveTrace || pendingImageHtml || liveApprovalsHtml || inlinePlanHtml ? '' : (window.PROM_THEME_ENGINE?.thinkingDotsHtml(String(st.turnStartedAt || '')) || '<div class="thinking" role="status" aria-label="Thinking"><div class="thinking-dot"></div><div class="thinking-dot"></div><div class="thinking-dot"></div></div>'))
             }
             ${liveApprovalsHtml}
             ${inlinePlanHtml}`;
@@ -14801,9 +14797,8 @@ function renderSessionThinkingHtml(sessionId) {
     && String(sessionId || '').trim() === String(window.activeChatSessionId || '').trim();
   const st = getSessionStreamState(sessionId) || {};
   const hasNonQuestionThinking = !!String(st.streamingAIText || '').trim()
-    || !!Array.isArray(st.liveTraceEntries || []).length
-    || !!Array.isArray(st.currentProgressLines || []).length
-    || !!Array.isArray(st.pendingApprovals || []).length
+    || !!(st.liveTraceEntries || []).length
+    || !!(st.pendingApprovals || []).length
     || !!getRuntimePlanItems(st.runtimeProgressState).length;
   if (pendingQuestion && !hasNonQuestionThinking) return '';
   const thinkingOnly = !hasNonQuestionThinking;
@@ -15506,7 +15501,9 @@ function syncLiveTraceNodeAttributes(currentNode, nextNode) {
     }
   });
   Array.from(nextNode?.attributes || []).forEach((attribute) => {
-    if (!preserved.has(attribute.name)) currentNode.setAttribute(attribute.name, attribute.value);
+    if (!preserved.has(attribute.name) && currentNode.getAttribute(attribute.name) !== attribute.value) {
+      currentNode.setAttribute(attribute.name, attribute.value);
+    }
   });
 }
 
@@ -15549,9 +15546,11 @@ function patchLiveTraceEntries(currentTrace, nextTrace) {
     const key = getLiveTraceNodeKey(nextNode, index);
     const currentNode = existing.get(key);
     if (currentNode && currentNode.tagName === nextNode.tagName && currentNode.className === nextNode.className) {
-      if (currentNode.outerHTML !== nextNode.outerHTML) {
+      const markup = nextNode.outerHTML;
+      if ((liveTraceRenderedMarkup.get(currentNode) || currentNode.outerHTML) !== markup) {
         const disclosures = captureLiveTraceDisclosureState(currentNode);
         const replacement = nextNode.cloneNode(true);
+        liveTraceRenderedMarkup.set(replacement, markup);
         restoreLiveTraceDisclosureState(replacement, disclosures);
         currentNode.replaceWith(replacement);
         ordered.push(replacement);
@@ -15577,14 +15576,15 @@ function patchLiveTraceGroup(currentGroup, nextGroup) {
   const currentBody = directLiveTraceChild(currentGroup, (node) => node.classList.contains('live-turn-tool-body'));
   const nextBody = directLiveTraceChild(nextGroup, (node) => node.classList.contains('live-turn-tool-body'));
   if (currentBody && nextBody?.hasAttribute('data-lazy-trace')) {
-    // Preserve closed bodies; refresh open groups with latest entries.
-    if (currentBody.hasAttribute('data-lazy-trace') || !currentBody.firstElementChild || wasOpen) {
+    if (!wasOpen) {
       currentBody.setAttribute('data-lazy-trace', nextBody.getAttribute('data-lazy-trace'));
-      currentBody.innerHTML = '';
-      if (wasOpen) hydrateLazyTraceBody(currentBody);
+      if (currentBody.firstChild) currentBody.replaceChildren();
+      return true;
     }
-    currentGroup.open = wasOpen;
-    return true;
+    // Generate the next open body off-document, then reconcile individual rows.
+    // Never tear down an expanded live group on each summary/token update.
+    hydrateLazyTraceBody(nextBody);
+    currentBody.removeAttribute('data-lazy-trace');
   }
   const currentTrace = directLiveTraceChild(currentBody, (node) => node.classList.contains('live-turn-trace'));
   const nextTrace = directLiveTraceChild(nextBody, (node) => node.classList.contains('live-turn-trace'));
@@ -15599,8 +15599,14 @@ function patchLiveTraceGroup(currentGroup, nextGroup) {
   return true;
 }
 
+const liveTraceRenderedMarkup = new WeakMap();
 function patchLiveTraceTimelineNode(currentNode, nextNode) {
   if (!currentNode || !nextNode) return false;
+  // Compare generated templates, not user-mutated disclosure DOM. Stable groups
+  // need no writes, scroll reads, re-hydration, or loss of selection.
+  const markup = nextNode.outerHTML;
+  if (liveTraceRenderedMarkup.get(currentNode) === markup) return true;
+  liveTraceRenderedMarkup.set(currentNode, markup);
   if (currentNode.matches('details.live-turn-tool-group')) return patchLiveTraceGroup(currentNode, nextNode);
 
   const wasOpen = currentNode.matches('details') ? currentNode.open === true : false;
@@ -15691,7 +15697,7 @@ function patchStreamingChatBubble(sessionId) {
   // Keep placeholder styling in sync when the first answer/tool arrives.
   const st = getSessionStreamState(sid) || {};
   bubble.classList.toggle('thinking-only', !String(st.streamingAIText || '').trim()
-    && !(st.liveTraceEntries || []).length && !(st.currentProgressLines || []).length
+    && !(st.liveTraceEntries || []).length
     && !(st.pendingApprovals || []).length && !getRuntimePlanItems(st.runtimeProgressState).length);
 
   const patchedAnswer = patchStreamingAnswerText(content, nextContent);
@@ -19209,7 +19215,7 @@ function renderBackgroundSpawnDock() {
     return `
       <section class="background-spawn-lane ${escHtml(status)}" data-bg-id="${escHtml(lane.id)}" style="--background-agent-color:${escHtml(identity.color)}">
         <button type="button" class="background-spawn-summary" data-bg-open-detail="${escHtml(lane.id)}" aria-label="Open ${escHtml(identity.name)} background work">
-          <span class="background-spawn-avatar">${escHtml(identity.name.slice(0, 2).toUpperCase())}</span>
+          <span class="background-spawn-avatar">${agentAvatarHtml(lane, identity.name)}</span>
           <span class="background-spawn-main">
             <strong>${escHtml(identity.name)}</strong>
             <em>${escHtml(detail)}</em>
@@ -46497,6 +46503,14 @@ async function catchUpMainChatStream(sessionId, options = {}) {
       : knownStreamId
         ? Math.max(getMainChatStreamLastSeq(sid, knownStreamId), Number(rememberedRun?.lastSeq || 0) || 0)
         : (options.recovery === true ? 0 : getMainChatStreamLastSeq(sid));
+    // A persisted cursor is not a hydrated renderer. A newly opened window
+    // must replay its visible state before resuming at that saved position.
+    const hydratedState = getSessionStreamState(sid);
+    if (options.recovery === true && after > 0
+      && !(hydratedState?.liveTraceEntries?.length || hydratedState?.streamingAIText || hydratedState?.streamingThinkingText)) {
+      after = 0;
+      resetMainChatStreamCursor(sid, knownStreamId);
+    }
     let data = await fetchJsonWithTimeout(`/api/mobile/chat/stream/${encodeURIComponent(sid)}?after=${encodeURIComponent(String(after))}`, 4000);
     if (!data) return null;
 
@@ -46537,7 +46551,15 @@ async function catchUpMainChatStream(sessionId, options = {}) {
     }
 
     const events = Array.isArray(data?.events) ? data.events : [];
-    events.forEach((frame) => applyMainChatStreamFrame(sid, frame, { recovery: options.recovery === true }));
+    // Hydration is one transaction. Replaying each frame through renderProgressPanel
+    // used to repeatedly rebuild the same active turn before its first paint.
+    events.forEach((frame) => applyMainChatStreamFrame(sid, frame, { recovery: options.recovery === true, suppressRender: true }));
+    if (events.length && sid === window.activeChatSessionId) {
+      applyStreamStateToWindow(sid);
+      syncActiveSessionRunState();
+      renderProgressPanel();
+      renderStreamingChatUpdate(sid);
+    }
     const lastSeq = Number(data?.stream?.lastSeq || 0) || 0;
     if (streamId && lastSeq > 0) {
       rememberDesktopActiveChatRun(sid, { streamId, lastSeq });
@@ -46762,7 +46784,7 @@ function handleMainChatStreamEvent(msg = {}, options = {}) {
   const isViewing = sid === window.activeChatSessionId;
   const renderIfViewing = () => {
     // Snapshot replays rebuild hundreds of frames in one tick and render once at the end.
-    if (!isViewing || options.suppressRender === true) return;
+    if (!isViewing || sid !== window.activeChatSessionId || options.suppressRender === true) return;
     applyStreamStateToWindow(sid);
     syncActiveSessionRunState();
     renderProgressPanel();

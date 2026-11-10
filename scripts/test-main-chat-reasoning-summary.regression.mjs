@@ -59,7 +59,7 @@ const sse = read('web-ui/src/features/chat/runtime/desktop-send-chat-runtime.js'
 const sseStart = sse.indexOf("case 'thinking_delta': {");
 const sseEnd = sse.indexOf("case 'agent_thought':", sseStart);
 assert.ok(sseStart >= 0 && sseEnd > sseStart);
-const runSse = new Function('event', 'streamState', 'appendLiveTrace', 'setDesktopLiveProgressNarration', 'chatProgressVisibility', 'window', 'thisSessionId', `let pendingThinkingBurst = ''; switch(event.type) { ${sse.slice(sseStart, sseEnd)} }`);
+const runSse = new Function('event', 'streamState', 'appendLiveTrace', 'setDesktopLiveProgressNarration', 'chatProgressVisibility', 'window', 'thisSessionId', 'scheduleStreamingRenderFor', 'renderIfViewingThisSession', `let pendingThinkingBurst = ''; switch(event.type) { ${sse.slice(sseStart, sseEnd)} }`);
 const replay = read('web-ui/src/mobile/mobile-chat-page-runtime.js');
 const replayStart = replay.indexOf("case 'thinking_delta': {", replay.indexOf('function processEntriesFromReplayFrames('));
 const replayEnd = replay.indexOf("case 'info':", replayStart);
@@ -69,7 +69,7 @@ for (const lane of ['desktop SSE', 'mobile replay']) {
   const state = { liveTraceEntries: [] };
   const actualAppend = new Function('isBareThinkingLiveTraceText', 'isDesktopTraceThoughtType', 'desktopTraceThoughtKind', `${extract(desktop, 'appendLiveTraceToStreamState')} return appendLiveTraceToStreamState;`)(() => false, () => true, () => 'summary');
   const send = (evt) => lane === 'desktop SSE'
-    ? runSse(evt, state, (type, text, options) => actualAppend(state, type, text, options), desktopReducer, progress, {}, 'fixture')
+    ? runSse(evt, state, (type, text, options) => actualAppend(state, type, text, options), desktopReducer, progress, {}, 'fixture', () => {}, () => {})
     : runReplay(evt, state, mobileHandlers._handleMobileReasoningSummaryDelta, mobileHandlers._setMobileLiveProgressNarration, progress);
   ['  ', ...chunks].forEach((text) => send({ type: 'reasoning_summary_delta', text }));
   assert.equal(state.liveTraceEntries[0].text, '  ' + chunks.join(''), `${lane}: actual caller exact chunks`);

@@ -3071,10 +3071,11 @@ function _renderDesktopSwitcherQuick(state, controller = _desktopSwitcherControl
   };
   const saveQuickEffort = async (index) => {
     const effort = levels[index]?.v || '';
-    if (!effort || index === activeIndex) return;
+    if (!effort) return;
+    if (index === activeIndex) { _closeModelSwitcher(controller); return; }
     try {
       await setActiveChatModelRoute({ providerId: state.provider, model: state.model, reasoningEffort: effort || undefined, speed: state.speed }, controller.sessionId);
-      _renderDesktopSwitcherQuick(await _loadDesktopSwitcherState(controller.sessionId), controller);
+      _closeModelSwitcher(controller);
     } catch (err) { showToast('Could not save reasoning effort', String(err?.message || err), 'error'); }
   };
   if (slider) {
@@ -3185,9 +3186,7 @@ function _renderDesktopSwitcherEffort(state, controller = _desktopSwitcherContro
     const effort = button.getAttribute('data-switcher-effort') || '';
     try {
       await setActiveChatModelRoute({ providerId: state.provider, model: state.model, reasoningEffort: effort || undefined, speed: state.speed }, controller.sessionId);
-      const next = await _loadDesktopSwitcherState(controller.sessionId);
-      _renderDesktopSwitcherMain(next, controller);
-      _renderDesktopSwitcherEffort(next, controller);
+      _closeModelSwitcher(controller);
     } catch (err) { showToast('Could not save reasoning effort', String(err?.message || err), 'error'); }
   }));
 }
