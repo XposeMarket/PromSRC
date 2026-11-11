@@ -127,145 +127,36 @@ desktop.ini
 /output/
 /tmp/
 
-# --- PERSONAL WORKSPACE SYNC ---
-# Workspace contents are intentionally Git-visible for private workspace synchronization.
-# The public Electron package excludes workspace via electron-builder-public.yml.
-!workspace/
-!workspace/**
-!workspace/**/
+# --- PERSONAL WORKSPACE (never tracked) ---
+# workspace/ holds the owner's personal runtime data (memory, Brain, uploads,
+# exports, games, reports, ...). This repository is public, so none of it is
+# tracked. Only two subtrees are allowed:
+#   workspace/skills/  shipped skill catalog (read by build + tests), minus its
+#                      local edit history and caches
+#   workspace/self/    developer self docs (read by scripts/test-*.mjs)
+# Enforced by scripts/audit-repo-privacy.mjs via scripts/check-workspace-tracking.mjs.
+/workspace/*
+!/workspace/skills/
+!/workspace/self/
+/workspace/skills/.history/
+/workspace/skills/.cache/
+workspace/**/node_modules/
+workspace/**/build/
+workspace/**/logs/
+workspace/**/*.log
+workspace/**/*.cpuprofile
+workspace/**/__pycache__/
+workspace/**/*.pyc
 
-# Bulky workspace projects/runtime folders are kept local and rebuilt/redone as needed.
+# Local OSS reference checkouts at the repo root.
 oss-agents/
-workspace/oss agents/
-workspace/oss-agents/
-workspace/Prometheus Website/
-workspace/xposemarket-site/
-workspace/xpose-market/
-workspace/teams/
-workspace/.prometheus/**
-workspace/.prometheus/subagents/
-workspace/hyperframes/
-workspace/hyperframes-promo-test/
-workspace/fitpulse-real-hyperframes/
-workspace/assets/
-workspace/video-debug/
-workspace/opportunity-radar/
-workspace/signal-radar/
-workspace/Brain/
-workspace/Brain/**
-workspace/audit/**
-workspace/downloads/**
-workspace/uploads/**
-workspace/entities/**
-workspace/events/**
-workspace/integrations/**
-workspace/projects/**
-workspace/proposals/**
-workspace/tasks/**
-workspace/node_modules/
-workspace/logs/
-workspace/tmp/
-workspace/creative-projects/
-workspace/generated/**
 
-# Private self docs are intentionally tracked in full.
-!workspace/self/
-!workspace/self/**
-
-# Keep skeleton folders in clones while excluding their bulky contents.
-!workspace/.prometheus/
-!workspace/.prometheus/**/
-!workspace/.prometheus/**/.gitkeep
-!workspace/oss agents/
-!workspace/oss agents/**/
-!workspace/oss agents/**/.gitkeep
-!workspace/oss-agents/.gitkeep
-!workspace/Prometheus Website/.gitkeep
-!workspace/xposemarket-site/.gitkeep
-!workspace/xpose-market/.gitkeep
-!workspace/teams/.gitkeep
-!workspace/.prometheus/subagents/.gitkeep
-!workspace/hyperframes/.gitkeep
-!workspace/hyperframes-promo-test/.gitkeep
-!workspace/fitpulse-real-hyperframes/.gitkeep
-!workspace/assets/.gitkeep
-!workspace/video-debug/.gitkeep
-!workspace/opportunity-radar/.gitkeep
-!workspace/signal-radar/.gitkeep
-!workspace/Brain/
-!workspace/Brain/**/
-!workspace/Brain/**/.gitkeep
-!workspace/Brain/thoughts/**
-!workspace/Brain/dreams/**
-!workspace/audit/
-!workspace/audit/**/
-!workspace/audit/**/.gitkeep
-!workspace/downloads/
-!workspace/downloads/**/
-!workspace/downloads/**/.gitkeep
-!workspace/uploads/
-!workspace/uploads/**/
-!workspace/uploads/**/.gitkeep
-!workspace/entities/
-!workspace/entities/**/
-!workspace/entities/**/.gitkeep
-!workspace/events/
-!workspace/events/**/
-!workspace/events/**/.gitkeep
-!workspace/integrations/
-!workspace/integrations/**/
-!workspace/integrations/**/.gitkeep
-!workspace/projects/
-!workspace/projects/**/
-!workspace/projects/**/.gitkeep
-!workspace/proposals/
-!workspace/proposals/**/
-!workspace/proposals/**/.gitkeep
-!workspace/tasks/
-!workspace/tasks/**/
-!workspace/tasks/**/.gitkeep
-!workspace/node_modules/.gitkeep
-!workspace/logs/.gitkeep
-!workspace/tmp/.gitkeep
-!workspace/creative-projects/.gitkeep
-!workspace/generated/
-!workspace/generated/**/
-!workspace/generated/.gitkeep
 # prom_repo_sync: auto-ignored exclude-matched noise
 *.tmp
 *.bak
 *.mp4
 *.mov
 *.webm
-
-# Final workspace safety guards. The broad workspace re-includes above are
-# intentional, but must never pull nested dependencies, compiler output, or
-# live diagnostic/runtime logs into repository checkpoints.
-workspace/**/node_modules/
-workspace/**/build/
-workspace/**/logs/
-workspace/temp/
-workspace/**/*.log
-workspace/**/*.cpuprofile
-workspace/**/*.obj
-workspace/**/__pycache__/
-workspace/**/*.pyc
-
-# External reference checkouts are independent repositories. Keep their local
-# working trees out of the parent repo rather than recording unusable gitlinks.
-workspace/repos/
-workspace/scratch/
-workspace/games/prometheus-vita/vendor/
-workspace/oss agents/hermes-agent/
-workspace/oss agents/openclaw/
-
-# Personal runtime records stay local. They are not part of PromSRC source
-# synchronization or public releases.
-workspace/Brain/**
-workspace/memory/**
-workspace/audit/**
-workspace/workspace/memory/**
-workspace/workspace/videos/**
 
 # Skill safety-scan caches written next to connector skills at runtime
 src/extensions/bundled/connectors/*/.cache/

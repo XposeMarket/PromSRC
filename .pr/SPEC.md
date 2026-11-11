@@ -1,29 +1,30 @@
-# OAuth pending action and phone completion repair
-Tier: 1; explicit live-fix authorization and separate review waiver in this incident.
-Surface: both
-Parity: shared module: web-ui/src/features/connectors/connect-flow.js:92 shared controller and backend; mobile uses existing secure browser viewer, desktop retains external-browser flow. Real Chromium tests at desktop1440/mobile390.
-Size justification: one bounded end-to-end authorization repair requires shared controller, existing viewer, route helper, two regression tests and docs.
+# Stop tracking personal workspace data
+Tier: 1; privacy fix for a public repository, no runtime behavior change.
+Surface: backend
+Parity: n/a, no UI.
+Size justification: 2,880 file deletions are index-only (git rm -r; files stay on disk for the owner). Hand-written change is small: .gitignore section, one guard module, one audit hook, one test, CI step, npm scripts, one test skip.
 ## Problem
-Saved credentials lost pending action after poll. After that fix, mobile still suppresses loopback authorization and sends user to PC.
+4,486 files under workspace/ were tracked, including USER.md, MEMORY.md, BUSINESS.md, SOUL.md, memory/ daily notes, Brain/, uploads/, exports/ and skills/.history/. .gitignore deliberately un-ignored workspace/** and scripts/audit-repo-privacy.mjs skipped workspace/ entirely, so nothing stopped it.
 ## Chosen approach
-Retain/recover pending action; wire mobile loopback connector OAuth to the existing in-house login handoff with paired/native-owner checks and server-derived browser identity/URL. Recheck exact attempt on viewer return, keep secrets DOM-only. No public callback or redirect config changes.
+Untrack everything under workspace/ except workspace/skills/** (minus .history/ and .cache/), which build and tests read, and workspace/self/** (developer docs that tests read). Rewrite the .gitignore section to ignore /workspace/* except those two subtrees. Add scripts/check-workspace-tracking.mjs (allow-list); audit-repo-privacy.mjs now always fails when a tracked workspace path is outside it. scripts/test-workspace-tracking-guard.mjs proves allowed passes and disallowed fails, at unit level and against a throwaway git repo. It runs in the Privacy and secret scan CI job and in npm run audit:privacy. memory-atoms.regression.ts skips when workspace/MEMORY.md is absent (same pattern as memory-atoms-real-corpus.stress.ts). prom-repo-sync behavior unchanged.
 ## Files
-- src/connections/runtime.ts
-- scripts/test-connection-runtime-identity.cjs
+- .gitignore
+- scripts/check-workspace-tracking.mjs
+- scripts/audit-repo-privacy.mjs
+- scripts/test-workspace-tracking-guard.mjs
+- .github/workflows/privacy-secret-scan.yml
+- package.json
+- src/gateway/memory-index/memory-atoms.regression.ts
 - .pr/SPEC.md
-- src/connections/adapters/connector-oauth.ts
-- src/connections/oauth-phone-handoff.ts
-- src/gateway/routes/connections-v2.router.ts
-- web-ui/src/features/connectors/connect-flow.js
-- web-ui/src/mobile/mobile-login-handoff.js
-- scripts/test-plugin-quick-connect.cjs
-- scripts/test-oauth-phone-handoff.cjs
-- workspace/self/12-connectors-mcp-integrations.md
+- workspace/** (index removals only, outside skills/ and self/)
+- scripts/pr-finish.ps1 (gate reads git file names with core.quotepath=off, so non-ASCII paths match the scope check)
+
 ## Acceptance
-Test: node --import tsx scripts/test-connection-runtime-identity.cjs && node scripts/test-oauth-phone-handoff.cjs && node scripts/test-plugin-quick-connect.cjs
-Actual shared form -> save -> pending polls -> phone viewer -> provider callback -> connected; close/reopen without key reentry; desktop unchanged. Reject unpaired/spoofed/expired/terminal/wrong-adapter handoffs; no caller URL/session override. Build/UI checks plus live browser readiness. Synthetic test provider is not real X consent.
+Test: node scripts/test-workspace-tracking-guard.mjs && node scripts/audit-repo-privacy.mjs --strict-current && npx tsc --noEmit -p .
+git ls-files workspace lists only workspace/skills/** (no .history) and workspace/self/**. Skill and self-doc tests still pass.
 ## Risks
-OAuth user consent still required by X; do not claim account connection until live status says connected. In-house Electron bridge required, fail clearly if unavailable. Preserve existing user approval and callback state/PKCE validation. Rollback only this branch's changed files, preserving other live hotfixes.
+Personal files remain in Git history; this change does not rewrite history (needs a separate, owner-approved filter-repo and force-push). prom_repo_sync will no longer sync personal workspace files through this repo, because they are now ignored; the owner needs another backup path for them. Rollback: revert this commit (files are still on disk).
 
 ## Scope notes
-Folded PR860 runtime identity hotfix already on live into this branch to eliminate docs/spec collision. Runtime code unchanged from deployed version. Both previous repairs remain available as standalone PRs; no merge performed.
+- .gitmodules: git rm -r removed the stale workspace/PromSite submodule entry automatically, because that gitlink was under workspace/.
+- Every workspace/** deletion (including non-ASCII paths under workspace/games/) is an index-only removal covered by the workspace/** line in Files.
