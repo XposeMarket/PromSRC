@@ -548,7 +548,7 @@ function openConnectorView(id) {
           ${resources.length ? `<div><span class="cv-identity-label">Resource scope</span><strong>${escHtml(resources.slice(0, 3).map((resource) => resource.displayName || resource.id).join(', '))}</strong>${resources.length > 3 ? `<span>+${resources.length - 3} more</span>` : ''}</div>` : ''}
           ${grants.length ? `<div><span class="cv-identity-label">Capabilities</span><strong>${grants.filter((grant) => grant.granted).length} granted</strong><span>${grants.filter((grant) => !grant.granted).length} approval-gated</span></div>` : ''}
           ${scopes.length ? `<div><span class="cv-identity-label">Granted scopes</span><strong>${scopes.length} provider scope${scopes.length === 1 ? '' : 's'}</strong><span>${escHtml(scopes.join(' · '))}</span></div>` : ''}
-          ${registeredTools.length ? `<div><span class="cv-identity-label">Tool exposure</span><strong>${exposedTools.length}/${registeredTools.length} exposed</strong><span>${state.health ? `Health: ${escHtml(state.health)}` : 'Review-gated by default'}</span></div>` : ''}
+          ${registeredTools.length ? `<div><span class="cv-identity-label">Tool exposure</span><strong>${state.legacyRuntime ? `${registeredTools.length} tools on` : `${exposedTools.length}/${registeredTools.length} exposed`}</strong><span>${state.health ? `Health: ${escHtml(state.health)}` : 'Review-gated by default'}</span></div>` : ''}
         </div>`
       : '';
     stateEl.innerHTML = `<div class="cv-state-line"><strong>${escHtml(status.label)}</strong>${lifecycle ? `<span class="cv-state-chips">${lifecycle}</span>` : ''}</div>${identityMarkup}${errorMarkup}`;
@@ -590,16 +590,16 @@ function openConnectorView(id) {
             <input type="checkbox" data-connector-tool="${escHtml(tool)}"${checked} style="margin-top:2px;accent-color:var(--brand)" />
             <span style="min-width:0;flex:1"><code style="font-size:10.5px;color:var(--text-2);word-break:break-word">${escHtml(tool)}</code><span style="display:block;margin-top:2px;font-size:10px;color:${risk === 'read-only' ? 'var(--ok)' : 'var(--warn)'}">${escHtml(risk === 'read-only' ? 'read-only · automatic' : `${risk} · approval required`)}</span></span>
           </label>`
-        : `<div style="display:flex;align-items:flex-start;gap:8px;padding:6px 8px;border:1px solid var(--line);border-radius:7px;background:var(--panel-2);opacity:${availableTools.includes(tool) ? '1' : '0.55'}"><code style="font-size:10.5px;color:var(--text-2);word-break:break-word;flex:1">${escHtml(tool)}</code><span style="font-size:10px;color:${risk === 'read-only' ? 'var(--ok)' : 'var(--warn)'};white-space:nowrap">${escHtml(risk === 'read-only' ? 'read-only' : 'approval')}</span></div>`;
+        : `<div style="display:flex;align-items:flex-start;gap:8px;padding:6px 8px;border:1px solid var(--line);border-radius:7px;background:var(--panel-2);opacity:${availableTools.includes(tool) ? '1' : '0.55'}"><code style="font-size:10.5px;color:var(--text-2);word-break:break-word;flex:1">${escHtml(tool)}</code><span style="font-size:10px;color:${risk === 'read-only' ? 'var(--ok)' : 'var(--warn)'};white-space:nowrap${classification || exposedTools.includes(tool) ? '' : ';display:none'}">${escHtml(risk === 'read-only' ? 'read-only' : 'approval')}</span></div>`;
     }).join('');
     if (tools.length && isConnected && availableTools.length) {
       aiToolsEl.style.display = '';
       aiToolsEl.innerHTML = `
         <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Tools available to Prometheus</div>
-        <div style="font-size:11px;color:var(--muted);line-height:1.45;margin-bottom:8px">${exposedTools.length}/${tools.length} are read-only and automatic. Other enabled actions remain approval-gated at the moment they run.</div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.45;margin-bottom:8px">${canManageToolAvailability ? `${exposedTools.length}/${tools.length} are read-only and automatic. Other enabled actions remain approval-gated at the moment they run.` : 'Read-only tools run automatically. Tools that change something ask for your approval when they run.'}</div>
         <div style="display:flex;flex-direction:column;gap:5px">${toolRows}</div>
-        ${canManageToolAvailability ? `<button class="cv-btn-connect" onclick="saveConnectorToolAvailability(decodeURIComponent('${encodedConnectionId}'), this)" style="margin-top:9px;background:var(--panel-2);color:var(--text);border:1px solid var(--line)">Save tool access</button>` : '<div style="font-size:11px;color:var(--muted);margin-top:8px">This legacy connector uses its runtime availability. Canonical connections expose a selectable tool allowlist.</div>'}
-        <div style="font-size:11px;color:var(--muted);margin-top:8px">Activate with <code style="font-size:10.5px">request_tool_category({"category":"external_apps"})</code></div>
+        ${canManageToolAvailability ? `<button class="cv-btn-connect" onclick="saveConnectorToolAvailability(decodeURIComponent('${encodedConnectionId}'), this)" style="margin-top:9px;background:var(--panel-2);color:var(--text);border:1px solid var(--line)">Save tool access</button>` : '<div style="font-size:11px;color:var(--muted);margin-top:8px">All tools for this plugin are on. Per-tool switches are not available for it yet.</div>'}
+        
       `;
     } else if (tools.length && isConnected) {
       aiToolsEl.style.display = '';
