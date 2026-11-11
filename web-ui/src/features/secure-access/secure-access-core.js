@@ -9,6 +9,8 @@
 //   Protected plugin entry alone allows brief app hiding (DOM only, five-minute cap).
 // - Only metadata (labels, origins, identifiers, states) is rendered/polled.
 
+import { SIGN_IN_CSS, signInIcon, presentSignIn } from './sign-in-presentation.js';
+
 export const SECURE_ACCESS_API = '/api/secure-access';
 const STYLE_ID = 'prom-secure-access-styles';
 
@@ -55,7 +57,7 @@ export function ensureSecureAccessStyles(doc = globalThis.document) {
   if (!doc || doc.getElementById(STYLE_ID)) return;
   const style = doc.createElement('style');
   style.id = STYLE_ID;
-  style.textContent = CSS;
+  style.textContent = CSS + SIGN_IN_CSS;
   (doc.head || doc.documentElement).appendChild(style);
 }
 
@@ -196,6 +198,8 @@ export function mountSecureAccessCard(host, opts = {}) {
   const fetchJson = opts.fetchJson;
   const mode = MODE_COPY[request.mode] ? request.mode : 'existing';
   const copy = MODE_COPY[mode];
+  const loginStyle = mode === 'existing';
+  let presentation = null;
   const persistentAllowed = status.persistentAllowed === true;
   // Entry capability is distinct from approval; replacement still needs owner proof.
   const canEnter = request.replaces ? status.owner?.canApprove : (status.entry?.canEnter ?? status.owner?.canApprove);
@@ -234,6 +238,11 @@ export function mountSecureAccessCard(host, opts = {}) {
     revealBtn.textContent = show ? 'Hide' : 'Show';
     revealBtn.setAttribute('aria-pressed', show ? 'true' : 'false');
   });
+  if (loginStyle) {
+    revealBtn.classList.add('sa-reveal');
+    const updateEye = () => { revealBtn.replaceChildren(signInIcon('eye')); revealBtn.setAttribute('aria-label', secretInput.type === 'password' ? 'Show password' : 'Hide password'); };
+    revealBtn.addEventListener('click', updateEye); updateEye();
+  }
   const secretRow = el('div', { class: 'sa-inrow' }, secretInput, mode === 'otp' ? null : revealBtn);
 
   const recoveryBox = el('input', { type: 'checkbox', id: `${uid}-recovery` });
@@ -266,18 +275,19 @@ export function mountSecureAccessCard(host, opts = {}) {
   const knob = el('span', { class: 'sa-knob', 'aria-hidden': 'true' });
   const remTitle = el('strong', {});
   const remDesc = el('span', { class: 'sa-muted' });
-  const remSwitch = el('button', { type: 'button', role: 'switch', class: 'sa-switch', disabled: !persistentAllowed },
+  const remSwitch = el('button', { type: 'button', role: 'switch', class: `sa-switch${loginStyle ? ' sa-remember' : ''}`, disabled: !persistentAllowed },
     el('span', { style: 'display:grid;gap:2px' }, remTitle, remDesc), knob);
   remSwitch.addEventListener('click', () => { if (!persistentAllowed) return; remember = !remember; syncRemember(); say(remember ? 'Remember access on' : 'This session only'); });
   function syncRemember() {
     remSwitch.setAttribute('aria-checked', remember ? 'true' : 'false');
-    remTitle.textContent = remember ? 'Remember access' : 'This session only';
+    remTitle.textContent = loginStyle ? 'Save this login for next time' : (remember ? 'Remember access' : 'This session only');
     remDesc.textContent = persistentAllowed
       ? (remember ? 'Encrypted on this computer until you revoke or delete it.' : 'Kept in memory only; cleared when Prometheus restarts.')
       : 'Remembering is off: this computer has no protected key store, so access is kept in memory only and cleared when Prometheus restarts.';
   }
 
-  const saveBtn = el('button', { type: 'submit', class: 'sa-btn sa-pri', text: 'Save protected access' });
+  const saveLabel = loginStyle ? 'Save login' : 'Save protected access';
+  const saveBtn = el('button', { type: 'submit', class: 'sa-btn sa-pri', text: saveLabel });
   const cancelBtn = el('button', { type: 'button', class: 'sa-btn', text: 'Cancel' });
   function syncRecovery() {
     recoveryRow.hidden = secretInput.dataset.generated !== 'true';
@@ -299,7 +309,8 @@ export function mountSecureAccessCard(host, opts = {}) {
   const form = el('form', { class: 'sa-form', autocomplete: 'on', novalidate: true, 'data-prom-no-draft': 'true' },
     needsIdentifier ? el('label', { class: 'sa-field', for: idInput.id }, el('span', { class: 'sa-lbl', text: mode === 'new' ? 'Email or username for the new account' : 'Email or username' }), idInput) : null,
     el('div', { class: 'sa-field' }, el('label', { class: 'sa-lbl', for: secretInput.id, text: copy.secret }), secretRow),
-    genRow, recoveryRow, remSwitch, scope, errorLine,
+    genRow, recoveryRow, remSwitch,
+    loginStyle ? el('p', { class: 'sa-login-privacy', text: 'Your password stays out of chat and is never shown to the AI.' }) : null, scope, errorLine,
     el('div', { class: 'sa-row' }, saveBtn, cancelBtn));
 
   if (ownerBlocked) { secretInput.disabled = true; idInput.disabled = true; }
@@ -309,8 +320,8 @@ export function mountSecureAccessCard(host, opts = {}) {
     ownerBlocked ? ownerSurfaceBanner(status) : null,
     ownerBlocked ? el('div', { class: 'sa-row' }, cancelBtn) : form);
   const card = el('section', { class: 'sa-card', 'aria-labelledby': `${uid}-h`, 'data-secure-access-request': request.id || '' },
-    el('div', { class: 'sa-hd' }, lockIcon(20), el('div', { style: 'display:grid;gap:2px;min-width:0;flex:1' },
-      el('h3', { id: `${uid}-h`, text: `${copy.title}: ${request.label || 'access'}` }),
+    el('div', { class: 'sa-hd' }, loginStyle ? signInIcon() : lockIcon(20), el('div', { style: 'display:grid;gap:2px;min-width:0;flex:1' },
+      el('h3', { id: `${uid}-h`, text: loginStyle ? 'Save your login' : `${copy.title}: ${request.label || 'access'}` }),
       el('p', { text: request.origin || '' }),
       request.purpose ? el('p', { text: request.purpose }) : null), expiryText),
     body, live);
@@ -326,6 +337,7 @@ export function mountSecureAccessCard(host, opts = {}) {
     resolved = true;
     wipe();
     clearInterval(timer);
+    presentation?.finish();
     const receipt = state === 'saved'
       ? ['Saved. Prom received a reference only, never the value.', `Site: ${request.origin || ''}`, `Storage: ${storageLabel(extra.storage || (remember ? 'persistent' : 'session'))}`, 'Scope: main Prom, sign-in only']
       : [state === 'expired' ? 'This request expired. Nothing was saved.' : 'Cancelled. Nothing was saved.'];
@@ -359,7 +371,7 @@ export function mountSecureAccessCard(host, opts = {}) {
     } catch (error) {
       errorLine.textContent = secureAccessErrorText(error, 'Could not save. Check the request has not expired and try again.');
     } finally {
-      busy = false; saveBtn.textContent = 'Save protected access'; syncSave();
+      busy = false; saveBtn.textContent = saveLabel; syncSave();
     }
   });
   cancelBtn.addEventListener('click', async () => {
@@ -387,7 +399,10 @@ export function mountSecureAccessCard(host, opts = {}) {
   globalThis.addEventListener?.('pagehide', onPageHide);
   syncRemember(); syncRecovery(); tick();
   timer = setInterval(tick, 1000);
-  host.appendChild(card);
+  if (loginStyle && typeof document.createElement('dialog').showModal === 'function') {
+    presentation = presentSignIn(card, { origin: request.origin || '', onDismiss: wipe, onSkip: () => cancelBtn.click() });
+  }
+  host.appendChild(presentation?.el || card);
 
   const handle = {
     el: card,
@@ -400,6 +415,7 @@ export function mountSecureAccessCard(host, opts = {}) {
       wipe();
       clearInterval(timer);
       globalThis.removeEventListener?.('pagehide', onPageHide);
+      presentation?.destroy();
       card.remove();
     },
   };
@@ -420,14 +436,16 @@ export function mountPendingLoginCard(host, opts = {}) {
   const err = el('p', { class: 'sa-err', role: 'alert' });
   const body = el('div', { style: 'display:grid;gap:10px' });
   let done = false;
+  let presentation = null;
   const card = el('section', { class: 'sa-card', 'data-secure-access-login': cred.id || '', 'aria-label': `Sign-in approval for ${cred.label || origin}` },
-    el('div', { class: 'sa-hd' }, lockIcon(20), el('div', { style: 'display:grid;gap:2px;min-width:0;flex:1' },
-      el('h3', { text: `Approve sign-in: ${cred.label || origin}` }),
+    el('div', { class: 'sa-hd' }, signInIcon(), el('div', { style: 'display:grid;gap:2px;min-width:0;flex:1' },
+      el('h3', { text: 'Ready to sign in' }),
       el('p', { text: `${origin}${cred.identifier ? ` \u00b7 ${cred.identifier}` : ''}` }))),
     body, err);
   const resolve = (status) => {
     if (done) return;
     done = true;
+    presentation?.finish();
     try { opts.onResolved?.({ credentialId: cred.id, status, label: cred.label || '', origin }); } catch { /* metadata only */ }
   };
   const outcome = async (verified) => {
@@ -445,6 +463,7 @@ export function mountPendingLoginCard(host, opts = {}) {
         event.currentTarget.disabled = true;
         try {
           const out = await postJson(fetchJson, `${base}/login/submit`, { confirm: true });
+          presentation?.submitted();
           body.replaceChildren(
             el('p', { class: 'sa-muted', text: out?.transferred === false ? 'Sign-in was not sent. Nothing changed.' : 'Sign-in sent. The result is unknown until checked. Did it work?' }),
             el('div', { class: 'sa-row' },
@@ -459,8 +478,12 @@ export function mountPendingLoginCard(host, opts = {}) {
         body.replaceChildren(el('p', { class: 'sa-muted', text: 'Declined. Nothing was submitted.' }));
         resolve('login_declined');
       } })));
-  host.appendChild(card);
-  return { el: card, get resolved() { return done; }, destroy() { card.remove(); } };
+  if (typeof document.createElement('dialog').showModal === 'function') {
+    const decline = body.querySelector('.sa-row > .sa-btn:not(.sa-pri)');
+    presentation = presentSignIn(card, { origin, title: 'Ready to sign in', onSkip: () => decline?.click() });
+  }
+  host.appendChild(presentation?.el || card);
+  return { el: card, get resolved() { return done; }, destroy() { presentation?.destroy(); card.remove(); } };
 }
 
 /**

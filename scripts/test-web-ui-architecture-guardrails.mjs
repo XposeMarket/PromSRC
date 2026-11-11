@@ -16,9 +16,9 @@ const CODE_OWNED_LEGACY_CEILINGS = Object.freeze({
   'web-ui/src/mobile/mobile-pages.js': 898464,
   // Reviewed against the 2026-10-01 main UI: these are tracked LF-byte
   // boundaries, not dynamic baselines. Future growth still fails CI.
-  'web-ui/src/mobile/mobile-chat-renderer-runtime.js': 258435, // Reviewed: #756 agent-chat Copy/sender toggle; #762 terminal-row disclosure + thread order (+856); merge train 2026-10-26 #774/#764 (+75)
-  'web-ui/src/styles/mobile.css': 642369, // Reviewed: #762 trace thumbnails + terminal row (+377); merge train 2026-10-26 #774 pending status (+111)
-  'web-ui/src/styles/components.css': 292703,
+  'web-ui/src/mobile/mobile-chat-renderer-runtime.js': 258459, // Reviewed: #756 agent-chat Copy/sender toggle; #762 terminal-row disclosure + thread order (+856); merge train 2026-10-26 #774/#764 (+75)
+  'web-ui/src/styles/mobile.css': 642896, // Reviewed: #762 trace thumbnails + terminal row (+377); merge train 2026-10-26 #774 pending status (+111)
+  'web-ui/src/styles/components.css': 293359, // Reviewed: #870 sign-in card/sheet refresh (+656)
   'web-ui/index.html': 558138,
 });
 // Reviewed against the extracted mobile-chat-page-runtime.js on 2026-10-01.

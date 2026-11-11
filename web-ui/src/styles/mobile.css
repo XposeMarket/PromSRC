@@ -19054,3 +19054,11 @@ body.pm-mobile-active .pm-page.pm-agent-chat-page .pm-chat-thread {
 /* First-output status stays local to the pending assistant row. */
 pm-pending-status { display: block; margin: 6px 0; font-size: 12px; line-height: 1.5; color: var(--pm-text-muted, #9aa0ad); }
 pm-pending-status[hidden] { display: none; }
+
+/* Same neutral website sign-in action as desktop; preserve native secure browser. */
+.pm-question-card:has(.pm-q-login){border-radius:24px;padding:20px}
+.pm-q-login{gap:12px}
+.pm-q-login-origin{font-size:13px;color:var(--pm-muted);overflow-wrap:anywhere}
+.pm-q-login .pm-q-login-open{min-height:49px;border-radius:28px;background:var(--pm-text,#f4f4f4);color:var(--pm-surface,#222);font-weight:600}
+.pm-q-login-note{line-height:1.6}
+.pm-question-card:has(.pm-q-login) .pm-q-actions button{border-radius:28px;min-height:44px}

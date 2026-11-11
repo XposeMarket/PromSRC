@@ -44690,7 +44690,7 @@ function renderInlinePrometheusQuestion(item, options = {}) {
     ${questionBlocks}
     ${pending && question.loginHandoff
       ? `<div class="pq-login-handoff">
-          <button class="pq-login-open" type="button" onclick="openDesktopLoginHandoff(${encodeInlineJsString(String(question.loginHandoff.url || ''))})">Open browser &amp; log in</button>
+          <span class="pq-login-origin">${escHtml(String(question.loginHandoff.url || ''))}</span><button class="pq-login-open" type="button" onclick="openDesktopLoginHandoff(${encodeInlineJsString(String(question.loginHandoff.url || ''))})">Open browser &amp; log in</button>
           <span class="pq-login-note">You log in yourself. Prometheus never sees your password.</span>
         </div>`
       : ''}
