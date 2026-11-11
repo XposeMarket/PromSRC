@@ -60,9 +60,10 @@ The following repository workflow is the owner's standing local process. Tool im
 - `npm run build` = `npm run build:backend && npm run build:web`.
 - `npm run build:backend` first runs `scripts/prune-dist.js` (removes `dist/` files whose source no longer exists, keeping tsc's incremental state), then `tsc`, then `scripts/copy-creative-renderers.js`, `scripts/copy-runtime-prompt-assets.js`, and `scripts/copy-extension-descriptors.js`.
 - Release builds (`build:win`, `build:mac`, `prepare:public:desktop`) start with `npm run clean:dist` (deletes `dist/` entirely) so packages never ship compiled copies of retired modules. `npm run check:dist` reports orphaned `dist/` files without changing anything.
-- `npm run build:web` is currently `npm run check:web-ui`.
+- `npm run build:web` is `npm run sync:web-ui` (regenerates the untracked bundle, then checks it).
 - `npm run sync:web-ui` runs `build:thinking-orb`, `scripts/prepare-public-build.js --web-only`, then `check:web-ui`.
 - `npm run check:web-ui` runs `scripts/check-public-web-ui-sync.js` and `scripts/check-web-ui-module-globals.mjs`.
+- `generated/public-web-ui/` and `.pr/` are gitignored (2026-11-11). PRs commit web-ui source only; the bundle is rebuilt by `sync:web-ui`, `npm run build` and CI. `.pr/SPEC.md` is per-worktree scratch, so parallel PRs no longer conflict on it. After pulling into the live checkout, run `npm run build` (it regenerates the bundle) before restarting the gateway.
 - Do not assume every change needs every build. Backend/runtime prompt changes need backend build; `web-ui/` or mobile changes need UI sync/check; public web source changes may need both source prep and sync; mixed changes sync before the backend build/restart as the current apply coordinator does.
 - If script behavior has changed since this verification, `package.json` and the relevant script file are authoritative. Don't manually edit generated/static copies as a substitute for running the supported synchronization script.
 

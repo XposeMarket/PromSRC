@@ -1,7 +1,0 @@
-@layer tokens, shell, route, components, state, compatibility;
-@import './theme-tokens.css' layer(tokens);
-@import './mobile.css' layer(route);
-
-@import './mobile-message-edit.css' layer(route);
-@import './mobile-drawer-search-morph.css' layer(route);
-@import './refined-markdown.css';

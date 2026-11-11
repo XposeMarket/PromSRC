@@ -1,1 +1,0 @@
-(()=>{if(!window.prometheusApp?.isElectron)return;document.body.classList.add("electron-shell");const platform=String(window.prometheusApp.platform||"").trim();platform&&document.body.classList.add(`electron-${platform}`)})();
