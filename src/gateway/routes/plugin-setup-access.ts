@@ -40,6 +40,29 @@ export function requirePluginSetup(req: any, res: any, next: () => void, gates: 
 }
 
 /**
+ * Connection types a paired phone may tear down: local-credential plugins only, whose stored secret the
+ * phone can already replace through setup. OAuth adapters (connector-oauth, mcp-oauth) are excluded because
+ * their disconnect revokes the grant at the provider, which needs the owner.
+ */
+export const PAIRED_PLUGIN_DISCONNECT_ADAPTERS = new Set(['api-key', 'setup-token']);
+
+/**
+ * Disconnect is the reverse of plugin setup: anything a paired phone may connect, it must be able to
+ * disconnect (no one-way doors). Disconnect clears that plugin's own local credential, which a paired
+ * phone can already overwrite through setup, so it grants no new power over secrets.
+ * The caller passes `pairedAllowed` only for teardown limited to PAIRED_PLUGIN_DISCONNECT_ADAPTERS; OAuth
+ * revocation, model endpoints, local executables and destructive legacy teardown (Obsidian index removal,
+ * X app credentials, Vercel's legacy vault key) fall through to the owner gate. Secure transport and per-request pairing
+ * revalidation always apply. No protected-storage check: it only removes access.
+ */
+export function requirePluginDisconnect(req: any, res: any, next: () => void, gates: PluginSetupGates = defaultGates, pairedAllowed = true): void {
+  res.setHeader('Cache-Control', 'no-store'); res.setHeader('Referrer-Policy', 'no-referrer');
+  if (!secureInputTransportAllowed(req)) { res.status(403).json({ success: false, error: 'SECURE_ORIGIN_REQUIRED' }); return; }
+  if (pairedAllowed && gates.pairedDevice(req)) { next(); return; }
+  gates.ownerGate(req, res, next);
+}
+
+/**
  * Legacy typed-credential save (`/api/connections/credentials`). The body picks the connector id and
  * accepts keys, tokens and OAuth app fields, so a paired device may use it only to complete a pending
  * connection attempt: the handler then validates that attempt and limits the fields. Without an

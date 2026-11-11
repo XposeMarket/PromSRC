@@ -1,5 +1,5 @@
 import { requireProtectedOwner } from './secure-access.router';
-import { requireAttemptBoundPluginSetup } from './plugin-setup-access';
+import { PAIRED_PLUGIN_DISCONNECT_ADAPTERS, requireAttemptBoundPluginSetup, requirePluginDisconnect } from './plugin-setup-access';
 import { nativeAppSetup } from '../../connections/native-app-setup';
 import { getConnectionRuntime as getPluginConnectRuntime } from '../../connections/runtime';
 import { setPluginCredentialState } from '../../security/plugin-credential-state';
@@ -459,7 +459,19 @@ router.post('/api/connections/save', (req: any, res: any) => {
   res.json({ success: true });
 });
 
-router.post('/api/connections/disconnect', requireProtectedOwner, async (req: any, res: any) => {
+// Owner-only legacy teardown: Obsidian deletes every registered vault's indexed notes; X deletes the OAuth app
+// credentials and removes the xurl app; Vercel deletes a legacy vault key a phone cannot re-enter.
+const OWNER_ONLY_LEGACY_DISCONNECT = new Set(['obsidian', 'x', 'vercel']);
+/** Paired phones may use the legacy route only for local-credential plugins (or services with no v2 connection). */
+function pairedLegacyDisconnectAllowed(id: string): boolean {
+  if (!id || OWNER_ONLY_LEGACY_DISCONNECT.has(id)) return false;
+  try {
+    return getPluginConnectRuntime().orchestrator.listConnections()
+      .filter(item => item.serviceId === id)
+      .every(item => PAIRED_PLUGIN_DISCONNECT_ADAPTERS.has(item.adapterId || ''));
+  } catch { return false; }
+}
+router.post('/api/connections/disconnect', (req: any, res: any, next: () => void) => requirePluginDisconnect(req, res, next, undefined, pairedLegacyDisconnectAllowed(String(req.body?.id || ''))), async (req: any, res: any) => {
   const { id } = req.body || {};
   if (!id) {
     res.status(400).json({ error: 'id required' });

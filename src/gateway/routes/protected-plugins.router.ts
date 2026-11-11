@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { pluginSetupSurfaceState } from './plugin-setup-access';
+import { pluginSetupSurfaceState, requirePluginDisconnect } from './plugin-setup-access';
 import { nativeAppSetup } from '../../connections/native-app-setup';
 import { getConfig } from '../../config/config';
 import { getConnectionRuntime } from '../../connections/runtime';
@@ -75,6 +75,7 @@ router.post('/api/protected-plugins/connection/:id/:action', (req, res, next) =>
     if (!secureInputTransportAllowed(req)) { res.status(403).json({ error: 'SECURE_ORIGIN_REQUIRED' }); return; }
     next(); return;
   }
+  if (req.params.action === 'disconnect') { requirePluginDisconnect(req, res, next); return; }
   requireProtectedOwner(req, res, next);
 }, async (req, res) => {
   if (!['stop', 'disconnect', 'delete'].includes(req.params.action)) { res.status(400).json({ error: 'UNSUPPORTED_ACTION' }); return; }
