@@ -76,7 +76,7 @@
     "test:unwired": "node scripts/run-unwired-tests.mjs",
     "build:thinking-orb": "node scripts/build-thinking-orb.mjs",
     "build:web-production": "node scripts/build-web-ui-production.mjs",
-    "build:web": "npm run check:web-ui",
+    "build:web": "npm run sync:web-ui",
     "check:web-ui": "node scripts/check-public-web-ui-sync.js && node scripts/check-web-ui-module-globals.mjs && npm run test:theme-tokens",
     "test:theme-tokens": "node scripts/test-theme-tokens.mjs",
     "test:web-ui-architecture": "node scripts/test-web-ui-architecture-guardrails.mjs",
