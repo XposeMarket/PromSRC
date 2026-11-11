@@ -123,11 +123,13 @@ export function summarizeConnectionOps(
         : liveKnown
           ? 'unavailable'
           : String(connection?.health || 'unknown'),
+    // A legacy stub has no stored verification, so the live runtime decides. A
+    // canonical record must have passed verify AND still be live.
     verified: runtimeInvalid
       ? false
-      : liveKnown
-        ? liveConnected
-        : Boolean(connection?.verified),
+      : legacy
+        ? (liveKnown ? liveConnected : Boolean(connection?.verified))
+        : Boolean(connection?.verified) && (!liveKnown || liveConnected),
     toolCount: typeof options.live?.toolCount === 'number' ? options.live.toolCount : storedToolCount(connection),
     autoExposedToolCount: Array.isArray(connection?.exposedTools) ? connection.exposedTools.length : 0,
   };

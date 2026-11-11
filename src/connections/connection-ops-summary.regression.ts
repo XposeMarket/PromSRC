@@ -109,5 +109,12 @@ const canonicalLiveOk = summarizeConnectionOps(canonical, { live: { connected: t
 assert.equal(canonicalLiveOk.connected, true);
 assert.equal(canonicalLiveOk.action, undefined);
 
+// A canonical record that never passed verify must not read as verified just because it is live.
+const canonicalNeverVerified = summarizeConnectionOps({ ...canonical, verified: false }, { live: { connected: true, toolCount: 1 } });
+assert.equal(canonicalNeverVerified.connected, true);
+assert.equal(canonicalNeverVerified.verified, false, 'live status must not stand in for a canonical verification that never ran');
+const canonicalVerifiedLive = summarizeConnectionOps({ ...canonical, verified: true }, { live: { connected: true, toolCount: 1 } });
+assert.equal(canonicalVerifiedLive.verified, true);
+
 
 console.log('[connection-ops-summary.regression] canonical registered gate, legacy live overlay, zero registered tools, and MCP invalidation passed');

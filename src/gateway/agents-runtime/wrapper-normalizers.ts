@@ -971,8 +971,12 @@ export function normalizeAgentTeamWrapperTool(name: string, rawArgs: any): { nam
   // an implicit create_if_missing envelope instead of rejecting those calls.
   if (target === 'spawn_subagent') {
     if (args.subagent_id == null && args.agent_id != null) args.subagent_id = args.agent_id;
-    const hasCreateShorthand = args.from_role != null || args.specialization != null
-      || hasNonEmptyValue(args.name) || hasNonEmptyValue(args.description);
+    // A bare name/description only means "create" when the caller also says not to
+    // run (run_now:false). With a task attached, a name may refer to an existing
+    // agent, and silently creating a duplicate would be worse than the error.
+    const namesNewAgent = args.run_now === false
+      && (hasNonEmptyValue(args.name) || hasNonEmptyValue(args.description));
+    const hasCreateShorthand = args.from_role != null || args.specialization != null || namesNewAgent;
     if (args.subagent_id == null && hasCreateShorthand && !isPlainObjectArg(args.create_if_missing)) {
       args.create_if_missing = {
         ...(args.from_role != null ? { from_role: args.from_role } : {}),
