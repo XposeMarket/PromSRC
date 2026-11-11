@@ -1491,7 +1491,7 @@ export const teamAgentCapabilityExecutor: CapabilityExecutor = {
           }
 
           if (!subagentId) {
-            if (!createIfMissing) return { name, args, result: 'spawn_subagent requires subagent_id unless create_if_missing is provided', error: true };
+            if (!createIfMissing) return { name, args, result: 'spawn_subagent needs a target. To create a new agent pass name (and optionally description, model, skillIds) or a create_if_missing object; to use an existing agent pass agent_id.', error: true };
             const seed = String(createIfMissing.name || createIfMissing.description || fromRole || 'disposable_agent')
               .toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40) || 'disposable_agent';
             subagentId = `${seed}_${Date.now().toString(36)}`;

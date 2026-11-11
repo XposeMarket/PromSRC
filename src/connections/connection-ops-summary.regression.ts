@@ -99,4 +99,15 @@ const overlayWithNoRegisteredTools = liveOverlayForConnection(vercelStub, {
 assert.equal(overlayWithNoRegisteredTools?.connected, true);
 assert.equal(overlayWithNoRegisteredTools?.toolCount, 0, 'registry-confirmed zero registered tools must not fall back to advertised tool names');
 
+// A canonical record whose live connector reports "not connected" must not read as connected.
+const canonicalLiveRevoked = summarizeConnectionOps(canonical, { live: { connected: false, toolCount: 1 } });
+assert.equal(canonicalLiveRevoked.connected, false, 'live runtime outranks a stored canonical "connected"');
+assert.equal(canonicalLiveRevoked.authState, 'reauth_required');
+assert.equal(canonicalLiveRevoked.action, 'reauthenticate');
+
+const canonicalLiveOk = summarizeConnectionOps(canonical, { live: { connected: true, toolCount: 1 } });
+assert.equal(canonicalLiveOk.connected, true);
+assert.equal(canonicalLiveOk.action, undefined);
+
+
 console.log('[connection-ops-summary.regression] canonical registered gate, legacy live overlay, zero registered tools, and MCP invalidation passed');

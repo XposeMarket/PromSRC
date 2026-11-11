@@ -46,6 +46,8 @@ The `background_ops` name is the unified model-facing surface; `background_spawn
 ### Choose the right execution lane
 
 - **Persistent specialist, no immediate run:** `agent_ops(action:"spawn", run_now:false)` creates/ensures a definition. `agent_chat_ops(action:"delegate")` creates one formal task; it is not the same as an ephemeral fan-out.
+- **Creating a new agent from a tool (2026-11-11):** `agent_ops(action:"spawn", name, description?, model?, run_now:false)` is enough. `normalizeAgentTeamWrapperTool` (`wrapper-normalizers.ts`) turns top-level `name`/`description`/`from_role`/`specialization` into the `create_if_missing` envelope when no `agent_id` is given; an explicit `create_if_missing` object is left untouched. Regression: `agent-ops-spawn-shorthand.regression.ts`. The desktop "New Bot" dialog (`web-ui/src/bot-create.js`) does not use this path; it posts to `/api/agents`.
+
 - **One-off parallel work from the current turn:** `background_ops(action:"spawn")` registers an ephemeral task, runs it with explicit categories/route overrides and returns an ID. Use `status`/`progress`, `steer`, `wait`, and `join` against that ID. The `background_ops` tool handler is in `subagent-executor.ts`; state/orchestration lives in `task-runner.ts`.
 - **Talk to a known running/finished subagent or manage its run:** use `agent_chat_ops` or `agent_run_ops` rather than spawning a duplicate worker.
 - **Work in another chat thread:** use peer-session operations in `src/gateway/threads/thread-ops.ts`. The detached-turn queue persists pending work and server startup drains queued target threads (`src/gateway/server-v2.ts`).

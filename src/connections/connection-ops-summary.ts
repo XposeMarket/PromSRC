@@ -1,4 +1,4 @@
-function isLegacyCompatibilityConnection(record: any): boolean {
+export function isLegacyCompatibilityConnection(record: any): boolean {
   return record?.adapterId === 'legacy'
     || record?.contractVersion === 1
     || record?.strategyId === 'legacy-compatibility';
@@ -100,18 +100,22 @@ export function summarizeConnectionOps(
   const legacy = isLegacyCompatibilityConnection(connection);
   const liveKnown = typeof options.live?.connected === 'boolean';
   const liveConnected = options.live?.connected === true;
+  // A canonical record keeps its stored lifecycle gate, but a live connector that
+  // reports "not connected" (revoked or expired grant) outranks the stored state.
+  const liveRevoked = !legacy && !runtimeInvalid && liveKnown && !liveConnected
+    && Boolean(connection?.enabled && connection?.authenticated);
   const connected = runtimeInvalid
     ? false
     : legacy
       ? Boolean(connection?.enabled) && (liveKnown ? liveConnected : Boolean(connection?.authenticated))
-      : Boolean(connection?.enabled && connection?.authenticated && connection?.registered);
+      : Boolean(connection?.enabled && connection?.authenticated && connection?.registered) && !liveRevoked;
 
   const summary: ConnectionOpsSummary = {
     id: String(connection?.id || ''),
     serviceId: String(connection?.serviceId || ''),
     serviceName: String(connection?.serviceName || ''),
     connected,
-    authState: runtimeInvalid ? 'reauth_required' : String(connection?.authState || 'none'),
+    authState: runtimeInvalid || liveRevoked ? 'reauth_required' : String(connection?.authState || 'none'),
     health: runtimeInvalid
       ? 'unavailable'
       : liveConnected
@@ -134,6 +138,10 @@ export function summarizeConnectionOps(
   }
   if (runtimeInvalid) {
     summary.error = String(options.mcpStatus?.error || 'MCP runtime unavailable').slice(0, 240);
+    summary.action = 'reauthenticate';
+  }
+  if (liveRevoked) {
+    summary.error = 'The connector runtime reports this account is not connected.';
     summary.action = 'reauthenticate';
   }
   return summary;

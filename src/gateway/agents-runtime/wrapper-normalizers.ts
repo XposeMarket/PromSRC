@@ -966,12 +966,14 @@ export function normalizeAgentTeamWrapperTool(name: string, rawArgs: any): { nam
     delete args.team_action;
   }
   // spawn_subagent requires subagent_id OR create_if_missing. The agent_ops schema
-  // advertises from_role/specialization as a standalone shorthand, so hydrate an
-  // implicit create_if_missing envelope instead of rejecting the documented call.
+  // advertises from_role/specialization as a standalone shorthand, and a model
+  // creating a brand-new agent naturally passes just name/description, so hydrate
+  // an implicit create_if_missing envelope instead of rejecting those calls.
   if (target === 'spawn_subagent') {
     if (args.subagent_id == null && args.agent_id != null) args.subagent_id = args.agent_id;
-    const hasRoleShorthand = args.from_role != null || args.specialization != null;
-    if (args.subagent_id == null && hasRoleShorthand && !isPlainObjectArg(args.create_if_missing)) {
+    const hasCreateShorthand = args.from_role != null || args.specialization != null
+      || hasNonEmptyValue(args.name) || hasNonEmptyValue(args.description);
+    if (args.subagent_id == null && hasCreateShorthand && !isPlainObjectArg(args.create_if_missing)) {
       args.create_if_missing = {
         ...(args.from_role != null ? { from_role: args.from_role } : {}),
         ...(args.specialization != null ? { specialization: args.specialization } : {}),

@@ -56,7 +56,8 @@ let subagentRunComposerStateByTask = {}; // taskId -> { busy, queue, controller,
 let subagentReasoningPopoverCleanup = null;
 let subagentDesktopVoiceTargetAgentId = '';
 let unifiedDesktopChatRendererPromise = null;
-let agentPackImportPath = 'workspace/oss-agents/marketplace-plan/examples/technical-docs-agent';
+// Empty by default: a prefilled example path does not exist on a fresh install.
+let agentPackImportPath = '';
 let agentPackImportPreview = null;
 let agentPackImportBusy = false;
 let subagentWorkspaceFiles = [];
