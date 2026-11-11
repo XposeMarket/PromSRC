@@ -74,6 +74,8 @@ assert.equal(legacyFromBase.connected, true);
 assert.equal(legacyFromBase.verified, false, 'no live signal must not be promoted to verified from saved state alone');
 assert.equal(legacyFromBase.registered, false);
 assert.deepEqual(legacyFromBase.availableTools, [], 'no live signal must not list tools as available');
+assert.equal(legacyFromBase.exposed, false);
+assert.deepEqual(legacyFromBase.registeredTools, []);
 const legacyNoCreds = overlayConnectionOnConnectorState({ connected: false, hasCredentials: false }, stub, undefined, descriptorTools);
 assert.equal(legacyNoCreds.connected, false);
 assert.equal(legacyNoCreds.authState, 'none');

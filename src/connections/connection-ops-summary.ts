@@ -103,8 +103,11 @@ export function summarizeConnectionOps(
   // A canonical record keeps its stored lifecycle gate, but a live connector that
   // reports "not connected" (revoked or expired grant) outranks the stored state.
   // The connector overlay is matched by service id, so it only speaks for a canonical
-  // record that is not backed by an MCP server (those are judged by mcpStatus).
-  const canonicalLiveApplies = !legacy && !options.mcpStatus && liveKnown;
+  // record that the built-in connector runtime actually backs. That is decided from
+  // the record's own adapter, never from whether an MCP status happens to exist:
+  // MCP-backed and other adapters keep their stored state and are judged by mcpStatus.
+  const canonicalLiveApplies = !legacy && liveKnown
+    && String(connection?.adapterId || '') === 'connector-oauth';
   const liveRevoked = canonicalLiveApplies && !runtimeInvalid && !liveConnected
     && Boolean(connection?.enabled && connection?.authenticated);
   const connected = runtimeInvalid

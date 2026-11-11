@@ -35,5 +35,7 @@ const namedRunNowTrue = normalizeAgentTeamWrapperTool('agent_ops', { action: 'sp
 assert.equal(namedRunNowTrue?.args.create_if_missing, undefined);
 const namedNoRunButTask = normalizeAgentTeamWrapperTool('agent_ops', { action: 'spawn', name: 'Wrench', run_now: false, task_prompt: 'List open quotes' });
 assert.equal(namedNoRunButTask?.args.create_if_missing, undefined, 'run_now:false with a task attached is still ambiguous and must not auto-create');
+const namedNoRunButTaskAlias = normalizeAgentTeamWrapperTool('agent_ops', { action: 'spawn', name: 'Wrench', run_now: false, task: 'List open quotes' });
+assert.equal(namedNoRunButTaskAlias?.args.create_if_missing, undefined, 'the task alias must block auto-create too');
 
 console.log('[agent-ops-spawn-shorthand.regression] run_now:false shorthand, existing id, explicit envelope, bare spawn, and name-with-task passed');
