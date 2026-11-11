@@ -38,6 +38,8 @@ jobs:
           cache: npm
       - name: Install dependencies without package lifecycle scripts
         run: npm ci --ignore-scripts
+      - name: Build public web UI bundle (generated/public-web-ui is not tracked)
+        run: npm run sync:web-ui
       - name: Verify public eval graders and local tool-loop recovery
         run: npm run -s test:eval-graders && npm run -s test:local-tool-loop
       - name: Build native terminal runtime used by tool regressions
@@ -132,7 +134,7 @@ jobs:
         run: npx tsx src/gateway/connector-tool-capabilities.regression.ts && npx tsx src/extensions/runtime-registry.performance.regression.ts
       - name: Verify public web source sync
         run: |
-          npm run sync:web-ui
+          npm run check:web-ui
           git diff --exit-code
       - name: Verify tool activity edit line stats
         run: |
