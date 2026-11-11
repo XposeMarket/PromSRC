@@ -79,8 +79,8 @@ if (-not $validSurface) { Gate 'surface-tag' 'FAIL' "Surface must be both | sibl
 else { Gate 'surface-tag' 'PASS' $surface }
 
 # ---------- 3. clean tree (everything committed, explicit paths) ----------
-$dirty = @(git status --porcelain --untracked-files=no | ? { $_ -notmatch '\s\.pr/' })
-$untracked = @(git ls-files --others --exclude-standard | ? { $_ -notmatch '^\.pr/' -and $_ -notmatch '^node_modules' })
+$dirty = @(git -c core.quotepath=off status --porcelain --untracked-files=no | ? { $_ -notmatch '\s\.pr/' })
+$untracked = @(git -c core.quotepath=off ls-files --others --exclude-standard | ? { $_ -notmatch '^\.pr/' -and $_ -notmatch '^node_modules' })
 if ($dirty.Count) { Gate 'clean-tree' 'FAIL' ("uncommitted tracked changes: " + (($dirty | Select -First 6) -join '; ') + ". Commit explicit paths or drop them.") }
 else { Gate 'clean-tree' 'PASS' 'no uncommitted tracked changes' }
 if ($untracked.Count) { Gate 'untracked' 'WARN' ("untracked files not in PR (forgot to add?): " + (($untracked | Select -First 8) -join ', ')) }
@@ -97,7 +97,7 @@ if ($ahead -eq 0) { Gate 'commits' 'FAIL' 'no commits ahead of origin/main' }
 elseif ($ahead -gt 3) { Gate 'commits' 'WARN' "$ahead commits; squash-merge will flatten, but check none are unrelated" }
 
 # ---------- changed files ----------
-$changed = @(git diff --name-only origin/main...HEAD)
+$changed = @(git -c core.quotepath=off diff --name-only origin/main...HEAD)
 $gen = @($changed | ? { $_ -like 'generated/public-web-ui/*' })
 $src = @($changed | ? { $_ -notlike 'generated/public-web-ui/*' })
 $webTouched = @($src | ? { $_ -like 'web-ui/*' }).Count -gt 0
@@ -126,7 +126,7 @@ else { Gate 'scope' 'PASS' "$($src.Count) source files, all in spec" }
 
 # ---------- 7. size ----------
 $lines = 0
-git diff --numstat origin/main...HEAD | % {
+git -c core.quotepath=off diff --numstat origin/main...HEAD | % {
   $p = $_ -split "`t"
   if ($p.Count -ge 3 -and $p[2] -notlike 'generated/*' -and $p[0] -ne '-') { $lines += [int]$p[0] + [int]$p[1] }
 }
@@ -159,13 +159,13 @@ elseif ($tsTouched) {
 if ($webTouched) {
   $r = Run 'check:web-ui' 'npm run -s check:web-ui' (Join-Path $prDir 'webui.log')
   if ($r.Code -eq 0) { Gate 'web-ui-sync' 'PASS' 'check:web-ui clean (generated bundle matches source)' }
-  else { Gate 'web-ui-sync' 'FAIL' ("run 'npm run sync:web-ui' and commit generated/public-web-ui. " + $r.Tail) }
-  # CI only sees committed files: regenerate, then the generated bundle must be byte-identical to HEAD (incl. new untracked files).
+  else { Gate 'web-ui-sync' 'FAIL' ("run 'npm run sync:web-ui' (generated/public-web-ui is untracked build output). " + $r.Tail) }
+  # The bundle is gitignored build output: regenerate it and make sure nothing under it is tracked again.
   $r2 = Run 'sync:web-ui' 'npm run -s sync:web-ui' (Join-Path $prDir 'webui-sync.log')
-  $genDirty = @(git status --porcelain --untracked-files=all -- generated/public-web-ui)
+  $genDirty = @(git -c core.quotepath=off status --porcelain --untracked-files=all -- generated/public-web-ui)
   if ($r2.Code -ne 0) { Gate 'web-ui-committed' 'FAIL' ("sync:web-ui failed: " + $r2.Tail) }
-  elseif ($genDirty.Count) { Gate 'web-ui-committed' 'FAIL' ("$($genDirty.Count) generated/public-web-ui files differ from HEAD after sync (CI will fail). Fix: git add generated/public-web-ui; git commit. e.g. " + (($genDirty | Select -First 4) -join '; ')) }
-  else { Gate 'web-ui-committed' 'PASS' 'regenerated bundle matches committed HEAD' }
+  elseif ($genDirty.Count) { Gate 'web-ui-committed' 'FAIL' ("$($genDirty.Count) generated/public-web-ui files are tracked again; the bundle is untracked build output. Fix: git rm -r --cached generated/public-web-ui. e.g. " + (($genDirty | Select -First 4) -join '; ')) }
+  else { Gate 'web-ui-committed' 'PASS' 'bundle regenerated; untracked build output, nothing to commit' }
   # Deleted paths still count for scope/size gates but cannot be syntax-checked.
   $nodeCheck = @($src | ? { $_ -like 'web-ui/*.js' -and (Test-Path -LiteralPath $_) } | % { node --check $_ 2>&1; if ($LASTEXITCODE) { "BAD $_" } } | ? { $_ -like 'BAD *' })
   if ($nodeCheck.Count) { Gate 'web-ui-syntax' 'FAIL' ($nodeCheck -join ', ') }
