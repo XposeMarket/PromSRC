@@ -5,7 +5,7 @@ import { getConfig } from '../../config/config';
 import { getExtensionDescriptor } from '../../extensions/registry';
 import { bindPluginCredential } from '../../connections/plugin-credential-binding';
 import { requireProtectedOwner, secureInputTransportAllowed } from './secure-access.router';
-import { PAIRED_PLUGIN_SETUP_ADAPTERS, pluginSetupSurfaceState, requirePluginDisconnect, requirePluginSetupAdapter } from './plugin-setup-access';
+import { PAIRED_PLUGIN_DISCONNECT_ADAPTERS, pluginSetupSurfaceState, requirePluginDisconnect, requirePluginSetupAdapter } from './plugin-setup-access';
 
 export const router = Router();
 // N1: the redaction wrapper is scoped to connection routes only (router is mounted at '/').
@@ -209,9 +209,9 @@ router.post('/api/connections-v2/:id/tools', (req, res) => {
 });
 
 router.post('/api/connections-v2/:id/disconnect', (req, res, next) => {
-  // A paired phone may only tear down connection types it could set up; model endpoints etc. need the owner.
+  // A paired phone may only tear down local-credential plugins; OAuth revocation, model endpoints etc. need the owner.
   const connection = getConnectionRuntime().orchestrator.listConnections().find(item => item.id === req.params.id);
-  requirePluginDisconnect(req, res, next, undefined, !!connection && PAIRED_PLUGIN_SETUP_ADAPTERS.has(connection.adapterId || ''));
+  requirePluginDisconnect(req, res, next, undefined, !!connection && PAIRED_PLUGIN_DISCONNECT_ADAPTERS.has(connection.adapterId || ''));
 }, async (req, res) => {
   try { await getConnectionRuntime().orchestrator.disconnect(req.params.id); res.json({ success: true }); }
   catch (error: any) { res.status(400).json({ success: false, error: error?.message || String(error) }); }

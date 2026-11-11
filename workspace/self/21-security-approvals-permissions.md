@@ -1,6 +1,6 @@
-# 21 — Security, approvals & permissions
+# 21 ? Security, approvals & permissions
 
-> **Last verified:** 2026-10-07 against PromSRC `a48712ccc` · **Owner area:** `src/security/`, `src/gateway/policy.ts`, `src/gateway/command-permissions.ts`, `src/gateway/approval-actions.ts`, `src/gateway/dev-source-approvals.ts`, `src/runtime/distribution.ts`
+> **Last verified:** 2026-10-07 against PromSRC `a48712ccc` ? **Owner area:** `src/security/`, `src/gateway/policy.ts`, `src/gateway/command-permissions.ts`, `src/gateway/approval-actions.ts`, `src/gateway/dev-source-approvals.ts`, `src/runtime/distribution.ts`
 > **Read this when:** changing command/file permissions, approval cards, final browser/desktop actions, dev-source access, elevated execution, secrets, policy tiers or public-distribution gates.
 
 ## Child-worker vault prewarming (PR782)
@@ -16,7 +16,7 @@ Context/model child workers warm only the vault's existing bounded derived-key c
 - `request_final_action_approval` is a separate one-shot grant immediately before high-impact Post/Send/Publish/Submit/Purchase/Transfer/Delete/Checkout UI actions. It binds the exact next browser/desktop action and must be consumed on that next call.
 - Dev-source writes have their own request, approval queue, path-scoped grant and apply boundary. Approving a command or enabling `prometheus_source_write` does not approve arbitrary files.
 - `src/gateway/policy.ts` defines READ/PROPOSE/COMMIT policy tiers and audit entries; scoped permission grants and tool-specific hard checks may further restrict any tier.
-- Secrets belong in managed config/auth/vault systems—not source, logs, proposals, prompts, tool results or documentation. `src/security/vault.ts` and `log-scrubber.ts` implement protected storage/redaction plumbing.
+- Secrets belong in managed config/auth/vault systems?not source, logs, proposals, prompts, tool results or documentation. `src/security/vault.ts` and `log-scrubber.ts` implement protected storage/redaction plumbing.
 - `isPublicDistributionBuild()` is driven by `PROMETHEUS_PUBLIC_BUILD` or package metadata `prometheusBuild: "public"`; public builds hide private Prometheus source/self-development tools and source categories.
 - Approval is a specific decision over a specific action/context, not blanket authorization for future or adjacent actions. Recheck fresh UI and actual post-action result after every high-impact action.
 
@@ -40,11 +40,11 @@ Context/model child workers warm only the vault's existing bounded derived-key c
 
 ## How it works
 
-### Three different “mode” concepts
+### Three different ?mode? concepts
 Do not collapse these settings:
-1. **Terminal approval mode** — `tools.permissions.shell.approval_mode` (`default` / `lite`) controls whether some terminal command-boundary approvals are required or skipped after policy checks.
-2. **Workspace tool mode** — `tools.workspace_mode` (`prometheus` / `terminal-first`) filters native file wrappers from the model-visible list. `src/runtime/workspace-tool-mode.ts` explicitly says it changes the editing surface, not filesystem, command, approval or source-access permissions.
-3. **Tool category activation** — `request_tool_category` exposes a specialist tool schema for a selected turn/session lifetime. It doesn't authorize the operation.
+1. **Terminal approval mode** ? `tools.permissions.shell.approval_mode` (`default` / `lite`) controls whether some terminal command-boundary approvals are required or skipped after policy checks.
+2. **Workspace tool mode** ? `tools.workspace_mode` (`prometheus` / `terminal-first`) filters native file wrappers from the model-visible list. `src/runtime/workspace-tool-mode.ts` explicitly says it changes the editing surface, not filesystem, command, approval or source-access permissions.
+3. **Tool category activation** ? `request_tool_category` exposes a specialist tool schema for a selected turn/session lifetime. It doesn't authorize the operation.
 
 Always report which setting or grant is involved. A terminal-first configuration is not Lite. A session-active category is not permission. A shell grant is not final UI approval.
 
@@ -57,7 +57,7 @@ The safe mental sequence is:
 3. Apply hard deny and path/command policy.
 4. Determine whether current scope/grants satisfy the action; if not, create the correct approval record/card.
 5. Verify approval status, target and lifetime at execution, then perform the specific operation.
-6. Audit and inspect the tool’s returned evidence; never infer success from approval alone.
+6. Audit and inspect the tool?s returned evidence; never infer success from approval alone.
 
 For connector/MCP wrappers, the target is resolved before policy so the actual operation is checked. `tool_call` discovery/dispatch is not a privileged escape hatch. See [05 Tools](05-tools-and-categories.md).
 
@@ -73,9 +73,9 @@ For connector/MCP wrappers, the target is resolved before policy so the actual o
 Do not use a broad persistent grant when a temporary/session approval suffices. Verify normalized Windows paths, symlink/junction targets and descendant matching; a path that lexically looks inside a project can resolve elsewhere. Never infer path approval from an unrelated dev-source or command approval.
 
 ### Approval cards, queues and one-shot actions
-The gateway stores pending approvals with IDs and action/tool metadata. `approval-actions.ts` validates the request and treats elevated-command, dev-source-edit/live-apply and final-action approval records as one-shot. A card “approved” state is not by itself proof that a later tool call used the exact grant correctly.
+The gateway stores pending approvals with IDs and action/tool metadata. `approval-actions.ts` validates the request and treats elevated-command, dev-source-edit/live-apply and final-action approval records as one-shot. A card ?approved? state is not by itself proof that a later tool call used the exact grant correctly.
 
-`request_final_action_approval` is intentionally late in the flow: prepare the target UI first, show a concise exact summary, identify account/surface/recipient/content and exact next tool, then ask. When approved, put the returned `final_action_approval_id` on the bound next browser/desktop click/press call, and inspect post-action UI evidence before reporting. The grant is not for “send anything” or a whole session. If the page/recipient/composer changed, obtain a new approval for the new action context.
+`request_final_action_approval` is intentionally late in the flow: prepare the target UI first, show a concise exact summary, identify account/surface/recipient/content and exact next tool, then ask. When approved, put the returned `final_action_approval_id` on the bound next browser/desktop click/press call, and inspect post-action UI evidence before reporting. The grant is not for ?send anything? or a whole session. If the page/recipient/composer changed, obtain a new approval for the new action context.
 
 Proposal approval is a separate review-and-execute workflow and may create a scoped execution task. Do not substitute a proposal card for a one-shot Post/Send/Publish/Purchase/Delete action where the immediate final-action rule applies.
 
@@ -141,8 +141,8 @@ Keep tests deterministic and avoid actual paid API calls, OS-admin operations, p
 
 ## Gotchas / sharp edges
 - **Schema visibility is not authorization.** Dynamic wrappers resolve their real name before policy; a forged direct call must meet the same checks.
-- **Approval mode names are easy to confuse.** “Lite permissions” refers to terminal approvals. “terminal-first” refers to which native workspace editing tools appear.
-- **Lite is not “allow anything.”** Unsafe blocked patterns and elevated/admin operations remain blocked or approval-gated; policy can independently require approval.
+- **Approval mode names are easy to confuse.** ?Lite permissions? refers to terminal approvals. ?terminal-first? refers to which native workspace editing tools appear.
+- **Lite is not ?allow anything.?** Unsafe blocked patterns and elevated/admin operations remain blocked or approval-gated; policy can independently require approval.
 - **A card must bind to one action.** Do not reuse final-action ID, change its target/recipient, or report success before post-action UI evidence.
 - **Do not use remembered approval for elevated commands.** Each command is fresh one-shot; saved grants never elevate.
 - **Source-write category is not the first approval step.** Request and receive scoped dev edit approval first.
@@ -159,13 +159,13 @@ Keep tests deterministic and avoid actual paid API calls, OS-admin operations, p
 5. For path/source rules, test traversal, case normalization on Windows, directory descendants, symlink/junction resolution, unapproved file and category-without-edit-approval.
 6. For secret handling, use synthetic credentials, verify vault lifecycle and ensure logs/errors/audit/results redact them; run privacy scanning.
 7. Run targeted regressions from [generated tests](generated/tests.md), `npx tsc --noEmit`, relevant package build/sync and `.github/workflows/pr-regression.yml` checks. Inspect logs for actual decision reasons.
-8. Update this doc when policy behavior changes; avoid documenting an unverified security guarantee as fact. For every “always/never” claim, cite a direct guard/test.
+8. Update this doc when policy behavior changes; avoid documenting an unverified security guarantee as fact. For every ?always/never? claim, cite a direct guard/test.
 
 ## Related
-- [05 Tools & categories](05-tools-and-categories.md) · [07 Source editing & PR workflow](07-source-editing-and-pr-workflow.md)
-- [12 Connectors/MCP](12-connectors-mcp-integrations.md) · [13 Browser & desktop](13-browser-desktop.md)
-- [18 Mobile app](18-mobile-app.md) · [23 Rich output/cards](23-rich-output-cards-artifacts.md) · [25 Sharp edges](25-sharp-edges.md)
-- [Generated tools](generated/tools.md) · [Generated categories](generated/tool-categories.md) · [Generated tests](generated/tests.md)
+- [05 Tools & categories](05-tools-and-categories.md) ? [07 Source editing & PR workflow](07-source-editing-and-pr-workflow.md)
+- [12 Connectors/MCP](12-connectors-mcp-integrations.md) ? [13 Browser & desktop](13-browser-desktop.md)
+- [18 Mobile app](18-mobile-app.md) ? [23 Rich output/cards](23-rich-output-cards-artifacts.md) ? [25 Sharp edges](25-sharp-edges.md)
+- [Generated tools](generated/tools.md) ? [Generated categories](generated/tool-categories.md) ? [Generated tests](generated/tests.md)
 
 ### Maintain one policy truth across layers
 - Schema builders decide what's offered; canonical manifest/legacy classifier decides category; provider adapters convert call names; executor enforces boundaries; approval actions bind a specific request; audit records outcome. A change may need coordinated edits across several layers.
@@ -193,5 +193,5 @@ Shared `ContentReview.js` renders in desktop Chat/Teams/Tasks/Proposals and mobi
 Scope boundary: this increment does not add native result-link/status tracking, immutable media snapshots, direct in-card prompt editing across all generation providers, or prove executed content equals preview. Approved remains distinct from posted. Agent result evidence remains in chat. Tests: content-review.regression.ts, needs-you-video-approval.regression.ts, scripts/test-content-review-ui.mjs.
 
 ## Paired plugin disconnect (2026-11-11)
-Disconnect is the reverse of paired plugin setup. `requirePluginDisconnect` (src/gateway/routes/plugin-setup-access.ts) guards `/api/connections/disconnect`, `/api/connections-v2/:id/disconnect` and `/api/protected-plugins/connection/:id/disconnect`: secure transport, then a revalidated pairing token, else the unchanged owner gate (cookie + exact-request consent). It skips the protected-storage check because it only removes access. Credential delete/replace and general secure-access actions stay owner-only. Regression: `npm run test:plugin-setup-access`. Review round 1 (Astra): paired disconnect is limited to teardown that only clears that plugin's own credential (which the phone can already overwrite through setup). Owner-only: legacy `obsidian` (deletes indexed vault notes) and `x` (deletes OAuth app credentials + xurl app), every `/api/protected-plugins/x/*` action, and v2 connections whose adapter is not in PAIRED_PLUGIN_SETUP_ADAPTERS (model endpoints, local resources, stdio MCP).
+Disconnect is the reverse of paired plugin setup. `requirePluginDisconnect` (src/gateway/routes/plugin-setup-access.ts) guards `/api/connections/disconnect`, `/api/connections-v2/:id/disconnect` and `/api/protected-plugins/connection/:id/disconnect`: secure transport, then a revalidated pairing token, else the unchanged owner gate (cookie + exact-request consent). It skips the protected-storage check because it only removes access. Credential delete/replace and general secure-access actions stay owner-only. Regression: `npm run test:plugin-setup-access`. Review round 1 (Astra): paired disconnect is limited to teardown that only clears that plugin's own credential (which the phone can already overwrite through setup). Review round 2: paired teardown is limited to PAIRED_PLUGIN_DISCONNECT_ADAPTERS (api-key, setup-token). Owner-only: OAuth connections (connector-oauth/mcp-oauth disconnect revokes the provider grant), legacy `obsidian` (deletes indexed vault notes), `x` (deletes OAuth app credentials + xurl app) and `vercel` (legacy vault key a phone cannot re-enter), every `/api/protected-plugins/x/*` action, and model endpoints/local resources/stdio MCP. The legacy route also refuses paired callers when the service has any v2 connection outside the allowlist.
 
