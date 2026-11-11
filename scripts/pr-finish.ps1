@@ -159,13 +159,13 @@ elseif ($tsTouched) {
 if ($webTouched) {
   $r = Run 'check:web-ui' 'npm run -s check:web-ui' (Join-Path $prDir 'webui.log')
   if ($r.Code -eq 0) { Gate 'web-ui-sync' 'PASS' 'check:web-ui clean (generated bundle matches source)' }
-  else { Gate 'web-ui-sync' 'FAIL' ("run 'npm run sync:web-ui' and commit generated/public-web-ui. " + $r.Tail) }
-  # CI only sees committed files: regenerate, then the generated bundle must be byte-identical to HEAD (incl. new untracked files).
+  else { Gate 'web-ui-sync' 'FAIL' ("run 'npm run sync:web-ui' (generated/public-web-ui is untracked build output). " + $r.Tail) }
+  # The bundle is gitignored build output: regenerate it and make sure nothing under it is tracked again.
   $r2 = Run 'sync:web-ui' 'npm run -s sync:web-ui' (Join-Path $prDir 'webui-sync.log')
   $genDirty = @(git -c core.quotepath=off status --porcelain --untracked-files=all -- generated/public-web-ui)
   if ($r2.Code -ne 0) { Gate 'web-ui-committed' 'FAIL' ("sync:web-ui failed: " + $r2.Tail) }
-  elseif ($genDirty.Count) { Gate 'web-ui-committed' 'FAIL' ("$($genDirty.Count) generated/public-web-ui files differ from HEAD after sync (CI will fail). Fix: git add generated/public-web-ui; git commit. e.g. " + (($genDirty | Select -First 4) -join '; ')) }
-  else { Gate 'web-ui-committed' 'PASS' 'regenerated bundle matches committed HEAD' }
+  elseif ($genDirty.Count) { Gate 'web-ui-committed' 'FAIL' ("$($genDirty.Count) generated/public-web-ui files are tracked again; the bundle is untracked build output. Fix: git rm -r --cached generated/public-web-ui. e.g. " + (($genDirty | Select -First 4) -join '; ')) }
+  else { Gate 'web-ui-committed' 'PASS' 'bundle regenerated; untracked build output, nothing to commit' }
   # Deleted paths still count for scope/size gates but cannot be syntax-checked.
   $nodeCheck = @($src | ? { $_ -like 'web-ui/*.js' -and (Test-Path -LiteralPath $_) } | % { node --check $_ 2>&1; if ($LASTEXITCODE) { "BAD $_" } } | ? { $_ -like 'BAD *' })
   if ($nodeCheck.Count) { Gate 'web-ui-syntax' 'FAIL' ($nodeCheck -join ', ') }
