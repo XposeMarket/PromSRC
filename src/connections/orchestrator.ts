@@ -6,6 +6,9 @@ import { ConnectionAttemptStore } from './attempt-store';
 import { ConnectionStore } from './connection-store';
 import { accountIdentitiesMatch } from './connector-contract';
 import { invalidateConnectionToolSurfaceCache } from './tool-surface';
+
+/** Adapters whose only proof of access is a stored credential; disconnecting them deletes it. */
+const CREDENTIAL_ADAPTERS = new Set(['api-key', 'setup-token']);
 import type {
   ConnectionAdapterResult, ConnectionAttempt, ConnectionPlan, ConnectionRecord,
   ConnectionDiscoveryResult, ConnectionStrategy, ConnectionVerificationResult,
@@ -240,7 +243,14 @@ export class ConnectionOrchestrator {
         console.warn(`[connections] disconnect cleanup failed for ${connectionId}:`, error?.message || error);
       }
     }
-    this.options.connections.update(connectionId, { enabled: false, authenticated: false, exposed: false, exposedTools: [], availableTools: [], authState: 'none', health: 'unavailable' });
+    // Credential-backed plugins (API key / setup token) return to a fresh "not set up" state:
+    // the stored key is gone, so the record must not keep claiming it is configured or point at
+    // the deleted reference. Registered tools stay so reconnecting only asks for credentials again.
+    const credentialBacked = CREDENTIAL_ADAPTERS.has(connection.adapterId || attempt?.plan?.strategy.adapter || '');
+    this.options.connections.update(connectionId, {
+      enabled: false, authenticated: false, exposed: false, exposedTools: [], availableTools: [], authState: 'none', health: 'unavailable',
+      ...(credentialBacked ? { configured: false, verified: false, credentialRef: undefined } : {}),
+    });
     invalidateConnectionToolSurfaceCache();
     this.options.activity.append({ type: 'connection.disconnected', connectionId, serviceId: connection.serviceId, pluginId: connection.pluginId, message: `Disconnected ${connection.serviceName || connection.serviceId}.` });
     this.emit({ type: 'connection_updated', connection: this.options.connections.get(connectionId) });
