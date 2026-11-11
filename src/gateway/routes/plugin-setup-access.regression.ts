@@ -35,6 +35,7 @@ async function main(): Promise<void> {
   app.post('/adapter/:adapter', (req, res, next) => requirePluginSetupAdapter(req, res, next, req.params.adapter, gates), (_req, res) => { res.json({ approved: true }); });
   let disconnects = 0;
   app.post('/api/connections-v2/:id/disconnect', (req, res, next) => requirePluginDisconnect(req, res, next, gates), (_req, res) => { disconnects += 1; res.json({ success: true }); });
+  app.post('/owner-only-disconnect', (req, res, next) => requirePluginDisconnect(req, res, next, gates, false), (_req, res) => { disconnects += 1; res.json({ success: true }); });
   const server = app.listen(0, '127.0.0.1');
   await new Promise<void>((resolve) => server.once('listening', resolve));
   const origin = `http://127.0.0.1:${(server.address() as any).port}`;
@@ -99,7 +100,11 @@ async function main(): Promise<void> {
     consent = false;
     assert.equal((await post('/api/connections-v2/conn_1/disconnect', {}, owner)).body.error, 'OWNER_CONSENT_REQUIRED');
     consent = true;
-    assert.equal(disconnects, 3);
+    // Teardown outside phone-settable plugin types (model endpoints, Obsidian index removal) stays owner-only.
+    const ownerOnly = await post('/owner-only-disconnect', {}, paired);
+    assert.equal(ownerOnly.status, 403); assert.equal(ownerOnly.body.error, 'OWNER_SURFACE_REQUIRED');
+    assert.equal((await post('/owner-only-disconnect', {}, owner)).status, 200, 'owner can still tear it down');
+    assert.equal(disconnects, 4);
 
     process.stdout.write('PASS plugin setup access: attempt-bound credentials route, owner path, transport/storage order, model endpoint excluded from paired adapters, paired disconnect\n');
   } finally {

@@ -459,7 +459,10 @@ router.post('/api/connections/save', (req: any, res: any) => {
   res.json({ success: true });
 });
 
-router.post('/api/connections/disconnect', (req: any, res: any, next: () => void) => requirePluginDisconnect(req, res, next), async (req: any, res: any) => {
+// Owner-only teardown: Obsidian deletes every registered vault's indexed notes; X deletes the OAuth app
+// credentials (not just tokens) and removes the xurl app. Everything else only clears that plugin's own credential.
+const OWNER_ONLY_LEGACY_DISCONNECT = new Set(['obsidian', 'x']);
+router.post('/api/connections/disconnect', (req: any, res: any, next: () => void) => requirePluginDisconnect(req, res, next, undefined, !OWNER_ONLY_LEGACY_DISCONNECT.has(String(req.body?.id || ''))), async (req: any, res: any) => {
   const { id } = req.body || {};
   if (!id) {
     res.status(400).json({ error: 'id required' });

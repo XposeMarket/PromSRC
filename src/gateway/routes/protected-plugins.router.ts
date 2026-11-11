@@ -57,7 +57,6 @@ router.post('/api/protected-plugins/x/:action', (req, res, next) => {
     if (!secureInputTransportAllowed(req)) { res.status(403).json({ error: 'SECURE_ORIGIN_REQUIRED' }); return; }
     next(); return;
   }
-  if (req.params.action === 'disconnect') { requirePluginDisconnect(req, res, next); return; }
   requireProtectedOwner(req, res, next);
 }, (req, res) => {
   const action = req.params.action;

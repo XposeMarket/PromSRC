@@ -41,14 +41,17 @@ export function requirePluginSetup(req: any, res: any, next: () => void, gates: 
 
 /**
  * Disconnect is the reverse of plugin setup: anything a paired phone may connect, it must be able to
- * disconnect (no one-way doors). It only removes access, so it skips the protected-storage check;
- * secure transport and per-request pairing revalidation still apply. Unpaired surfaces fall back to
- * the owner gate. Credential delete/replace and general secure-access actions stay owner-only.
+ * disconnect (no one-way doors). Disconnect clears that plugin's own local credential, which a paired
+ * phone can already overwrite through setup, so it grants no new power over secrets.
+ * The caller passes `pairedAllowed` only for teardown limited to plugin types a phone can set up
+ * (PAIRED_PLUGIN_SETUP_ADAPTERS); model endpoints, local executables and destructive teardown such as
+ * Obsidian index removal fall through to the owner gate. Secure transport and per-request pairing
+ * revalidation always apply. No protected-storage check: it only removes access.
  */
-export function requirePluginDisconnect(req: any, res: any, next: () => void, gates: PluginSetupGates = defaultGates): void {
+export function requirePluginDisconnect(req: any, res: any, next: () => void, gates: PluginSetupGates = defaultGates, pairedAllowed = true): void {
   res.setHeader('Cache-Control', 'no-store'); res.setHeader('Referrer-Policy', 'no-referrer');
   if (!secureInputTransportAllowed(req)) { res.status(403).json({ success: false, error: 'SECURE_ORIGIN_REQUIRED' }); return; }
-  if (gates.pairedDevice(req)) { next(); return; }
+  if (pairedAllowed && gates.pairedDevice(req)) { next(); return; }
   gates.ownerGate(req, res, next);
 }
 
