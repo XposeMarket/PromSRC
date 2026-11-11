@@ -24,7 +24,7 @@ concurrency:
 
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Browser OS-package mirrors can consume 10+ minutes before tests start.
     # Keep every regression mandatory while allowing dependency installation.
     timeout-minutes: 30
