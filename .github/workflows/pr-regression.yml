@@ -24,7 +24,7 @@ concurrency:
 
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Browser OS-package mirrors can consume 10+ minutes before tests start.
     # Keep every regression mandatory while allowing dependency installation.
     timeout-minutes: 30
@@ -38,12 +38,16 @@ jobs:
           cache: npm
       - name: Install dependencies without package lifecycle scripts
         run: npm ci --ignore-scripts
+      - name: Build public web UI bundle (generated/public-web-ui is not tracked)
+        run: npm run sync:web-ui
       - name: Verify public eval graders and local tool-loop recovery
         run: npm run -s test:eval-graders && npm run -s test:local-tool-loop
       - name: Build native terminal runtime used by tool regressions
         run: npm rebuild node-pty --ignore-scripts=false
       - name: Install Playwright Chromium for browser regressions
-        run: npx playwright install --with-deps chromium
+        # apt mirrors on hosted runners intermittently fail DNS; runner images already ship
+        # Chromium's system libs, so fall back to the browser-only download.
+        run: npx playwright install --with-deps chromium || npx playwright install chromium
       - name: Verify desktop stable/beta update channel
         run: node --test electron/update-channel.test.js
       - name: Verify release workflow and updater manifests
@@ -132,7 +136,7 @@ jobs:
         run: npx tsx src/gateway/connector-tool-capabilities.regression.ts && npx tsx src/extensions/runtime-registry.performance.regression.ts
       - name: Verify public web source sync
         run: |
-          npm run sync:web-ui
+          npm run check:web-ui
           git diff --exit-code
       - name: Verify tool activity edit line stats
         run: |

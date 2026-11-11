@@ -38,7 +38,7 @@ TasksPage renders planned_chat records as passive cards with authoritative steps
 | Cards and response rendering | `web-ui/src/cards/`, `web-ui/src/utils.js` → `renderMarkdown()` | Rich outputs and visual sandboxing; see [23 Rich output](23-rich-output-cards-artifacts.md). |
 | Feature-owned modules | `web-ui/src/features/{chat,connectors,usage}/` | Move changes with the owning feature; avoid growing monolithic page modules. |
 | Styles and themes | `web-ui/src/styles/`, especially `themes.css`, `base.css`, `pages.css` | Desktop entry CSS imports shared tokens and page styling. |
-| Public output | `generated/public-web-ui/` | Build product, not source. `scripts/check-public-web-ui-sync.js` enforces sync. |
+| Public output | `generated/public-web-ui/` | Build product, not source, and **not tracked in git** (gitignored since 2026-11-11). Built by `npm run sync:web-ui`, `npm run build` (`build:web` now syncs), npm install (postinstall builds it when missing) and the release `prepare:public:desktop`. CI builds it right after install. `scripts/check-public-web-ui-sync.js` enforces sync. PRs never commit it. |
 
 ## How it works
 
