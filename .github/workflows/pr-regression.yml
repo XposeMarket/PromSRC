@@ -45,7 +45,9 @@ jobs:
       - name: Build native terminal runtime used by tool regressions
         run: npm rebuild node-pty --ignore-scripts=false
       - name: Install Playwright Chromium for browser regressions
-        run: npx playwright install --with-deps chromium
+        # apt mirrors on hosted runners intermittently fail DNS; runner images already ship
+        # Chromium's system libs, so fall back to the browser-only download.
+        run: npx playwright install --with-deps chromium || npx playwright install chromium
       - name: Verify desktop stable/beta update channel
         run: node --test electron/update-channel.test.js
       - name: Verify release workflow and updater manifests
