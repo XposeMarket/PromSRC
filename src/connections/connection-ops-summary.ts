@@ -102,7 +102,10 @@ export function summarizeConnectionOps(
   const liveConnected = options.live?.connected === true;
   // A canonical record keeps its stored lifecycle gate, but a live connector that
   // reports "not connected" (revoked or expired grant) outranks the stored state.
-  const liveRevoked = !legacy && !runtimeInvalid && liveKnown && !liveConnected
+  // The connector overlay is matched by service id, so it only speaks for a canonical
+  // record that is not backed by an MCP server (those are judged by mcpStatus).
+  const canonicalLiveApplies = !legacy && !options.mcpStatus && liveKnown;
+  const liveRevoked = canonicalLiveApplies && !runtimeInvalid && !liveConnected
     && Boolean(connection?.enabled && connection?.authenticated);
   const connected = runtimeInvalid
     ? false
@@ -129,7 +132,7 @@ export function summarizeConnectionOps(
       ? false
       : legacy
         ? (liveKnown ? liveConnected : Boolean(connection?.verified))
-        : Boolean(connection?.verified) && (!liveKnown || liveConnected),
+        : Boolean(connection?.verified) && (!canonicalLiveApplies || liveConnected),
     toolCount: typeof options.live?.toolCount === 'number' ? options.live.toolCount : storedToolCount(connection),
     autoExposedToolCount: Array.isArray(connection?.exposedTools) ? connection.exposedTools.length : 0,
   };

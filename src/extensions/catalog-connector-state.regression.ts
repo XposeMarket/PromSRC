@@ -71,7 +71,9 @@ assert.deepEqual(legacyDown.availableTools, []);
 // Legacy stub with no live status (Vercel-style credential check) follows the base state.
 const legacyFromBase = overlayConnectionOnConnectorState(base, stub, undefined, descriptorTools);
 assert.equal(legacyFromBase.connected, true);
-assert.equal(legacyFromBase.verified, true);
+assert.equal(legacyFromBase.verified, false, 'no live signal must not be promoted to verified from saved state alone');
+assert.equal(legacyFromBase.registered, false);
+assert.deepEqual(legacyFromBase.availableTools, [], 'no live signal must not list tools as available');
 const legacyNoCreds = overlayConnectionOnConnectorState({ connected: false, hasCredentials: false }, stub, undefined, descriptorTools);
 assert.equal(legacyNoCreds.connected, false);
 assert.equal(legacyNoCreds.authState, 'none');

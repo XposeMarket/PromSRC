@@ -27,7 +27,7 @@ import{a as be}from"./chunk-WTYEVVN3.js";import{b as ye}from"./chunk-X7QQFLQC.js
           ${u.length?`<div><span class="cv-identity-label">Resource scope</span><strong>${r(u.slice(0,3).map(C=>C.displayName||C.id).join(", "))}</strong>${u.length>3?`<span>+${u.length-3} more</span>`:""}</div>`:""}
           ${S.length?`<div><span class="cv-identity-label">Capabilities</span><strong>${S.filter(C=>C.granted).length} granted</strong><span>${S.filter(C=>!C.granted).length} approval-gated</span></div>`:""}
           ${T.length?`<div><span class="cv-identity-label">Granted scopes</span><strong>${T.length} provider scope${T.length===1?"":"s"}</strong><span>${r(T.join(" \xB7 "))}</span></div>`:""}
-          ${f.length?`<div><span class="cv-identity-label">Tool exposure</span><strong>${P.length}/${f.length} exposed</strong><span>${i.health?`Health: ${r(i.health)}`:"Review-gated by default"}</span></div>`:""}
+          ${f.length?`<div><span class="cv-identity-label">Tool exposure</span><strong>${i.legacyRuntime?`${f.length} tools on`:`${P.length}/${f.length} exposed`}</strong><span>${i.health?`Health: ${r(i.health)}`:"Review-gated by default"}</span></div>`:""}
         </div>`:"";l.innerHTML=`<div class="cv-state-line"><strong>${r(o.label)}</strong>${d?`<span class="cv-state-chips">${d}</span>`:""}</div>${I}${v}`,l.style.display=""}let c=document.getElementById("cv-permissions");c&&(c.innerHTML=t.permissions.map(d=>`
           <div class="cv-perm-row">
             <div class="cv-perm-icon" style="background:${t.color}18;color:${t.color}">${r(d.icon)}</div>

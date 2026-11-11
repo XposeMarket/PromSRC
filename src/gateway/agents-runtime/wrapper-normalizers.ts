@@ -975,6 +975,7 @@ export function normalizeAgentTeamWrapperTool(name: string, rawArgs: any): { nam
     // run (run_now:false). With a task attached, a name may refer to an existing
     // agent, and silently creating a duplicate would be worse than the error.
     const namesNewAgent = args.run_now === false
+      && !hasNonEmptyValue(args.task_prompt) && !hasNonEmptyValue(args.task)
       && (hasNonEmptyValue(args.name) || hasNonEmptyValue(args.description));
     const hasCreateShorthand = args.from_role != null || args.specialization != null || namesNewAgent;
     if (args.subagent_id == null && hasCreateShorthand && !isPlainObjectArg(args.create_if_missing)) {

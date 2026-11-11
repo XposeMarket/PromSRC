@@ -33,5 +33,7 @@ const namedWithTask = normalizeAgentTeamWrapperTool('agent_ops', { action: 'spaw
 assert.equal(namedWithTask?.args.create_if_missing, undefined, 'a name plus a task must not silently create a duplicate agent');
 const namedRunNowTrue = normalizeAgentTeamWrapperTool('agent_ops', { action: 'spawn', name: 'Wrench', run_now: true, task_prompt: 'x' });
 assert.equal(namedRunNowTrue?.args.create_if_missing, undefined);
+const namedNoRunButTask = normalizeAgentTeamWrapperTool('agent_ops', { action: 'spawn', name: 'Wrench', run_now: false, task_prompt: 'List open quotes' });
+assert.equal(namedNoRunButTask?.args.create_if_missing, undefined, 'run_now:false with a task attached is still ambiguous and must not auto-create');
 
 console.log('[agent-ops-spawn-shorthand.regression] run_now:false shorthand, existing id, explicit envelope, bare spawn, and name-with-task passed');

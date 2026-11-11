@@ -548,7 +548,7 @@ function openConnectorView(id) {
           ${resources.length ? `<div><span class="cv-identity-label">Resource scope</span><strong>${escHtml(resources.slice(0, 3).map((resource) => resource.displayName || resource.id).join(', '))}</strong>${resources.length > 3 ? `<span>+${resources.length - 3} more</span>` : ''}</div>` : ''}
           ${grants.length ? `<div><span class="cv-identity-label">Capabilities</span><strong>${grants.filter((grant) => grant.granted).length} granted</strong><span>${grants.filter((grant) => !grant.granted).length} approval-gated</span></div>` : ''}
           ${scopes.length ? `<div><span class="cv-identity-label">Granted scopes</span><strong>${scopes.length} provider scope${scopes.length === 1 ? '' : 's'}</strong><span>${escHtml(scopes.join(' · '))}</span></div>` : ''}
-          ${registeredTools.length ? `<div><span class="cv-identity-label">Tool exposure</span><strong>${exposedTools.length}/${registeredTools.length} exposed</strong><span>${state.health ? `Health: ${escHtml(state.health)}` : 'Review-gated by default'}</span></div>` : ''}
+          ${registeredTools.length ? `<div><span class="cv-identity-label">Tool exposure</span><strong>${state.legacyRuntime ? `${registeredTools.length} tools on` : `${exposedTools.length}/${registeredTools.length} exposed`}</strong><span>${state.health ? `Health: ${escHtml(state.health)}` : 'Review-gated by default'}</span></div>` : ''}
         </div>`
       : '';
     stateEl.innerHTML = `<div class="cv-state-line"><strong>${escHtml(status.label)}</strong>${lifecycle ? `<span class="cv-state-chips">${lifecycle}</span>` : ''}</div>${identityMarkup}${errorMarkup}`;

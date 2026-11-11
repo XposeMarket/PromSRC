@@ -116,5 +116,16 @@ assert.equal(canonicalNeverVerified.verified, false, 'live status must not stand
 const canonicalVerifiedLive = summarizeConnectionOps({ ...canonical, verified: true }, { live: { connected: true, toolCount: 1 } });
 assert.equal(canonicalVerifiedLive.verified, true);
 
+// A healthy MCP-backed canonical record must not be flagged because a built-in
+// connector that happens to share its service id is disconnected.
+const mcpBackedHealthy = summarizeConnectionOps({ ...canonical, verified: true }, {
+  mcpStatus: { status: 'connected' },
+  live: { connected: false, toolCount: 0 },
+});
+assert.equal(mcpBackedHealthy.connected, true, 'a same-id disconnected connector must not revoke a healthy MCP connection');
+assert.notEqual(mcpBackedHealthy.authState, 'reauth_required');
+assert.equal(mcpBackedHealthy.action, undefined);
+assert.equal(mcpBackedHealthy.verified, true);
+
 
 console.log('[connection-ops-summary.regression] canonical registered gate, legacy live overlay, zero registered tools, and MCP invalidation passed');

@@ -35,19 +35,23 @@ export function overlayConnectionOnConnectorState(
 
   if (isLegacyCompatibilityConnection(latest)) {
     const connected = liveKnown ? liveStatus.connected === true : base.connected === true;
+    // Only an affirmative live signal counts as verification. With no live status
+    // (status collection failed, or the base state is just a saved key or session)
+    // the row stays unverified with no tools promoted, exactly as before this overlay.
+    const confirmed = liveKnown && liveStatus.connected === true;
     const needsReauth = !connected && liveKnown && latest.authenticated === true;
-    const tools = connected ? [...descriptorTools] : [];
+    const tools = confirmed ? [...descriptorTools] : [];
     return {
       ...base,
       connectionId: latest.id,
       connected,
       configured: connected || base.hasCredentials === true,
       authenticated: connected,
-      registered: connected,
-      exposed: connected,
-      verified: connected,
+      registered: confirmed,
+      exposed: confirmed,
+      verified: confirmed,
       authState: needsReauth ? 'reauth_required' : connected ? 'healthy' : 'none',
-      health: needsReauth ? 'degraded' : connected ? 'healthy' : 'unknown',
+      health: needsReauth ? 'degraded' : confirmed ? 'healthy' : 'unknown',
       contractVersion: latest.contractVersion,
       legacyRuntime: true,
       account: latest.account || base.account,
