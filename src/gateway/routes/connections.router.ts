@@ -1,5 +1,5 @@
 import { requireProtectedOwner } from './secure-access.router';
-import { requireAttemptBoundPluginSetup } from './plugin-setup-access';
+import { requireAttemptBoundPluginSetup, requirePluginDisconnect } from './plugin-setup-access';
 import { nativeAppSetup } from '../../connections/native-app-setup';
 import { getConnectionRuntime as getPluginConnectRuntime } from '../../connections/runtime';
 import { setPluginCredentialState } from '../../security/plugin-credential-state';
@@ -459,7 +459,7 @@ router.post('/api/connections/save', (req: any, res: any) => {
   res.json({ success: true });
 });
 
-router.post('/api/connections/disconnect', requireProtectedOwner, async (req: any, res: any) => {
+router.post('/api/connections/disconnect', (req: any, res: any, next: () => void) => requirePluginDisconnect(req, res, next), async (req: any, res: any) => {
   const { id } = req.body || {};
   if (!id) {
     res.status(400).json({ error: 'id required' });

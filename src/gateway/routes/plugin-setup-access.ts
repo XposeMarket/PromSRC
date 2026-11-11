@@ -40,6 +40,19 @@ export function requirePluginSetup(req: any, res: any, next: () => void, gates: 
 }
 
 /**
+ * Disconnect is the reverse of plugin setup: anything a paired phone may connect, it must be able to
+ * disconnect (no one-way doors). It only removes access, so it skips the protected-storage check;
+ * secure transport and per-request pairing revalidation still apply. Unpaired surfaces fall back to
+ * the owner gate. Credential delete/replace and general secure-access actions stay owner-only.
+ */
+export function requirePluginDisconnect(req: any, res: any, next: () => void, gates: PluginSetupGates = defaultGates): void {
+  res.setHeader('Cache-Control', 'no-store'); res.setHeader('Referrer-Policy', 'no-referrer');
+  if (!secureInputTransportAllowed(req)) { res.status(403).json({ success: false, error: 'SECURE_ORIGIN_REQUIRED' }); return; }
+  if (gates.pairedDevice(req)) { next(); return; }
+  gates.ownerGate(req, res, next);
+}
+
+/**
  * Legacy typed-credential save (`/api/connections/credentials`). The body picks the connector id and
  * accepts keys, tokens and OAuth app fields, so a paired device may use it only to complete a pending
  * connection attempt: the handler then validates that attempt and limits the fields. Without an

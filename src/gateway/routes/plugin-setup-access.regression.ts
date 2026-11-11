@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import express from 'express';
 import { SECURE_ACCESS_OWNER_COOKIE } from '../../security/secure-access-owner';
 import { requireProtectedOwner, type OwnerProof } from './secure-access.router';
-import { PAIRED_PLUGIN_SETUP_ADAPTERS, requireAttemptBoundPluginSetup, requirePluginSetupAdapter, type PluginSetupGates } from './plugin-setup-access';
+import { PAIRED_PLUGIN_SETUP_ADAPTERS, requireAttemptBoundPluginSetup, requirePluginDisconnect, requirePluginSetupAdapter, type PluginSetupGates } from './plugin-setup-access';
 
 const PAIRED = 'synthetic-paired';
 const OWNER = 'synthetic-owner';
@@ -33,6 +33,8 @@ async function main(): Promise<void> {
   let saves = 0;
   app.post('/api/connections/credentials', (req, res, next) => requireAttemptBoundPluginSetup(req, res, next, gates), (_req, res) => { saves += 1; res.json({ saved: true }); });
   app.post('/adapter/:adapter', (req, res, next) => requirePluginSetupAdapter(req, res, next, req.params.adapter, gates), (_req, res) => { res.json({ approved: true }); });
+  let disconnects = 0;
+  app.post('/api/connections-v2/:id/disconnect', (req, res, next) => requirePluginDisconnect(req, res, next, gates), (_req, res) => { disconnects += 1; res.json({ success: true }); });
   const server = app.listen(0, '127.0.0.1');
   await new Promise<void>((resolve) => server.once('listening', resolve));
   const origin = `http://127.0.0.1:${(server.address() as any).port}`;
@@ -84,7 +86,22 @@ async function main(): Promise<void> {
     }
     assert.equal((await post('/adapter/openai-compatible-model', {}, owner)).status, 200, 'owner can still approve a model endpoint');
 
-    process.stdout.write('PASS plugin setup access: attempt-bound credentials route, owner path, transport/storage order, model endpoint excluded from paired adapters\n');
+    // 3. Disconnect is the reverse of setup: a paired phone that can connect must be able to disconnect.
+    assert.equal((await post('/api/connections-v2/conn_1/disconnect', {}, paired)).status, 200, 'paired phone can disconnect');
+    storage = false;
+    assert.equal((await post('/api/connections-v2/conn_1/disconnect', {}, paired)).status, 200, 'removing access never needs protected storage');
+    storage = true;
+    const anon = await post('/api/connections-v2/conn_1/disconnect', {});
+    assert.equal(anon.status, 403); assert.equal(anon.body.error, 'OWNER_SURFACE_REQUIRED');
+    assert.equal((await post('/api/connections-v2/conn_1/disconnect', {}, { 'x-pairing-token': 'unknown' })).status, 403, 'unknown pairing token refused');
+    assert.equal((await post('/api/connections-v2/conn_1/disconnect', {}, { ...paired, origin: 'https://evil.example' })).status, 403, 'cross-origin refused even when paired');
+    assert.equal((await post('/api/connections-v2/conn_1/disconnect', {}, owner)).status, 200, 'desktop owner path unchanged');
+    consent = false;
+    assert.equal((await post('/api/connections-v2/conn_1/disconnect', {}, owner)).body.error, 'OWNER_CONSENT_REQUIRED');
+    consent = true;
+    assert.equal(disconnects, 3);
+
+    process.stdout.write('PASS plugin setup access: attempt-bound credentials route, owner path, transport/storage order, model endpoint excluded from paired adapters, paired disconnect\n');
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
