@@ -9678,3 +9678,32 @@ p:has(> .prom-inline-figure + br + .prom-inline-figure) .prom-inline-media {
 .chat-question-card .pq-login-open{min-height:49px;border-radius:28px;background:var(--text-primary,#f4f4f4);color:var(--bg-secondary,#222);font-weight:600}
 .chat-question-card .pq-login-note{line-height:1.6}
 .chat-question-card:has(.pq-login-handoff) .pq-actions button{border-radius:28px;min-height:44px}
+
+/* Reasoning summaries (OpenAI + Anthropic) show the full newest paragraph,
+   wrapped, instead of a one-line ellipsis (Raul, 2026-11-11). */
+.live-turn-tool-summary strong.t-think.is-reasoning,
+.live-turn-thought-summary .t-think.is-reasoning,
+.live-turn-tool-summary strong.t-think.is-reasoning .t-think-sizer,
+.live-turn-thought-summary .t-think.is-reasoning .t-think-sizer,
+.live-turn-tool-summary strong.t-think.is-reasoning .t-think-text,
+.live-turn-thought-summary .t-think.is-reasoning .t-think-text {
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+}
+.live-turn-tool-summary strong.t-think.is-reasoning,
+.live-turn-thought-summary .t-think.is-reasoning {
+  font-weight: 600;
+  line-height: 1.4;
+}
+.live-turn-tool-summary:has(strong.t-think.is-reasoning) {
+  align-items: flex-start;
+}
+
+/* Exposed reasoning blocks inside the expanded tool body stay muted grey (Raul, 2026-11-12). */
+.live-turn-prose.is-reasoning-prose,
+.live-turn-prose.is-reasoning-prose .live-turn-md,
+.live-turn-prose.is-reasoning-prose .live-turn-md * {
+  color: var(--prom-muted, var(--muted, #8a8f98)) !important;
+}
+.live-turn-prose.is-reasoning-prose { font-size: 0.92em; line-height: 1.45; border-color: transparent; }

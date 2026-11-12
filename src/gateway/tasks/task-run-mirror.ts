@@ -17,6 +17,11 @@ export interface TaskRunBinding {
 
 const activeTaskRunsBySession = new Map<string, TaskRunBinding>();
 
+/** Chat events mirrorChatEventToTask acts on; everything else is ignored. */
+export const MIRRORED_TASK_EVENTS: ReadonlySet<string> = new Set([
+  'tool_call', 'tool_result', 'progress_state', 'task_step_done', 'info', 'warning', 'error', 'final', 'done',
+]);
+
 function normalizeSessionId(sessionId: string): string {
   return String(sessionId || '').trim();
 }
@@ -106,8 +111,13 @@ export function mirrorChatEventToTask(
   broadcast?: (data: any) => void,
   opts?: { scheduleId?: string; teamId?: string; agentId?: string; agentName?: string },
 ): void {
+  // Hot path: sendSSE mirrors EVERY chat event (each streamed token and
+  // thinking delta). Bail out before the synchronous task-file read for events
+  // this mirror ignores; a profiled 13.8s gateway stall came from loadTask()
+  // running once per token on a large task record.
+  if (!taskId || !MIRRORED_TASK_EVENTS.has(event)) return;
   try {
-    if (!taskId || !loadTask(taskId)) return;
+    if (!loadTask(taskId)) return;
     if (event === 'tool_call') {
       const action = String(data?.action || 'unknown');
       appendJournal(taskId, {

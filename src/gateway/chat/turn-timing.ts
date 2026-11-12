@@ -147,6 +147,7 @@ function appendTimingLine(
 // a V8 CPU profile from request_received to provider_request_start for the
 // next few turns. Profiles land in `<configDir>/logs/ttft-profiles/`.
 const TTFT_PROFILE_MAX_TURNS = 3;
+const TTFT_PROFILE_FLAG_TTL_MS = 30 * 60_000;
 let ttftProfileActiveTurn = '';
 let ttftProfileSession: any = null;
 let ttftProfilesTaken = 0;
@@ -160,6 +161,11 @@ function maybeStartTtftProfile(configDir: string, turnId: string): void {
   if (ttftProfileActiveTurn) return;
   let flagMtime = 0;
   try { flagMtime = fs.statSync(ttftProfileFlagPath(configDir)).mtimeMs; } catch { return; }
+  // Starting the V8 CPU profiler enumerates every loaded code object and blocks
+  // the event loop for seconds on a large gateway (3.66s measured 2026-11-11,
+  // right before the user's request was admitted). A forgotten debug flag must
+  // not tax every first turn after each restart, so the opt-in expires.
+  if (Date.now() - flagMtime > TTFT_PROFILE_FLAG_TTL_MS) return;
   if (flagMtime !== ttftProfileFlagSeenAt) { ttftProfileFlagSeenAt = flagMtime; ttftProfilesTaken = 0; }
   if (ttftProfilesTaken >= TTFT_PROFILE_MAX_TURNS) return;
   try {

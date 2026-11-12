@@ -31,7 +31,7 @@ import { getCoordinatedDevEdit, listCoordinatedDevEditPeers, beginCoordinatedDev
 import { formatDevVerificationSummary, resolveDevVerificationPlan, runDevVerificationPlan } from '../../dev-verification.js';
 import { createFinalActionApprovalScope, grantFinalActionApproval } from '../../final-action-approvals.js';
 import { claimBrainDreamProposalSlot, releaseBrainDreamProposalSlot } from '../../brain/brain-proposal-policy.js';
-import { inferAgentIdFromSession, inferApprovalOrigin, inferTeamNoteContext, appendAndBroadcastTeamChat, getTeamChatTargetMetadata, resolveTeammateReference, normalizeShareArtifactArgs, routeMemberProposalToManager, isProposalExecutionSession, resolveTaskForSession, maybeStartTeamStatusTaskMirror, getPromApplySurfacesForFiles, formatPromApplyDevChangesInstruction, executeTool } from '../subagent-executor';
+import { inferAgentIdFromSession, inferApprovalOrigin, inferTeamNoteContext, appendAndBroadcastTeamChat, getTeamChatTargetMetadata, resolveTeammateReference, normalizeShareArtifactArgs, routeMemberProposalToManager, isProposalExecutionSession, resolveTaskForSession, resolveRestartOwningTask, maybeStartTeamStatusTaskMirror, getPromApplySurfacesForFiles, formatPromApplyDevChangesInstruction, executeTool } from '../subagent-executor';
 import type { createWorkspaceHelpers } from '../workspace-helpers';
 export interface DefaultToolContext extends ReturnType<typeof createWorkspaceHelpers> {
  name: string;
@@ -1637,7 +1637,7 @@ export async function handleDefaultTool(ctx: DefaultToolContext): Promise<Awaite
           if (hasBackend) {
             try {
               const { buildAndRestart, gracefulRestart } = require('../../lifecycle');
-              const restartTask = resolveTaskForSession(sessionId);
+              const restartTask = resolveRestartOwningTask(sessionId);
               const sessionHint = getSessionChannelHint(sessionId);
               const isTelegramSession = String(sessionId || '').startsWith('telegram_') || sessionHint?.channel === 'telegram';
               const ctx = {
@@ -1852,7 +1852,7 @@ export async function handleDefaultTool(ctx: DefaultToolContext): Promise<Awaite
           const reason = String(args.reason || 'manual restart').trim();
           try {
             const { gracefulRestart } = require('../../lifecycle');
-            const restartTask = resolveTaskForSession(sessionId);
+            const restartTask = resolveRestartOwningTask(sessionId);
             const sessionHint = getSessionChannelHint(sessionId);
             const isTelegramSession = String(sessionId || '').startsWith('telegram_') || sessionHint?.channel === 'telegram';
             const resolvedTelegramChatId = Number.isFinite(Number(args.telegram_chat_id))

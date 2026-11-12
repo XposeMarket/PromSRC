@@ -2751,6 +2751,15 @@ html.pm-session-context-open * {
   box-sizing: border-box;
   padding: 10px 0 20px;
 }
+/* Keyboard open on an unsaved chat: the composer and the fixed context dock
+   (gateway + directed-chat rows) take most of the remaining height and were
+   drawn over the starter cards. Hide the starters while typing; they return
+   when the keyboard closes. */
+.pm-app.pm-keyboard-open .pm-mobile-empty-chat-cards,
+body.pm-keyboard-open .pm-mobile-empty-chat-cards {
+  visibility: hidden;
+  pointer-events: none;
+}
 .pm-mobile-empty-chat-cards {
   width: min(100%, 360px);
   display: flex;

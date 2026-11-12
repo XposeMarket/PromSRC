@@ -21,7 +21,7 @@ for(const [surface,group] of [['mobile',mobileGroup],['desktop',desktopGroup]]){
     assert.equal(result.some(g=>g.kind==='reasoning-live'),false);
     const tools=result.find(g=>g.kind==='tools');
     assert.equal(tools.id,before.find(g=>g.kind==='tools').id);
-    assert.equal(tools.entries.length,3);assert.equal(title(tools.reasoningEntries),'Checked');
+    assert.deepEqual(tools.entries.map(e=>e.id),['t1','r1','t2','r2','t3']);assert.equal(title(tools.reasoningEntries),'Checked');
     const next=fold(group([...entries,p('p2'),t('t4'),r('r3','**Next**')]),{streaming});
     assert.equal(next.filter(g=>g.kind==='tools').length,2,surface+' commentary is the boundary');
     assert.equal(title(next.filter(g=>g.kind==='tools')[0].reasoningEntries),'Checked');
@@ -34,7 +34,7 @@ for(const [surface,group] of [['mobile',mobileGroup],['desktop',desktopGroup]]){
   const promoted=fold([{kind:'thought-summary',id:'s0',entries:[r('r1','**Read**')]},{kind:'tools',id:'tg1',entries:[t('t1')],status:'running',live:true,extra:{k:1}}],{streaming:true});
   const pt=promoted.find(g=>g.kind==='tools');
   assert.equal(pt.status,'running');assert.equal(pt.live,true);assert.deepEqual(pt.extra,{k:1});
-  assert.equal(pt.id.startsWith('reasoning_phase_'),true);assert.equal(title(pt.reasoningEntries),'Read');assert.equal(pt.entries.length,1);
+  assert.equal(pt.id.startsWith('reasoning_phase_'),true);assert.equal(title(pt.reasoningEntries),'Read');assert.deepEqual(pt.entries.map(e=>e.id),['r1','t1']);
   // Non-streaming trailing summary after a boundary is static thought-summary, never live thinking.
   const restored=fold([{kind:'commentary',id:'c',entries:[p('p1')]},{kind:'thought-summary',id:'s',entries:[r('r1','**Read**')]}],{streaming:false});
   assert.equal(restored.some(g=>g.kind==='reasoning-live'),false);
