@@ -80,6 +80,7 @@
 ## Config & knobs
 - Connector account tokens are owned by each connector/OAuth adapter and the configured vault; use the connector's settings/setup path rather than reading vault values into prompts.
 - MCP server configuration is mediated by connection/MCP administration. Preset manifests map known server transport fields; custom servers need explicit transport/command/args/env configuration and trusted ownership.
+- Disconnecting an API-key or setup-token plugin deletes its stored credential and resets the record to "not set up" (`configured:false`, `verified:false`, no `credentialRef`) while keeping `registeredTools`, so the plugin's tools stay listed but Connect asks for credentials again from scratch (`ConnectionOrchestrator.disconnect`, regression `src/connections/disconnect-reset.regression.ts`). OAuth/browser/MCP records keep their configured flag.
 - `connection_ops` actions include discovery, planning, connect/continue/verify, repair/status/cancel/disconnect/list, and tool/exposure controls. Use the tool schema for current fields rather than inventing arguments.
 - `<connector>_api_request` supports a connector-defined default base and optionally a connector-defined named base. The server determines the API host.
 - `x_search_ops` and `x_posts` are convenience wrappers; write actions still dispatch through the X connector and its established policy.
