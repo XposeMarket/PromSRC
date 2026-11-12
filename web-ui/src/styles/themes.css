@@ -4003,6 +4003,38 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area {
   }
 }
 
+/* Narrow desktop windows (<=900px, sidebar still open): the header controls
+   had no sizing below the breakpoint, so search/priority collapsed to 4px and
+   the icons stacked over each other. Give them the same fixed 30px chips. */
+@media (max-width: 900px) {
+  body:not(.pm-mobile-active) .sidebar-top-actions {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 2px;
+  }
+
+  body:not(.pm-mobile-active) .sidebar-top-actions > .sidebar-header-btn {
+    position: relative;
+    display: inline-grid;
+    flex: 0 0 30px;
+    width: 30px;
+    height: 30px;
+    place-items: center;
+    padding: 0;
+    border: 0 !important;
+    border-radius: 7px;
+    background: transparent !important;
+    color: var(--sidebar-muted, var(--muted));
+    box-shadow: none !important;
+  }
+
+  body:not(.pm-mobile-active) .sidebar-top-actions > .sidebar-header-btn svg {
+    width: 16px;
+    height: 16px;
+  }
+}
+
 /* Desktop sidebar header + priority rail. Keep these controls quiet and
    aligned with the P1 mark; the sidebar itself is the only surface. */
 @media (min-width: 901px) {

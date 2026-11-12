@@ -129,8 +129,10 @@ const s3 = summary('s3', '**Writing the fix**\nApplying changes.');
     const folded = foldMobileReasoningSummaryGroups(groupTrace(entries), { streaming });
     assert.equal(folded.length, 1);
     assert.equal(folded[0].kind, 'tools');
-    assert.equal(folded[0].entries.length, 3);
-    assert.equal(mobileReasoningSummaryTitle(folded[0].reasoningEntries), 'Writing the fix');
+    // Body is chronological: reasoning blocks interleave with the tool calls (Raul, 2026-11-12).
+    assert.deepEqual(folded[0].entries.map(e => e.id), ['s1', 't1', 's2', 't2', 's3', 't3']);
+    assert.equal(folded[0].entries.filter(e => e.type === 'tool').length, 3);
+    assert.equal(mobileReasoningSummaryTitle(folded[0].reasoningEntries), 'Writing the fix\nApplying changes.');
     assert.deepEqual(folded[0].reasoningEntries.map(e => e.id), ['s1', 's2', 's3']);
   }
   const before = foldMobileReasoningSummaryGroups(groupTrace(entries.slice(0, 2)), { streaming: true });
@@ -139,16 +141,19 @@ const s3 = summary('s3', '**Writing the fix**\nApplying changes.');
   const trailing = foldMobileReasoningSummaryGroups(groupTrace([tool('t1','Read'), s1, s2]), { streaming: true });
   assert.equal(trailing.length, 1, 'trailing summary updates tool header, not separate live label');
   assert.equal(trailing[0].kind, 'tools');
-  assert.equal(mobileReasoningSummaryTitle(trailing[0].reasoningEntries), 'Checking reasoning slot');
+  assert.equal(mobileReasoningSummaryTitle(trailing[0].reasoningEntries), 'Checking reasoning slot\nComparing providers.');
   const boundary = foldMobileReasoningSummaryGroups(groupTrace([tool('t1','Read'), s1, preamble('p2','Found it'), s2, tool('t2','Check')]), { streaming:true });
   assert.equal(boundary.filter(g => g.kind === 'tools').length, 2);
   assert.equal(boundary.filter(g => g.kind === 'thought').length, 1);
-  assert.equal(mobileReasoningSummaryTitle(boundary[0].reasoningEntries), 'Inspecting the renderer');
-  assert.equal(mobileReasoningSummaryTitle(boundary[2].reasoningEntries), 'Checking reasoning slot');
+  assert.equal(mobileReasoningSummaryTitle(boundary[0].reasoningEntries), 'Inspecting the renderer\nReading source.');
+  assert.equal(mobileReasoningSummaryTitle(boundary[2].reasoningEntries), 'Checking reasoning slot\nComparing providers.');
   const pending = foldMobileReasoningSummaryGroups(groupTrace([s1,s2]), {streaming:true});
   assert.equal(pending.length,1);
   assert.equal(pending[0].kind,'reasoning-live');
-  assert.equal(pending[0].title,'Checking reasoning slot');
+  assert.equal(pending[0].title,'Checking reasoning slot\nComparing providers.');
+  // Full paragraphs stream; the newest paragraph replaces the previous one (Raul 2026-11-11).
+  assert.equal(mobileReasoningSummaryTitle([summary('pp', 'First thought paragraph that runs long.\n\nSecond paragraph is the newest one.')]), 'Second paragraph is the newest one.');
+  assert.equal(mobileReasoningSummaryTitle([summary('hh', '**Heading**\n\nBody under heading.')]), 'Heading\nBody under heading.');
 }
 
 
@@ -174,7 +179,7 @@ const s3 = summary('s3', '**Writing the fix**\nApplying changes.');
 }
 
 {
-  assert.equal(mobileReasoningSummaryTitle([s1]), 'Inspecting the renderer');
+  assert.equal(mobileReasoningSummaryTitle([s1]), 'Inspecting the renderer\nReading source.');
   assert.equal(mobileReasoningSummaryTitle([summary('plain', 'No heading here, just text')]), 'No heading here, just text');
   assert.equal(mobileReasoningSummaryTitle([]), '');
   const html = renderMobileReasoningLiveGroup({ id: MOBILE_REASONING_LIVE_GROUP_ID, entries: [summary('x', '<b>Probe</b> & "check"')] });
@@ -182,12 +187,12 @@ const s3 = summary('s3', '**Writing the fix**\nApplying changes.');
   assert.match(html, /class="pm-trace-thought-summary"/, 'reuses the existing live label slot styling');
   assert.doesNotMatch(html, /<b>Probe/, 'summary titles are escaped');
   assert.equal(renderMobileReasoningLiveGroup({ entries: [] }), '');
-  assert.match(renderMobileReasoningLiveGroup({ entries: [s2] }, { renderLabel: (t) => `[${t}]` }), /\[Checking reasoning slot\]/);
+  assert.match(renderMobileReasoningLiveGroup({ entries: [s2] }, { renderLabel: (t) => `[${t}]` }), /\[Checking reasoning slot\nComparing providers\.\]/);
 }
 console.log('G: OpenAI reasoning summaries overwrite one live label');
 
 // ---------- wiring contracts (renderer runs inside a DOM factory) ----------
-assert.match(renderer, /import \{ foldMobileReasoningSummaryGroups, mobileReasoningSummaryTitle, renderMobileReasoningLiveGroup \} from '\.\/mobile-reasoning-summary-fold\.js';/);
+assert.match(renderer, /import \{ foldMobileReasoningSummaryGroups,[^}]*mobileReasoningSummaryTitle,[^}]*renderMobileReasoningLiveGroup \} from '\.\/mobile-reasoning-summary-fold\.js';/);
 assert.match(renderer, /if \(!kindFilter\) groups = foldMobileReasoningSummaryGroups\(groups, \{ streaming \}\);/);
 assert.match(renderer, /group\.kind === 'reasoning-live'\) return renderMobileReasoningLiveGroup\(group, \{ renderLabel: renderThinkingState \}\)/);
 assert.match(renderer, /mobileReasoningSummaryTitle\(group\.reasoningEntries\)/);

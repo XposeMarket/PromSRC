@@ -1241,6 +1241,29 @@ export function runtimeToolDetailMetadata(data: Record<string, unknown> | null |
   return out;
 }
 
+/** Append a raw reasoning delta to the current reasoning block; returns true when a new block entry was created. */
+export function appendRuntimeReasoningDelta(entries: Array<Record<string, unknown>>, raw: string): boolean {
+  if (!raw) return false;
+  const last = entries[entries.length - 1];
+  const lastExtra = last?.extra as { source?: unknown; event?: unknown } | undefined;
+  if (last && last.type === 'think' && lastExtra?.source === 'reasoning_summary' && lastExtra?.event === 'reasoning_summary_delta') {
+    const next = `${last.content || ''}${raw}`;
+    last.content = next.length > 16_000 ? next.slice(-16_000) : next;
+    return false;
+  }
+  const content = raw.replace(/^\s+/, '');
+  if (!content) return false;
+  entries.push({
+    ts: new Date().toLocaleTimeString(),
+    type: 'think',
+    actor: 'Prom',
+    content,
+    extra: { source: 'reasoning_summary', event: 'reasoning_summary_delta', visibility: 'user', reasoningKind: 'summary' },
+  });
+  if (entries.length > 12_000) entries.splice(0, entries.length - 12_000);
+  return true;
+}
+
 export function runtimeProcessEntryFromSseEvent(type: string, data: any): Record<string, any> | null {
   const eventType = String(type || '').trim();
   const source = String(data?.source || data?.extra?.source || '').trim().toLowerCase();
@@ -2507,6 +2530,23 @@ router.post('/api/chat', async (req, res) => {
           thinkingTail: runtimeThinkingTail,
           processEntries: runtimeProcessEntries.length ? [...runtimeProcessEntries] : undefined,
         });
+      }
+      return;
+    }
+    if (event === 'reasoning_summary_delta') {
+      // Coalesce provider reasoning deltas into ONE growing, untrimmed process entry per
+      // reasoning block (was one trimmed entry + full checkpoint copy/flush per delta,
+      // which split words and stalled the loop on long Anthropic thinking). Copy and
+      // persist only when a new block starts or every 2s.
+      if (!__firstContentLogged) { __firstContentLogged = true; __turnTimingLog(`FIRST_CONTENT(${event})`); }
+      const started = appendRuntimeReasoningDelta(runtimeProcessEntries, String(data?.text ?? data?.summary ?? ''));
+      const now = Date.now();
+      const persist = now - lastRuntimeThinkingCheckpointAt >= 2000;
+      if (persist) lastRuntimeThinkingCheckpointAt = now;
+      if (started || persist) {
+        updateLiveRuntimeCheckpoint(runtimeId, { event, at: now, processEntries: [...runtimeProcessEntries] }, { persist });
+      } else {
+        markLiveRuntimeProgress(runtimeId, { event, phase: 'model_stream' });
       }
       return;
     }

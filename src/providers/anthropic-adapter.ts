@@ -1436,10 +1436,16 @@ export class AnthropicAdapter implements LLMProvider {
                 if (delta.text) options.onModelEvent?.({ type: 'assistant_delta', text: delta.text, nativeType: 'content_block_delta.text_delta', provider: this.id, model });
 	              } else if (delta.type === 'thinking_delta') {
 	                const thinkDelta = delta.thinking || '';
+	                const thinkingIsSummary = !/claude-3/i.test(String(model || ''));
 	                thinking += thinkDelta;
 	                if (thinkDelta) {
-	                  options.onThinking?.(thinkDelta);
-	                  options.onModelEvent?.({ type: 'reasoning_delta', text: thinkDelta, nativeType: 'content_block_delta.thinking_delta', provider: this.id, model });
+	                  // Claude 4+ returns SUMMARIZED thinking (we also request display:'summarized'),
+	                  // the same user-safe class as OpenAI reasoning summaries. Route it through the
+	                  // visible reasoning-summary channel so every provider renders identically.
+	                  // Claude 3.x returned raw thinking, so it stays on the private channel.
+	                  if (thinkingIsSummary && options.onReasoningSummary) options.onReasoningSummary(thinkDelta);
+	                  else options.onThinking?.(thinkDelta);
+	                  options.onModelEvent?.({ type: 'reasoning_delta', text: thinkDelta, summary: thinkingIsSummary, nativeType: 'content_block_delta.thinking_delta', provider: this.id, model });
 	                }
 	              } else if (delta.type === 'input_json_delta') {
                 if (blocks[idx]) {

@@ -217,6 +217,17 @@ function getRecentConversationForRestart(previousSessionId?: string): {
   }
 }
 
+function isRestartOwningTaskLive(taskId: string): boolean {
+  try {
+    const { loadTask } = require('./tasks/task-store') as typeof import('./tasks/task-store');
+    const { isLiveRestartOwnerStatus } = require('./tasks/restart-owner') as typeof import('./tasks/restart-owner');
+    // Unknown/missing task keeps the historical task-owned behaviour.
+    return isLiveRestartOwnerStatus(loadTask(String(taskId))?.status);
+  } catch {
+    return true;
+  }
+}
+
 function isPlainManualGatewayRestartRequest(value: string): boolean {
   const normalized = String(value || '')
     .toLowerCase()
@@ -464,10 +475,14 @@ function buildHotRestartTargets(restartCtx: RestartContext): HotRestartTarget[] 
   // A durable task owns its restart lifecycle. Startup recovery relaunches the
   // task and its normal delivery path reports the result; a separate boot chat
   // message would leak internal task-session state and race the task status.
+  // Defense in depth: a restart context written by an older gateway may name a
+  // task that had already finished. A finished task relaunches nothing, so
+  // skipping the chat here would orphan the turn that asked for the restart.
   if (
     restartCtx.taskId
     && restartCtx.suppressStandaloneRestartMessage
     && (restartCtx.taskInitiatedTool === 'gateway_restart' || restartCtx.taskInitiatedTool === 'prom_apply_dev_changes')
+    && isRestartOwningTaskLive(restartCtx.taskId)
   ) {
     return [];
   }

@@ -45,7 +45,8 @@ assert.match(renderer, /Prefer it over the[\s\S]{0,180}durable reasoning-summary
 assert.match(renderer, /latestToolGroupIndex === groups\.length - 1/, 'only the current trailing tool group may own live summary presentation');
 assert.doesNotMatch(renderer, /if \(isMutableProgress && activeToolGroup\)/, 'safe provider summaries are mutable headers and must not split a stable tool phase (only real commentary, vision, or compaction boundaries split)');
 assert.doesNotMatch(renderer, /const pendingSummary = previous\?\.kind === 'thought-summary'/, 'narration must remain inline outside the following tool disclosure');
-assert.match(renderer, /const progressSummary = mobileReasoningSummaryTitle\(group\.reasoningEntries\)\s+\|\| _mobileTraceProgressSummary\(group\.entries\)/, 'tool groups must prefer the reasoning-summary title attached to that group, falling back to its own progress summary');
+assert.match(renderer, /const reasoningTitle = isLiveCurrent \? mobileReasoningSummaryTitle\(group\.reasoningEntries\) : '';/, 'live tool groups prefer the reasoning-summary title; finished groups use the normal tool summary (Raul, 2026-11-12)');
+assert.match(renderer, /const progressSummary = reasoningTitle\s+\|\| _mobileTraceProgressSummary\(toolOnlyEntries\)/, 'tool groups fall back to their own progress summary, excluding reasoning entries');
 assert.match(renderer, /const toolBodyEntries = visibleEntries;/, 'safe summary bodies must be visible inside their tool phase');
 assert.match(renderer, /String\(extra\.source \|\| entry\?\.source \|\| ''\)\.toLowerCase\(\) !== 'agent_progress'/, 'recovered summaries must retain their model-progress ownership');
 assert.match(renderer, /pm-trace-tool-icon\$\{isLiveCurrent \? ' is-live' : ''\}/, 'active tool rows must expose a live status indicator');

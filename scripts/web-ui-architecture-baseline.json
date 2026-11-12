@@ -7,9 +7,9 @@
   "legacySurfaces": {
     "web-ui/src/pages/ChatPage.js": 2352734,
     "web-ui/src/mobile/mobile-pages.js": 898464,
-    "web-ui/src/mobile/mobile-chat-renderer-runtime.js": 258459,
-    "web-ui/src/styles/mobile.css": 642896,
-    "web-ui/src/styles/components.css": 293359,
+    "web-ui/src/mobile/mobile-chat-renderer-runtime.js": 259677,
+    "web-ui/src/styles/mobile.css": 643313,
+    "web-ui/src/styles/components.css": 294590,
     "web-ui/index.html": 558138
   }
 }

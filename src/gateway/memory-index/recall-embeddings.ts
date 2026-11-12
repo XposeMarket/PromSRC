@@ -35,6 +35,8 @@ const running = new Set<string>();
 const timers = new Map<string, NodeJS.Timeout>();
 let matrixCache: { key: string; model: string; dims: number; ids: Int32Array; data: Float32Array; count: number; builtAt: number } | null = null;
 let matrixDirty = true;
+/** workspace|model -> highest recall_fts rowid at or below which every row is embedded. */
+const embeddedFloor = new Map<string, number>();
 
 export function invalidateRecallVectorCache(): void { matrixDirty = true; }
 
@@ -105,20 +107,34 @@ export async function embedRecallBatch(workspacePath: string, batch = BATCH): Pr
   const db = getRecallDb(workspacePath);
   if (!db) return 0;
   ensureTable(db);
+  // The pending-row query scans the whole FTS table (~250ms on 33k rows, and
+  // profiled at 6-7s of main-thread time while the gateway was busy). It runs
+  // after every indexed turn, so remember the highest rowid known to be fully
+  // embedded and only look above it. New/re-indexed rows always get a higher
+  // rowid; a full index reset drops max(rowid) below the floor and rescans.
+  const maxRowid = Number((db.prepare('SELECT max(rowid) AS m FROM recall_fts').get() as any)?.m || 0);
+  const floorKey = `${workspacePath}|${provider.model}`;
+  let floor = embeddedFloor.get(floorKey) ?? 0;
+  if (floor > maxRowid) floor = 0;
+  if (maxRowid <= floor) return 0;
   // Newest first: recent conversations matter most and finish embedding first.
   const rows = db.prepare(`SELECT f.rowid AS id, f.body AS body, f.title AS title, f.path AS path
-    FROM recall_fts f LEFT JOIN recall_vec v ON v.rowid = f.rowid AND v.model = ?
-    WHERE v.rowid IS NULL AND length(f.body) >= ?
-    ORDER BY CAST(f.ts AS INTEGER) DESC LIMIT ?`).all(provider.model, MIN_BODY_CHARS, batch) as any[];
-  if (!rows.length) return 0;
+    FROM recall_fts f
+    WHERE f.rowid > ? AND length(f.body) >= ?
+      AND NOT EXISTS (SELECT 1 FROM recall_vec v WHERE v.rowid = f.rowid AND v.model = ?)
+    ORDER BY f.rowid DESC LIMIT ?`).all(floor, MIN_BODY_CHARS, provider.model, batch) as any[];
+  if (!rows.length) { embeddedFloor.set(floorKey, maxRowid); return 0; }
   const vectors = await provider.embedBatch(rows.map((r) => embedText(r.body, r.title)));
   const insert = db.prepare('INSERT OR REPLACE INTO recall_vec(rowid, path, model, dims, vec) VALUES (?, ?, ?, ?, ?)');
+  let stored = 0;
   db.transaction(() => {
     rows.forEach((r, i) => {
       const v = vectors[i]?.vector;
-      if (Array.isArray(v) && v.length) insert.run(r.id, r.path, provider.model, v.length, toBlob(v));
+      if (Array.isArray(v) && v.length) { insert.run(r.id, r.path, provider.model, v.length, toBlob(v)); stored += 1; }
     });
   })();
+  // Last partial batch fully stored: everything up to maxRowid is done.
+  if (rows.length < batch && stored === rows.length) embeddedFloor.set(floorKey, maxRowid);
   matrixDirty = true;
   return rows.length;
 }

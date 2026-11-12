@@ -13,12 +13,6 @@
   <link rel="apple-touch-icon" href="/assets/Prometheus.png">
   <script src="/src/theme-registry.js"></script>
 
-  <link rel="stylesheet" href="/src/styles/theme-tokens.css?v=theme-tokens-p1">
-  <link rel="stylesheet" href="/src/styles/mobile.css">
-  <link rel="stylesheet" href="/src/styles/mobile-message-edit.css">
-  <link rel="stylesheet" href="/src/styles/mobile-drawer-search-morph.css">
-<link rel="stylesheet" href="/src/styles/agent-pets.css?v=agent-pets-v1">
-<link rel="stylesheet" href="/src/styles/refined-markdown.css?v=refined-markdown-v1">
   <title>Prometheus</title>
   <script src="/vendor/jsqr/jsQR.js" defer></script>
   <style>
@@ -29,7 +23,17 @@
   </style>
 </head>
 <body class="pm-mobile-active pm-mobile-document-scroll">
-  <div id="mobile-root" aria-live="polite"></div>
+  <!-- Static first paint: the loader sits BEFORE the stylesheets so slow
+       networks (3G) show it immediately instead of a black screen while
+       ~640KB of CSS downloads. Stylesheets below still block every script
+       after them, so the app never renders unstyled. -->
+  <div id="mobile-root" aria-live="polite"><div class="pm-mobile-startup" role="status">Loading Prometheus…</div></div>
+  <link rel="stylesheet" href="/src/styles/theme-tokens.css?v=theme-tokens-p1">
+  <link rel="stylesheet" href="/src/styles/mobile.css">
+  <link rel="stylesheet" href="/src/styles/mobile-message-edit.css">
+  <link rel="stylesheet" href="/src/styles/mobile-drawer-search-morph.css">
+  <link rel="stylesheet" href="/src/styles/agent-pets.css?v=agent-pets-v1">
+  <link rel="stylesheet" href="/src/styles/refined-markdown.css?v=refined-markdown-v1">
   <script>
     window.__PROM_SHOULD_BOOT_MOBILE = () => true;
     window.__PROM_MOBILE_ROUTER_READY = Promise.resolve(null);
@@ -38,7 +42,6 @@
     // This runs before the module graph. An installed PWA can otherwise stay
     // completely black if an old service worker stalls a script request.
     const mobileBootRoot = document.getElementById('mobile-root');
-    mobileBootRoot.innerHTML = '<div class="pm-mobile-startup" role="status">Loading Prometheus…</div>';
     async function repairMobileBoot() {
       const briefly = (promise) => Promise.race([
         Promise.resolve(promise),

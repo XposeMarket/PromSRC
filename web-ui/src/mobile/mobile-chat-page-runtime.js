@@ -3542,6 +3542,13 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
       _scheduleThreadRender(threadEl, body, requestedSession, 16);
     }
   }
+  // Reasoning deltas arrive token-by-token (Anthropic thinking is long). Re-rendering the
+  // whole thread every 16ms made the chat unusable (Raul, 2026-11-12), so paint them ~8x/s.
+  function renderThreadReasoningSoon() {
+    if (!_scheduleMobileStreamingPatch(threadEl, body, requestedSession, 120)) {
+      _scheduleThreadRender(threadEl, body, requestedSession, 120);
+    }
+  }
 
   function _currentChatVoiceSessionLabel() {
     const sid = String(requestedSession || __pmChat.activeSessionId || MOBILE_CHAT_SESSION_ID).trim();
@@ -6543,13 +6550,13 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       }
       case 'reasoning_summary':
       case 'reasoning_summary_delta': {
-        if (_handleMobileReasoningSummaryDelta(aiTurn, evt)) renderThreadSoon();
+        if (_handleMobileReasoningSummaryDelta(aiTurn, evt)) renderThreadReasoningSoon();
         return 'streaming';
       }
       case 'reasoning_delta':
       case 'reasoning_summary': {
         const chunk = String(evt.text || evt.summary || evt.thinking || '');
-        if (_handleMobileReasoningSummaryDelta(aiTurn, { ...evt, text: chunk })) renderThreadSoon();
+        if (_handleMobileReasoningSummaryDelta(aiTurn, { ...evt, text: chunk })) renderThreadReasoningSoon();
         return 'streaming';
       }
       case 'thinking':

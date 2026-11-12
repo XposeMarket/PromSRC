@@ -1,6 +1,6 @@
 import { renderContentReview } from '../components/ContentReview.js';
 
-import { foldMobileReasoningSummaryGroups, mobileReasoningSummaryTitle } from '../mobile/mobile-reasoning-summary-fold.js';
+import { foldMobileReasoningSummaryGroups, isMobileReasoningSummaryEntry, mobileReasoningSummaryKey, mobileReasoningSummaryTitle } from '../mobile/mobile-reasoning-summary-fold.js';
 import { agentAvatarHtml } from '../components/provider-logo.js';
 import { liveTraceSummaryKey, desktopTraceProgressSummary as formatDesktopTraceProgressSummary } from '../features/chat/trace-summary-presentation.js';
 
@@ -13176,7 +13176,7 @@ function renderLiveTraceEntry(entry) {
   const attr = entryId ? ` data-live-entry-id="${escHtml(entryId)}"` : '';
   const previewHtml = renderLiveTracePreview(entry);
   if (isDesktopTraceThoughtType(type)) {
-    return `<div class="live-turn-prose live-turn-${escHtml(type)}"${attr}>
+    return `<div class="live-turn-prose live-turn-${escHtml(type)}${isMobileReasoningSummaryEntry(entry) ? ' is-reasoning-prose' : ''}"${attr}>
       <div class="live-turn-md">${renderMd(dedupeDesktopTraceProseText(text))}</div>
       ${previewHtml}
     </div>`;
@@ -13554,7 +13554,7 @@ function renderLiveTurnTrace(entries, { streaming = false, openLiveCurrent = fal
   ), -1);
   return `<div class="live-turn-timeline">${groups.map((group, index) => {
     if (group.kind === 'reasoning-live') {
-      return `<div class="live-turn-thought-summary" data-live-trace-group="${escHtml(group.id)}" aria-live="polite"><strong class="t-think">${renderThinkingState(mobileReasoningSummaryTitle(group.reasoningEntries))}</strong></div>`;
+      return `<div class="live-turn-thought-summary" data-live-trace-group="${escHtml(group.id)}" aria-live="polite"><strong class="t-think is-reasoning">${renderThinkingState(mobileReasoningSummaryTitle(group.reasoningEntries))}</strong></div>`;
     }
     if (group.kind === 'narration') {
       return `<div class="live-turn-narration" data-live-trace-group="${escHtml(group.id)}">${group.entries.map(renderLiveTraceEntry).join('')}</div>`;
@@ -13599,16 +13599,22 @@ function renderLiveTurnTrace(entries, { streaming = false, openLiveCurrent = fal
     // Resolve progress only inside this tool group. This preserves earlier
     // groups and lets a summary that preceded the tool call remain attached
     // to the tool without resurrecting stale narration from another phase.
-    const progressSummary = mobileReasoningSummaryTitle(group.reasoningEntries) || desktopTraceProgressSummary(group.entries);
+    // Live: reasoning drives the header. Finished: normal tool summary; reasoning lives in the body.
+    const reasoningTitle = isLiveCurrent ? mobileReasoningSummaryTitle(group.reasoningEntries) : '';
+    const progressSummary = reasoningTitle || desktopTraceProgressSummary(group.entries.filter((entry) => !isMobileReasoningSummaryEntry(entry)));
     // liveTraceGroups already folded and filtered this presentation list.
     // Replaying it here (and again for the body) rebuilds every tool payload.
     const summary = progressSummary || (isLiveCurrent ? liveTraceCurrentToolLabel(group.entries, { coalesced: true }) : liveTraceToolSummary(group.entries, { coalesced: true }));
-    const summaryKey = liveTraceSummaryKey(summary);
+    const summaryKey = reasoningTitle && summary === reasoningTitle
+      ? mobileReasoningSummaryKey(group.reasoningEntries)
+      : liveTraceSummaryKey(summary);
     const visibleEntries = group.entries;
     // The mutable progress packet is rendered in the header only. Leaving it
     // in the body creates a duplicate summary and makes the next event appear
     // to overwrite the stream instead of extending it.
-    const toolBodyEntries = [...(group.reasoningEntries || []), ...visibleEntries.filter((entry) => !isDesktopMutableProgressTraceEntry(entry))];
+    // group.entries already holds reasoning blocks in chronological order with the calls.
+    const toolBodyEntries = visibleEntries.filter((entry) => !isDesktopMutableProgressTraceEntry(entry));
+    for (const entry of group.reasoningEntries || []) if (!toolBodyEntries.includes(entry)) toolBodyEntries.unshift(entry);
     const callCount = toolBodyEntries.filter((entry) => entry?.activity?.kind === 'operation').length;
     const nonReasoningEntries = toolBodyEntries.filter((entry) => !isDesktopTraceReasoningSummaryType(entry?.type));
     const itemCount = callCount || nonReasoningEntries.length || (toolBodyEntries.length ? 1 : 0);
@@ -13617,7 +13623,7 @@ function renderLiveTurnTrace(entries, { streaming = false, openLiveCurrent = fal
     return `<details class="live-turn-tool-group"${openAttr}${isLiveCurrent ? ' data-live-trace-current="1"' : ''} data-live-trace-group="${escHtml(group.id)}">
       <summary class="live-turn-tool-summary">
         <span class="live-turn-tool-icon" aria-hidden="true">${renderToolActivityIcon({ family: 'tool', key: 'tool.summary' }, escHtml)}</span>
-        <strong class="t-think" data-live-trace-summary-key="${escHtml(summaryKey)}">${renderThinkingState(summary)}</strong>
+        <strong class="t-think${reasoningTitle && summary === reasoningTitle ? ' is-reasoning' : ''}" data-live-trace-summary-key="${escHtml(summaryKey)}">${renderThinkingState(summary)}</strong>
         <span class="live-turn-tool-chevron" aria-hidden="true">›</span>
         <em>${itemCount} ${itemLabel}${itemCount === 1 ? '' : 's'}</em>${isLiveCurrent ? waitCountdownHtml(toolBodyEntries) : ''}
       </summary>

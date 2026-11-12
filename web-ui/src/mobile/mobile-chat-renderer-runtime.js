@@ -15,7 +15,7 @@ import { normalizeMobileImage } from './mobile-image-shrink.js';
 import { swapKeyedTimelineSession } from '../features/chat/timeline/keyed-dom.js';
 import { animateThinkingTextSwap, renderThinkingState } from '../utils.js';
 import { mergeMobileBackgroundTraceEntries } from './mobile-background-trace-merge.js';
-import { foldMobileReasoningSummaryGroups, mobileReasoningSummaryTitle, renderMobileReasoningLiveGroup } from './mobile-reasoning-summary-fold.js';
+import { foldMobileReasoningSummaryGroups, isMobileReasoningSummaryEntry, mobileReasoningSummaryKey, mobileReasoningSummaryTitle, renderMobileReasoningLiveGroup } from './mobile-reasoning-summary-fold.js';
 import { mergeBackgroundAgentSteerMessages } from '../features/chat/core/background-agent-work.js';
 import { isSteerFrozenRow } from './mobile-restart-continuity.js';
 import { agentModelLabel, agentAvatarHtml } from '../components/provider-logo.js';
@@ -355,7 +355,7 @@ export function createMobileChatRendererRuntime(context = {}) {
     const attr = entryId ? ` data-pm-live-entry-id="${escapeHtml(entryId)}"` : '';
     const previewHtml = _renderMobileLiveTracePreview(entry);
     if (type === 'preamble' || type === 'think' || type === 'assistant' || _isMobileTraceReasoningSummaryType(type)) {
-      return `<div class="pm-live-prose ${escapeHtml(type)}"${attr}><div class="pm-live-md">${_renderMobileMarkdown(_dedupeMobileTraceProseText(text))}</div>${previewHtml}</div>`;
+      return `<div class="pm-live-prose ${escapeHtml(type)}${isMobileReasoningSummaryEntry(entry) ? ' is-reasoning-prose' : ''}"${attr}><div class="pm-live-md">${_renderMobileMarkdown(_dedupeMobileTraceProseText(text))}</div>${previewHtml}</div>`;
     }
     // Name the tool when the entry knows it; never a bare "Tool" label.
     const toolName = String(entry?.extra?.toolName || entry?.extra?.action || entry?.toolName || entry?.action || '')
@@ -1021,14 +1021,27 @@ export function createMobileChatRendererRuntime(context = {}) {
       // The model summary belongs to the tool group it narrates. Looking only
       // at the newest raw event made a tool_call replace that summary with the
       // synthetic action label (for example, "Request Tool Category").
-      const progressSummary = mobileReasoningSummaryTitle(group.reasoningEntries)
-        || _mobileTraceProgressSummary(group.entries);
-      const summary = progressSummary || (isLiveCurrent ? _mobileTraceCurrentToolLabel(group.entries) : _mobileTraceToolSummary(group.entries));
-      const summaryKey = _mobileTraceSummaryKey(summary);
-      const visibleEntries = _mobileVisibleTraceEntries(group.entries);
-      // Preserve the safe summary body in the same segment as its tools.
+      // Live: reasoning drives the header. Finished: header is the normal tool summary and
+      // reasoning only appears inside the expanded body (Raul, 2026-11-12).
+      const reasoningTitle = isLiveCurrent ? mobileReasoningSummaryTitle(group.reasoningEntries) : '';
+      const toolOnlyEntries = (group.entries || []).filter((entry) => !isMobileReasoningSummaryEntry(entry));
+      const progressSummary = reasoningTitle
+        || _mobileTraceProgressSummary(toolOnlyEntries);
+      const summary = progressSummary || (isLiveCurrent ? _mobileTraceCurrentToolLabel(toolOnlyEntries) : _mobileTraceToolSummary(toolOnlyEntries));
+      const summaryKey = reasoningTitle && summary === reasoningTitle
+        ? mobileReasoningSummaryKey(group.reasoningEntries)
+        : _mobileTraceSummaryKey(summary);
+      const visibleEntries = _mobileVisibleTraceEntries(toolOnlyEntries);
       const toolBodyEntries = visibleEntries;
-      const bodyTraceEntries = group.reasoningEntries?.length ? [...group.reasoningEntries, ...toolBodyEntries] : toolBodyEntries;
+      // Expanded body is chronological: reasoning block, its calls, next block...
+      const bodyTraceEntries = [];
+      let run = [];
+      const flushRun = () => { if (run.length) bodyTraceEntries.push(..._mobileVisibleTraceEntries(run)); run = []; };
+      for (const entry of group.entries || []) {
+        if (isMobileReasoningSummaryEntry(entry)) { flushRun(); bodyTraceEntries.push(entry); } else run.push(entry);
+      }
+      flushRun();
+      for (const entry of group.reasoningEntries || []) if (!bodyTraceEntries.includes(entry)) bodyTraceEntries.unshift(entry);
       const callCount = toolBodyEntries.filter((entry) => /^(operation|result)$/.test(entry?.activity?.kind)).length;
       const nonReasoningEntries = toolBodyEntries.filter((entry) => !_isMobileTraceReasoningSummaryType(entry?.type));
       const itemCount = callCount || nonReasoningEntries.length || (toolBodyEntries.length ? 1 : 0);
@@ -1044,7 +1057,7 @@ export function createMobileChatRendererRuntime(context = {}) {
       return `<details class="pm-trace-tool-group"${openAttr}${isLiveCurrent ? ' data-pm-trace-live-current="1"' : ''} data-pm-trace-group="${escapeHtml(group.id)}">
         <summary class="pm-trace-tool-summary">
           <span class="pm-trace-tool-icon${isLiveCurrent ? ' is-live' : ''}" aria-hidden="true">${isLiveCurrent ? '' : renderToolActivityIcon({ family: 'tool', key: 'tool.summary' }, escapeHtml)}</span>
-          <strong class="t-think" data-pm-trace-summary-key="${escapeHtml(summaryKey)}">${renderThinkingState(summary)}</strong>
+          <strong class="t-think${reasoningTitle && summary === reasoningTitle ? ' is-reasoning' : ''}" data-pm-trace-summary-key="${escapeHtml(summaryKey)}">${renderThinkingState(summary)}</strong>
           <span class="pm-trace-tool-chevron" aria-hidden="true">›</span>
           <em>${itemCount} ${itemLabel}${itemCount === 1 ? '' : 's'}</em>${isLiveCurrent ? waitCountdownHtml(toolBodyEntries) : ''}
         </summary>
@@ -2519,7 +2532,8 @@ export function createMobileChatRendererRuntime(context = {}) {
           const key = String(node.getAttribute('data-pm-trace-summary-key') || '').trim();
           const stable = groupKey ? stableTraceSummaryLabels[groupKey] : null;
           if (stable?.node && stable.key === key && stable.node !== node) {
-            node.replaceWith(stable.node);
+            // Same reasoning paragraph still streaming: keep the fresh text, skip the swap animation.
+            if (String(stable.node.textContent || '') === String(node.textContent || '')) node.replaceWith(stable.node);
           } else if (!stable || stable.key !== key) {
             const previousLabel = String(
               stable?.node?.querySelector?.('.t-think-text')?.textContent
