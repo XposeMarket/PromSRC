@@ -23,7 +23,8 @@ import { BrowserSessionMetadata, BrowserPerformanceObserver, BrowserProfileKind,
 import { lookupTaskSummary, releaseUserChromeTabLocks, inferBrowserOwnerType, registerBrowserSessionMetadata, claimUserChromeTab, attachBrowserConsoleCollector } from './sessions.js';
 import { getMainChromeDebugPort, getUserChromeDebugPort, isPortOpen, connectOverCDPWithRetry, getBrowserProfileLabel, recoverStuckPrometheusChrome, findBrowserExecutableForPlaywright, connectOverCDPWithTimeout, getPW } from './chrome.js';
 import { getMainBrowserTarget } from './target.js';
-import { getUserChromeProfileDirectory } from './inhouse.js';
+import { getUserChromeProfileDirectory, isAgentOwnedBrowserSession } from './inhouse.js';
+import { resolveAgentBrowserProfileSetting } from './inhouse-sessions.js';
 import { resolveSessionId } from './extraction.js';
 import { browserSessionInitInFlight, sessions } from './state.js';
 import { stopBrowserLiveStream, persistBrowserSessionRecord, buildBrowserSessionRestoreRecord, findRestorableBrowserPage, isRestorableBrowserUrl, clearBrowserInteractionState, clearBrowserTeachSessionSnapshot } from './streaming.js';
@@ -115,6 +116,24 @@ export function resolvePersistentBrowserProfileDir(identity: string, sessionId: 
   return primary;
 }
 
+/** Profile dir of the main Prometheus-owned Chrome (CDP) lane. */
+export function getMainPrometheusChromeProfileDir(): string {
+  return process.env.CHROME_PROFILE || path.join(os.homedir(), '.prometheus', 'chrome-debug-profile');
+}
+
+/**
+ * Whether an agent-owned session (background/task/team agent) should attach to
+ * the main Prometheus Chrome profile instead of a fresh per-agent profile.
+ * Follows the same `subagent_browser_profile` / per-agent `browser_profile`
+ * setting as the in-house lane: anything but "isolated" shares main's logins.
+ * Detached/internal sessions (x scrapers etc.) and main chat return false.
+ */
+export function shouldAgentShareMainChromeProfile(metadata: BrowserSessionMetadata, cfgOverride?: any): boolean {
+  if (metadata.ownerType === 'main') return false;
+  if (!isAgentOwnedBrowserSession(metadata)) return false;
+  return resolveAgentBrowserProfileSetting(metadata, cfgOverride) !== 'isolated';
+}
+
 export function getPersistentBrowserPort(identity: string): number {
   const mainPort = getMainChromeDebugPort();
   const base = Number(process.env.CHROME_BACKGROUND_DEBUG_PORT_BASE || String(mainPort + 100));
@@ -130,14 +149,22 @@ export async function connectOrLaunchPersistentChrome(
 ): Promise<{ browser: any; debugPort: number; profileDir: string; ownsBrowser: boolean; profileKind: BrowserProfileKind; browserTarget: BrowserProfileKind }> {
   const identity = getStableBrowserIdentity(sessionId, metadata);
   const mainTarget = metadata.ownerType === 'main' ? getMainBrowserTarget(sessionId) : 'prometheus';
+  // Agent sessions on the Prometheus Chrome lane share main chat's signed-in
+  // Prometheus Chrome profile unless they are configured as "isolated".
+  // Previously every background agent got a brand-new empty per-agent
+  // user-data-dir here, so it hit login walls on every site.
+  const sharesMainChrome = shouldAgentShareMainChromeProfile(metadata);
   const debugPort = metadata.ownerType === 'main'
     ? (mainTarget === 'user' ? getUserChromeDebugPort() : getMainChromeDebugPort())
-    : getPersistentBrowserPort(identity);
+    : (sharesMainChrome ? getMainChromeDebugPort() : getPersistentBrowserPort(identity));
   const profileDir = metadata.ownerType === 'main'
     ? (mainTarget === 'user'
       ? getRealChromeProfileDir()
-      : (process.env.CHROME_PROFILE || path.join(os.homedir(), '.prometheus', 'chrome-debug-profile')))
-    : resolvePersistentBrowserProfileDir(identity, sessionId, metadata);
+      : getMainPrometheusChromeProfileDir())
+    : (sharesMainChrome ? getMainPrometheusChromeProfileDir() : resolvePersistentBrowserProfileDir(identity, sessionId, metadata));
+  if (metadata.ownerType !== 'main') {
+    console.log(`[Browser] ${sessionId} Chrome lane: ${sharesMainChrome ? 'shared main Prometheus profile' : 'isolated agent profile'} ${profileDir} (port ${debugPort})`);
+  }
   const profileKind: BrowserProfileKind = metadata.ownerType === 'main' ? mainTarget : 'prometheus';
   const chromeProfileDirectory = metadata.ownerType === 'main' && mainTarget === 'user'
     ? getUserChromeProfileDirectory(sessionId)
@@ -192,7 +219,7 @@ export async function connectOrLaunchPersistentChrome(
     if (!await isPortOpen(debugPort)) continue;
     try {
       const browser = await connectOverCDPWithTimeout(pw, debugPort);
-      console.log(`[Browser] Launched and connected to Chrome on port ${debugPort} (${metadata.ownerType}, ${getBrowserProfileLabel(profileKind)})`);
+      console.log(`[Browser] Launched and connected to Chrome on port ${debugPort} (${metadata.ownerType}, ${getBrowserProfileLabel(profileKind)}, profile: ${profileDir})`);
       return { browser, debugPort, profileDir, ownsBrowser: true, profileKind, browserTarget: profileKind };
     } catch {
       // Chrome may expose /json/version a moment before CDP is ready.
@@ -388,7 +415,8 @@ export async function getOrCreateSessionUncoalesced(
     context,
     page,
     ownsBrowser: browserConnection.ownsBrowser,
-    isolated: metadata.ownerType !== 'main',
+    // A shared main-profile agent session must never terminate main's Chrome on close.
+    isolated: metadata.ownerType !== 'main' && !shouldAgentShareMainChromeProfile(metadata),
     debugPort: browserConnection.debugPort,
     profileDir: browserConnection.profileDir,
     profileKind: browserConnection.profileKind,
