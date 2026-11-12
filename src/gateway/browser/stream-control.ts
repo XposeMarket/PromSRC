@@ -24,7 +24,7 @@ import { getUserChromeExtensionOnboarding, getUserChromeRelay } from '../user-ch
 import { BrowserLiveStreamTransport, BrowserLiveStreamFocus, normalizeBrowserLiveStreamFocus, browserLiveStreams, refreshBrowserLiveStreamLease, broadcastBrowserLiveStreamStatus, BROWSER_STREAM_HEARTBEAT_STATUS, stopBrowserLiveStream, BrowserLiveStreamState, tryStartBrowserCDPStream, startBrowserSnapshotStreamLoop } from './streaming.js';
 import { resolveSessionId } from './extraction.js';
 import { getInHouseSession, callInHouseBrowser } from './inhouse.js';
-import { getOrCreateSession, getStableBrowserIdentity, getPersistentBrowserPort, getRealChromeProfileDir, resolvePersistentBrowserProfileDir } from './profiles.js';
+import { getOrCreateSession, getStableBrowserIdentity, getPersistentBrowserPort, getRealChromeProfileDir, resolvePersistentBrowserProfileDir, shouldAgentShareMainChromeProfile, getMainPrometheusChromeProfileDir } from './profiles.js';
 import { syncPageMetadata } from './observation.js';
 import { sessions } from './state.js';
 import { recoverInHouseSessionMapping, shouldUseInHouseBrowser } from './inhouse-sessions.js';
@@ -250,14 +250,16 @@ export async function browserDoctor(sessionId: string): Promise<string> {
     const metadata = registerBrowserSessionMetadata(resolved);
     const identity = getStableBrowserIdentity(resolved, metadata);
     const target = metadata.ownerType === 'main' ? getMainBrowserTarget(resolved) : 'prometheus';
+    const sharesMainChrome = shouldAgentShareMainChromeProfile(metadata);
     const debugPort = metadata.ownerType === 'main'
       ? (target === 'user' ? getUserChromeDebugPort() : getMainChromeDebugPort())
-      : getPersistentBrowserPort(identity);
+      : (sharesMainChrome ? getMainChromeDebugPort() : getPersistentBrowserPort(identity));
     const profileDir = metadata.ownerType === 'main'
       ? (target === 'user'
         ? getRealChromeProfileDir()
-        : (process.env.CHROME_PROFILE || path.join(os.homedir(), '.prometheus', 'chrome-debug-profile')))
-      : resolvePersistentBrowserProfileDir(identity, resolved, metadata);
+        : getMainPrometheusChromeProfileDir())
+      : (sharesMainChrome ? getMainPrometheusChromeProfileDir() : resolvePersistentBrowserProfileDir(identity, resolved, metadata));
+    if (metadata.ownerType !== 'main') ok('Agent Chrome profile', sharesMainChrome ? 'shared with main Prometheus Chrome' : 'isolated per-agent profile (no shared logins)');
     try {
       const chromePath = await findBrowserExecutableForPlaywright();
       chromePath ? ok('Chrome executable', chromePath) : fail('Chrome executable', 'not found; configure CHROME_PATH or install Chrome/Chromium');

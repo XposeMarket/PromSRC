@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { resolveAgentBrowserProfileSetting, SHARED_SUBAGENT_BROWSER_PROFILE } from './browser-tools';
+import { shouldAgentShareMainChromeProfile } from './browser/profiles';
 
 const meta = (sessionId: string, ownerType: any, ownerId: string) => ({
   sessionId,
@@ -30,6 +31,16 @@ const cfg = { subagent_browser_profile: 'isolated', agents: [{ id: 'radar_x', br
 assert.equal(resolveAgentBrowserProfileSetting(subagentChat, cfg), 'main');
 const cfg2 = { agents: [{ id: 'radar_x', browserProfile: 'own' }] };
 assert.equal(resolveAgentBrowserProfileSetting(subagentChat, cfg2), 'isolated');
+
+// Prometheus Chrome lane: agents share main's signed-in Chrome profile by default
+// (regression: background agents with target="prometheus" got a fresh empty
+// per-agent user-data-dir and hit login walls everywhere).
+assert.equal(shouldAgentShareMainChromeProfile(background, {}), true);
+assert.equal(shouldAgentShareMainChromeProfile(subagentChat, { agents: [] }), true);
+assert.equal(shouldAgentShareMainChromeProfile(background, { subagent_browser_profile: 'isolated' }), false);
+assert.equal(shouldAgentShareMainChromeProfile(subagentChat, cfg2), false);
+assert.equal(shouldAgentShareMainChromeProfile(meta('main-chat-1', 'main', 'main-chat-1'), {}), false);
+assert.equal(shouldAgentShareMainChromeProfile(meta('x_scrape_1', 'detached', 'x_scrape_1'), {}), false);
 
 console.log('subagent-browser-profile regression: ok');
 process.exit(0);
