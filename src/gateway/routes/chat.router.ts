@@ -1019,6 +1019,7 @@ function reconcileMainChatExecutionOwners(now = Date.now()): void {
       lastSemanticEvent: stream.lastSemanticEvent,
       lastSemanticProgressAt: stream.lastSemanticProgressAt,
       activeBackgroundCount: activeBackgroundIds.length,
+      lastBackgroundWaitAt: stream.lastBackgroundWaitAt,
     });
     const waitingOnQuestion = isQuestionWaitInFlight(stream.blockingWaits || [], stream.sessionId, () => {
       const queue = getPrometheusQuestionQueue();
@@ -1043,7 +1044,7 @@ function reconcileMainChatExecutionOwners(now = Date.now()): void {
       continue;
     }
 
-    if (!waitingOnQuestion && !isBlockingWaitInFlight(stream.blockingWaits || [], now) && isMainChatSemanticProgressStalled({
+    if (!waitingOnQuestion && !waitingOnBackground && !isBlockingWaitInFlight(stream.blockingWaits || [], now) && isMainChatSemanticProgressStalled({
       now,
       lastSemanticProgressAt: stream.lastSemanticProgressAt,
       streamActive: stream.active,

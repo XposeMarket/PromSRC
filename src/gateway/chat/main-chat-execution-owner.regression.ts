@@ -107,6 +107,10 @@ assert.equal(isLiveBackgroundJoin({ now, lastSemanticEvent: 'active_tool_wait', 
 assert.equal(isLiveBackgroundJoin({ now, lastSemanticEvent: 'background_wait', lastSemanticProgressAt: now - 130_000, activeBackgroundCount: 2 }), false, 'a stale join cannot mask a dead owner');
 assert.equal(isLiveBackgroundJoin({ now, lastSemanticEvent: 'background_wait', lastSemanticProgressAt: now - 30_000, activeBackgroundCount: 0 }), false, 'a completed worker cannot indefinitely mask a stuck foreground');
 assert.equal(isLiveBackgroundJoin({ now, lastSemanticEvent: 'heartbeat', lastSemanticProgressAt: now, activeBackgroundCount: 2 }), false, 'transport heartbeats are not join liveness');
+// Real stream: background_wait is non-semantic, so lastSemanticEvent stays at the spawn tool_result.
+assert.equal(isLiveBackgroundJoin({ now, lastSemanticEvent: 'tool_result', lastSemanticProgressAt: now - 11 * 60_000, lastBackgroundWaitAt: now - 20_000, activeBackgroundCount: 1 }), true, 'a fresh finalization-gate keepalive keeps a long worker join alive past the semantic stall window');
+assert.equal(isLiveBackgroundJoin({ now, lastSemanticEvent: 'tool_result', lastSemanticProgressAt: now - 11 * 60_000, lastBackgroundWaitAt: now - 150_000, activeBackgroundCount: 1 }), false, 'a stale keepalive cannot mask a dead owner');
+assert.equal(isLiveBackgroundJoin({ now, lastSemanticEvent: 'tool_result', lastSemanticProgressAt: now - 11 * 60_000, lastBackgroundWaitAt: now - 20_000, activeBackgroundCount: 0 }), false, 'no active workers means no join');
 
 console.log('main chat execution owner regression passed');
 
