@@ -105,8 +105,12 @@ export function isLiveBackgroundJoin(input: {
   lastSemanticProgressAt?: number;
   now?: number;
   activeBackgroundCount: number;
+  /** Last finalization-gate keepalive. background_wait is non-semantic, so lastSemanticEvent never holds it. */
+  lastBackgroundWaitAt?: number;
 }): boolean {
   const now = Number.isFinite(input.now) ? Number(input.now) : Date.now();
+  const keepaliveAt = Number(input.lastBackgroundWaitAt || 0);
+  if (input.activeBackgroundCount > 0 && keepaliveAt > 0 && now - keepaliveAt < 2 * 60_000) return true;
   return (input.lastSemanticEvent === 'background_wait' || input.lastSemanticEvent === 'active_tool_wait')
     && input.activeBackgroundCount > 0
     && Number(input.lastSemanticProgressAt || 0) > 0
