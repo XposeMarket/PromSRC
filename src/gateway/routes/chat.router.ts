@@ -1242,10 +1242,11 @@ export function runtimeToolDetailMetadata(data: Record<string, unknown> | null |
 }
 
 /** Append a raw reasoning delta to the current reasoning block; returns true when a new block entry was created. */
-export function appendRuntimeReasoningDelta(entries: Array<Record<string, any>>, raw: string): boolean {
+export function appendRuntimeReasoningDelta(entries: Array<Record<string, unknown>>, raw: string): boolean {
   if (!raw) return false;
   const last = entries[entries.length - 1];
-  if (last && last.type === 'think' && last.extra?.source === 'reasoning_summary' && last.extra?.event === 'reasoning_summary_delta') {
+  const lastExtra = last?.extra as { source?: unknown; event?: unknown } | undefined;
+  if (last && last.type === 'think' && lastExtra?.source === 'reasoning_summary' && lastExtra?.event === 'reasoning_summary_delta') {
     const next = `${last.content || ''}${raw}`;
     last.content = next.length > 16_000 ? next.slice(-16_000) : next;
     return false;

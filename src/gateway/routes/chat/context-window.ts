@@ -186,10 +186,10 @@ export function estimateToolObservationRawTokens(sessionId: string, profile: { t
 
 export function estimateStoredThreadFootprint(
   sessionId: string,
-  session: any,
-  profile: { tokenizer: any },
+  session: Parameters<typeof computeStoredThreadFootprint>[1],
+  profile: Parameters<typeof computeStoredThreadFootprint>[2],
   observationSnapshot: ToolObservationSnapshot = readToolObservationSnapshot(sessionId, 512, profile.tokenizer),
-) {
+): ReturnType<typeof computeStoredThreadFootprint> {
   const history = Array.isArray(session?.history) ? session.history : [];
   // The context meter polls this; walking the whole session JSON each time
   // (countJsonContainerChars) showed up as ~1s gateway stalls on long threads.
@@ -206,21 +206,21 @@ export function estimateStoredThreadFootprint(
   ].join('|');
   const cachedFootprint = storedThreadFootprintCache.get(sessionId);
   if (cachedFootprint && cachedFootprint.key === footprintKey) return cachedFootprint.value;
-  const value = computeStoredThreadFootprint(sessionId, session, history, profile, observationSnapshot);
+  const value = computeStoredThreadFootprint(sessionId, session, profile, observationSnapshot);
   if (storedThreadFootprintCache.size > 200) storedThreadFootprintCache.clear();
   storedThreadFootprintCache.set(sessionId, { key: footprintKey, value });
   return value;
 }
 
-const storedThreadFootprintCache = new Map<string, { key: string; value: any }>();
+const storedThreadFootprintCache = new Map<string, { key: string; value: ReturnType<typeof computeStoredThreadFootprint> }>();
 
 function computeStoredThreadFootprint(
   sessionId: string,
   session: any,
-  history: any[],
   profile: { tokenizer: any },
   observationSnapshot: ToolObservationSnapshot,
 ) {
+  const history = Array.isArray(session?.history) ? session.history : [];
   let visibleChatTokens = 0;
   let processEntryTokens = 0;
   let legacyToolLogTokens = 0;
