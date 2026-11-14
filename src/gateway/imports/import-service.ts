@@ -687,8 +687,17 @@ async function commitConversationJob(job: ImportJob): Promise<ImportJob> {
     throw new Error('No selected conversations remain in this import preview. Select at least one chat and try again.');
   }
   const total = conversations.length;
+  delete result.notStarted;
+  delete result.cancelledAt;
+  let cancelledAt = -1;
   for (let index = 0; index < conversations.length; index += 1) {
     const conversation = conversations[index];
+    if (cancelRequests.has(job.id)) {
+      // Cancel takes effect between chats: the chat in flight always finishes
+      // so no half-written session is left behind.
+      cancelledAt = index;
+      break;
+    }
     progress(job, 'committing', index, total, `Importing ${conversation.title}`, conversation.id);
     try {
       const project = conversation.project ? projectForReference(job, conversation.project, result) : null;
@@ -709,9 +718,22 @@ async function commitConversationJob(job: ImportJob): Promise<ImportJob> {
     // without creating duplicate sessions.
     reorderSessionSidebar(result.sessionIds, { channel: 'web', state: 'all' });
   }
-  const complete = result.failures.length === 0;
+  cancelRequests.delete(job.id);
+  if (cancelledAt >= 0) {
+    result.notStarted = total - cancelledAt;
+    result.cancelledAt = nowIso();
+  }
+  const complete = result.failures.length === 0 && cancelledAt < 0;
   job.status = complete ? 'completed' : (result.sessionIds.length || result.resourceIds.length ? 'partial' : 'failed');
-  job.progress = { phase: job.status, completed: total, total, message: complete ? 'Import completed.' : 'Import completed with failures.', checkpoint: job.checkpoint };
+  const done = cancelledAt >= 0 ? cancelledAt : total;
+  job.progress = {
+    phase: job.status,
+    completed: done,
+    total,
+    message: cancelledAt >= 0 ? `Cancelled: ${done} processed, ${total - done} not started.` : complete ? 'Import completed.' : 'Import completed with failures.',
+    checkpoint: job.checkpoint,
+  };
+  job.result = result;
   persistJob(job);
   if (complete) cleanupStaging(job);
   return job;
@@ -871,6 +893,42 @@ export function getImportJob(id: string, ownerId: string): ImportJob | null {
   const job = readJob(safeJobId(id));
   if (!job || job.ownerId !== ownerId) return null;
   return publicJob(job);
+}
+
+/** In-process cancel requests. Checked between chats by the commit loop. */
+const cancelRequests = new Set<string>();
+
+/** Ask a running conversation import to stop after the chat it is importing now. */
+export function requestCancelImportJob(id: string, ownerId: string): ImportJob {
+  const job = getOwnedJob(id, ownerId);
+  if (job.status !== 'committing') throw new Error('Only a running import can be cancelled.');
+  cancelRequests.add(job.id);
+  return publicJob(job);
+}
+
+/**
+ * Exact duplicate check used by the Agents & imports preflight. Mirrors the
+ * stable session key in sessionForConversation, so a chat counted here is the
+ * same chat the commit loop would skip.
+ */
+export function isConversationAlreadyImported(input: {
+  ownerId: string;
+  workspacePath: string;
+  provider: string;
+  adapter: ImportAdapterId;
+  sourceConversationId: string;
+  sourceAccountId?: string;
+}): boolean {
+  const sourceConversationId = String(input.sourceConversationId || '').trim();
+  if (!sourceConversationId) return false;
+  const dedupeKey = stableImportId(input.ownerId, path.resolve(input.workspacePath), input.provider, input.sourceAccountId || '', sourceConversationId);
+  const sessionId = `import_${input.adapter.replace(/[^a-z0-9]+/gi, '_').toLowerCase()}_${dedupeKey}`.slice(0, 180);
+  try {
+    if (!sessionExists(sessionId)) return false;
+    return (getSession(sessionId) as any)?.externalImport?.dedupeKey === dedupeKey;
+  } catch {
+    return false;
+  }
 }
 
 function getOwnedJob(id: string, ownerId: string): ImportJob {
