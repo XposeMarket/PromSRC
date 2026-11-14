@@ -116,7 +116,7 @@ function normalizeSelection(body: any): AgentSelection {
   const list = (value: unknown, max: number): string[] => Array.isArray(value)
     ? [...new Set(value.filter((item): item is string => typeof item === 'string').map((item) => item.trim()).filter(Boolean))].slice(0, max)
     : [];
-  return { groups: list(body?.groups, 2_000), chats: list(body?.chats, 10_000) };
+  return { groups: list(body?.groups, 2_000), chats: list(body?.chats, 10_000), exclude: list(body?.exclude, 10_000) };
 }
 
 /** Exact counts for the confirmation dialog, plus the bounded job requests to send to POST /api/imports/jobs. */

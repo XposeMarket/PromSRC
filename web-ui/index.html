@@ -355,6 +355,7 @@
 <link rel="stylesheet" href="src/styles/hub.css?v=skill-hover-actions">
 <link rel="stylesheet" href="src/styles/themes.css?v=desktop-sidebar-priority-v2">
 <link rel="stylesheet" href="src/styles/settings.css?v=full-page-settings-v2">
+<link rel="stylesheet" href="src/styles/agents-imports.css?v=agents-imports-v1">
 <link rel="stylesheet" href="src/styles/surfaces-polish.css?v=ui-polish-2026-10">
 <link rel="stylesheet" href="src/styles/refined-markdown.css?v=refined-markdown-v1">
 
@@ -3816,70 +3817,9 @@
 
 
         <section id="settings-external-import" class="settings-section settings-external-import-section">
-          <div class="settings-section-heading">
-            <h2>Import chats &amp; MCP integrations</h2>
-            <span class="settings-help" tabindex="0" aria-label="External import safety details" data-settings-help="Imports are staged and previewed before commit. Historical tool calls never execute. Credentials and OAuth tokens are redacted and must be authorized again.">?</span>
-          </div>
-          <div class="settings-import-discovery" aria-labelledby="settings-import-discovery-title">
-            <div class="settings-import-discovery-heading">
-              <div>
-                <h3 id="settings-import-discovery-title">Found on this computer</h3>
-              </div>
-              <button class="settings-inline-link" type="button" onclick="loadExternalImportDiscovery()">Scan again</button>
-            </div>
-            <div id="settings-import-discovery" class="settings-import-discovery-list" role="status" aria-live="polite">Scanning known local agent folders…</div>
-          </div>
-          <div class="settings-import-grid">
-            <article class="settings-import-card">
-              <div class="settings-import-card-heading">
-                <div>
-                  <h3>Import another conversation source</h3>
-                  <p>Prometheus automatically detects supported local transcripts, project boundaries, and official exports. Preview the newest chats first, then choose exactly what to import.</p>
-                </div>
-                <span class="settings-import-safety-badge">Preview first</span>
-              </div>
-              <label class="settings-import-field" for="settings-import-conversation-path">
-                <span>Local export or folder path</span>
-                <input id="settings-import-conversation-path" class="settings-row-input settings-import-path-input" type="text" autocomplete="off" placeholder="C:\\Exports\\conversations.zip or ~/.claude/projects" />
-              </label>
-              <div class="settings-import-card-actions">
-                <button class="btn btn-sm" type="button" onclick="previewExternalImportJob('conversation')">Build preview</button>
-                <span class="settings-import-inline-note">Project-aware preview is automatic. Nothing is committed yet.</span>
-              </div>
-              <div id="settings-import-conversation-status" class="settings-row-status" role="status" aria-live="polite"></div>
-              <div id="settings-import-conversation-job" class="settings-import-job" aria-live="polite"><div class="settings-import-empty">No staged import. Choose a local export or conversation folder and build a preview.</div></div>
-              <div id="settings-import-conversation-batches" class="settings-import-job settings-import-batches" aria-live="polite"></div>
-            </article>
-
-            <article class="settings-import-card">
-              <div class="settings-import-card-heading">
-                <div>
-                  <h3>Import MCP integrations</h3>
-                  <p>Prometheus detects local MCP declarations from supported agent configurations. Import metadata safely, then authorize and enable each integration in Plugins.</p>
-                </div>
-                <span class="settings-import-safety-badge settings-import-safety-badge--secure">Reauthorize secrets</span>
-              </div>
-              <label class="settings-import-field" for="settings-import-setup-path">
-                <span>Local MCP config folder or file</span>
-                <input id="settings-import-setup-path" class="settings-row-input settings-import-path-input" type="text" autocomplete="off" placeholder="C:\\Users\\you\\.codex\\config.toml" />
-              </label>
-              <div class="settings-import-card-actions">
-                <button class="btn btn-sm" type="button" onclick="previewExternalImportJob('setup')">Preview MCP integrations</button>
-                <span class="settings-import-inline-note">Conflicts are skipped by default; tokens and keys are never silently copied.</span>
-              </div>
-              <div id="settings-import-setup-status" class="settings-row-status" role="status" aria-live="polite"></div>
-              <div id="settings-import-setup-job" class="settings-import-job" aria-live="polite"><div class="settings-import-empty">No staged MCP integration preview. Imported definitions stay disabled until you confirm and authorize them.</div></div>
-            </article>
-          </div>
-          <section id="settings-import-history" class="settings-import-history" aria-labelledby="settings-import-history-title">
-            <div class="settings-import-history-heading">
-              <div>
-                <h3 id="settings-import-history-title">Import history &amp; rollback</h3>
-                <p>Completed imports stay here so the preview cards remain focused. Rollback removes only state created by that import.</p>
-              </div>
-            </div>
-            <div id="settings-import-history-list" class="settings-import-history-list" aria-live="polite"><div class="settings-import-empty">No completed imports or rollback records yet.</div></div>
-          </section>
+          <!-- Agents & imports (stage 1). Rendered by web-ui/src/settings/agents-imports.js;
+               the same module renders the mobile settings section. -->
+          <div id="settings-agents-imports" class="settings-agents-imports"></div>
         </section>
 
         <section class="settings-section settings-auto-settle-section">

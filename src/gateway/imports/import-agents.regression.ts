@@ -122,6 +122,9 @@ async function main(): Promise<void> {
   const wholeAlpha = agents.preflightAgentSelection('codex', { groups: [alphaGroup.key] }, () => false, opts);
   assert.equal(wholeAlpha.totalChats, 5);
   assert.equal(wholeAlpha.groups[0].all, true);
+  // Whole project minus one unticked chat: "4 of 5" without listing all ids.
+  const allBut = agents.preflightAgentSelection('codex', { groups: [alphaGroup.key], exclude: [alphaChats[0].id] }, () => false, opts);
+  assert.deepEqual([allBut.totalChats, allBut.groups[0].selected, allBut.groups[0].total, allBut.groups[0].all], [4, 4, 5, false]);
   const empty = agents.preflightAgentSelection('codex', {}, () => false, opts);
   assert.equal(empty.totalChats, 0);
   assert.equal(empty.requests.length, 0);

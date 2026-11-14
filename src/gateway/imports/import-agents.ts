@@ -52,7 +52,12 @@ export interface ImportAgentSetupSource {
   id: string;
   label: string;
   setupFileCount: number;
+  /** Local config path, returned to the local settings client only (same as /discover). */
+  sourcePath: string;
 }
+
+/** Adapters whose chats can be listed one by one in an opened row. */
+const BROWSABLE_ADAPTERS = new Set<ImportAdapterId>(['codex-local', 'claude-code-local', 'hermes-local', 'openclaw-local']);
 
 export interface ImportAgent {
   id: string;
@@ -69,6 +74,8 @@ export interface ImportAgent {
   browsable: boolean;
   supportsProjects: boolean;
   conversationSourceIds: string[];
+  /** For non-browsable sources: whole-source import through the existing preview flow. */
+  conversationSource?: { sourcePath: string; adapter: ImportAdapterId; label: string };
   setupSources: ImportAgentSetupSource[];
 }
 
@@ -100,6 +107,8 @@ export interface AgentSelection {
   groups?: string[];
   /** Individual chats: partial groups and loose chats. */
   chats?: string[];
+  /** Chats unticked inside a whole group ("all but these"). Ignored outside whole groups. */
+  exclude?: string[];
 }
 
 export interface ResolvedGroupSelection {
@@ -157,14 +166,18 @@ export function listImportAgents(options: ImportDiscoveryOptions = {}): { scanne
       setupSources: [],
     };
     if (source.kind === 'setup') {
-      agent.setupSources.push({ id: source.id, label: source.label, setupFileCount: source.setupFileCount });
+      agent.setupSources.push({ id: source.id, label: source.label, setupFileCount: source.setupFileCount, sourcePath: source.sourcePath });
     } else {
       agent.conversationSourceIds.push(source.id);
       agent.chatCount += source.transcriptCount;
       agent.bytes += source.bytes;
       agent.capped = agent.capped || source.capped;
       agent.supportsProjects = agent.supportsProjects || source.supportsProjects;
-      agent.browsable = agent.browsable || source.adapter !== 'cursor-local';
+      const browsable = BROWSABLE_ADAPTERS.has(source.adapter);
+      agent.browsable = agent.browsable || browsable;
+      if (!browsable && !agent.conversationSource) {
+        agent.conversationSource = { sourcePath: source.sourcePath, adapter: source.adapter, label: source.label };
+      }
     }
     agents.set(id, agent);
   }
@@ -181,7 +194,7 @@ function agentContext(agentId: string, options: ImportDiscoveryOptions): AgentCo
   const discovery = discoverImportSources(options);
   const source = discovery.sources.find((item) => item.kind === 'conversation'
     && agentIdForProvider(item.provider) === wanted
-    && item.adapter !== 'cursor-local');
+    && BROWSABLE_ADAPTERS.has(item.adapter));
   if (!source) throw new Error('That agent has no chats to list. Scan again.');
   return { agentId: wanted, source, root: path.resolve(source.sourcePath), adapter: source.adapter };
 }
@@ -496,6 +509,7 @@ export function resolveAgentSelection<T extends { id: string; bytes: number; gro
 ): { groups: ResolvedGroupSelection[]; looseChats: number; totalChats: number; totalBytes: number; files: T[]; unknownChats: string[] } {
   const wholeGroups = new Set((selection.groups || []).map(String));
   const chatIds = new Set((selection.chats || []).map(String));
+  const excluded = new Set((selection.exclude || []).map(String));
   const known = new Set(files.map((file) => file.id));
   const unknownChats = [...chatIds].filter((id) => !known.has(id));
   const picked: T[] = [];
@@ -505,7 +519,7 @@ export function resolveAgentSelection<T extends { id: string; bytes: number; gro
     if (file.group) {
       const g = groupTotals.get(file.group.key) || { kind: file.group.kind, label: file.group.label, total: 0, selected: 0 };
       g.total += 1;
-      const take = wholeGroups.has(file.group.key) || chatIds.has(file.id);
+      const take = wholeGroups.has(file.group.key) ? !excluded.has(file.id) : chatIds.has(file.id);
       if (take) { g.selected += 1; picked.push(file); }
       groupTotals.set(file.group.key, g);
     } else if (chatIds.has(file.id)) {
@@ -609,5 +623,5 @@ export function preflightAgentSelection(
 
 /** Stable digest of a selection, used by the client to detect stale preflights. */
 export function selectionDigest(selection: AgentSelection): string {
-  return crypto.createHash('sha256').update(JSON.stringify({ g: [...(selection.groups || [])].sort(), c: [...(selection.chats || [])].sort() })).digest('hex').slice(0, 16);
+  return crypto.createHash('sha256').update(JSON.stringify({ g: [...(selection.groups || [])].sort(), c: [...(selection.chats || [])].sort(), x: [...(selection.exclude || [])].sort() })).digest('hex').slice(0, 16);
 }
