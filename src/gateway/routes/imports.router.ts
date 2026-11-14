@@ -7,11 +7,14 @@ import {
   createImportJob,
   deleteImportJob,
   getImportJob,
+  isConversationAlreadyImported,
   listImportJobs,
+  requestCancelImportJob,
   retryImportJob,
   rollbackImportJob,
 } from '../imports/import-service';
 import { discoverImportSources } from '../imports/import-discovery';
+import { listAgentChats, listAgentGroups, listImportAgents, preflightAgentSelection, type AgentSelection } from '../imports/import-agents';
 import type { ConversationImportMode, ImportAdapterId, ImportJobKind, SetupImportScope } from '../imports/import-types';
 
 export const router = Router();
@@ -67,6 +70,76 @@ router.get('/api/imports/discover', (_req, res) => {
     res.json({ success: true, ...discoverImportSources() });
   } catch (error) {
     res.status(500).json({ success: false, error: errorMessage(error) });
+  }
+});
+
+/**
+ * Agents & imports page. `GET /api/imports/agents` is metadata-only (same
+ * guarantee as /discover). The per-agent routes below run only after the user
+ * opens a row; they read bounded titles/previews and return them without
+ * storing them anywhere.
+ */
+router.get('/api/imports/agents', (_req, res) => {
+  try {
+    res.json({ success: true, ...listImportAgents() });
+  } catch (error) {
+    res.status(500).json({ success: false, error: errorMessage(error) });
+  }
+});
+
+router.get('/api/imports/agents/:agentId/groups', (req, res) => {
+  try {
+    res.json({ success: true, ...listAgentGroups(String(req.params.agentId || '')) });
+  } catch (error) {
+    res.status(400).json({ success: false, error: errorMessage(error) });
+  }
+});
+
+router.get('/api/imports/agents/:agentId/chats', (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({
+      success: true,
+      ...listAgentChats(String(req.params.agentId || ''), {
+        offset: Number(req.query.offset || 0),
+        limit: Number(req.query.limit || 50),
+        group: typeof req.query.group === 'string' ? req.query.group : undefined,
+        preview: String(req.query.preview || '') === '1',
+      }),
+    });
+  } catch (error) {
+    res.status(400).json({ success: false, error: errorMessage(error) });
+  }
+});
+
+function normalizeSelection(body: any): AgentSelection {
+  const list = (value: unknown, max: number): string[] => Array.isArray(value)
+    ? [...new Set(value.filter((item): item is string => typeof item === 'string').map((item) => item.trim()).filter(Boolean))].slice(0, max)
+    : [];
+  return { groups: list(body?.groups, 2_000), chats: list(body?.chats, 10_000), exclude: list(body?.exclude, 10_000) };
+}
+
+/** Exact counts for the confirmation dialog, plus the bounded job requests to send to POST /api/imports/jobs. */
+router.post('/api/imports/agents/:agentId/preflight', (req, res) => {
+  try {
+    const owner = ownerId();
+    const workspacePath = getConfig().getWorkspacePath();
+    const result = preflightAgentSelection(
+      String(req.params.agentId || ''),
+      normalizeSelection(req.body),
+      (input) => isConversationAlreadyImported({ ...input, ownerId: owner, workspacePath }),
+    );
+    res.json({ success: true, preflight: result });
+  } catch (error) {
+    res.status(400).json({ success: false, error: errorMessage(error) });
+  }
+});
+
+router.post('/api/imports/jobs/:id/cancel', (req, res) => {
+  try {
+    res.json({ success: true, job: requestCancelImportJob(String(req.params.id || ''), ownerId()) });
+  } catch (error) {
+    res.status(400).json({ success: false, error: errorMessage(error) });
   }
 });
 

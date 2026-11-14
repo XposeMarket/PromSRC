@@ -219,6 +219,9 @@ export interface ImportJobResult {
   conflicts: number;
   failures: string[];
   rolledBackAt?: string;
+  /** Set when the user cancelled after the current chat; counts chats never started. */
+  notStarted?: number;
+  cancelledAt?: string;
 }
 
 export interface ExternalImportBinding {
