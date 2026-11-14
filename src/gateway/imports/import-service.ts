@@ -569,13 +569,18 @@ function importedSessionIdForConversation(job: ImportJob, conversation: Imported
     ...(job.sourceAccountId ? { sourceAccountId: job.sourceAccountId } : {}),
   };
   const sourceConversationId = String(source.sourceConversationId || conversation.id);
-  const dedupeKey = stableImportId(job.ownerId, path.resolve(job.workspacePath), source.provider, source.sourceAccountId || '', sourceConversationId);
-  const baseId = `import_${source.adapter.replace(/[^a-z0-9]+/gi, '_').toLowerCase()}_${dedupeKey}`;
-  const baseSessionId = baseId.slice(0, 180);
+  const { dedupeKey, sessionId: baseSessionId } = importSessionKeys(job.ownerId, job.workspacePath, source.provider, source.adapter, source.sourceAccountId, sourceConversationId);
   if (!sessionExists(baseSessionId)) return baseSessionId;
   const existing = getSession(baseSessionId);
   if ((existing as any).externalImport?.dedupeKey === dedupeKey) return baseSessionId;
-  return `${baseId.slice(0, 150)}_${stableImportId(job.id).slice(0, 16)}`;
+  return `${baseSessionId.slice(0, 150)}_${stableImportId(job.id).slice(0, 16)}`;
+}
+
+/** Stable dedupe key and base session id for one imported chat. Shared by the commit loop and the preflight duplicate check. */
+function importSessionKeys(ownerId: string, workspacePath: string, provider: string, adapter: string, sourceAccountId: string | undefined, sourceConversationId: string): { dedupeKey: string; sessionId: string } {
+  const dedupeKey = stableImportId(ownerId, path.resolve(workspacePath), provider, sourceAccountId || '', sourceConversationId);
+  const sessionId = `import_${adapter.replace(/[^a-z0-9]+/gi, '_').toLowerCase()}_${dedupeKey}`.slice(0, 180);
+  return { dedupeKey, sessionId };
 }
 
 function sessionForConversation(job: ImportJob, conversation: ImportedConversation, result: ImportJobResult): string {
@@ -584,9 +589,8 @@ function sessionForConversation(job: ImportJob, conversation: ImportedConversati
     ...(job.sourceAccountId ? { sourceAccountId: job.sourceAccountId } : {}),
   };
   const sourceConversationId = String(source.sourceConversationId || conversation.id);
-  const dedupeKey = stableImportId(job.ownerId, path.resolve(job.workspacePath), source.provider, source.sourceAccountId || '', sourceConversationId);
-  const baseId = `import_${source.adapter.replace(/[^a-z0-9]+/gi, '_').toLowerCase()}_${dedupeKey}`;
-  let sessionId = baseId.slice(0, 180);
+  const { dedupeKey, sessionId: keySessionId } = importSessionKeys(job.ownerId, job.workspacePath, source.provider, source.adapter, source.sourceAccountId, sourceConversationId);
+  let sessionId = keySessionId;
   if (sessionExists(sessionId)) {
     const existing = getSession(sessionId);
     if ((existing as any).externalImport?.dedupeKey === dedupeKey) {
@@ -594,7 +598,7 @@ function sessionForConversation(job: ImportJob, conversation: ImportedConversati
       result.sessionIds.push(sessionId);
       return '';
     }
-    sessionId = `${baseId.slice(0, 150)}_${stableImportId(job.id).slice(0, 16)}`;
+    sessionId = `${keySessionId.slice(0, 150)}_${stableImportId(job.id).slice(0, 16)}`;
   }
   const session = getSession(sessionId);
   const history: ChatMessage[] = conversation.messages.map((message) => attachEventsToMessage(message, conversation.events));
@@ -921,8 +925,7 @@ export function isConversationAlreadyImported(input: {
 }): boolean {
   const sourceConversationId = String(input.sourceConversationId || '').trim();
   if (!sourceConversationId) return false;
-  const dedupeKey = stableImportId(input.ownerId, path.resolve(input.workspacePath), input.provider, input.sourceAccountId || '', sourceConversationId);
-  const sessionId = `import_${input.adapter.replace(/[^a-z0-9]+/gi, '_').toLowerCase()}_${dedupeKey}`.slice(0, 180);
+  const { dedupeKey, sessionId } = importSessionKeys(input.ownerId, input.workspacePath, input.provider, input.adapter, input.sourceAccountId, sourceConversationId);
   try {
     if (!sessionExists(sessionId)) return false;
     return (getSession(sessionId) as any)?.externalImport?.dedupeKey === dedupeKey;

@@ -52,7 +52,7 @@
 .aip-tile {
   flex: none; width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center;
   border: 1px solid var(--aip-line); background: color-mix(in srgb, var(--aip-text) 7%, transparent);
-  font-weight: 700; font-size: 13px; color: var(--aip-text);
+  font-weight: 700; font-size: 12px; letter-spacing: -0.2px; color: var(--aip-text);
 }
 .aip-row-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .aip-row-name { font-weight: 600; }

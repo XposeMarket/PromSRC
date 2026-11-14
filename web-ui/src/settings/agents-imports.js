@@ -269,7 +269,7 @@ export function mountAgentsImports(container, options = {}) {
 
   function agentStatus(agent) {
     const parts = ['Found'];
-    if (agent.chatCount) parts.push(`${plural(agent.chatCount, 'chat')} found`);
+    if (agent.chatCount) parts.push(`${plural(agent.chatCount, 'chat')}`);
     else if (agent.setupSources?.length) parts.push('MCP config only');
     const size = formatBytes(agent.bytes);
     if (size) parts.push(size);

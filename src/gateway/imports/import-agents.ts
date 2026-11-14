@@ -41,11 +41,11 @@ const CREDENTIAL_NAME = /(auth|credential|token|oauth|login|secret|password|cook
 
 /** Agents the page knows by name. Anything else discovery finds is "Import only". */
 const KNOWN_AGENTS: Record<string, { name: string; letter: string; order: number }> = {
-  claude: { name: 'Claude Code', letter: 'C', order: 1 },
-  codex: { name: 'Codex', letter: 'X', order: 0 },
-  openclaw: { name: 'OpenClaw', letter: 'O', order: 2 },
-  hermes: { name: 'Hermes Agent', letter: 'H', order: 3 },
-  cursor: { name: 'Cursor', letter: 'U', order: 4 },
+  claude: { name: 'Claude Code', letter: 'Cc', order: 1 },
+  codex: { name: 'Codex', letter: 'Cx', order: 0 },
+  openclaw: { name: 'OpenClaw', letter: 'Oc', order: 2 },
+  hermes: { name: 'Hermes Agent', letter: 'He', order: 3 },
+  cursor: { name: 'Cursor', letter: 'Cu', order: 4 },
 };
 
 export interface ImportAgentSetupSource {
