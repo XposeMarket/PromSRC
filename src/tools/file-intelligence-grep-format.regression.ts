@@ -21,4 +21,11 @@ assert.equal(compact.split('\n').length, 21);
 assert.doesNotMatch(compact, /suggested_read|char_window/);
 assert.ok(compact.length < detailed.length / 3, `compact=${compact.length} detailed=${detailed.length}`);
 assert.match(detailed, /suggested_exact_read/);
+// Paged, capped search: header must show the real window and the next offset.
+const paged = formatGrepToolResult({ match_count: 240, total_exact: false, offset: 80, has_more: true, next_offset: 160, returned_count: 20, matches: matches.slice(0, 20) });
+assert.match(paged, /^Showing 81-100 of at least 240 matches\. More matches exist: pass offset=160 to see the next page\./);
+assert.doesNotMatch(paged, /omitted/);
+const exhaustedPage = formatGrepToolResult({ match_count: 20, total_exact: true, offset: 0, has_more: false, matches });
+assert.match(exhaustedPage, /^Showing 1-20 of 20 matches\./);
+assert.doesNotMatch(exhaustedPage, /offset=/);
 console.log('compact grep result regression passed');
