@@ -131,6 +131,37 @@ assert.match(mainSource, /isHardwareAccelerationEnabled/);
 assert.match(mainSource, /getGPUFeatureStatus/);
 assert.match(mainSource, /buildNativeBrowserProcessBreakdown/);
 
+// Idle hidden tabs are closed by age; presented and leased tabs never are.
+const policy = require('../electron/native-browser-resource-policy.js');
+const HOUR = 60 * 60 * 1000;
+assert.equal(policy.resolveNativeBrowserIdleCloseMs(undefined), 24 * HOUR);
+assert.equal(policy.resolveNativeBrowserIdleCloseMs(''), 24 * HOUR);
+assert.equal(policy.resolveNativeBrowserIdleCloseMs('6'), 6 * HOUR);
+assert.equal(policy.resolveNativeBrowserIdleCloseMs('0'), 0, '0 disables idle closing');
+assert.equal(policy.resolveNativeBrowserIdleCloseMs('nope'), 24 * HOUR);
+assert.equal(policy.resolveNativeBrowserIdleCloseMs('-3'), 24 * HOUR);
+const idleBase = { presented: false, leaseActive: false, lastActivityAt: 1_000, now: 1_000 + 25 * HOUR, idleCloseMs: 24 * HOUR };
+assert.equal(policy.shouldCloseIdleNativeBrowserView(idleBase), true);
+assert.equal(policy.shouldCloseIdleNativeBrowserView({ ...idleBase, now: 1_000 + 23 * HOUR }), false, 'still inside the idle limit');
+assert.equal(policy.shouldCloseIdleNativeBrowserView({ ...idleBase, presented: true }), false, 'the visible tab is never closed');
+assert.equal(policy.shouldCloseIdleNativeBrowserView({ ...idleBase, leaseActive: true }), false, 'a tab in use is never closed');
+assert.equal(policy.shouldCloseIdleNativeBrowserView({ ...idleBase, idleCloseMs: 0 }), false, 'disabled');
+assert.equal(policy.shouldCloseIdleNativeBrowserView({ ...idleBase, lastActivityAt: 0 }), false, 'unknown activity time is kept');
+assert.equal(policy.shouldCloseIdleNativeBrowserView(), false);
+
+// Hidden tabs log on their own pressure change, then only on the long interval.
+const logBase = { presented: false, pressureLevel: 'elevated', processPressureLevel: 'elevated', lastPressureKey: 'elevated:elevated', lastLogAt: 0, now: 61_000, visibleIntervalMs: 60_000, hiddenIntervalMs: 1_800_000 };
+assert.equal(policy.shouldLogNativeBrowserResource(logBase), false, 'unchanged hidden tab stays quiet after one minute');
+assert.equal(policy.shouldLogNativeBrowserResource({ ...logBase, presented: true }), true, 'visible tab keeps the one-minute cadence');
+assert.equal(policy.shouldLogNativeBrowserResource({ ...logBase, now: 1_800_000 }), true, 'hidden tab repeats on the long interval');
+assert.equal(policy.shouldLogNativeBrowserResource({ ...logBase, lastPressureKey: 'normal' }), true, 'hidden tab logs when it first comes under pressure');
+assert.equal(policy.shouldLogNativeBrowserResource({ ...logBase, pressureLevel: 'high', lastPressureKey: 'elevated:elevated' }), true, 'hidden tab logs when its own level changes');
+assert.equal(policy.shouldLogNativeBrowserResource({ ...logBase, pressureLevel: 'normal', lastPressureKey: 'normal:normal' }), false, 'app-wide pressure alone does not make a hidden tab log every minute');
+assert.equal(policy.shouldLogNativeBrowserResource({ ...logBase, pressureLevel: 'normal', processPressureLevel: 'normal' }), false, 'nothing to log when normal');
+assert.match(mainSource, /closeIdleNativeBrowserViews\(\);/);
+assert.match(mainSource, /nativeViewMeta\(view\)\.lastActivityAt = Date\.now\(\)/);
+assert.match(mainSource, /shouldLogNativeBrowserResource\(\{/);
+
 await import('./test-electron-native-browser-navigation.mjs');
 await import('./test-electron-native-browser-view-contract.mjs');
 await import('./test-electron-native-browser-navigation-wrapper.mjs');

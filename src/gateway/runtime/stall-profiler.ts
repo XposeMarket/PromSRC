@@ -172,6 +172,37 @@ export interface StallProfilerOptions {
   maxProfileFiles?: number;
   /** Directory for raw .cpuprofile dumps; omit to skip writing them. */
   profileDir?: string;
+  /** Windows only: keep a sub-100ms interval even though V8 then spins one full core. Tests and short debug runs only. */
+  allowWindowsBusyWait?: boolean;
+}
+
+/**
+ * V8's sampler thread on Windows busy-waits instead of sleeping for any
+ * interval of 100ms or less, which burns one full core for as long as the
+ * profiler runs (measured 2026-11-15: 97-100% of a core at 1-100ms, 0% at
+ * 101ms and above). An always-on profiler must stay above that line there.
+ */
+export const WINDOWS_MIN_SLEEPING_SAMPLING_US = 125_000;
+/** Samples kept per rolling window; bounds memory at any sampling rate. */
+export const STALL_PROFILER_SAMPLE_BUDGET = 6_000;
+
+export function resolveStallSamplingIntervalUs(
+  requestedUs: number | undefined, platform: string = process.platform, allowWindowsBusyWait = false,
+): number {
+  const requested = Number.isFinite(requestedUs) && Number(requestedUs) > 0 ? Number(requestedUs) : 10_000;
+  const interval = Math.max(1000, Math.floor(requested));
+  if (platform === 'win32' && !allowWindowsBusyWait) return Math.max(interval, WINDOWS_MIN_SLEEPING_SAMPLING_US);
+  return interval;
+}
+
+/**
+ * Each rotation stops and restarts the profiler, which blocks the main thread
+ * (about 1s on a large gateway). Rotate only as often as the sample budget
+ * needs, so a slower sampling rate also means fewer freezes.
+ */
+export function resolveStallRotateMs(requestedMs: number | undefined, samplingIntervalUs: number): number {
+  if (Number.isFinite(requestedMs) && Number(requestedMs) > 0) return Math.max(5_000, Math.floor(Number(requestedMs)));
+  return Math.max(60_000, Math.round((STALL_PROFILER_SAMPLE_BUDGET * samplingIntervalUs) / 1000));
 }
 
 type PostFn = (method: string, params?: Record<string, unknown>, cb?: (err: Error | null, result?: any) => void) => void;
@@ -185,9 +216,13 @@ export class StallProfiler {
   private readonly opts: Required<Omit<StallProfilerOptions, 'profileDir'>> & { profileDir?: string };
 
   constructor(options: StallProfilerOptions = {}) {
+    const samplingIntervalUs = resolveStallSamplingIntervalUs(
+      options.samplingIntervalUs, process.platform, options.allowWindowsBusyWait === true,
+    );
     this.opts = {
-      samplingIntervalUs: Math.max(1000, options.samplingIntervalUs ?? 10_000),
-      rotateMs: Math.max(5_000, options.rotateMs ?? 60_000),
+      samplingIntervalUs,
+      allowWindowsBusyWait: options.allowWindowsBusyWait === true,
+      rotateMs: resolveStallRotateMs(options.rotateMs, samplingIntervalUs),
       minCaptureGapMs: Math.max(0, options.minCaptureGapMs ?? 30_000),
       maxProfileFiles: Math.max(1, options.maxProfileFiles ?? 12),
       profileDir: options.profileDir,

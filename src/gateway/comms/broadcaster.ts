@@ -101,7 +101,8 @@ const EVENT_LOOP_STALL_DIAGNOSTIC_MS = parseNonNegativeIntEnv('PROMETHEUS_GATEWA
 const stallProfilerEnv = String(process.env.PROMETHEUS_GATEWAY_STALL_PROFILER || '').trim().toLowerCase();
 const STALL_PROFILER_ENABLED = !['0', 'false', 'off', 'no'].includes(stallProfilerEnv);
 const STALL_PROFILER_SAMPLING_US = parseNonNegativeIntEnv('PROMETHEUS_GATEWAY_STALL_PROFILER_INTERVAL_US', 10_000);
-const STALL_PROFILER_ROTATE_MS = parseNonNegativeIntEnv('PROMETHEUS_GATEWAY_STALL_PROFILER_ROTATE_MS', 60_000);
+// 0 = derive from the sampling interval (fixed sample budget per window).
+const STALL_PROFILER_ROTATE_MS = parseNonNegativeIntEnv('PROMETHEUS_GATEWAY_STALL_PROFILER_ROTATE_MS', 0);
 let _stallProfiler: StallProfiler | null = null;
 
 function startStallProfiler(): void {
@@ -109,7 +110,7 @@ function startStallProfiler(): void {
   try {
     const profiler = new StallProfiler({
       samplingIntervalUs: STALL_PROFILER_SAMPLING_US,
-      rotateMs: STALL_PROFILER_ROTATE_MS,
+      rotateMs: STALL_PROFILER_ROTATE_MS || undefined,
       profileDir: path.join(getConfig().getConfigDir(), 'logs', 'stall-profiles'),
     });
     if (profiler.start()) _stallProfiler = profiler;

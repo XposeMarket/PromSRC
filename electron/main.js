@@ -67,6 +67,9 @@ const {
   findNativeBrowserProcessMetric,
   getNativeBrowserOSProcessId,
   normalizeElectronProcessMetrics,
+  resolveNativeBrowserIdleCloseMs,
+  shouldCloseIdleNativeBrowserView,
+  shouldLogNativeBrowserResource,
 } = require('./native-browser-resource-policy');
 // ─── Config ────────────────────────────────────────────────────────────────
 function parseGatewayPort(value) {
@@ -921,6 +924,10 @@ let presentedNativeTabId = '';             // tab currently shown in the canvas
 const NATIVE_BROWSER_RESOURCE_SAMPLE_INTERVAL_MS = 10_000;
 const NATIVE_BROWSER_RESOURCE_QUERY_TIMEOUT_MS = 750;
 const NATIVE_BROWSER_RESOURCE_LOG_INTERVAL_MS = 60_000;
+// Hidden tabs repeat an unchanged pressure line this often instead of every minute.
+const NATIVE_BROWSER_RESOURCE_HIDDEN_LOG_INTERVAL_MS = 30 * 60_000;
+// Hidden tabs untouched for this long are closed. PROMETHEUS_NATIVE_BROWSER_IDLE_CLOSE_HOURS=0 disables it.
+const NATIVE_BROWSER_IDLE_CLOSE_MS = resolveNativeBrowserIdleCloseMs(process.env.PROMETHEUS_NATIVE_BROWSER_IDLE_CLOSE_HOURS);
 const NATIVE_BROWSER_RESOURCE_MAX_VIEWS_PER_SAMPLE = 16;
 let nativeBrowserResourceTimer = null;
 let nativeBrowserResourceSampleInFlight = false;
@@ -2203,6 +2210,7 @@ function nativeViewMeta(view) {
     lastResourceMetrics: null,
     lastResourceLogAt: 0,
     lastResourcePressure: 'normal',
+    lastActivityAt: Date.now(),
     consoleEntries: [],
     networkEntries: [],
     networkCapture: false,
@@ -2332,6 +2340,7 @@ function leaseNativeBrowserActivity(view) {
   const old = nativeBrowserActivityLeases.get(key);
   if (old) clearTimeout(old.timer);
   const expiresAt = Date.now() + NATIVE_BROWSER_LEASE_MS;
+  meta.lastActivityAt = Date.now();
   const timer = setTimeout(() => releaseNativeBrowserLease(view), NATIVE_BROWSER_LEASE_MS);
   timer.unref?.();
   nativeBrowserActivityLeases.set(key, { timer, expiresAt });
@@ -2596,9 +2605,16 @@ async function collectNativeBrowserResourceMetrics(
   const now = Date.now();
   const processPressure = record.processBreakdown?.pressure || { level: 'normal', reasons: [] };
   const pressureKey = `${record.pressure.level}:${processPressure.level}`;
-  if ((record.pressure.level !== 'normal' || processPressure.level !== 'normal')
-    && (meta.lastResourcePressure !== pressureKey
-      || now - Number(meta.lastResourceLogAt || 0) >= NATIVE_BROWSER_RESOURCE_LOG_INTERVAL_MS)) {
+  if (shouldLogNativeBrowserResource({
+    presented: record.presented === true,
+    pressureLevel: record.pressure.level,
+    processPressureLevel: processPressure.level,
+    lastPressureKey: meta.lastResourcePressure,
+    lastLogAt: meta.lastResourceLogAt,
+    now,
+    visibleIntervalMs: NATIVE_BROWSER_RESOURCE_LOG_INTERVAL_MS,
+    hiddenIntervalMs: NATIVE_BROWSER_RESOURCE_HIDDEN_LOG_INTERVAL_MS,
+  })) {
     writeGatewayLog(`[main][native-browser-resource] ${JSON.stringify({
       sessionId: record.sessionId,
       tabId: record.tabId,
@@ -2623,10 +2639,53 @@ async function collectNativeBrowserResourceMetrics(
   return record;
 }
 
+// Hidden tabs from finished, paused or abandoned sessions used to live until
+// the app quit, each holding a renderer process. Close the ones nobody has
+// touched for the idle limit; the presented tab and leased tabs are kept.
+function closeIdleNativeBrowserViews(now = Date.now()) {
+  if (!(NATIVE_BROWSER_IDLE_CLOSE_MS > 0)) return 0;
+  let closed = 0;
+  for (const [key, view] of [...nativeBrowserViews]) {
+    const meta = nativeViewMeta(view);
+    const lease = nativeBrowserActivityLeases.get(key);
+    const presented = meta.presented === true
+      || (presentedNativePartition === meta.partition && presentedNativeTabId === meta.tabId);
+    if (!shouldCloseIdleNativeBrowserView({
+      presented,
+      leaseActive: !!lease && lease.expiresAt > now,
+      lastActivityAt: meta.lastActivityAt,
+      now,
+      idleCloseMs: NATIVE_BROWSER_IDLE_CLOSE_MS,
+    })) continue;
+    const sid = String(meta.sessionId || '').trim();
+    const registry = getNativeTabRegistry(sid, meta.partition, false);
+    try {
+      destroyNativeBrowserView(meta.partition, meta.tabId, view);
+    } catch (error) {
+      writeGatewayLog(`[main][native-browser-idle-close] failed tab=${meta.tabId}: ${error?.message || error}\n`);
+      continue;
+    }
+    if (registry) {
+      registry.tabIds = registry.tabIds.filter((id) => id !== meta.tabId);
+      if (registry.activeTabId === meta.tabId) registry.activeTabId = registry.tabIds[0] || '';
+      if (!registry.tabIds.length) nativeBrowserSessionTabs.delete(nativeSessionKey(sid, meta.partition));
+    }
+    closed += 1;
+    writeGatewayLog(`[main][native-browser-idle-close] ${JSON.stringify({
+      sessionId: sid,
+      tabId: meta.tabId,
+      idleHours: Math.round(((now - Number(meta.lastActivityAt || now)) / 3_600_000) * 10) / 10,
+    })}\n`);
+  }
+  return closed;
+}
+
 async function sampleNativeBrowserResources() {
   if (nativeBrowserResourceSampleInFlight || !nativeBrowserViews.size) return;
   nativeBrowserResourceSampleInFlight = true;
   try {
+    closeIdleNativeBrowserViews();
+    if (!nativeBrowserViews.size) return;
     const processMetrics = readNativeBrowserProcessMetrics();
     const gpu = readNativeBrowserGpuDiagnostics();
     const views = Array.from(nativeBrowserViews.values()).slice(0, NATIVE_BROWSER_RESOURCE_MAX_VIEWS_PER_SAMPLE);
@@ -2865,7 +2924,11 @@ function ensureNativeBrowserView(sessionId = '', profileId = '', requestedTabId 
   registry.activeTabId = tabId;
 
   let view = getNativeViewByPartition(partition, tabId);
-  if (view) return { view, wc: view.webContents, partition, tabId };
+  if (view) {
+    // Any open/navigate/automation call resolves its view here, so this is the idle clock.
+    nativeViewMeta(view).lastActivityAt = Date.now();
+    return { view, wc: view.webContents, partition, tabId };
+  }
 
   const profileDescriptor = resolveNativeProfileDescriptor(partition);
   const webPreferences = {
