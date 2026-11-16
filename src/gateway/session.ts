@@ -1902,6 +1902,17 @@ export function searchSessionSummaries(
   return results;
 }
 
+/**
+ * Indexed summary for one chat, without loading its history. Null when the
+ * index does not carry it (no messages yet, or an unknown id).
+ */
+export function getSessionSummaryById(id: string): SessionSummary | null {
+  const sessionId = String(id || '').trim();
+  if (!sessionId) return null;
+  const summaries = loadSessionIndex().summaries;
+  return Object.prototype.hasOwnProperty.call(summaries, sessionId) ? summaries[sessionId] : null;
+}
+
 export function sessionExists(id: string): boolean {
   const sessionId = String(id || '').trim();
   return isSafeStorageId(sessionId) && fs.existsSync(getSessionPath(sessionId));

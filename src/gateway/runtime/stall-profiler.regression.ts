@@ -2,7 +2,10 @@ import assert from 'node:assert/strict';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { StallProfiler, summarizeCpuProfileWindow, type CpuProfile } from './stall-profiler';
+import {
+  StallProfiler, summarizeCpuProfileWindow, resolveStallSamplingIntervalUs, resolveStallRotateMs,
+  WINDOWS_MIN_SLEEPING_SAMPLING_US, type CpuProfile,
+} from './stall-profiler';
 
 // 1. Window summary on a synthetic profile: idle excluded, trailing window only,
 //    full stacks walk leaf -> root.
@@ -41,7 +44,21 @@ function freezeMainThreadForTest(ms: number): number {
 
 async function main(): Promise<void> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stall-profiler-'));
-  const profiler = new StallProfiler({ samplingIntervalUs: 1000, rotateMs: 60_000, minCaptureGapMs: 0, profileDir: dir });
+  // Windows never busy-waits by default; other platforms keep the requested rate.
+  assert.equal(resolveStallSamplingIntervalUs(10_000, 'win32'), WINDOWS_MIN_SLEEPING_SAMPLING_US);
+  assert.equal(resolveStallSamplingIntervalUs(100_000, 'win32'), WINDOWS_MIN_SLEEPING_SAMPLING_US, '100ms still spins on Windows');
+  assert.equal(resolveStallSamplingIntervalUs(250_000, 'win32'), 250_000);
+  assert.equal(resolveStallSamplingIntervalUs(1000, 'win32', true), 1000, 'explicit opt-in keeps the fast rate');
+  assert.equal(resolveStallSamplingIntervalUs(10_000, 'linux'), 10_000);
+  assert.equal(resolveStallSamplingIntervalUs(undefined, 'darwin'), 10_000);
+  assert.equal(resolveStallSamplingIntervalUs(5, 'linux'), 1000);
+  // Rotation follows the sample budget unless set explicitly.
+  assert.equal(resolveStallRotateMs(undefined, 10_000), 60_000, '10ms sampling keeps the 60s window');
+  assert.equal(resolveStallRotateMs(undefined, WINDOWS_MIN_SLEEPING_SAMPLING_US), 750_000, '125ms sampling rotates every 12.5min');
+  assert.equal(resolveStallRotateMs(0, 10_000), 60_000);
+  assert.equal(resolveStallRotateMs(20_000, WINDOWS_MIN_SLEEPING_SAMPLING_US), 20_000, 'explicit rotation wins');
+  assert.equal(resolveStallRotateMs(100, 10_000), 5_000);
+  const profiler = new StallProfiler({ samplingIntervalUs: 1000, rotateMs: 60_000, minCaptureGapMs: 0, profileDir: dir, allowWindowsBusyWait: true });
   try {
     assert.equal(profiler.start(), true, 'profiler starts');
     await new Promise((r) => setTimeout(r, 100));
