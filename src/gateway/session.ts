@@ -3571,7 +3571,9 @@ export function consolidateLegacyAutomatedSessions(): number {
   for (const file of files) {
     const id = file.slice(0, -5);
     if (!isSafeStorageId(id)) continue;
-    const m = /^auto_(.+)_(\d{10,})$/i.exec(id);
+    // Legacy heartbeat runs (heartbeat_<agentId>_<ms>) fold into the agent's
+    // single heartbeat thread auto_heartbeat_<agentId>.
+    const m = /^auto_(.+)_(\d{10,})$/i.exec(id) || /^(heartbeat_.+)_(\d{10,})$/i.exec(id);
     if (!m) continue;
     const jobId = m[1];
     const ts = Number(m[2]) || 0;
@@ -3583,6 +3585,7 @@ export function consolidateLegacyAutomatedSessions(): number {
   for (const [jobId, runs] of legacyByJob) {
     runs.sort((a, b) => a.ts - b.ts);
     const stableId = `auto_${jobId}`;
+    const heartbeatAgent = /^heartbeat_(.+)$/i.exec(jobId)?.[1];
     const stable = getSession(stableId);
     if (!Array.isArray(stable.history)) stable.history = [];
     const seen = new Set(
@@ -3611,6 +3614,7 @@ export function consolidateLegacyAutomatedSessions(): number {
       // Sort merged history chronologically and persist the stable thread.
       stable.history.sort((a, b) => Number(a.timestamp || 0) - Number(b.timestamp || 0));
       stable.channel = stable.channel || inferChannelFromSessionId(stableId);
+      if (heartbeatAgent && !String(stable.title || '').trim()) stable.title = `💓 ${heartbeatAgent} heartbeat`;
       stable.autoTitleLocked = true;
       flushSession(stableId);
     }
