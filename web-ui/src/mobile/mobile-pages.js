@@ -2967,6 +2967,15 @@ async function _steerMobileQueuedPrompt(sessionId, index) {
     return;
   }
   let clientSteerId = '';
+  // Close the queued banner immediately; waiting for upload + /api/chat/steer made it
+  // linger for seconds. Any failure puts the prompt back at its original slot.
+  let removedFromQueue = false;
+  const restoreQueued = () => {
+    if (!removedFromQueue) return;
+    removedFromQueue = false;
+    if (!queue.includes(item)) queue.splice(Math.min(index, queue.length), 0, item);
+  };
+  if (queue[index] === item) { queue.splice(index, 1); removedFromQueue = true; _renderMobileQueuedPromptsPanel(sid); }
   try {
     const files = Array.isArray(item.files) ? item.files : [];
     const uploadResults = files.length ? await _uploadMobileChatAttachments(files) : [];
@@ -3002,7 +3011,8 @@ async function _steerMobileQueuedPrompt(sessionId, index) {
       err.definitive = true;
       throw err;
     }
-    queue.splice(index, 1);
+    if (!removedFromQueue) { const at = queue.indexOf(item); if (at >= 0) queue.splice(at, 1); }
+    removedFromQueue = false;
     _renderMobileQueuedPromptsPanel(sid);
     // The steer just emptied the queue under the user's thumb; don't let the
     // next tap land on Stop.
@@ -3015,9 +3025,10 @@ async function _steerMobileQueuedPrompt(sessionId, index) {
     const definitive = err?.definitive === true
       || (Number(err?.status || 0) >= 400 && Number(err?.status || 0) < 500)
       || err?.retryable === false;
+    restoreQueued();
+    _renderMobileQueuedPromptsPanel(sid);
     if (definitive) {
       _rollbackMobileQueuedSteerTurn(sid, clientSteerId, errorText);
-      _renderMobileQueuedPromptsPanel(sid);
       pmToast(`Steer rejected: ${errorText}`, 'error');
       return;
     }
@@ -3045,6 +3056,16 @@ function _renderMobileQueuedPromptsPanel(sessionId = '') {
     return;
   }
   panel.hidden = false;
+  // Stream events re-render this panel constantly. Rebuilding identical markup wiped the
+  // open Steer/Delete popover under the user's thumb, so skip no-op rebuilds and keep the
+  // open menu across real ones.
+  const queueSignature = JSON.stringify([sid, queue.map((item) => [String(item?.id || ''), String(item?.message || ''), Array.isArray(item?.files) ? item.files.length : 0])]);
+  if (panel.dataset.pmQueueSig === queueSignature && panel.querySelector('.pm-mobile-queued-list')) {
+    try { window.__pmMobileQueuedPromptsChanged?.(); } catch {}
+    return;
+  }
+  const openMenuIndex = Number(panel.querySelector('.pm-mobile-queued-popover:not([hidden])')?.getAttribute('data-mobile-queued-menu'));
+  panel.dataset.pmQueueSig = queueSignature;
   panel.innerHTML = `
     <div class="pm-mobile-queued-list">
       ${queue.map((item, index) => `
@@ -3091,6 +3112,10 @@ function _renderMobileQueuedPromptsPanel(sessionId = '') {
       }
     });
   });
+  if (Number.isInteger(openMenuIndex) && openMenuIndex >= 0 && openMenuIndex < queue.length) {
+    const reopened = panel.querySelector(`[data-mobile-queued-menu="${openMenuIndex}"]`);
+    if (reopened) reopened.hidden = false;
+  }
   try { window.__pmMobileQueuedPromptsChanged?.(); } catch {}
 }
 
