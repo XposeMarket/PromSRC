@@ -153,3 +153,17 @@ assert.equal(isQuestionWaitInFlight(resumeWait, 'session', () => [{ ...pendingCa
 assert.equal(isQuestionWaitInFlight([], 'session', () => { throw new Error('unexpected queue read'); }), false, 'no disk reads for normal work');
 assert.equal(isQuestionWaitInFlight(updateBlockingWaits(questionWait, 'done', {}, afterSevenHours), 'session', () => [pendingCard], afterSevenHours), false);
 console.log('durable question watchdog regressions passed');
+
+import { isApprovalWaitInFlight } from './main-chat-execution-owner';
+const approvalTurnStart = waitStart;
+const pendingApproval = { id: 'a1', sessionId: 'session', status: 'pending', createdAt: new Date(approvalTurnStart + 5_000).toISOString(), hasWaiter: true };
+const afterElevenMinutes = approvalTurnStart + 11 * 60_000;
+assert.equal(isApprovalWaitInFlight('session', approvalTurnStart, () => [pendingApproval], afterElevenMinutes), true, 'a live approval card outlasts the 10min semantic stall limit');
+assert.equal(isApprovalWaitInFlight('session', approvalTurnStart, () => [pendingApproval], afterSevenHours), true, 'a live approval card outlasts the 6h age limit');
+for (const changed of [{ status: 'approved' }, { status: 'rejected' }, { hasWaiter: false }, { sessionId: 'other' }, { createdAt: new Date(approvalTurnStart - 1).toISOString() }, { createdAt: 'not-a-date' }]) {
+  assert.equal(isApprovalWaitInFlight('session', approvalTurnStart, () => [{ ...pendingApproval, ...changed }], afterElevenMinutes), false, JSON.stringify(changed));
+}
+assert.equal(isApprovalWaitInFlight('session', approvalTurnStart, () => [], afterElevenMinutes), false, 'no pending approval cannot suppress watchdog');
+assert.equal(isApprovalWaitInFlight('', approvalTurnStart, () => { throw new Error('unexpected queue read'); }), false, 'no session, no queue read');
+assert.equal(isApprovalWaitInFlight('session', 0, () => { throw new Error('unexpected queue read'); }), false, 'unknown turn start, no queue read');
+console.log('approval wait watchdog regressions passed');

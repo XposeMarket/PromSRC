@@ -169,6 +169,25 @@ export function isQuestionWaitInFlight(
       : Date.parse(question.createdAt) >= wait.startedAt && Date.parse(question.createdAt) <= now));
 }
 
+export type PendingApprovalWait = { id: string; sessionId?: string; status: string; createdAt: string; hasWaiter: boolean };
+
+/**
+ * A tool call parked on an approval card is waiting on the human, not stalled.
+ * Only a pending approval that this session raised during the current turn and
+ * that still has a live waiter counts, so a detached, resolved or foreign card
+ * cannot suppress the watchdog. The approval queue's own max age bounds the wait.
+ */
+export function isApprovalWaitInFlight(
+  sessionId: string, turnStartedAt: number,
+  loadPending: () => PendingApprovalWait[],
+  now = Date.now(),
+): boolean {
+  if (!sessionId || !Number.isFinite(turnStartedAt) || turnStartedAt <= 0) return false;
+  return loadPending().some((approval) => approval.sessionId === sessionId
+    && approval.status === 'pending' && approval.hasWaiter === true
+    && Date.parse(approval.createdAt) >= turnStartedAt && Date.parse(approval.createdAt) <= now);
+}
+
 
 /** Track all parallel calls by id, falling back to the runtime's name/step envelope. */
 export function updateBlockingWaits(waits: BlockingWait[], event: string, data: any, at: number): BlockingWait[] {
