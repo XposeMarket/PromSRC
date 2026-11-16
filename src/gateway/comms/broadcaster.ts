@@ -17,7 +17,8 @@ import { getNodeRuntimeSnapshot } from '../runtime/node-runtime';
 import { getRuntimeWorkerDiagnostics } from '../process/runtime-worker-broker.js';
 import { StallProfiler } from '../runtime/stall-profiler';
 import { canAttemptRecoveryGc, decideMemoryRecoveryAfterGc, decideActiveWorkMemoryRecovery, gcConfirmThresholdBytes, isMemoryPressureSample, runMemoryRecoveryRestart, runRecoveryGc, shouldKeepSkippingWithinGcWindow } from '../runtime/gateway-memory-recovery';
-import { countLocalRunningRuntimes } from '../live-runtime-registry';
+import { countLocalRunningRuntimes, listLocalRunningRuntimes } from '../live-runtime-registry';
+import { buildMemoryHighWaterEvent, createMemoryHighWaterState, formatMemoryHighWaterLine, MEMORY_HIGHWATER_DEFAULT_FLOOR_BYTES, MEMORY_HIGHWATER_DEFAULT_STEP_BYTES, MEMORY_HIGHWATER_LOG_FILE, nextMemoryHighWater } from '../runtime/gateway-memory-highwater';
 import { getHeapStatistics } from 'node:v8';
 import { freemem } from 'node:os';
 
@@ -104,6 +105,48 @@ const STALL_PROFILER_SAMPLING_US = parseNonNegativeIntEnv('PROMETHEUS_GATEWAY_ST
 // 0 = derive from the sampling interval (fixed sample budget per window).
 const STALL_PROFILER_ROTATE_MS = parseNonNegativeIntEnv('PROMETHEUS_GATEWAY_STALL_PROFILER_ROTATE_MS', 0);
 let _stallProfiler: StallProfiler | null = null;
+
+// Memory high-water log: one line in logs/gateway-memory-highwater.ndjson each
+// time the process peak climbs a step above the last logged peak, naming what
+// was running. Diagnostics only. PROMETHEUS_GATEWAY_MEMORY_HIGHWATER=0 disables.
+const memoryHighWaterEnv = String(process.env.PROMETHEUS_GATEWAY_MEMORY_HIGHWATER || '').trim().toLowerCase();
+const MEMORY_HIGHWATER_ENABLED = !['0', 'false', 'off', 'no'].includes(memoryHighWaterEnv);
+const MEMORY_HIGHWATER_FLOOR_BYTES = parseNonNegativeIntEnv('PROMETHEUS_GATEWAY_MEMORY_HIGHWATER_FLOOR_BYTES', MEMORY_HIGHWATER_DEFAULT_FLOOR_BYTES);
+const MEMORY_HIGHWATER_STEP_BYTES = parseNonNegativeIntEnv('PROMETHEUS_GATEWAY_MEMORY_HIGHWATER_STEP_BYTES', MEMORY_HIGHWATER_DEFAULT_STEP_BYTES) || MEMORY_HIGHWATER_DEFAULT_STEP_BYTES;
+const _memoryHighWater = createMemoryHighWaterState();
+
+function maybeLogMemoryHighWater(configDir: string, memory: NodeJS.MemoryUsage, now: number): void {
+  if (!MEMORY_HIGHWATER_ENABLED) return;
+  try {
+    let maxRssBytes = 0;
+    try { maxRssBytes = Math.max(0, Number(process.resourceUsage().maxRSS) || 0) * 1024; } catch {}
+    const previousPeakBytes = _memoryHighWater.lastLoggedPeakBytes;
+    const decision = nextMemoryHighWater({
+      state: _memoryHighWater,
+      rssBytes: memory.rss,
+      maxRssBytes,
+      floorBytes: MEMORY_HIGHWATER_FLOOR_BYTES,
+      stepBytes: MEMORY_HIGHWATER_STEP_BYTES,
+      now,
+    });
+    if (!decision.log) return;
+    const event = buildMemoryHighWaterEvent({
+      now,
+      pid: process.pid,
+      uptimeSec: process.uptime(),
+      decision,
+      previousPeakBytes,
+      memory,
+      heapLimitBytes: getHeapStatistics().heap_size_limit,
+      modelBusyCount: _modelBusyCount,
+      lastMainSessionId: _lastMainSessionId,
+      runtimes: listLocalRunningRuntimes(),
+      runtimeWorkers: getRuntimeWorkerDiagnostics(),
+    });
+    enqueueAsyncAppend(path.join(configDir, 'logs', MEMORY_HIGHWATER_LOG_FILE), JSON.stringify(event) + '\n');
+    console.warn(formatMemoryHighWaterLine(event));
+  } catch {}
+}
 
 function startStallProfiler(): void {
   if (!STALL_PROFILER_ENABLED || _stallProfiler || _gatewayDraining) return;
@@ -553,6 +596,7 @@ function writeRuntimeStatus(reason = 'heartbeat'): void {
     const memory = process.memoryUsage();
     const eventLoop = sampleEventLoopMetrics();
     appendEventLoopStallDiagnostic(configDir, now, heartbeatDriftMs, elapsedMs, eventLoop, memory);
+    maybeLogMemoryHighWater(configDir, memory, now);
     _lastHeartbeatCpuUsage = process.cpuUsage();
     _lastHeartbeatAt = now;
     enqueueAsyncWrite(path.join(configDir, 'gateway-runtime-status.json'), JSON.stringify({
