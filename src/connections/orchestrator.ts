@@ -6,6 +6,7 @@ import { ConnectionAttemptStore } from './attempt-store';
 import { ConnectionStore } from './connection-store';
 import { accountIdentitiesMatch } from './connector-contract';
 import { invalidateConnectionToolSurfaceCache } from './tool-surface';
+import { CONNECTION_STATE_TRANSITIONS } from './schema';
 
 /** Adapters whose only proof of access is a stored credential; disconnecting them deletes it. */
 const CREDENTIAL_ADAPTERS = new Set(['api-key', 'setup-token']);
@@ -220,6 +221,15 @@ export class ConnectionOrchestrator {
     catch (error: any) { return this.fail(attempt, 'REPAIR_FAILED', String(error?.message || error), true); }
   }
 
+  /** Close an unfinished attempt from any state: cancel where allowed, otherwise fail it. */
+  abandon(id: string, reason = 'Abandoned stale setup attempt.'): ConnectionAttempt {
+    const attempt = this.requireAttempt(id);
+    if (['cancelled', 'connected', 'failed'].includes(attempt.state)) return attempt;
+    if (CONNECTION_STATE_TRANSITIONS[attempt.state]?.includes('cancelled')) return this.cancel(id);
+    this.fail(attempt, 'ABANDONED', reason, true);
+    return this.requireAttempt(id);
+  }
+
   cancel(id: string): ConnectionAttempt {
     const attempt = this.requireAttempt(id);
     if (['cancelled', 'connected', 'failed'].includes(attempt.state)) return attempt;
@@ -251,6 +261,14 @@ export class ConnectionOrchestrator {
       enabled: false, authenticated: false, exposed: false, exposedTools: [], availableTools: [], authState: 'none', health: 'unavailable',
       ...(credentialBacked ? { configured: false, verified: false, credentialRef: undefined } : {}),
     });
+    // Close every setup attempt still bound to this connection. A stale attempt stuck in
+    // 'registering' (never verified) was being resumed by Connect after a disconnect and
+    // showed "Saved. Setup is complete" instead of asking for credentials (Raul, 2026-11-12).
+    for (const stale of this.options.attempts.list({ serviceId: connection.serviceId })) {
+      if (stale.connectionId !== connectionId || stale.state === 'cancelled' || stale.state === 'failed') continue;
+      if (CONNECTION_STATE_TRANSITIONS[stale.state]?.includes('cancelled')) this.transition(stale, 'cancelled', 'Closed because the connection was disconnected.');
+      else this.fail(stale, 'DISCONNECTED', 'Closed because the connection was disconnected.', true);
+    }
     invalidateConnectionToolSurfaceCache();
     this.options.activity.append({ type: 'connection.disconnected', connectionId, serviceId: connection.serviceId, pluginId: connection.pluginId, message: `Disconnected ${connection.serviceName || connection.serviceId}.` });
     this.emit({ type: 'connection_updated', connection: this.options.connections.get(connectionId) });

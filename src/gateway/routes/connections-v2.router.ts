@@ -3,7 +3,10 @@ import { publicConnectionValue } from '../../connections/serialize-public';
 import { getConnectionRuntime } from '../../connections/runtime';
 import { getConfig } from '../../config/config';
 import { getExtensionDescriptor } from '../../extensions/registry';
-import { bindPluginCredential } from '../../connections/plugin-credential-binding';
+import { bindPluginCredential, hasBoundPluginCredential } from '../../connections/plugin-credential-binding';
+import { routeIncomingAccount, runWithConnectorAccounts, removeAccountRecord } from '../../connections/connector-accounts';
+import { beginAddAccount, cancelAddAccount, getConnectorAccountsView, makeDefaultConnectorAccount, removeConnectorAccount } from '../../connections/connector-account-service';
+import { pluginCredentialState } from '../../security/plugin-credential-state';
 import { requireProtectedOwner, secureInputTransportAllowed } from './secure-access.router';
 import { PAIRED_PLUGIN_DISCONNECT_ADAPTERS, pluginSetupSurfaceState, requirePluginDisconnect, requirePluginSetupAdapter } from './plugin-setup-access';
 
@@ -149,6 +152,26 @@ router.post('/api/connection-secure-input/:sessionId', (req, res, next) => {
       return;
     }
     // Protected plugin path: bind, then finish continuation server-side. Never return the ref.
+    // Add-account mode: a second credential binds to its own account slot and never replaces
+    // the default connection record or its credential.
+    {
+      const configDir = getConfig().getConfigDir();
+      const serviceId = session.serviceId!;
+      const addSlug = routeIncomingAccount(configDir, serviceId, 'credential', {},
+        () => hasBoundPluginCredential(configDir, serviceId) && !pluginCredentialState(configDir, serviceId).stopped ? { accountId: '__default__' } : null);
+      if (addSlug) {
+        try { runWithConnectorAccounts([serviceId], addSlug, () => bindPluginCredential(configDir, serviceId, result.credentialRef, session.attemptId!)); }
+        catch {
+          removeAccountRecord(configDir, serviceId, addSlug);
+          try { runtime.secureInput.clearReference(result.credentialRef, serviceId, session.attemptId!); } catch { /* reported below */ }
+          res.status(400).json({ success: false, error: 'CREDENTIAL_BINDING_FAILED' }); return;
+        }
+        try { runtime.orchestrator.cancel(session.attemptId!); } catch { /* attempt bookkeeping only */ }
+        const added = getConnectorAccountsView(serviceId).accounts.find((a) => a.slug === addSlug);
+        res.json({ success: true, status: 'STORED', account: added ? { slug: added.slug, label: added.label } : { slug: addSlug }, fieldsReceived: result.fieldsReceived });
+        return;
+      }
+    }
     let stored: { prior: any; connectionId: string } | undefined;
     try {
       stored = runtime.orchestrator.recordStoredCredential(session.attemptId!, result.credentialRef);
@@ -173,6 +196,35 @@ router.post('/api/connection-secure-input/:sessionId', (req, res, next) => {
     }
     res.json({ success: true, status: 'STORED', fieldsReceived: result.fieldsReceived });
   } catch { res.status(400).json({ success: false, error: 'SECURE_INPUT_INVALID' }); }
+});
+
+// ── Multi-account plugins ────────────────────────────────────────────────────
+// Metadata only (labels/emails/usernames). Never returns credentials.
+router.get('/api/connector-accounts/:id', (req, res) => {
+  try { res.set('Cache-Control', 'no-store').json({ success: true, ...getConnectorAccountsView(req.params.id) }); }
+  catch (error: any) { res.status(400).json({ success: false, error: error?.message || String(error) }); }
+});
+
+// Arming add mode only routes the NEXT completed sign-in/credential to a new account slot.
+router.post('/api/connector-accounts/:id/add', (req, res) => {
+  if (!secureInputTransportAllowed(req) || !pluginSetupSurfaceState(req).canConfigure) { res.status(403).json({ success: false, error: 'OWNER_SURFACE_REQUIRED' }); return; }
+  try { res.json({ success: true, ...beginAddAccount(req.params.id, { label: req.body?.label, hint: req.body?.hint }) }); }
+  catch (error: any) { res.status(400).json({ success: false, error: error?.message || String(error) }); }
+});
+
+router.post('/api/connector-accounts/:id/cancel-add', (req, res) => {
+  try { cancelAddAccount(req.params.id); res.json({ success: true }); }
+  catch (error: any) { res.status(400).json({ success: false, error: error?.message || String(error) }); }
+});
+
+router.post('/api/connector-accounts/:id/:slug/default', (req, res, next) => requirePluginDisconnect(req, res, next), (req, res) => {
+  try { res.json({ success: true, ...makeDefaultConnectorAccount(req.params.id, req.params.slug) }); }
+  catch (error: any) { res.status(400).json({ success: false, error: error?.message || String(error) }); }
+});
+
+router.post('/api/connector-accounts/:id/:slug/remove', (req, res, next) => requirePluginDisconnect(req, res, next), (req, res) => {
+  try { const removed = removeConnectorAccount(req.params.id, req.params.slug); res.json({ success: true, removed: { slug: removed.slug, label: removed.label }, ...getConnectorAccountsView(req.params.id) }); }
+  catch (error: any) { res.status(400).json({ success: false, error: error?.message || String(error) }); }
 });
 
 router.get('/api/connections-v2', (_req, res) => {
