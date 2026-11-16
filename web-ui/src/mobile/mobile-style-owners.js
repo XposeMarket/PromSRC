@@ -63,6 +63,13 @@ const STYLE_DEFINITIONS = Object.freeze({
       version: 'pm-v1-2026-08-24-route-owner',
       attribute: 'data-prom-mobile-settings-route-style',
     }),
+    Object.freeze({
+      id: 'pm-mobile-agents-imports-style',
+      file: 'agents-imports.css',
+      layer: 'route',
+      version: 'pm-v1-2026-11-14-agents-imports',
+      attribute: 'data-prom-mobile-agents-imports-style',
+    }),
   ]),
 });
 

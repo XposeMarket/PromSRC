@@ -105,7 +105,7 @@ function existsAsDirectory(value: string): boolean {
   }
 }
 
-function isTranscriptFile(relativePath: string, adapter: ImportAdapterId): boolean {
+export function isTranscriptFile(relativePath: string, adapter: ImportAdapterId): boolean {
   const lower = relativePath.replace(/\\/g, '/').toLowerCase();
   if (/\.(jsonl|json|md)$/i.test(lower) && /(session|transcript|conversation|history|rollout|chat|project)/i.test(lower)) return true;
   if (adapter === 'codex-local' && /\.jsonl$/i.test(lower)) return true;
@@ -171,7 +171,7 @@ function scanPath(root: string, adapter: ImportAdapterId, mode: CandidateDefinit
   return stats;
 }
 
-function listCodexRolloutFiles(root: string): Array<{ absolutePath: string; relativePath: string; bytes: number }> {
+export function listCodexRolloutFiles(root: string): Array<{ absolutePath: string; relativePath: string; bytes: number }> {
   const out: Array<{ absolutePath: string; relativePath: string; bytes: number }> = [];
   const walk = (current: string, relative: string, depth: number): void => {
     if (out.length >= 8_000 || depth > MAX_SCAN_DEPTH) return;

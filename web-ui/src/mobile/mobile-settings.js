@@ -3,6 +3,7 @@ import { mobileGatewayFetch, loadGatewayStatus, loadVoiceStatus } from './mobile
 import { prettifyModelName } from './mobile-model-badge.js';
 import { effortOptions, reasoningCapability, supportsFastSpeed, validEffort } from '../reasoning-capabilities.js';
 import { ensureMobileSettingsStyles } from './mobile-style-owners.js';
+import { mountAgentsImports } from '../settings/agents-imports.js';
 import { mountVoiceProviderSettings } from '../voice/voice-provider-settings.js';
 import { renderContextSelection, wireContextSelection } from '../context-selection.js';
 import { setCachedBusyComposerMode } from '../features/chat/runtime/busy-composer-mode.js';
@@ -73,6 +74,7 @@ const SECTIONS = [
   { id: 'models', title: 'Models', icon: 'brain', desc: 'LLM providers, defaults, brain, and compaction.' },
   { id: 'voice', title: 'Voice', icon: 'mic', desc: 'Voice providers, defaults, and listening mode.' },
   { id: 'agents', title: 'Agents', icon: 'robot', desc: 'Agent list and model defaults.' },
+  { id: 'imports', title: 'Agents & imports', icon: 'upload', desc: 'Copy chats and MCP config from coding agents on this computer.' },
   { id: 'channels', title: 'Channels', icon: 'send', desc: 'Telegram, Discord, and WhatsApp connections.' },
   { id: 'integrations', title: 'Integrations', icon: 'paperclip', desc: 'Webhooks and MCP servers.' },
 ];
@@ -233,6 +235,7 @@ async function loadSection(page, section, navigate) {
   if (section === 'heartbeat') return renderHeartbeat(content, page);
   if (section === 'security') return renderSecurity(content, page);
   if (section === 'agents') return renderAgents(content, page);
+  if (section === 'imports') return renderAgentsImports(content, navigate);
   if (section === 'channels') return renderChannels(content, page);
   if (section === 'integrations') return renderIntegrations(content, page);
 }
@@ -714,6 +717,18 @@ async function renderSecurity(content, page) {
       }) });
       setSectionStatus(page, 'File access settings saved.', 'ok');
     } catch (err) { setSectionStatus(page, err.message, 'error'); }
+  });
+}
+
+// Agents & imports: same module as desktop Settings > General. Reads happen on
+// the gateway computer; the phone only displays titles/previews for an opened
+// row and keeps nothing.
+function renderAgentsImports(content, navigate) {
+  content.innerHTML = '<div class="pm-card pm-settings-card pm-agents-imports"></div>';
+  mountAgentsImports(content.querySelector('.pm-agents-imports'), {
+    surface: 'mobile',
+    request: (path, opts = {}) => mobileGatewayFetch(path, opts),
+    openPlugins: () => navigate?.('#mobile/plugins'),
   });
 }
 
