@@ -28,6 +28,7 @@ PRs have edited the repo copy (e.g. #559 changed `WEB_UI_THEMES.md` on 2026-10-0
 ## 3. Search & file tools
 - `workspace_read grep/search` defaults to **literal** matching. A pattern with `|`, `(`, `\d` and no `regex:true` returns 0 matches plus a warning. Retry with the right mode before suspecting the tool.
 - `search_files` **default-excludes `dist/`, `build/`, `generated/`, `temp/`, `logs/`**. Searching built output returns nothing silently. Use `rg` via `workspace_run` with an explicit path.
+- `search_files` pages its results. The header reads `Showing X-Y of N matches`. When `has_more=true`, pass the returned `next_offset` as `offset` to get the next page. A total shown as `at least N` means the search hit its storage cap (up to 1000 stored matches), so more matches exist beyond it. It is not a complete count. Before 2026-11 the header said `80 of 240 (160 omitted)` with no way to fetch the rest.
 - Note the default exclude on `generated/` in particular: `self/generated/` won't show up in default searches. Search it explicitly.
 - Big tool outputs get spilled to `temp/tool-results/*.txt` (`[TOOL_RESULT_ARTIFACT]`). Read the targeted range; don't rerun the command.
 - Giant files: `src/gateway/routes/chat.router.ts` (~17k lines) and `src/gateway/prompt-context.ts`. Grep for symbols, then read windows. See [generated/source-map.md](generated/source-map.md).

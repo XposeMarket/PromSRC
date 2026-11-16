@@ -892,7 +892,12 @@ export async function handleWorkspaceTool(ctx: handleWorkspaceToolContext): Prom
         const maxResults = Math.max(1, Math.min(80, requestedMaxResults));
         const requestedMaxFileBytes = Math.floor(Number(args.max_file_bytes) || (5 * 1024 * 1024));
         const maxFileBytes = Math.max(64 * 1024, Math.min(25 * 1024 * 1024, requestedMaxFileBytes));
-        const storeLimit = Math.max(maxResults, Math.min(240, maxResults * 3));
+        // Pagination: `offset` skips earlier matches so the model can page past the first 80.
+        // Stored matches are capped at SEARCH_STORE_CEILING per search; beyond that the
+        // total is reported as "at least N" instead of pretending the cap is the total.
+        const SEARCH_STORE_CEILING = 1000;
+        const offset = Math.max(0, Math.min(SEARCH_STORE_CEILING - maxResults, Math.floor(Number(args.offset) || 0)));
+        const storeLimit = Math.min(SEARCH_STORE_CEILING, Math.max(offset + maxResults, Math.min(240, maxResults * 3)));
         const requestedMaxFiles = Math.floor(Number(args.max_files) || 5_000);
         const maxFiles = Math.max(100, Math.min(25_000, requestedMaxFiles));
         const requestedMaxDurationMs = Math.floor(Number(args.timeout_ms) || 10_000);
@@ -944,7 +949,14 @@ export async function handleWorkspaceTool(ctx: handleWorkspaceToolContext): Prom
           pathOnly: args.path_only === true || args.mode === 'path',
           signal: deps.abortSignal?.signal,
         });
-        const sortedMatches = search.matches.sort(compareGrepMatches(pattern)).slice(0, maxResults);
+        const orderedMatches = search.matches.sort(compareGrepMatches(pattern));
+        const sortedMatches = orderedMatches.slice(offset, offset + maxResults);
+        // Exhausted only when the walk finished with no storage/file/time cap hit.
+        const searchExhausted = search.stopReason === 'completed' && !search.truncated;
+        // More pages exist when stored matches continue past this page, or when the storage
+        // cap (not the ceiling) stopped collection, so a larger storeLimit on the next call can reach them.
+        const hasMore = offset + sortedMatches.length < orderedMatches.length
+          || (search.stopReason === 'result_limit' && storeLimit < SEARCH_STORE_CEILING);
         const payload = {
           directory: resolvedDir.displayPath,
           pattern,
@@ -959,6 +971,10 @@ export async function handleWorkspaceTool(ctx: handleWorkspaceToolContext): Prom
           skipped_large_file_samples: search.skippedLargeSamples,
           match_count_observed: search.totalMatchesObserved,
           returned_count: args.path_only === true || args.mode === 'path' ? search.pathMatches.length : sortedMatches.length,
+          offset,
+          has_more: hasMore,
+          next_offset: hasMore ? offset + sortedMatches.length : undefined,
+          total_exact: searchExhausted,
           truncated_count_observed: Math.max(0, search.totalMatchesObserved - sortedMatches.length),
           truncated: search.truncated,
           stop_reason: search.stopReason,

@@ -62,7 +62,7 @@ export type GrepMatchRecord = {
 
 /** Large grep results default to a readable, bounded line listing. */
 export function formatGrepToolResult(
-  payload: { matches?: GrepMatchRecord[]; path_matches?: unknown[]; match_count?: number; match_count_observed?: number; returned_count?: number; truncated_count?: number; truncated_count_observed?: number; no_match_hints?: string[] },
+  payload: { matches?: GrepMatchRecord[]; path_matches?: unknown[]; match_count?: number; match_count_observed?: number; returned_count?: number; truncated_count?: number; truncated_count_observed?: number; no_match_hints?: string[]; offset?: number; has_more?: boolean; next_offset?: number; total_exact?: boolean },
   requestedFormat?: unknown,
 ): string {
   const format = String(requestedFormat || 'auto').toLowerCase();
@@ -71,8 +71,19 @@ export function formatGrepToolResult(
     return JSON.stringify(payload, null, 2);
   }
   const total = Number(payload.match_count ?? payload.match_count_observed ?? matches.length);
-  const truncated = Number(payload.truncated_count ?? payload.truncated_count_observed ?? Math.max(0, total - matches.length));
-  const lines = [`${matches.length} of ${total} matches${truncated > 0 ? ` (${truncated} omitted)` : ''}. Use format:"json" for detailed read hints.`];
+  const offset = Math.max(0, Number(payload.offset) || 0);
+  const shown = matches.length;
+  const omitted = Math.max(0, total - offset - shown);
+  const totalLabel = payload.total_exact === false ? `at least ${total}` : `${total}`;
+  const header = shown === 0
+    ? `0 matches at offset ${offset} (${totalLabel} total)`
+    : `Showing ${offset + 1}-${offset + shown} of ${totalLabel} matches`;
+  // Legacy payloads (no paging fields) keep the old "(N omitted)" wording.
+  const omittedNote = payload.has_more === undefined && omitted > 0 ? ` (${omitted} omitted)` : '';
+  const nextHint = payload.has_more === true
+    ? ` More matches exist: pass offset=${payload.next_offset ?? offset + shown} to see the next page.`
+    : '';
+  const lines = [`${header}${omittedNote}.${nextHint} Use format:"json" for detailed read hints.`];
   for (const match of matches) {
     const path = String(match.path || match.file || '').replace(/\r?\n/g, ' ');
     const line = Number(match.line_number || match.line || 0);
