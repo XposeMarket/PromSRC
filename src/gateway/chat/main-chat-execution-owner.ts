@@ -105,8 +105,12 @@ export function isLiveBackgroundJoin(input: {
   lastSemanticProgressAt?: number;
   now?: number;
   activeBackgroundCount: number;
+  /** Last finalization-gate keepalive. background_wait is non-semantic, so lastSemanticEvent never holds it. */
+  lastBackgroundWaitAt?: number;
 }): boolean {
   const now = Number.isFinite(input.now) ? Number(input.now) : Date.now();
+  const keepaliveAt = Number(input.lastBackgroundWaitAt || 0);
+  if (input.activeBackgroundCount > 0 && keepaliveAt > 0 && now - keepaliveAt < 2 * 60_000) return true;
   return (input.lastSemanticEvent === 'background_wait' || input.lastSemanticEvent === 'active_tool_wait')
     && input.activeBackgroundCount > 0
     && Number(input.lastSemanticProgressAt || 0) > 0
@@ -163,6 +167,25 @@ export function isQuestionWaitInFlight(
     && questionWaits.some((wait) => wait.name === 'await_prometheus_question_response'
       ? question.id === wait.args?.question_id
       : Date.parse(question.createdAt) >= wait.startedAt && Date.parse(question.createdAt) <= now));
+}
+
+export type PendingApprovalWait = { id: string; sessionId?: string; status: string; createdAt: string; hasWaiter: boolean };
+
+/**
+ * A tool call parked on an approval card is waiting on the human, not stalled.
+ * Only a pending approval that this session raised during the current turn and
+ * that still has a live waiter counts, so a detached, resolved or foreign card
+ * cannot suppress the watchdog. The approval queue's own max age bounds the wait.
+ */
+export function isApprovalWaitInFlight(
+  sessionId: string, turnStartedAt: number,
+  loadPending: () => PendingApprovalWait[],
+  now = Date.now(),
+): boolean {
+  if (!sessionId || !Number.isFinite(turnStartedAt) || turnStartedAt <= 0) return false;
+  return loadPending().some((approval) => approval.sessionId === sessionId
+    && approval.status === 'pending' && approval.hasWaiter === true
+    && Date.parse(approval.createdAt) >= turnStartedAt && Date.parse(approval.createdAt) <= now);
 }
 
 

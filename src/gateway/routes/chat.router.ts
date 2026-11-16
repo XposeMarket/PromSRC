@@ -204,6 +204,7 @@ import {
   isLiveBackgroundJoin,
   isBlockingWaitInFlight,
   isQuestionWaitInFlight,
+  isApprovalWaitInFlight,
   resolveMainChatAbortSettlement,
   isMainChatSemanticProgressStalled,
   isMainChatStreamOwnerOrphaned,
@@ -1019,12 +1020,26 @@ function reconcileMainChatExecutionOwners(now = Date.now()): void {
       lastSemanticEvent: stream.lastSemanticEvent,
       lastSemanticProgressAt: stream.lastSemanticProgressAt,
       activeBackgroundCount: activeBackgroundIds.length,
+      lastBackgroundWaitAt: stream.lastBackgroundWaitAt,
     });
     const waitingOnQuestion = isQuestionWaitInFlight(stream.blockingWaits || [], stream.sessionId, () => {
       const queue = getPrometheusQuestionQueue();
       return queue.listPending().filter((question) => queue.hasResolveCallback(question.id));
     }, now);
-    if (ageExceeded && !waitingOnBackground && !waitingOnQuestion) {
+    // An approval card (including a one-shot administrator command) waits on
+    // the human exactly like a question card. Aborting the turn here also
+    // auto-rejects the approval, so the approved work can never run.
+    const waitingOnApproval = isApprovalWaitInFlight(stream.sessionId, stream.startedAt, () => {
+      const queue = getApprovalQueue();
+      return queue.listPending().map((approval) => ({
+        id: approval.id,
+        sessionId: approval.sessionId,
+        status: approval.status,
+        createdAt: approval.createdAt,
+        hasWaiter: queue.hasResolveCallback(approval.id),
+      }));
+    }, now);
+    if (ageExceeded && !waitingOnBackground && !waitingOnQuestion && !waitingOnApproval) {
       const memory = process.memoryUsage();
       const diagnostic = {
         reason: 'max_age_exceeded',
@@ -1043,7 +1058,7 @@ function reconcileMainChatExecutionOwners(now = Date.now()): void {
       continue;
     }
 
-    if (!waitingOnQuestion && !isBlockingWaitInFlight(stream.blockingWaits || [], now) && isMainChatSemanticProgressStalled({
+    if (!waitingOnQuestion && !waitingOnApproval && !waitingOnBackground && !isBlockingWaitInFlight(stream.blockingWaits || [], now) && isMainChatSemanticProgressStalled({
       now,
       lastSemanticProgressAt: stream.lastSemanticProgressAt,
       streamActive: stream.active,
