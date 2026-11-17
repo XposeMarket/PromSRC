@@ -8010,7 +8010,10 @@ async function _loadSessionFromServer(id, options = {}) {
       params.set('historyLimit', String(Math.max(20, Math.min(300, Number(options.historyLimit || 80)))));
       params.set('processLimit', String(Math.max(40, Math.min(500, Number(options.processLimit || 240)))));
       params.set('includeToolLog', '0');
-      if (options.fullProcess === true || options.recovery === true) params.set('fullProcess', '1');
+      // Only explicit full-trace refreshes ask for fullProcess. Opening a working
+      // chat used to imply it via `recovery`, which pulled 5-10 MB (5-10 s) per
+      // open; the active run's trace is replayed from the stream right after.
+      if (options.fullProcess === true) params.set('fullProcess', '1');
     }
     const query = params.toString();
     const data = await fetchJsonWithTimeout(

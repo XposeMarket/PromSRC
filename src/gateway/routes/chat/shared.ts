@@ -1,5 +1,5 @@
 import { createForegroundToolActivityTracker, foregroundConnectionMessage, type ForegroundToolActivity } from '../../chat/foreground-tool-activity';
-import { isInternalBackgroundResult } from '../../history-reconciliation';
+import { dedupeMessageMediaLists, isInternalBackgroundResult } from '../../history-reconciliation';
 import { buildAttachmentRuntimeContext, appendAttachmentContextToMessage, normalizeRuntimeVisionAttachments, type RuntimeVisionAttachment } from '../../chat/attachment-context';
 import type { MainChatStreamState } from '../../chat/main-chat-stream-store';
 import { getLiveRuntime } from '../../live-runtime-registry';
@@ -157,6 +157,7 @@ export function sanitizeAttachmentPreviewForUi(preview: any, options: { dataUrlL
 }
 
 export function sanitizeMessageMediaForUi(msg: any): void {
+  dedupeMessageMediaLists(msg);
   for (const key of ['generatedImages', 'generatedVideos', 'files', 'artifacts']) {
     if (Array.isArray(msg[key])) msg[key] = msg[key].map(sanitizeDurableMediaDescriptorForUi);
   }
