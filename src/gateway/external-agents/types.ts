@@ -95,7 +95,10 @@ export interface ExternalTurnInput {
   signal: AbortSignal;
   emit: (event: ExternalAgentEvent) => void;
   /** Request card id factory input: the adapter builds everything except requestId/agentId/sessionId. */
-  requestUser: (req: Omit<ExternalUserRequest, 'requestId' | 'agentId' | 'sessionId'>) => Promise<ExternalUserResponse>;
+  requestUser: (
+    req: Omit<ExternalUserRequest, 'requestId' | 'agentId' | 'sessionId'>,
+    opts?: { signal?: AbortSignal; cancelResponse?: ExternalUserResponse },
+  ) => Promise<ExternalUserResponse>;
 }
 
 export interface ExternalTurnResult {
