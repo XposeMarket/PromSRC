@@ -1536,6 +1536,7 @@ export async function handleChatUntraced(
       progressState.source = 'declared';
       progressState.items = prior.runtimeProgress.items.map((item, index) => ({ id: `resumed_${index}`, text: item.text, status: item.status === 'completed' ? 'done' : item.status as RuntimeProgressItem['status'] }));
       progressState.activeIndex = progressState.items.findIndex(item => !['done', 'skipped'].includes(item.status));
+      stepCursor = Math.max(0, progressState.activeIndex);
       progressState.manualStepAdvance = true;
       planStepToolsActive = true;
       emitProgressState('plan_resumed');
