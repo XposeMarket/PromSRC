@@ -114,6 +114,7 @@ const memoryHighWaterEnv = String(process.env.PROMETHEUS_GATEWAY_MEMORY_HIGHWATE
 const MEMORY_HIGHWATER_ENABLED = !['0', 'false', 'off', 'no'].includes(memoryHighWaterEnv);
 const MEMORY_HIGHWATER_FLOOR_BYTES = parseNonNegativeIntEnv('PROMETHEUS_GATEWAY_MEMORY_HIGHWATER_FLOOR_BYTES', MEMORY_HIGHWATER_DEFAULT_FLOOR_BYTES);
 const MEMORY_HIGHWATER_STEP_BYTES = parseNonNegativeIntEnv('PROMETHEUS_GATEWAY_MEMORY_HIGHWATER_STEP_BYTES', MEMORY_HIGHWATER_DEFAULT_STEP_BYTES) || MEMORY_HIGHWATER_DEFAULT_STEP_BYTES;
+const MEMORY_HIGHWATER_ROTATE_BYTES = 2 * 1024 * 1024;
 const _memoryHighWater = createMemoryHighWaterState();
 
 function maybeLogMemoryHighWater(configDir: string, memory: NodeJS.MemoryUsage, now: number): void {
@@ -145,7 +146,7 @@ function maybeLogMemoryHighWater(configDir: string, memory: NodeJS.MemoryUsage, 
       runtimeWorkers: getRuntimeWorkerDiagnostics(),
       inflightHttp: listInflightHttp(now),
     });
-    enqueueAsyncAppend(path.join(configDir, 'logs', MEMORY_HIGHWATER_LOG_FILE), JSON.stringify(event) + '\n');
+    enqueueAsyncAppend(path.join(configDir, 'logs', MEMORY_HIGHWATER_LOG_FILE), JSON.stringify(event) + '\n', undefined, MEMORY_HIGHWATER_ROTATE_BYTES);
     console.warn(formatMemoryHighWaterLine(event));
   } catch {}
 }

@@ -28,11 +28,27 @@ const MAX_PATH_CHARS = 160;
 const inflight = new Map<number, TrackedRequest>();
 let nextId = 1;
 
+const PLAIN_ROUTE_WORD = /^[a-z][a-z-]{0,23}$/;
+const MAX_API_SEGMENTS = 6;
+
+/**
+ * Log-safe request path. Path segments can carry secrets or ids, and tracking
+ * runs before auth, so only a fixed route shape is stored:
+ * - absolute-form targets lose scheme and host; query and fragment are dropped;
+ * - anything not under /api/ becomes "[non-api]";
+ * - under /api/, at most 6 segments are kept and every segment that is not a
+ *   plain lowercase route word becomes ":id".
+ */
 export function sanitizeRequestPath(rawUrl: unknown): string {
-  const raw = String(rawUrl || '');
+  let raw = String(rawUrl || '').trim();
+  const absolute = raw.match(/^[a-z][a-z0-9+.-]*:\/\/[^/?#]*/i);
+  if (absolute) raw = raw.slice(absolute[0].length);
   const q = raw.search(/[?#]/);
-  const pathOnly = (q >= 0 ? raw.slice(0, q) : raw) || '/';
-  return pathOnly.slice(0, MAX_PATH_CHARS);
+  const pathOnly = q >= 0 ? raw.slice(0, q) : raw;
+  if (!pathOnly.startsWith('/api/')) return '[non-api]';
+  const segments = pathOnly.slice('/api/'.length).split('/').filter((s) => s.length > 0);
+  const kept = segments.slice(0, MAX_API_SEGMENTS).map((s) => (PLAIN_ROUTE_WORD.test(s) ? s : ':id'));
+  return ('/api/' + kept.join('/')).slice(0, MAX_PATH_CHARS);
 }
 
 /** Register a request; it is removed when the response finishes or the socket closes. */

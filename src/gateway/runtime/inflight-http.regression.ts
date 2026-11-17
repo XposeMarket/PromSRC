@@ -9,9 +9,19 @@ const MB = 1024 * 1024;
 
 // Query strings (auth tokens) never reach the log.
 assert.equal(sanitizeRequestPath('/api/agents/reel/chat?limit=20&token=SECRET'), '/api/agents/reel/chat');
-assert.equal(sanitizeRequestPath('/a#frag'), '/a');
-assert.equal(sanitizeRequestPath(''), '/');
-assert.equal(sanitizeRequestPath('/' + 'x'.repeat(500)).length, 160);
+assert.equal(sanitizeRequestPath('/a#frag'), '[non-api]');
+assert.equal(sanitizeRequestPath(''), '[non-api]');
+assert.equal(sanitizeRequestPath('/api/x/' + 'a'.repeat(500)), '/api/x/:id');
+// Secrets in path segments never reach the log (tracking runs before auth).
+assert.equal(sanitizeRequestPath('/secret-funnel-token/api/status'), '[non-api]');
+assert.equal(sanitizeRequestPath('http://host/path'), '[non-api]');
+assert.equal(sanitizeRequestPath('/api/x/AbC123token'), '/api/x/:id');
+assert.equal(sanitizeRequestPath('/api/x/AbC123token?auth=hidden'), '/api/x/:id');
+assert.equal(sanitizeRequestPath('http://h:1/api/agents/abc123/chat?t=1'), '/api/agents/:id/chat');
+assert.equal(sanitizeRequestPath('/api/agents/builder_mvnb3jr1/chat'), '/api/agents/:id/chat');
+assert.equal(sanitizeRequestPath('/api/canvas/generated-image-preview'), '/api/canvas/generated-image-preview');
+assert.equal(sanitizeRequestPath('/api/files/%2e%2e'), '/api/files/:id');
+assert.equal(sanitizeRequestPath('/api/a/b/c/d/e/f/g/h'), '/api/a/b/c/d/e/f');
 
 // Tracked until finish OR close (aborted clients), oldest first.
 resetInflightHttpForTests();
