@@ -876,6 +876,13 @@ export function mountAgentsImports(container, options = {}) {
         const created = await call('/api/imports/jobs', { method: 'POST', body: req, timeoutMs: 600000 });
         job = created.job;
         if (job.status !== 'preview_ready') throw new Error(job.error || job.preview?.unsupportedReason || 'This batch could not be read.');
+        if (run.cancelling) {
+          // Cancelled while this batch was being read: never confirm it.
+          notStarted += req.chatCount;
+          try { await call(`/api/imports/jobs/${encodeURIComponent(job.id)}`, { method: 'DELETE' }); } catch { /* best effort */ }
+          continue;
+        }
+
         const ids = (job.preview?.conversationSummaries || []).map((item) => item.id);
         run.jobId = job.id;
         const confirmPromise = call(`/api/imports/jobs/${encodeURIComponent(job.id)}/confirm`, { method: 'POST', body: { confirm: true, conversationIds: ids }, timeoutMs: 3600000 });

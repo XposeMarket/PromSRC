@@ -157,6 +157,38 @@ async function main(): Promise<void> {
   assert.equal(after.toImport, 5);
   assert.throws(() => service.requestCancelImportJob(committed.id, ownerId), /running import/);
 
+  // --- 8. Cancel mid-import: a 30-chat batch stops between chats. ----------
+  const bigOpts = { homeDir: path.join(root, 'big-home'), localAppData: path.join(root, 'big-local'), appData: path.join(root, 'big-roaming') };
+  const bigCwd = process.platform === 'win32' ? 'C:\\work\\big' : '/work/big';
+  for (let index = 0; index < 30; index += 1) {
+    write(`big-home/.codex/sessions/2026/09/01/rollout-big${index}.jsonl`, codex(`sess-big${index}`, bigCwd, `Big task ${index}`, `Big reply ${index}`));
+  }
+  const bigGroup = agents.listAgentGroups('codex', bigOpts).groups[0];
+  assert.ok(bigGroup && bigGroup.chatCount >= 30, 'cancel fixture group has at least 30 chats');
+  const bigRequest = agents.preflightAgentSelection('codex', { groups: [bigGroup.key] }, () => false, bigOpts).requests[0];
+  const bigCreated = await service.createImportJob({
+    ownerId, workspacePath: workspace, kind: 'conversation', sourcePath: bigRequest.sourcePath, requestedAdapter: bigRequest.adapter,
+    sourceLabel: bigRequest.sourceLabel, conversationMode: 'projects', sourceFiles: bigRequest.sourceFiles, overwrite: false,
+  });
+  assert.equal(bigCreated.job.status, 'preview_ready', `cancel fixture preview: ${bigCreated.job.error || ''}`);
+  const bigIds = (bigCreated.job.preview?.conversationSummaries || []).map((item: any) => item.id);
+  assert.ok(bigIds.length >= 30, 'cancel fixture preview lists at least 30 chats');
+  const bigJobId = bigCreated.job.id;
+  const bigConfirm = service.confirmImportJob(bigJobId, ownerId, bigIds);
+  let turns = 0;
+  while (service.getImportJob(bigJobId, ownerId)?.status !== 'committing' && turns < 200) {
+    await new Promise((resolve) => setImmediate(resolve));
+    turns += 1;
+  }
+  assert.equal(service.getImportJob(bigJobId, ownerId)?.status, 'committing', 'import reaches the committing phase before cancel');
+  assert.doesNotThrow(() => service.requestCancelImportJob(bigJobId, ownerId), 'cancel is accepted while the import is committing');
+  const cancelled = await bigConfirm;
+  const cancelledResult: any = cancelled.result || {};
+  assert.ok(Number(cancelledResult.notStarted) >= 1 && Number(cancelledResult.notStarted) < bigIds.length, `cancel stops mid-import (notStarted=${cancelledResult.notStarted})`);
+  assert.ok(cancelledResult.cancelledAt, 'cancelled import records cancelledAt');
+  assert.notEqual(cancelled.status, 'completed', 'cancelled import is not reported as completed');
+
+
   // --- 7. Empty state: a fresh install with no agents. ---------------------
   const bare = path.join(root, 'bare');
   fs.mkdirSync(bare, { recursive: true });
