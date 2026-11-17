@@ -3,6 +3,7 @@ import path from 'path';
 import { getConfig } from '../../config/config';
 import { stripInternalToolNotes } from '../comms/reply-processor';
 import { appendDurableCommentaryContext, buildDurableCommentaryContext } from '../context/commentary-context';
+import { compactTraceEntries } from './subagent-chat-compaction';
 
 export type SubagentChatRole = 'user' | 'agent' | 'system';
 
@@ -30,9 +31,13 @@ interface SubagentChatFile {
   messages?: SubagentChatMessage[];
   latestContextSummary?: string;
   contextSummaryUpdatedAt?: number;
+  /** Set once trace fields are stored compacted (inline images moved to files). */
+  traceStorageVersion?: number;
 }
 
 const MAX_MESSAGES_PER_AGENT = 500;
+export const AGENT_CHAT_TRACE_STORAGE_VERSION = 1;
+const TRACE_FIELDS = ['processEntries', 'liveTraceEntries'] as const;
 
 function sanitizeAgentId(agentId: string): string {
   return String(agentId || '').replace(/[^a-zA-Z0-9_.-]/g, '_').slice(0, 120) || 'agent';
@@ -69,13 +74,22 @@ function readMessagesFile(file: string): SubagentChatMessage[] {
   return Array.isArray(parsed.messages) ? parsed.messages : [];
 }
 
+/** Shallow metadata copy whose trace arrays are compacted (no inline images, bounded strings). */
+function compactMetadataTraces(raw: any): Record<string, any> {
+  const metadata = raw && typeof raw === 'object' ? { ...raw } : {};
+  for (const field of TRACE_FIELDS) {
+    if (Array.isArray(metadata[field])) metadata[field] = compactTraceEntries(metadata[field]);
+  }
+  return metadata;
+}
+
 function normalizeDurableFields(message: any): SubagentChatMessage {
-  const metadata = message?.metadata && typeof message.metadata === 'object' ? message.metadata : {};
+  const metadata = compactMetadataTraces(message?.metadata);
   const processEntries = Array.isArray(message?.processEntries)
-    ? message.processEntries
+    ? compactTraceEntries(message.processEntries)
     : Array.isArray(metadata.processEntries) ? metadata.processEntries : undefined;
   const liveTraceEntries = Array.isArray(message?.liveTraceEntries)
-    ? message.liveTraceEntries
+    ? compactTraceEntries(message.liveTraceEntries)
     : Array.isArray(metadata.liveTraceEntries) ? metadata.liveTraceEntries : undefined;
   const visibleReasoningSummary = typeof message?.visibleReasoningSummary === 'string'
     ? message.visibleReasoningSummary
@@ -101,14 +115,92 @@ function normalizeDurableFields(message: any): SubagentChatMessage {
   };
 }
 
+function sameTrace(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+  if (!a.length) return true;
+  const last = (list: any[]) => String(list[list.length - 1]?.id ?? JSON.stringify(list[list.length - 1]).slice(0, 200));
+  return last(a) === last(b);
+}
+
+/**
+ * On-disk shape: when metadata carries the same trace array as the top level,
+ * store it once (in metadata, which the desktop/mobile renderers read).
+ * normalizeDurableFields re-hoists it to the top level on read.
+ */
+export function toStoredChatMessage(message: Record<string, any>): Record<string, any> {
+  const metadata = message?.metadata && typeof message.metadata === 'object' ? message.metadata : null;
+  if (!metadata) return message;
+  let out: Record<string, any> | null = null;
+  for (const field of TRACE_FIELDS) {
+    if (Array.isArray(message[field]) && sameTrace(message[field], metadata[field])) {
+      if (!out) out = { ...message };
+      delete out[field];
+    }
+  }
+  return out || message;
+}
+
+function writeFileAtomic(file: string, text: string): void {
+  const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
+  fs.writeFileSync(tmp, text, 'utf-8');
+  try {
+    fs.renameSync(tmp, file);
+  } catch (err) {
+    try { fs.unlinkSync(tmp); } catch {}
+    throw err;
+  }
+}
+
 function writeChatFile(agentId: string, messages: SubagentChatMessage[], state: SubagentChatContextState = {}): void {
   fs.mkdirSync(chatDir(), { recursive: true });
-  fs.writeFileSync(chatPath(agentId), JSON.stringify({
+  writeFileAtomic(chatPath(agentId), JSON.stringify({
     agentId,
-    messages: messages.slice(-MAX_MESSAGES_PER_AGENT),
+    traceStorageVersion: AGENT_CHAT_TRACE_STORAGE_VERSION,
+    messages: messages.slice(-MAX_MESSAGES_PER_AGENT).map((message) => toStoredChatMessage(message as any)),
     ...(state.latestContextSummary ? { latestContextSummary: state.latestContextSummary.slice(0, 12_000) } : {}),
     ...(state.contextSummaryUpdatedAt ? { contextSummaryUpdatedAt: state.contextSummaryUpdatedAt } : {}),
-  }, null, 2), 'utf-8');
+  }, null, 2));
+}
+
+const BACKUP_DIR_NAME = 'backup-pre-trace-compaction';
+const BACKUP_MIN_BYTES = 1024 * 1024;
+
+/**
+ * One-time, in-place upgrade of a chat file written before trace compaction.
+ * Keeps every message and every file-level field (nothing is filtered), compacts
+ * trace arrays, and copies the original to agent-chats/backup-pre-trace-compaction/
+ * first when it is large enough to matter. Returns the parsed (compacted) file.
+ */
+export function upgradeChatFileStorage(file: string): SubagentChatFile {
+  const parsed = readChatFile(file);
+  if (!Array.isArray(parsed.messages) || parsed.traceStorageVersion === AGENT_CHAT_TRACE_STORAGE_VERSION) return parsed;
+  try {
+    const size = fs.statSync(file).size;
+    if (size >= BACKUP_MIN_BYTES) {
+      const backupDir = path.join(path.dirname(file), BACKUP_DIR_NAME);
+      const backupFile = path.join(backupDir, path.basename(file));
+      if (!fs.existsSync(backupFile)) {
+        fs.mkdirSync(backupDir, { recursive: true });
+        fs.copyFileSync(file, backupFile);
+      }
+    }
+    const messages = parsed.messages.map((raw: any) => {
+      if (!raw || typeof raw !== 'object') return raw;
+      const next: Record<string, any> = { ...raw };
+      for (const field of TRACE_FIELDS) {
+        if (Array.isArray(next[field])) next[field] = compactTraceEntries(next[field]);
+      }
+      if (next.metadata && typeof next.metadata === 'object') next.metadata = compactMetadataTraces(next.metadata);
+      return toStoredChatMessage(next);
+    });
+    const upgraded: SubagentChatFile = { ...parsed, messages, traceStorageVersion: AGENT_CHAT_TRACE_STORAGE_VERSION };
+    writeFileAtomic(file, JSON.stringify(upgraded, null, 2));
+    return upgraded;
+  } catch (err: any) {
+    console.warn(`[agent-chat] trace compaction skipped for ${path.basename(file)}: ${err?.message || err}`);
+    return parsed;
+  }
 }
 
 function normalizeMessageContentForDedupe(value: string): string {
@@ -123,7 +215,8 @@ export function getSubagentChatHistory(agentId: string, limit = 100): SubagentCh
   try {
     const file = chatPath(agentId);
     const legacyFile = chatPath(agentId, legacyChatDir());
-    const primaryMessages = readMessagesFile(file);
+    const primaryParsed = upgradeChatFileStorage(file);
+    const primaryMessages = Array.isArray(primaryParsed.messages) ? primaryParsed.messages : [];
     const legacyMessages = legacyFile !== file ? readMessagesFile(legacyFile) : [];
     const seen = new Set<string>();
     const messagesNear = new Map<string, number>();
@@ -235,6 +328,20 @@ export function setSubagentChatContextState(
     latestContextSummary: String(state.latestContextSummary || '').trim() || undefined,
     contextSummaryUpdatedAt: Number(state.contextSummaryUpdatedAt || 0) || undefined,
   });
+}
+
+/**
+ * List-preview shape: no trace arrays (processEntries/liveTraceEntries) at the
+ * top level or in metadata. Used by `GET /api/agents/:id/chat?lite=1` for
+ * roster/preview callers that only need role/content/ts/source.
+ */
+export function toLiteChatMessage(message: SubagentChatMessage): SubagentChatMessage {
+  const { processEntries: _p, liveTraceEntries: _l, ...rest } = message as any;
+  if (rest.metadata && typeof rest.metadata === 'object') {
+    const { processEntries: _mp, liveTraceEntries: _ml, ...metadata } = rest.metadata;
+    rest.metadata = metadata;
+  }
+  return rest;
 }
 
 export function formatSubagentChatContext(messages: SubagentChatMessage[], agentName: string, maxMessages = 20): string {

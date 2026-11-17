@@ -11,6 +11,7 @@ import {
   getSubagentChatContextState,
   getSubagentChatHistory,
   setSubagentChatContextState,
+  toLiteChatMessage,
 } from '../agents-runtime/subagent-chat-store';
 import { addMessage, getActiveHistoryForPersistence, getSession, replaceHistory, restoreSessionContextState, setActivatedToolCategories, setWorkspace } from '../session';
 import { handleTaskRecoveryMessage } from '../tasks/task-router';
@@ -1602,7 +1603,9 @@ router.get('/api/agents/:id/chat', (req, res) => {
   const agent = getAgentById(agentId);
   if (!agent) return res.status(404).json({ success: false, error: `Agent "${agentId}" not found` });
   const limit = Math.max(1, Math.min(500, Number(req.query.limit) || 100));
-  res.json({ success: true, messages: getSubagentChatHistory(agentId, limit) });
+  const messages = getSubagentChatHistory(agentId, limit);
+  const lite = ['1', 'true', 'yes'].includes(String(req.query.lite || '').toLowerCase());
+  res.json({ success: true, messages: lite ? messages.map(toLiteChatMessage) : messages });
 });
 
 router.post('/api/agents/:id/chat/voice-log', (req, res) => {

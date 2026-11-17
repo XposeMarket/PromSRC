@@ -116,7 +116,8 @@ function collectAgentsFromRows() {
 async function hydrateAgent(agent) {
   const id = agent.id;
   const [chatData, runsData] = await Promise.all([
-    api(`/api/agents/${encodeURIComponent(id)}/chat?limit=20`).catch(() => ({ messages: [] })),
+    // Preview only needs role/content/ts/source; lite=1 skips trace payloads.
+    api(`/api/agents/${encodeURIComponent(id)}/chat?limit=20&lite=1`).catch(() => ({ messages: [] })),
     api(`/api/agents/${encodeURIComponent(id)}/runs?limit=12`).catch(() => ({ runs: [] })),
   ]);
   const messages = Array.isArray(chatData?.messages) ? chatData.messages : [];
