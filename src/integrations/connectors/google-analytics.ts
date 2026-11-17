@@ -29,9 +29,13 @@ export class GoogleAnalyticsConnector extends OAuthConnector {
       callbackPort: 19429,
       callbackPath: '/auth/callback/ga4',
       revokeUrl: 'https://oauth2.googleapis.com/revoke',
+      webClient: true,
     };
     super(cfg, configDir);
   }
+
+  /** One Google web client (saved on Gmail) serves every Google connector. */
+  protected webClientFallbackIds(): string[] { return ['gmail']; }
 
   protected async buildTokens(data: Record<string, any>): Promise<ConnectorTokens> {
     const tokens: ConnectorTokens = {

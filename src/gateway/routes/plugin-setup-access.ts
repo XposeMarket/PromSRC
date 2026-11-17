@@ -44,7 +44,8 @@ export function requirePluginSetup(req: any, res: any, next: () => void, gates: 
  * phone can already replace through setup. OAuth adapters (connector-oauth, mcp-oauth) are excluded because
  * their disconnect revokes the grant at the provider, which needs the owner.
  */
-export const PAIRED_PLUGIN_DISCONNECT_ADAPTERS = new Set(['api-key', 'setup-token']);
+// OAuth plugins included (Raul 2026-11-12): a paired phone can connect them, so it must be able to disconnect them (no one-way doors).
+export const PAIRED_PLUGIN_DISCONNECT_ADAPTERS = new Set(['api-key', 'setup-token', 'connector-oauth', 'mcp-oauth']);
 
 /**
  * Disconnect is the reverse of plugin setup: anything a paired phone may connect, it must be able to

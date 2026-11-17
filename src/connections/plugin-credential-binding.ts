@@ -3,6 +3,7 @@ import path from 'path';
 import { randomUUID } from 'crypto';
 import { getVault } from '../security/vault';
 import { pluginCredentialState, setPluginCredentialState } from '../security/plugin-credential-state';
+import { bindingKeyFor, bindingKeyForSlug } from './connector-accounts';
 type Binding = { reference: string; attemptId: string };
 function read(directory: string): Record<string, Binding> {
   try { return JSON.parse(fs.readFileSync(path.join(directory, 'plugin-credential-bindings.json'), 'utf8')); }
@@ -13,8 +14,10 @@ export function bindPluginCredential(directory: string, serviceId: string, refer
   if (owners[reference]?.serviceId !== serviceId || owners[reference]?.attemptId !== attemptId) throw new Error('CREDENTIAL_BINDING_MISMATCH');
   const bindings = read(directory);
   setPluginCredentialState(directory, serviceId, true, 'replace-start');
-  const previous = bindings[serviceId];
-  bindings[serviceId] = { reference, attemptId };
+  // Extra accounts bind under `<serviceId>::acct::<slug>` (active account scope); default keeps `serviceId`.
+  const slot = bindingKeyFor(serviceId);
+  const previous = bindings[slot];
+  bindings[slot] = { reference, attemptId };
   const file = path.join(directory, 'plugin-credential-bindings.json');
   const temp = `${file}.${randomUUID()}.tmp`;
   fs.writeFileSync(temp, JSON.stringify(bindings), { mode: 0o600 }); fs.renameSync(temp, file);
@@ -25,7 +28,7 @@ export function bindPluginCredential(directory: string, serviceId: string, refer
 export function resolveBoundPluginCredential(directory: string, serviceId: string, field: string): { handled: boolean; value?: string } {
   try {
     if (pluginCredentialState(directory, serviceId).stopped) return { handled: true };
-    const binding = read(directory)[serviceId];
+    const binding = read(directory)[bindingKeyFor(serviceId)];
     // Missing binding file with a generation > 0 means credentials were once stored: fail closed, never fall back to legacy/env.
     if (!binding) return { handled: pluginCredentialState(directory, serviceId).generation > 0 };
     const owners = JSON.parse(fs.readFileSync(path.join(directory, 'connection-credential-owners.json'), 'utf8'));
@@ -40,4 +43,50 @@ export function deleteBoundPluginCredential(directory: string, serviceId: string
   const binding = read(directory)[serviceId];
   if (binding) getVault(directory).delete(binding.reference.replace(/^vault:/, ''), 'protected-plugin:delete');
   // Retain a tombstone binding so legacy/env fallback cannot silently reconnect.
+}
+
+export function hasBoundPluginCredential(directory: string, serviceId: string, slug = ''): boolean {
+  try { return Boolean(read(directory)[bindingKeyForSlug(serviceId, slug)]); } catch { return false; }
+}
+
+/** Remove one extra account's binding + vault value. Never touches the default slot. */
+export function deleteAccountPluginCredential(directory: string, serviceId: string, slug: string): void {
+  if (!slug) throw new Error('DEFAULT_ACCOUNT_PROTECTED');
+  const bindings = read(directory);
+  const key = bindingKeyForSlug(serviceId, slug);
+  const binding = bindings[key];
+  if (!binding) return;
+  delete bindings[key];
+  const file = path.join(directory, 'plugin-credential-bindings.json');
+  const temp = `${file}.${randomUUID()}.tmp`;
+  fs.writeFileSync(temp, JSON.stringify(bindings), { mode: 0o600 }); fs.renameSync(temp, file);
+  getVault(directory).delete(binding.reference.replace(/^vault:/, ''), 'protected-plugin:account-remove');
+}
+
+/** Move an extra account's binding to another EMPTY extra slot. Never touches the default slot. */
+export function moveAccountPluginCredential(directory: string, serviceId: string, from: string, to: string): void {
+  if (!from || !to) throw new Error('DEFAULT_ACCOUNT_PROTECTED');
+  const bindings = read(directory);
+  const source = bindingKeyForSlug(serviceId, from);
+  const destination = bindingKeyForSlug(serviceId, to);
+  if (!bindings[source]) throw new Error('ACCOUNT_NOT_FOUND');
+  if (bindings[destination]) throw new Error('ACCOUNT_SLOT_TAKEN');
+  bindings[destination] = bindings[source];
+  delete bindings[source];
+  const file = path.join(directory, 'plugin-credential-bindings.json');
+  const temp = `${file}.${randomUUID()}.tmp`;
+  fs.writeFileSync(temp, JSON.stringify(bindings), { mode: 0o600 }); fs.renameSync(temp, file);
+}
+
+/** Swap the default binding with an extra account's binding (make default). */
+export function swapAccountPluginCredential(directory: string, serviceId: string, slug: string): void {
+  const bindings = read(directory);
+  const key = bindingKeyForSlug(serviceId, slug);
+  if (!bindings[key]) throw new Error('ACCOUNT_NOT_FOUND');
+  const previous = bindings[serviceId];
+  bindings[serviceId] = bindings[key];
+  if (previous) bindings[key] = previous; else delete bindings[key];
+  const file = path.join(directory, 'plugin-credential-bindings.json');
+  const temp = `${file}.${randomUUID()}.tmp`;
+  fs.writeFileSync(temp, JSON.stringify(bindings), { mode: 0o600 }); fs.renameSync(temp, file);
 }
