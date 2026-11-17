@@ -62,6 +62,22 @@ async function main() {
   const c = new Clock(); const token = { aborted: false };
   const race = boundedProcessWait({ cancellation: token, subscribe: (done) => { token.aborted = true; done('late'); return () => {}; } }, c);
   assert.equal((await race).kind, 'cancelled'); assert.equal(c.jobs.size, 0);
+  // Parallel observers of the same completion detach independently.
+  const sharedClock = new Clock(); let sharedDone!: (v: string) => void;
+  const sharedPromise = new Promise<string>((resolve) => { sharedDone = resolve; });
+  const sharedKey = {}; const shared = new CompletionObservers<string>();
+  const subscribe = (done: (v: string | null) => void, fail: (e: unknown) => void) => shared.subscribe(sharedKey, () => sharedPromise, done, fail);
+  const short = boundedProcessWait({ timeoutMs: 1000, subscribe }, sharedClock);
+  const long = boundedProcessWait({ timeoutMs: 300000, subscribe }, sharedClock);
+  await sharedClock.tick(1000); assert.equal((await short).kind, 'deadline');
+  assert.equal((shared as any).entries.get(sharedKey).observers.size, 1);
+  sharedDone('final metadata'); assert.deepEqual(await long, { kind: 'completed', value: 'final metadata' }); assert.equal(sharedClock.jobs.size, 0);
+  // Progress invoked after an event-loop delay must not renew or emit beyond deadline.
+  const lateClock = new Clock(); let lateProgress = 0;
+  const late = boundedProcessWait({ timeoutMs: 300000, subscribe: () => () => {}, onProgress: () => { lateProgress++; } }, lateClock);
+  const heartbeat = [...lateClock.jobs.values()].find((j) => j.repeat === 15000)!;
+  lateClock.time = 300001; heartbeat.fn();
+  assert.equal((await late).kind, 'deadline'); assert.equal(lateProgress, 0); assert.equal(lateClock.jobs.size, 0);
   console.log('PASS bounds, >30s early completion, native/flag/pre-abort, fixed deadline, transport failure, rejection, observer retention and races');
 }
 main().catch((error) => { console.error(error); process.exitCode = 1; });
