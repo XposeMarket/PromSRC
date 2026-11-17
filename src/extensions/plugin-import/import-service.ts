@@ -554,8 +554,33 @@ export async function installBundle(bundle: PluginBundle, source: string, deps: 
     if (fs.existsSync(packageDir)) movePath(packageDir, previousPkg);
     movePath(stagedPkg, packageDir);
     fs.mkdirSync(dataDir, { recursive: true });
+    // Skills the previous install owned are backed up before the importer overwrites them, so a
+    // failed re-import (or a later failure) puts the working version back instead of losing it.
+    const previousSkills = new Set(existing?.skills || []);
+    const skillBackups = new Map<string, { dir: string; backup: string }>();
+    const keptSkills: string[] = [];
+    const skillDirOf = (sid: string): string | null => {
+      const s: any = deps.skills.get?.(sid);
+      return s && typeof s === 'object' && typeof s.rootDir === 'string' && fs.existsSync(s.rootDir) ? s.rootDir : null;
+    };
+    const backupSkill = (sid: string) => {
+      if (!previousSkills.has(sid) || skillBackups.has(sid)) return;
+      const dir = skillDirOf(sid);
+      if (!dir) return;
+      const backup = path.join(temp, 'previous-skills', sid);
+      fs.cpSync(dir, backup, { recursive: true });
+      skillBackups.set(sid, { dir, backup });
+    };
+    const restoreSkill = (sid: string): boolean => {
+      const b = skillBackups.get(sid);
+      if (!b) return false;
+      try { fs.rmSync(b.dir, { recursive: true, force: true }); fs.cpSync(b.backup, b.dir, { recursive: true }); return true; } catch { return false; }
+    };
     const rollback = () => {
       try { fs.rmSync(packageDir, { recursive: true, force: true }); if (fs.existsSync(previousPkg)) movePath(previousPkg, packageDir); } catch { /* best effort */ }
+      for (const sid of skillIds) if (!previousSkills.has(sid)) { try { deps.skills.deleteSkill(sid); } catch { /* best effort */ } }
+      for (const sid of skillBackups.keys()) restoreSkill(sid);
+      try { deps.skills.scanSkills(); } catch { /* best effort */ }
       for (const mid of planned.mcp) if (!previousMcp.has(mid)) { try { deps.mcp.deleteConfig(mid); } catch { /* best effort */ } }
       for (const cfg of previousMcp.values()) { try { deps.mcp.upsertConfig(cfg); } catch { /* best effort */ } }
       if (existing) { try { writeLedger(existing); } catch { /* best effort */ } }
@@ -563,13 +588,26 @@ export async function installBundle(bundle: PluginBundle, source: string, deps: 
     try {
 
     const stageSkill = async (dir: string, skillId: string) => {
+      backupSkill(skillId);
       try {
         const installed = await deps.skills.importBundles(dir, { id: skillId, overwrite: true, mode: 'adapt', applySafeFixes: true });
         skillIds.push(...installed.map((s) => s.id));
       } catch (err: any) {
-        warnings.push(`skill ${skillId}: ${String(err?.message || err).slice(0, 240)}`);
+        const reason = String(err?.message || err).slice(0, 240);
+        if (previousSkills.has(skillId)) {
+          const restored = restoreSkill(skillId);
+          if (restored) { try { deps.skills.scanSkills(); } catch { /* best effort */ } }
+          // Keep ownership of the working previous version so it is neither orphaned nor deleted below.
+          if (restored || deps.skills.get?.(skillId)) {
+            keptSkills.push(skillId);
+            warnings.push(`skill ${skillId}: new version failed (${reason}); kept the previous version`);
+            return;
+          }
+        }
+        warnings.push(`skill ${skillId}: ${reason}`);
       }
     };
+
     if (parts.has('skills')) for (const dir of bundle.skillDirs) await stageSkill(dir, skillIdFor(dir));
     if (parts.has('commands')) {
       for (const cmd of bundle.commands) {
@@ -606,14 +644,14 @@ export async function installBundle(bundle: PluginBundle, source: string, deps: 
     const hooks = planned.hooks.map((h, i) => ({ ...h, id: `${id}:${h.event}:${i}` }));
     const ledger: ImportedPluginLedger = {
       id, name: bundle.name, format: bundle.format, source, version: bundle.version,
-      importedAt: new Date().toISOString(), skills: skillIds, mcpServers, hooks, hooksApproved: false,
+      importedAt: new Date().toISOString(), skills: [...skillIds, ...keptSkills.filter((s) => !skillIds.includes(s))], mcpServers, hooks, hooksApproved: false,
       requiredEnv: bundle.requiredEnv, unsupported, pluginDir, packageDir, dataDir,
       provenance: options.provenance && Object.keys(options.provenance).length ? options.provenance : undefined,
     };
     writeLedger(ledger);
     // Drop what the previous version owned and this one no longer ships.
     if (existing) {
-      for (const sid of existing.skills) if (!skillIds.includes(sid)) { try { deps.skills.deleteSkill(sid); } catch { /* best effort */ } }
+      for (const sid of existing.skills) if (!ledger.skills.includes(sid)) { try { deps.skills.deleteSkill(sid); } catch { /* best effort */ } }
       for (const s of existing.mcpServers) if (!mcpServers.some((m) => m.id === s.id)) { try { void deps.mcp.disconnect?.(s.id); deps.mcp.deleteConfig(s.id); } catch { /* best effort */ } }
     }
     fs.writeFileSync(path.join(pluginDir, EXTENSION_DESCRIPTOR_FILENAME), JSON.stringify({
@@ -632,7 +670,7 @@ export async function installBundle(bundle: PluginBundle, source: string, deps: 
     if (needSecrets.length) nextSteps.push(`Secrets needed: ${needSecrets.map((m) => `${m.id} (${m.note})`).join('; ')}. The user saves them on the Plugins page; never ask for them in chat.`);
     if (mcpReport.length) nextSteps.push(`${mcpReport.length} MCP server(s) imported but OFF. They run third-party code; turn on with plugin_ops(action:"activate_mcp", id:"${id}") only when the user wants them (it asks for approval).`);
     if (hooks.length) nextSteps.push(`${hooks.length} hook(s) imported but inactive. They run shell commands; enable with plugin_ops(action:"approve_hooks", id:"${id}") only when the user asks.`);
-    return { id, format: bundle.format, skills: skillIds, mcpServers: mcpReport, hooks: hooks.length, hooksApproved: false, unsupported, warnings, nextSteps, partial: warnings.length > 0, provenance: ledger.provenance };
+    return { id, format: bundle.format, skills: ledger.skills, mcpServers: mcpReport, hooks: hooks.length, hooksApproved: false, unsupported, warnings, nextSteps, partial: warnings.length > 0, provenance: ledger.provenance };
     } catch (err) { rollback(); throw err; }
   } finally {
     try { fs.rmSync(temp, { recursive: true, force: true }); } catch {}

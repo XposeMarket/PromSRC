@@ -47,22 +47,77 @@ interface GateLedger {
   mcpServers?: Array<{ id: string; activation?: 'pending' | 'active'; approvedHash?: string }>;
 }
 
-/** The imported plugin that owns an MCP server id, if any. */
-export function findImportedMcpOwner(serverId: string, userPluginsDir?: string): { ledger: GateLedger; entry: NonNullable<GateLedger['mcpServers']>[number] } | null {
+/** What the gate could learn from the user plugins folder. */
+export interface ImportLedgerScan {
+  /** Resolved user plugins dir, when known. */
+  dir?: string;
+  ledgers: Array<{ dirName: string; ledger: GateLedger }>;
+  /** Plugin folders that look imported but whose ledger is missing, unreadable or malformed. */
+  unverifiable: string[];
+  /** The folder itself could not be resolved or listed. */
+  error?: string;
+}
+
+function looksLikeImportFolder(pluginDir: string): boolean {
+  if (fs.existsSync(path.join(pluginDir, 'files'))) return true;
+  try {
+    const desc = JSON.parse(fs.readFileSync(path.join(pluginDir, 'prometheus.extension.json'), 'utf8'));
+    return desc?.category === 'imported-plugin' || String(desc?.runtime?.binding || '').startsWith('imported-plugin:');
+  } catch { return false; }
+}
+
+/** Read every import ledger. Never throws; problems are reported so callers can fail closed. */
+export function scanImportLedgers(userPluginsDir?: string): ImportLedgerScan {
   let dir = userPluginsDir;
-  if (!dir) { try { dir = resolveUserPluginsDir(); } catch { return null; } }
-  if (!dir || !fs.existsSync(dir)) return null;
-  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+  if (!dir) { try { dir = resolveUserPluginsDir(); } catch (e: any) { return { ledgers: [], unverifiable: [], error: `plugins folder unavailable (${e?.message || e})` }; } }
+  const out: ImportLedgerScan = { dir, ledgers: [], unverifiable: [] };
+  if (!dir || !fs.existsSync(dir)) return out;
+  let entries: fs.Dirent[];
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (e: any) { return { ...out, error: `plugins folder unreadable (${e?.code || e?.message || e})` }; }
+  for (const e of entries) {
     if (!e.isDirectory()) continue;
-    const file = path.join(dir, e.name, IMPORT_LEDGER_FILENAME);
-    if (!fs.existsSync(file)) continue;
-    let ledger: GateLedger;
-    try { ledger = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { continue; }
+    const pluginDir = path.join(dir, e.name);
+    const file = path.join(pluginDir, IMPORT_LEDGER_FILENAME);
+    if (!fs.existsSync(file)) { if (looksLikeImportFolder(pluginDir)) out.unverifiable.push(e.name); continue; }
+    let ledger: any;
+    try { ledger = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { out.unverifiable.push(e.name); continue; }
+    const valid = ledger && typeof ledger === 'object' && ledger.id === e.name
+      && (ledger.mcpServers === undefined || (Array.isArray(ledger.mcpServers) && ledger.mcpServers.every((s: any) => s && typeof s.id === 'string')));
+    if (!valid) { out.unverifiable.push(e.name); continue; }
+    out.ledgers.push({ dirName: e.name, ledger });
+  }
+  return out;
+}
+
+/** The imported plugin that owns an MCP server id, if any (readable ledgers only). */
+export function findImportedMcpOwner(serverId: string, userPluginsDir?: string): { ledger: GateLedger; entry: NonNullable<GateLedger['mcpServers']>[number] } | null {
+  for (const { ledger } of scanImportLedgers(userPluginsDir).ledgers) {
     const entry = (ledger.mcpServers || []).find((s) => s && s.id === serverId);
     if (entry) return { ledger, entry };
   }
   return null;
 }
+
+const IMPORT_MARKER = /^Imported from plugin (\S+)/;
+
+/** Which imported plugin a config claims to come from, judged from the config alone. */
+export function importedPluginHint(cfg: Record<string, any>, userPluginsDir?: string): string | null {
+  const marker = IMPORT_MARKER.exec(String(cfg?.description || ''));
+  if (marker) return marker[1];
+  if (!userPluginsDir) return null;
+  // Paths into the importer's package or data folders mean the config was written by the importer.
+  const norm = (s: string) => s.replace(/\\/g, '/').toLowerCase();
+  const roots = [path.resolve(userPluginsDir), path.join(path.dirname(path.resolve(userPluginsDir)), 'plugin-data')].map((r) => norm(r).replace(/\/+$/, '') + '/');
+  const values = [cfg?.command, cfg?.cwd, ...(Array.isArray(cfg?.args) ? cfg.args : [])].filter((v) => typeof v === 'string').map((v) => norm(v));
+  for (const v of values) {
+    for (const root of roots) {
+      const at = v.indexOf(root);
+      if (at >= 0) return v.slice(at + root.length).split('/')[0] || 'unknown';
+    }
+  }
+  return null;
+}
+
 
 const INLINE_VAULT = /\$\{vault:([A-Za-z0-9_.:-]+)\}/g;
 
@@ -82,12 +137,30 @@ export function vaultRefsIn(cfg: Record<string, any>): string[] {
 
 /**
  * null = allowed to launch. A string = the reason it is blocked (shown to the user).
- * Servers not owned by any imported plugin are never affected.
+ *
+ * Fails closed: a config that carries the importer's marker ("Imported from plugin <id>")
+ * or points into the importer's package/data folders, or whose id belongs to a plugin
+ * folder with a missing/unreadable/malformed ledger, is blocked unless a readable ledger
+ * owns it. Manual configs with none of those signs are untouched.
  */
 export function checkImportedMcpLaunch(cfg: Record<string, any>, userPluginsDir?: string): string | null {
-  const owner = findImportedMcpOwner(String(cfg?.id || ''), userPluginsDir);
-  if (!owner) return null;
+  const id = String(cfg?.id || '');
+  const scan = scanImportLedgers(userPluginsDir);
+  let owner: { ledger: GateLedger; entry: NonNullable<GateLedger['mcpServers']>[number] } | null = null;
+  for (const { ledger } of scan.ledgers) {
+    const entry = (ledger.mcpServers || []).find((s) => s && s.id === id);
+    if (entry) { owner = { ledger, entry }; break; }
+  }
+  if (!owner) {
+    const claimed = scan.unverifiable.find((name) => id === name || id.startsWith(`${name}-`));
+    if (claimed) return `MCP server "${id}" may belong to imported plugin "${claimed}", whose import record is missing or unreadable. Reinstall or remove that plugin before using it.`;
+    const hint = importedPluginHint(cfg, scan.dir);
+    if (!hint) return null; // a manual configuration
+    const why = scan.error ? ` (${scan.error})` : '';
+    return `MCP server "${id}" came from imported plugin "${hint}", but no readable import record owns it${why}. Reinstall the plugin from Plugins to use it.`;
+  }
   const { ledger, entry } = owner;
+
   const scope = `plugins.${ledger.id}.`;
   const foreign = vaultRefsIn(cfg).filter((k) => !k.startsWith(scope));
   if (foreign.length) return `Imported plugin "${ledger.id}" may only use its own saved secrets (plugins.${ledger.id}.*); blocked: ${foreign.join(', ')}`;

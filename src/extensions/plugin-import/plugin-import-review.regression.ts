@@ -35,10 +35,35 @@ const SHA = 'c'.repeat(40);
   writeLedger();
   assert.equal(checkImportedMcpLaunch(cfg, userDir), null, 'approved config launches');
   assert.match(String(checkImportedMcpLaunch({ ...cfg, args: ['evil.js'] }, userDir)), /changed since/, 'edited config needs fresh approval');
-  assert.equal(checkImportedMcpLaunch({ ...cfg, id: 'someone-elses-server' }, userDir), null, 'non-imported servers are untouched');
+  const manual: any = { id: 'someone-elses-server', name: 'mine', enabled: true, transport: 'stdio', command: 'node', args: [path.join(tmp, 'my-tools', 'server.js')] };
+  assert.equal(checkImportedMcpLaunch(manual, userDir), null, 'manual (non-imported) servers are untouched');
+  assert.match(String(checkImportedMcpLaunch({ ...cfg, id: 'someone-elses-server' }, userDir)), /no readable import record/, 'a config pointing into an import package needs an owning ledger');
   ledger.mcpServers[0] = { id: 'demo-srv' }; // legacy import, no activation field
   writeLedger();
   assert.equal(checkImportedMcpLaunch(cfg, userDir), null, 'legacy imports keep working');
+
+  // ── F1: unverifiable ownership fails closed; manual configs stay usable ──
+  const ledgerFile = path.join(pluginDir, 'imported-plugin.json');
+  fs.writeFileSync(ledgerFile, '{ not json');
+  assert.match(String(checkImportedMcpLaunch(cfg, userDir)), /missing or unreadable/, 'corrupt ledger blocks its servers');
+  fs.writeFileSync(ledgerFile, JSON.stringify({ id: 'other-name', mcpServers: [{ id: 'demo-srv', activation: 'active', approvedHash: mcpConfigHash(cfg) }] }));
+  assert.match(String(checkImportedMcpLaunch(cfg, userDir)), /missing or unreadable/, 'ledger whose id does not match its folder is not trusted');
+  fs.rmSync(ledgerFile);
+  assert.match(String(checkImportedMcpLaunch(cfg, userDir)), /missing or unreadable/, 'missing ledger blocks its servers');
+  const remoteOnly: any = { id: 'x-remote', enabled: true, transport: 'http', url: 'https://mcp.example.com', description: 'Imported from plugin gone' };
+  assert.match(String(checkImportedMcpLaunch(remoteOnly, userDir)), /imported plugin "gone"/, 'importer marker without any ledger is blocked');
+  assert.match(String(checkImportedMcpLaunch(remoteOnly, path.join(tmp, 'no-such-plugins-dir'))), /no readable import record/, 'absent plugins folder still fails closed for marked configs');
+  assert.equal(checkImportedMcpLaunch(manual, userDir), null, 'manual config unaffected by a broken import next to it');
+  fs.mkdirSync(path.join(userDir, 'hand-made'), { recursive: true });
+  fs.writeFileSync(path.join(userDir, 'hand-made', 'prometheus.extension.json'), JSON.stringify({ id: 'hand-made', kind: 'integration' }));
+  assert.equal(checkImportedMcpLaunch({ ...manual, id: 'hand-made-srv' }, userDir), null, 'a non-import extension folder does not claim server ids');
+  // A plugins path that is a file (unlistable) still blocks marked configs and leaves manual ones alone.
+  const fileDir = path.join(tmp, 'plugins-is-a-file');
+  fs.writeFileSync(fileDir, 'x');
+  assert.match(String(checkImportedMcpLaunch(remoteOnly, fileDir)), /unreadable/, 'unreadable plugins folder fails closed');
+  assert.equal(checkImportedMcpLaunch(manual, fileDir), null);
+  ledger.mcpServers[0] = { id: 'demo-srv' };
+  writeLedger();
 
   // ── R2: imported servers may only use their own vault namespace ──
   assert.deepEqual(vaultRefsIn({ env: { A: 'vault:integrations.github.pat' }, headers: { Authorization: 'Bearer ${vault:x.y}' } }).sort(), ['integrations.github.pat', 'x.y']);
@@ -93,6 +118,48 @@ const SHA = 'c'.repeat(40);
     mcp: { getConfigs: () => [], upsertConfig() {}, deleteConfig: () => true },
   };
   await assert.rejects(() => installBundle(twice as any, twice.root, deps), /same id/);
+
+  // ── F2: a failed reinstall keeps the previously working skill and its ownership ──
+  // Inert fixtures only: SKILL.md text, nothing is executed.
+  fs.mkdirSync(path.join(tmp, 'keep', 'skills', 'hello'), { recursive: true });
+  fs.writeFileSync(path.join(tmp, 'keep', 'plugin.json'), JSON.stringify({ $schema: AGENT_PLUGINS_SCHEMA, name: 'keep' }));
+  fs.writeFileSync(path.join(tmp, 'keep', 'skills', 'hello', 'SKILL.md'), '---\nname: hello\ndescription: v1\n---\n\nversion one');
+  const keep = readPluginBundle(path.join(tmp, 'keep'))!;
+  const skillsRoot = path.join(tmp, 'skills-store');
+  const live = new Map<string, { id: string; rootDir: string }>();
+  let failImport = false;
+  const kdeps: any = {
+    userPluginsDir: path.join(tmp, 'keep-plugins'), skipReload: true,
+    skills: {
+      // Mirrors SkillsManager: removes the old folder first, then copies (and may fail part-way).
+      async importBundles(src: string, o: any) {
+        const dir = path.join(skillsRoot, o.id);
+        fs.rmSync(dir, { recursive: true, force: true });
+        if (failImport) { live.delete(o.id); throw new Error('blocked by compatibility audit'); }
+        fs.cpSync(src, dir, { recursive: true });
+        live.set(o.id, { id: o.id, rootDir: dir });
+        return [{ id: o.id }];
+      },
+      deleteSkill: (sid: string) => { const s = live.get(sid); if (s) fs.rmSync(s.rootDir, { recursive: true, force: true }); return live.delete(sid); },
+      scanSkills() { for (const e of fs.existsSync(skillsRoot) ? fs.readdirSync(skillsRoot) : []) live.set(e, { id: e, rootDir: path.join(skillsRoot, e) }); },
+      get: (sid: string) => live.get(sid),
+    },
+    mcp: { getConfigs: () => [], upsertConfig() {}, deleteConfig: () => true },
+  };
+  const first = await installBundle(keep, keep.root, kdeps);
+  assert.deepEqual(first.skills, ['keep-hello']);
+  fs.writeFileSync(path.join(tmp, 'keep', 'skills', 'hello', 'SKILL.md'), '---\nname: hello\ndescription: v2\n---\n\nversion two');
+  failImport = true;
+  const again = await installBundle(keep, keep.root, kdeps, { overwrite: true });
+  assert.ok(again.warnings.some((x) => /kept the previous version/.test(x)), 'failure is reported');
+  assert.match(fs.readFileSync(path.join(skillsRoot, 'keep-hello', 'SKILL.md'), 'utf8'), /version one/, 'previous skill files restored');
+  assert.ok(live.get('keep-hello'), 'previous skill still loaded');
+  const { getImportedPlugin } = await import('./import-service');
+  assert.deepEqual(getImportedPlugin('keep', kdeps.userPluginsDir)!.skills, ['keep-hello'], 'ledger keeps ownership of the working skill');
+  failImport = false;
+  const third = await installBundle(keep, keep.root, kdeps, { overwrite: true });
+  assert.deepEqual(third.skills, ['keep-hello']);
+  assert.match(fs.readFileSync(path.join(skillsRoot, 'keep-hello', 'SKILL.md'), 'utf8'), /version two/, 'a later good reinstall updates it');
 
   fs.rmSync(tmp, { recursive: true, force: true });
   console.log('plugin-import review regression passed');
