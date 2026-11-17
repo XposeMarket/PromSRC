@@ -47,6 +47,13 @@ import {
   storageFilePath,
 } from './storage/storage-paths';
 import type { ExternalImportBinding, ImportedHistoricalEvent } from './imports/import-types';
+import {
+  isExternalAgentId,
+  normalizeExternalAgentBinding,
+  summarizeExternalAgentBinding,
+  type ExternalAgentBinding,
+  type ExternalAgentSummary,
+} from './external-agents/types';
 import { retainAnthropicToolCategories, ANTHROPIC_RETAINED_CATEGORY_LIMIT } from '../providers/anthropic-tool-cache';
 
 export interface ChatMessage {
@@ -418,6 +425,11 @@ export interface Session {
   chatModelRoute?: ChatModelRoute;
   voiceRoom?: VoiceRoomMetadata | null;
   externalImport?: ExternalImportBinding;
+  /**
+   * Live connected agent that runs this chat (stage 3: Codex). Set once on the
+   * first message, immutable after. Never coexists with externalImport.
+   */
+  externalAgent?: ExternalAgentBinding;
 }
 
 export interface SessionMutationScope {
@@ -457,6 +469,8 @@ export interface SessionSummary {
   lastModelVersion?: number;
   voiceRoom?: VoiceRoomMetadata | null;
   externalImport?: Pick<ExternalImportBinding, 'version' | 'source' | 'continuation' | 'sourceResume' | 'importedAt'>;
+  /** Live connected agent (Codex, ...). Never carries anything from the agent's auth. */
+  externalAgent?: ExternalAgentSummary;
 }
 
 export interface SessionSearchResult extends SessionSummary {
@@ -1233,6 +1247,7 @@ function normalizeSessionSummary(input: any): SessionSummary | null {
     lastModelVersion: SESSION_LAST_MODEL_VERSION,
     voiceRoom: input?.voiceRoom && typeof input.voiceRoom === 'object' ? input.voiceRoom as VoiceRoomMetadata : null,
     externalImport: normalizeExternalImport(input?.externalImport),
+    externalAgent: normalizeExternalAgentSummary(input?.externalAgent),
   };
 }
 
@@ -1339,6 +1354,19 @@ function normalizeExternalImport(input: any): ExternalImportBinding | undefined 
     importedAt: String(input.importedAt || source.importedAt || '').trim() || new Date().toISOString(),
   };
 }
+
+function normalizeExternalAgentSummary(input: any): ExternalAgentSummary | undefined {
+  if (!input || typeof input !== 'object' || !isExternalAgentId(input.agentId)) return undefined;
+  const cwd = String(input.cwd || '').trim().slice(0, 1000);
+  const last = String(input.lastTurnStatus || '');
+  return {
+    agentId: input.agentId,
+    cwd,
+    hasUpstream: input.hasUpstream === true,
+    ...(['completed', 'interrupted', 'failed'].includes(last) ? { lastTurnStatus: last as 'completed' | 'interrupted' | 'failed' } : {}),
+  };
+}
+
 
 function isCommandTitleText(value: any): boolean {
   const text = String(value || '').trim();
@@ -1548,6 +1576,7 @@ function buildSessionSummary(session: Session): SessionSummary {
           importedAt: session.externalImport.importedAt,
         }
       : undefined,
+    externalAgent: session.externalImport ? undefined : summarizeExternalAgentBinding(session.externalAgent),
   };
 }
 
@@ -1642,6 +1671,7 @@ function buildSessionSummaryFromData(sessionId: string, data: any): SessionSumma
       lastModelVersion: SESSION_LAST_MODEL_VERSION,
       voiceRoom: data?.voiceRoom && typeof data.voiceRoom === 'object' ? data.voiceRoom as VoiceRoomMetadata : null,
       externalImport: normalizeExternalImport(data?.externalImport),
+      externalAgent: data?.externalImport ? undefined : summarizeExternalAgentBinding(normalizeExternalAgentBinding(data?.externalAgent)),
     };
   } catch {
     return null;
@@ -1922,6 +1952,7 @@ function readSessionFileForSearch(sessionId: string): Session | null {
       mainChatGoalHistory: normalizeMainChatGoalHistory(data?.mainChatGoalHistory, sessionId),
       chatModelRoute: normalizeChatModelRoute(data?.chatModelRoute),
       externalImport: normalizeExternalImport(data?.externalImport),
+      externalAgent: data?.externalImport ? undefined : normalizeExternalAgentBinding(data?.externalAgent),
     };
   } catch {
     return null;
@@ -2813,6 +2844,7 @@ export function getSession(id: string): Session {
         mainChatGoalHistory: normalizeMainChatGoalHistory(data.mainChatGoalHistory, sessionId),
         chatModelRoute: normalizeChatModelRoute(data.chatModelRoute),
         externalImport: normalizeExternalImport(data.externalImport),
+        externalAgent: data.externalImport ? undefined : normalizeExternalAgentBinding(data.externalAgent),
       };
       sessions.set(sessionId, session);
       setSessionCacheWeight(sessionId, session);
@@ -2863,6 +2895,7 @@ export function getSession(id: string): Session {
     mainChatGoal: null,
     mainChatGoalHistory: [],
     externalImport: undefined,
+    externalAgent: undefined,
   };
   sessions.set(sessionId, session);
   setSessionCacheWeight(sessionId, session);
@@ -3841,6 +3874,8 @@ function scrubSession(session: Session): Session {
       ? session.mainChatGoalHistory.map((goal) => scrubMainChatGoal(goal)).filter(Boolean) as MainChatGoalState[]
       : session.mainChatGoalHistory,
     externalImport: session.externalImport ? scrubPersistedData(session.externalImport) : session.externalImport,
+    // Live connected-agent binding: agent id, folder, upstream session id and last turn status only.
+    externalAgent: normalizeExternalAgentBinding(session.externalAgent),
     history: session.history.map(msg => ({
       ...msg,
       content: scrubPersistedText(msg.content),
