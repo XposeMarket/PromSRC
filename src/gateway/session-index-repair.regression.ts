@@ -105,6 +105,18 @@ async function main(): Promise<void> {
     assert.ok(index.summaries.web_crash_orphan, 'transcript newer than the index is recovered into it');
     assert.ok(index.summaries.web_live, 'a live save during reconcile is not lost');
 
+    // Once per process: a newer unindexed transcript appearing AFTER the first
+    // reconcile must not be picked up by later list calls (no second pass).
+    writeSession(sessionDir, 'web_late_orphan', {
+      channel: 'web', createdAt: Date.now(), lastActiveAt: Date.now(),
+      history: [{ role: 'user', content: 'appeared after reconcile', timestamp: Date.now() }, assistant],
+    }, Date.now() + 60_000);
+    sessionApi.listSessionSummaries({ channel: 'web', scope: 'all', state: 'all', limit: 50, offset: 0 });
+    await sessionApi.waitForSessionIndexRepair();
+    await sessionApi.flushPendingSessionWrites();
+    const after = JSON.parse(fs.readFileSync(indexPath, 'utf-8'));
+    assert.equal(after.summaries.web_late_orphan, undefined, 'reconcile runs once per process, not on every list');
+
     console.log('session index repair regression: ok');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
