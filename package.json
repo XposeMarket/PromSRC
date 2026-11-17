@@ -244,6 +244,7 @@
     "test:scheduler-misfire": "tsx src/gateway/scheduling/scheduler-misfire.regression.ts && tsx src/gateway/scheduling/scheduler-admission-crash.regression.ts",
     "test:sched-task-review": "tsx src/gateway/scheduling/sched-task-review.regression.ts",
     "test:schedule-pause-state": "tsx src/gateway/scheduling/schedule-pause-state.regression.ts",
+    "test:schedule-main-isolation": "tsx src/gateway/scheduling/schedule-main-target-isolation.regression.ts",
     "test:reasoning-capabilities": "npm run build:backend && node scripts/test-reasoning-capabilities.mjs",
     "test:p6-subagents-runs-proposals-ui": "node scripts/test-p6-subagents-runs-proposals-ui.mjs",
     "test:desktop-subagent-chat": "node scripts/test-desktop-subagent-chat-ui.mjs",
