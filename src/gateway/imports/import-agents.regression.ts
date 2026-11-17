@@ -175,13 +175,17 @@ async function main(): Promise<void> {
   assert.ok(bigIds.length >= 30, 'cancel fixture preview lists at least 30 chats');
   const bigJobId = bigCreated.job.id;
   const bigConfirm = service.confirmImportJob(bigJobId, ownerId, bigIds);
-  let turns = 0;
-  while (service.getImportJob(bigJobId, ownerId)?.status !== 'committing' && turns < 200) {
-    await new Promise((resolve) => setImmediate(resolve));
-    turns += 1;
-  }
-  assert.equal(service.getImportJob(bigJobId, ownerId)?.status, 'committing', 'import reaches the committing phase before cancel');
-  assert.doesNotThrow(() => service.requestCancelImportJob(bigJobId, ownerId), 'cancel is accepted while the import is committing');
+  // The cancel must arrive the way a real HTTP request does: as a separate macrotask.
+  // Without a yield between chats the whole import finishes first and this cancel is refused.
+  let cancelStatus = '';
+  let cancelError: any = null;
+  await new Promise<void>((resolve) => setImmediate(() => {
+    cancelStatus = String(service.getImportJob(bigJobId, ownerId)?.status || '');
+    try { service.requestCancelImportJob(bigJobId, ownerId); } catch (error) { cancelError = error; }
+    resolve();
+  }));
+  assert.equal(cancelStatus, 'committing', 'a cancel arriving as a separate request finds the import still running');
+  assert.equal(cancelError, null, `cancel is accepted mid-import: ${cancelError?.message || ''}`);
   const cancelled = await bigConfirm;
   const cancelledResult: any = cancelled.result || {};
   assert.ok(Number(cancelledResult.notStarted) >= 1 && Number(cancelledResult.notStarted) < bigIds.length, `cancel stops mid-import (notStarted=${cancelledResult.notStarted})`);
