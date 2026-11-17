@@ -3,6 +3,7 @@ import { collectNeedsYouItems } from '../needs-you-collect';
 import { getPlannedChatRunDetail, listPlannedChatRuns, recordPlannedChatProgress, recordPlannedChatActivity, finishPlannedChatRun, resumePlannedChatRun } from './planned-chat-runs';
 import { listLiveRuntimes, registerLiveRuntime, finishLiveRuntime } from '../live-runtime-registry';
 import { sessionExists } from '../session';
+import { runInteractiveTurn as defaultRunInteractiveTurn } from '../routes/chat/pipeline/interactive-turn';
 
 const resuming = new Set<string>();
 /** Continue the original chat through its normal admission/approval pipeline. */
@@ -15,7 +16,7 @@ export async function continuePlannedChat(id: string, runTurn?: typeof import('.
   if (listPlannedChatRuns().find(r => r.sessionId === sid)?.runtimeId !== row.runtimeId) return { success: false, error: 'A newer plan exists. Resume the latest task instead.' };
   resuming.add(sid);
   try {
-    const runInteractiveTurn = runTurn || (await import('../routes/chat/pipeline/interactive-turn')).runInteractiveTurn;
+    const runInteractiveTurn = runTurn || defaultRunInteractiveTurn;
     const controller = new AbortController();
     const signal = { aborted: false, signal: controller.signal, reason: '' };
     const origin = sid.startsWith('mobile_') ? { channel: 'mobile' as const, surface: 'mobile_app' as const, device: 'phone' as const } : { channel: 'web' as const, surface: 'desktop_web' as const, device: 'desktop' as const };

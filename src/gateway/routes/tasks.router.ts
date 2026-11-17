@@ -1,5 +1,6 @@
 import { readTaskNoteEvidence, taskJournalNoteEvidence } from '../tasks/task-note-evidence';
 import { listPlannedChatRuns, getPlannedChatRunDetail } from '../tasks/planned-chat-runs';
+import { continuePlannedChat } from '../tasks/planned-chat-resume';
 
 // src/gateway/routes/tasks.router.ts
 // Tasks, Background Tasks, Schedules, Error Response routes
@@ -746,7 +747,6 @@ router.post('/api/bg-tasks/:id/pause', (req, res) => {
 
 router.post('/api/bg-tasks/:id/resume', async (req, res) => {
   if (String(req.params.id).startsWith('chat-plan:')) {
-    const { continuePlannedChat } = await import('../tasks/planned-chat-resume');
     const result = await continuePlannedChat(req.params.id);
     res.status(result.success ? 202 : 409).json(result);
     return;
