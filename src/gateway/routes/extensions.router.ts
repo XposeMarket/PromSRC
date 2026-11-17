@@ -3,6 +3,7 @@ import { buildExtensionsCatalog } from '../../extensions/catalog-service.js';
 import { ensurePrometheusExtensionRuntimeLoaded } from '../../extensions/extension-bootstrap.js';
 import { buildMcpServerConfigFromPreset, listMcpPresets } from '../../extensions/mcp-preset-service.js';
 import { reloadExtensions } from '../../extensions/reload.js';
+import { scanPlugins, defaultPluginSourceRoots, defaultMarketplaceRoots, listImportedPlugins, enableReadyMcpServers } from '../../extensions/plugin-import/import-service.js';
 import {
   installUserPlugin,
   listUserPlugins,
@@ -119,7 +120,6 @@ async function pluginOpsDeps() {
 
 router.get('/api/plugins/import/scan', async (req, res) => {
   try {
-    const { scanPlugins, defaultPluginSourceRoots, defaultMarketplaceRoots, listImportedPlugins } = await import('../../extensions/plugin-import/import-service');
     const includeMarketplaces = String(req.query.marketplaces || '') === '1';
     const roots = [...defaultPluginSourceRoots(), ...(includeMarketplaces ? defaultMarketplaceRoots() : [])];
     res.json({ success: true, roots, plugins: scanPlugins({ roots, filter: String(req.query.q || '') }), imported: listImportedPlugins() });
@@ -163,7 +163,6 @@ router.post('/api/plugins/import/secret', async (req, res) => {
     new SecretVault(getConfig().getConfigDir()).set(`plugins.${id}.${name}`, value, 'plugins:import-secret');
     // Saving a secret never turns a pending server on: only servers the user already
     // activated (or legacy imports) are re-enabled once their secrets are present.
-    const { enableReadyMcpServers } = await import('../../extensions/plugin-import/import-service');
     res.json({ success: true, mcp: enableReadyMcpServers(id, await pluginOpsDeps()) });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err?.message || 'failed to store secret' });

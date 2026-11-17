@@ -3,7 +3,7 @@
  * plus the user's own Codex personal catalog (~/.agents/plugins/marketplace.json).
  *
  * Only the two hardcoded URLs below are ever fetched. Arbitrary catalog URLs and
- * community registries (e.g. ClawHub) are deliberately NOT supported. Listing is
+ * community registries are deliberately NOT supported. Listing is
  * metadata only: nothing is downloaded or executed until the user installs one
  * entry, and install resolves the entry server-side from its stable id.
  */

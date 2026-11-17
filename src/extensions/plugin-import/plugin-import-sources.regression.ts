@@ -85,12 +85,14 @@ async function zipOf(files: Record<string, string>): Promise<Buffer> {
   const escape = convertMcpServer('p', { id: 'e', config: { type: 'stdio', command: 'node', cwd: '../../outside' } }, pkg, undefined, { dataDir });
   assert.ok(escape.problems.some((p) => /outside the plugin/.test(p)), 'cwd escaping the plugin is a problem, not silently used');
 
-  // ── 3. Catalogs: allowlist is exactly the two official URLs (no ClawHub) ─────
+  // Catalogs: exactly two remote URLs and one local-only personal catalog.
   assert.deepEqual([...OFFICIAL_CATALOG_URLS].sort(), [
     'https://raw.githubusercontent.com/anthropics/claude-plugins-official/main/.claude-plugin/marketplace.json',
     'https://raw.githubusercontent.com/openai/plugins/main/.agents/plugins/marketplace.json',
   ].sort());
-  assert.ok(!JSON.stringify(CATALOGS).toLowerCase().includes('clawhub'), 'no ClawHub catalog');
+  assert.deepEqual(CATALOGS.map(({ id, url }) => [id, url]), [
+    ['claude-official', OFFICIAL_CATALOG_URLS[0]], ['openai-official', OFFICIAL_CATALOG_URLS[1]], ['codex-personal', undefined],
+  ]);
   const parsed = parseCatalog({ plugins: [
     { name: 'in-repo', source: './plugins/in-repo', description: 'A' },
     { name: 'pinned', source: { source: 'github', repo: 'o/r', sha: SHA } },
