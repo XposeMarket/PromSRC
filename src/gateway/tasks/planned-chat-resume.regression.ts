@@ -14,6 +14,8 @@ async function main() {
  const progress = { source: 'declared', taskSummary: 'Recovery fixture', activeIndex: 1, items: [{text:'Done work',status:'done'},{text:'Remaining work',status:'in_progress'}] };
  plans.recordPlannedChatProgress('old', sid, progress, 'Recovery fixture'); plans.finishPlannedChatRun('old','failed');
  for(let i=0;i<100 && plans.getPlannedChatRunDetail('old')?.status!=='paused';i++) await sleep();
+ for (const text of ['Continue writing the email, not the deployment', 'Resume editing the memo', 'Pick up groceries']) assert.equal(plans.findResumableChatPlan(sid, text), undefined);
+ for (const text of ['Continue','Resume the plan.', 'Continue the paused plan.']) assert.equal(plans.findResumableChatPlan(sid, text)?.runtimeId, 'old');
  let calls=0; let release!:()=>void; let emit:any;
  const run = async (message:string, target:string, send:any, _pins:any, _signal:any, context:string) => { calls++; assert.equal(target,sid); assert.match(message,/Continue/); assert.match(context,/\[done\] Done work/); emit=send; await new Promise<void>(r=>release=r); return {type:'chat',text:'done'}; };
  const started = await resume.continuePlannedChat('chat-plan:old',run); assert.equal(started.success,true,JSON.stringify(started));

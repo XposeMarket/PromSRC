@@ -329,7 +329,7 @@ export function getPlannedChatRunDetail(id: string, pending: PendingRequest[] = 
 
 /** Explicit continuation only; unrelated messages never adopt a previous plan. */
 export function findResumableChatPlan(sessionId: string, message: string) {
-  if (!/^\s*(?:continue|resume|pick up|keep going)\b/i.test(message)) return undefined;
+  if (!/^(?:continue|resume|pick up|keep going)(?:\s+(?:the |this |that )?(?:paused |previous )?(?:plan|task))?[.!]?$/i.test(message.trim())) return undefined;
   const newest = listPlannedChatRuns().find(row => row.sessionId === sessionId);
   if (newest?.status === 'paused') return store().get(newest.runtimeId);
   return newest?.status === 'running' && newest.resumedFromRuntimeId ? store().get(newest.runtimeId) : undefined;
