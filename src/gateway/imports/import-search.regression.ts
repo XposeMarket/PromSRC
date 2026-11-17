@@ -200,6 +200,26 @@ async function main(): Promise<void> {
     assert.equal(fs.existsSync(search.importSearchDbPath()), false, 'delete all removes the file');
     assert.equal(search.listIndexedAgents().agents.length, 0);
 
+    // --- 9b. Stale rows: a replaced chat's old text is never found, state is partial, refresh works.
+    search.startSearchIndex('codex', opts);
+    await search.waitForSearchIndex('codex');
+    assert.equal((await s('quasarwidget', 'all')).total, 1, 'original text indexed before replacement');
+    fs.writeFileSync(bodyFile, chat('body', [user('Body chat'), assistant('replacedmarkerzeta now the only text')]), 'utf8');
+    fs.utimesSync(bodyFile, new Date(base + 20000), new Date(base + 20000));
+    const stale = await s('quasarwidget', 'all');
+    assert.equal(stale.total, 0, 'replaced text not found');
+    assert.equal(stale.results.some((hit) => hit.snippetHtml?.includes('quasarwidget')), false, 'no stale snippet');
+    assert.equal(stale.messageSearch.state, 'partial', 'stale chat makes the index partial');
+    assert.equal(search.searchIndexStatus('codex', opts).messageSearch, 'partial', 'status partial');
+    assert.ok(search.searchIndexStatus('codex', opts).indexedChats < search.searchIndexStatus('codex', opts).totalChats, 'stale row not counted as indexed');
+    assert.equal((await s('giraffeword', 'all')).total, 0, 'older appended text is not findable after replacement');
+    search.startSearchIndex('codex', opts);
+    await search.waitForSearchIndex('codex');
+    assert.equal((await s('quasarwidget', 'all')).total, 0, 'refresh keeps replaced text gone');
+    assert.equal((await s('replacedmarkerzeta', 'all')).total, 1, 'refresh indexes replacement text');
+    assert.equal(search.searchIndexStatus('codex', opts).messageSearch, 'ready', 'refresh returns to ready');
+    search.deleteAllSearchIndexes();
+
     // Review regressions: persistent privacy allowlists and deletion lifecycle.
     assert.equal(search.indexableMessage({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'thinking', text: 'PRIVATE_REASON' }] } }, 'claude-code-local'), null);
     assert.equal(search.indexableMessage({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', content: 'PRIVATE_FILE' }] } }, 'claude-code-local'), null);

@@ -152,7 +152,7 @@ router.get('/api/imports/agents/:agentId/search-index', async (req, res) => {
     const id = String(req.params.agentId || '');
     let listing;
     try { listing = await warmAgentIndex(id); } catch { /* vanished sources remain deletable */ }
-    let status = searchIndexStatus(id, {}, listing?.files.length ?? 0);
+    let status = searchIndexStatus(id, {}, listing?.files);
     if (req.query.refresh === '1' && status.enabled && listing) status = startSearchIndex(id, {}, listing);
     res.json({ success: true, status });
   } catch (error) {
