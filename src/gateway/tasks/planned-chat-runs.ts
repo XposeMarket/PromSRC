@@ -6,7 +6,7 @@ import { getConfig } from '../../config/config';
 import { listLiveRuntimes } from '../live-runtime-registry';
 import { broadcastWS } from '../comms/broadcaster';
 
-export type PlannedRunStatus = 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted';
+export type PlannedRunStatus = 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted' | 'paused';
 export interface PlannedRunItem { text: string; status: string; startedAt?: number; completedAt?: number }
 export interface PlannedRunActivity { t: number; kind: 'tool' | 'result' | 'error'; name: string; detail?: string }
 export interface PlannedChatRun {
@@ -238,9 +238,13 @@ export class PlannedChatRunStore {
       const row = await this.readAsync(runtimeId);
       if (!row || row.status !== 'running' || row.ownerPid !== this.ownerPid) return;
       if (entries.length) row.activity = [...(row.activity || []), ...entries].slice(-PLANNED_ACTIVITY_MAX);
-      row.status = status;
-      row.completedAt = row.updatedAt = Date.now();
-      if (status === 'completed') {
+      // A turn ending is not evidence that its declared work finished.
+      const done = row.runtimeProgress.items.length > 0 && row.runtimeProgress.items.every(item => ['done', 'completed', 'skipped'].includes(item.status));
+      row.status = status === 'cancelled' ? 'cancelled' : status === 'completed' && done ? 'completed' : 'paused';
+      row.updatedAt = Date.now();
+      if (row.status === 'completed' || row.status === 'cancelled') row.completedAt = row.updatedAt;
+      else delete row.completedAt;
+      if (row.status === 'completed') {
         row.runtimeProgress.items = row.runtimeProgress.items.map(item => (item.status === 'in_progress' || item.status === 'running') ? { ...item, completedAt: item.completedAt || row.completedAt } : item);
       }
       await this.writeAsync(row);
@@ -250,17 +254,23 @@ export class PlannedChatRunStore {
   list(liveRuntimeIds: Set<string>, pending: PendingRequest[] = []) {
     const rows = this.rows().sort((a, b) => b.createdAt - a.createdAt || b.updatedAt - a.updatedAt);
     const newestRunning = new Map<string, string>();
-    const effective = (row: PlannedChatRun): PlannedRunStatus => row.status === 'running'
-      && (row.ownerPid === this.ownerPid ? !liveRuntimeIds.has(row.runtimeId) : !this.alive(row.ownerPid)) ? 'interrupted' : row.status;
+    const effective = (row: PlannedChatRun): PlannedRunStatus => {
+      if (row.status === 'cancelled') return 'cancelled';
+      if (row.status === 'running') return (row.ownerPid === this.ownerPid ? !liveRuntimeIds.has(row.runtimeId) : !this.alive(row.ownerPid)) ? 'paused' : 'running';
+      return row.status === 'completed' && row.runtimeProgress.items.every(item => ['done', 'completed', 'skipped'].includes(item.status)) ? 'completed' : 'paused';
+    };
     for (const row of rows) if (effective(row) === 'running' && !newestRunning.has(row.sessionId)) newestRunning.set(row.sessionId, row.runtimeId);
-    return rows.map(row => {
+    const newest = new Map<string, string>();
+    for (const row of rows) if (!newest.has(row.sessionId)) newest.set(row.sessionId, row.runtimeId);
+    const superseded = new Set(rows.map(row => row.resumedFromRuntimeId).filter(Boolean));
+    return rows.filter(row => !superseded.has(row.runtimeId)).map(row => {
       const { activity, originPrompt, ...rest } = row;
       const last = Array.isArray(activity) && activity.length ? activity[activity.length - 1] : undefined;
       return {
         ...rest,
         status: effective(row) === 'running' && newestRunning.get(row.sessionId) === row.runtimeId && pending.some(item => item.sessionId === row.sessionId && (typeof item.createdAt === 'number' ? item.createdAt : Date.parse(String(item.createdAt || ''))) >= row.createdAt) ? 'awaiting_user_input' : effective(row),
         source: 'Chat', channel: 'Chat', startedAt: row.createdAt, lastProgressAt: row.updatedAt,
-        currentStepIndex: row.runtimeProgress.activeIndex, supportedActions: ['open_chat'],
+        currentStepIndex: row.runtimeProgress.activeIndex, supportedActions: effective(row) === 'paused' && newest.get(row.sessionId) === row.runtimeId && !pending.some(item => item.sessionId === row.sessionId) ? ['open_chat', 'resume'] : ['open_chat'],
         // Compact list fields; full originPrompt/activity come from the detail route.
         ...(originPrompt ? { originalAssignment: String(originPrompt).slice(0, 280) } : {}),
         ...(last ? { lastToolCall: { name: last.name, kind: last.kind, t: last.t } } : {}),
@@ -281,7 +291,8 @@ function store() {
 export function recordPlannedChatProgress(runtimeId: string, sessionId: string, payload: any, title: string, resumedFromRuntimeId?: string, originPrompt?: string) {
   try {
     // Serialized async write; broadcast only after it lands.
-    void store().progress(runtimeId, sessionId, payload, title, resumedFromRuntimeId, originPrompt).then(() => {
+    const prior = payload?.reason === 'plan_resumed' ? findResumableChatPlan(sessionId, 'Continue') : undefined;
+    void store().progress(runtimeId, sessionId, payload, title, resumedFromRuntimeId || prior?.runtimeId, originPrompt || prior?.originPrompt).then(() => {
       if (payload?.source === 'declared') broadcastWS({ type: 'planned_chat_updated', runtimeId, sessionId });
     }).catch(error => console.warn('[planned-chat] Could not save progress:', error));
   } catch (error) { console.warn('[planned-chat] Could not save progress:', error); }
@@ -315,3 +326,11 @@ export function getPlannedChatRunDetail(id: string, pending: PendingRequest[] = 
   return { ...(listed || {}), ...row, status: listed?.status || row.status, originalAssignment: row.originPrompt, activity: row.activity || [] };
 }
 
+
+/** Explicit continuation only; unrelated messages never adopt a previous plan. */
+export function findResumableChatPlan(sessionId: string, message: string) {
+  if (!/^(?:continue|resume|pick up|keep going)(?:\s+(?:the |this |that )?(?:paused |previous )?(?:plan|task))?[.!]?$/i.test(message.trim())) return undefined;
+  const newest = listPlannedChatRuns().find(row => row.sessionId === sessionId);
+  if (newest?.status === 'paused') return store().get(newest.runtimeId);
+  return newest?.status === 'running' && newest.resumedFromRuntimeId ? store().get(newest.runtimeId) : undefined;
+}

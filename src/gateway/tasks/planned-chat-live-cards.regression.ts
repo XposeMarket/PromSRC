@@ -65,8 +65,8 @@ async function main() {
     row = store.get('r1')!;
     assert.equal(row.activity!.length, PLANNED_ACTIVITY_MAX, 'ring capped at 40');
     assert.equal(row.activity![row.activity!.length - 1].name, 'tool_59');
-    assert.equal(row.status, 'completed');
-    assert.ok(row.runtimeProgress.items[1].completedAt, 'finishing completed closes the active step');
+    assert.equal(row.status, 'paused');
+    assert.equal(row.runtimeProgress.items[1].completedAt, undefined, 'a final reply does not close an unfinished step');
     store.activity('r1', { t: clock, kind: 'tool', name: 'late' });
     await store.flushActivity('r1');
     assert.equal(store.get('r1')!.activity!.length, PLANNED_ACTIVITY_MAX, 'no writes after finish');
@@ -92,7 +92,7 @@ async function main() {
     store.activity('r2', { t: clock, kind: 'tool', name: 'queued_before_finish' });
     await store.finish('r2', 'failed');
     const failed = store.get('r2')!;
-    assert.equal(failed.status, 'failed');
+    assert.equal(failed.status, 'paused');
     assert.equal(failed.activity!.length, 2);
     assert.equal(failed.activity![1].name, 'queued_before_finish');
     console.log('PASS finish after queued activity keeps terminal state and activity');
@@ -121,12 +121,12 @@ async function main() {
         release(); // never await finish while keeping its prerequisite blocked
         await Promise.all([resumed, finished]);
       }
-      assert.equal(gs.get('dst')!.status, 'completed', 'held resume must not leave a running record after finish');
+      assert.equal(gs.get('dst')!.status, 'paused', 'held resume must not leave a running record after finish');
       await gs.progress('dst', 'sg', progress(['in_progress', 'pending']), 'late');
       await gs.resume('src', 'dst', 'sg');
       gs.activity('dst', { t: clock, kind: 'tool', name: 'late' });
       await gs.flushActivity('dst');
-      assert.equal(gs.get('dst')!.status, 'completed', 'late progress/resume after finish is a no-op');
+      assert.equal(gs.get('dst')!.status, 'paused', 'late progress/resume after finish is a no-op');
       assert.equal(gs.get('dst')!.activity, undefined, 'late activity after finish is ignored');
       console.log('PASS finished-run guard: held resume cannot resurrect a completed run');
     }

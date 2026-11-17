@@ -74,3 +74,15 @@ assert.equal(interactions.question({id:'q'}),'question:1');
 assert.equal(interactions.approval({id:'a'}),'approval:a');
 assert.deepEqual(calls,['q']);
 console.log('PASS lazy Tasks interaction adapter reuses original renderers');
+
+// Both Tasks surfaces expose original-thread resume only when backend permits it.
+const taskDesktop = fs.readFileSync(new URL('../web-ui/src/pages/TasksPage.js', import.meta.url), 'utf8');
+const taskMobile = fs.readFileSync(new URL('../web-ui/src/mobile/mobile-tasks-pages.js', import.meta.url), 'utf8');
+assert.match(taskDesktop, /supportedActions\?\.includes\('resume'\)/);
+assert.match(taskDesktop, /data-planned-resume/);
+assert.match(taskMobile, /supportedActions\?\.includes\('resume'\)/);
+assert.match(taskMobile, /data-task-action="resume"/);
+const chatPipeline = fs.readFileSync(new URL('../src/gateway/routes/chat/pipeline/handle-chat.ts', import.meta.url), 'utf8');
+assert.match(chatPipeline, /if \(!progressState\.manualStepAdvance && progressState\.items\.length >= 2\)/, 'declared plans must not auto-complete at final reply');
+assert.match(chatPipeline, /findResumableChatPlan\(sessionId, message\)/);
+console.log('PASS desktop/mobile Resume guards and declared-plan finalization contract');

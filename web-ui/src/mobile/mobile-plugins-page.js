@@ -1,5 +1,6 @@
 // Mobile Plugins page (replaces the old "More" landing on mobile only).
 import { openConnectFlow } from '../features/connectors/connect-flow.js';
+import { mountConnectorAccounts } from '../features/connectors/connector-accounts-ui.js';
 //
 // One alphabetical list of everything the gateway can plug into the model:
 // bundled connectors, MCP servers, and plugins imported from Claude Code /
@@ -342,6 +343,7 @@ function openSheet(page, row, navigate, onChanged) {
       </div>
       ${row.desc ? `<p class="pm-plugin-sheet-desc">${escapeHtml(row.desc)}</p>` : ''}
       ${details}
+      ${(isOn || row.reauthRequired) && row.kind === 'connector' ? '<div data-plugin-accounts></div>' : ''}
       ${perms}
       ${row.kind === 'imported' && row.mcpCount ? `<button class="pm-plugin-sheet-primary" type="button" data-plugin-mcp-toggle>${row.mcpOn ? 'Turn MCP server off' : 'Turn MCP server on'}</button>` : ''}
       ${isOn ? '<button class="pm-plugin-sheet-primary" type="button" data-plugin-verify>Ask Prom to verify</button>' : ''}
@@ -412,6 +414,15 @@ function openSheet(page, row, navigate, onChanged) {
     close();
     await openConnectFlow(mobileGatewayFetch, { serviceId: row.id, kind: row.kind === 'mcp' ? 'mcp_preset' : ['connector', 'provider', 'integration'].includes(row.kind) ? row.kind : undefined }, { onChanged, onVerify: message => askPromInChat(navigate, message) });
   });
+  // Multi-account: current account first, then extra accounts and "Add another account".
+  const accountsHost = wrap.querySelector('[data-plugin-accounts]');
+  if (accountsHost) {
+    mountConnectorAccounts(accountsHost, {
+      fetchJson: mobileGatewayFetch, connectorId: row.id, name: row.name, connected: !!row.connected, accountLabel: row.account,
+      startConnect: () => openConnectFlow(mobileGatewayFetch, { serviceId: row.id, kind: 'connector' }, { onChanged, onVerify: message => { close(); askPromInChat(navigate, message); } }),
+      onVerify: (message) => { close(); askPromInChat(navigate, message); },
+    });
+  }
   // On <body>, not the page: a transformed page ancestor would pin a fixed
   // overlay to the page box instead of the viewport.
   document.body.appendChild(wrap);

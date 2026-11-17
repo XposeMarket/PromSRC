@@ -9,26 +9,38 @@ export const SIGN_IN_CSS = `
 .sa-login-dialog .sa-row{flex-direction:column;gap:10px}.sa-login-dialog .sa-row>.sa-btn{flex:auto;width:100%}.sa-login-dialog .sa-row>.sa-btn:not(.sa-pri){background:color-mix(in srgb,currentColor 8%,transparent);border-color:transparent}.sa-login-dialog details{border:0;padding:0;color:var(--sa-m)}.sa-login-dialog summary{font-weight:500}.sa-login-dialog .sa-remember{border:0;padding:0;justify-content:flex-start;align-items:flex-start;gap:10px;font-size:14px}.sa-login-dialog .sa-remember .sa-knob{order:-1;width:19px;height:19px;border-radius:5px;margin-top:2px}.sa-login-dialog .sa-remember .sa-knob::after{display:none}.sa-login-dialog .sa-remember[aria-checked=true] .sa-knob{background:var(--sa-ink);color:var(--sa-surface)}.sa-login-dialog .sa-remember[aria-checked=true] .sa-knob::after{display:block;content:'✓';position:static;background:none;width:auto;height:auto;text-align:center;font-size:14px;line-height:18px;color:var(--sa-surface)}.sa-login-dialog .sa-remember strong{font-weight:500}.sa-login-dialog .sa-remember .sa-muted{font-size:11px;line-height:1.5}.sa-login-privacy{text-align:center;font-size:12px;color:var(--sa-m);line-height:1.6}.sa-login-dismiss{position:absolute;right:12px;top:10px;display:grid;place-items:center;width:44px;height:44px;border:0;border-radius:24px;background:transparent;color:inherit;font-size:24px!important}.sa-login-dialog .sa-input:focus-visible{outline-color:var(--sa-ink)}.sa-login-dialog .sa-remember strong{font-weight:500}.sa-login button:focus-visible{outline:2px solid currentColor;outline-offset:3px}.sa-login [hidden]{display:none!important}
 @media(max-width:699px){.sa-login-dialog{margin:auto auto max(8px,env(safe-area-inset-bottom));max-height:calc(100dvh - 16px);padding-bottom:env(safe-area-inset-bottom)}}
 @media(prefers-reduced-motion:reduce){.sa-login *{transition:none!important}}
+.sa-login-origin{display:flex;align-items:center;gap:5px}.sa-login-origin .sa-login-icon{width:14px;height:14px}
+.sa-use{display:grid;gap:14px;justify-items:center;text-align:center;padding:22px 18px 18px}
+.sa-use-tile{width:52px;height:52px;border-radius:15px;display:grid;place-items:center;border:1px solid color-mix(in srgb,currentColor 16%,transparent)}.sa-use-tile .sa-login-icon{width:26px;height:26px;color:#8b5cf6}
+.sa-use h3{margin:0;font-size:22px;font-weight:650}
+.sa-use-acct{display:flex;align-items:center;gap:12px;width:100%;box-sizing:border-box;text-align:left;padding:12px 14px;border:1px solid color-mix(in srgb,currentColor 16%,transparent);border-radius:16px;min-width:0}
+.sa-use-acct>span:first-child{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;flex:none;background:color-mix(in srgb,currentColor 9%,transparent)}
+.sa-use-acct>span:last-child{display:grid;gap:2px;min-width:0}.sa-use-acct b{font-weight:550;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.sa-use-acct small{opacity:.62;font-size:13px}
+.sa-use .sa-row{flex-direction:column;width:100%;gap:10px}.sa-use .sa-row>.sa-btn{width:100%}
+.sa-use .sa-row>.sa-btn:not(.sa-pri){background:color-mix(in srgb,currentColor 9%,transparent);border-color:transparent}
+.sa-spin{width:16px;height:16px;border-radius:50%;border:2px solid color-mix(in srgb,currentColor 25%,transparent);border-top-color:currentColor;animation:sa-spin .8s linear infinite;display:inline-block;vertical-align:-3px;margin-right:8px}
+@keyframes sa-spin{to{transform:rotate(360deg)}}
 `;
 
 export function signInIcon(kind = 'globe') {
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   for (const [key, value] of Object.entries({ viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.7', 'aria-hidden': 'true', class: 'sa-login-icon' })) svg.setAttribute(key, value);
-  const paths = kind === 'eye' ? ['M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z', 'M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0'] : ['M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0', 'M3 12h18', 'M12 3c5 5 5 13 0 18-5-5-5-13 0-18'];
+  const paths = kind === 'lock' ? ['M6 11h12v9H6z', 'M8.5 11V8a3.5 3.5 0 0 1 7 0v3'] : kind === 'eye' ? ['M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z', 'M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0'] : ['M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0', 'M3 12h18', 'M12 3c5 5 5 13 0 18-5-5-5-13 0-18'];
   for (const d of paths) { const p = document.createElementNS(svg.namespaceURI, 'path'); p.setAttribute('d', d); svg.appendChild(p); }
   return svg;
 }
 
-export function presentSignIn(card, { origin, title = 'Sign in to continue', onDismiss, onSkip } = {}) {
+export function presentSignIn(card, { origin, title = 'Sign in to continue', primaryLabel = 'Sign in', skipLabel = 'Cancel', onDismiss, onSkip } = {}) {
   const make = (tag, cls, text) => { const n = document.createElement(tag); n.className = cls; if (text) n.textContent = text; return n; };
   const root = make('div', 'sa-login');
   const launcher = make('section', 'sa-login-launch');
   const identity = make('div', 'sa-login-identity');
-  const heading = make('div', ''); heading.append(make('h3', '', title), make('p', 'sa-login-origin', origin));
+  const originLine = make('p', 'sa-login-origin'); originLine.append(signInIcon('lock'), document.createTextNode(origin || ''));
+  const heading = make('div', ''); heading.append(make('h3', '', title), originLine);
   identity.append(signInIcon(), heading);
   const actions = make('div', 'sa-row');
-  const open = make('button', 'sa-btn sa-pri', 'Continue'); open.type = 'button'; open.setAttribute('aria-haspopup', 'dialog');
-  const skip = make('button', 'sa-btn', 'Skip'); skip.type = 'button';
+  const open = make('button', 'sa-btn sa-pri', primaryLabel); open.type = 'button'; open.setAttribute('aria-haspopup', 'dialog');
+  const skip = make('button', 'sa-btn', skipLabel); skip.type = 'button';
   actions.append(open, skip); launcher.append(identity, actions);
   const dialog = make('dialog', 'sa-login-dialog'); dialog.setAttribute('aria-label', title);
   const close = make('button', 'sa-login-dismiss', '×'); close.type = 'button'; close.setAttribute('aria-label', 'Close sign-in');

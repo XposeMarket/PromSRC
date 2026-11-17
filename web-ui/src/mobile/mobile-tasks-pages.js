@@ -384,7 +384,7 @@ function _pmRenderTaskDetail(listTask, detail, detailEvidence, tab) {
       <section><div class="pm-card-head">Progress</div>${_pmRenderProgressList(view.progress)}</section>`;
   }
   const composer = view.openChat
-    ? `<div class="pm-lr-actions"><button class="pm-btn pm-btn-primary" data-ny-open="${escapeHtml(String(merged.sessionId || ''))}">Open chat</button></div>`
+    ? `<div class="pm-lr-actions">${merged.supportedActions?.includes('resume') ? `<button class="pm-btn pm-btn-primary" data-task-action="resume" data-task-id="${id}">Resume</button>` : ''}<button class="pm-btn" data-ny-open="${escapeHtml(String(merged.sessionId || ''))}">Open chat</button></div>`
     : `<div class="pm-lr-actions">
         ${action ? `<button class="pm-btn ghost" data-task-action="${action.action}" data-task-id="${id}">${escapeHtml(action.label)}</button>` : ''}
         ${['failed', 'complete'].includes(_pmTaskFilter(merged.status)) ? `<button class="pm-btn ghost danger" data-task-action="delete" data-task-id="${id}">${ICONS.trash} Remove</button>` : ''}

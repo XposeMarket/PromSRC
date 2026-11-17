@@ -24,7 +24,7 @@ import { getConfig } from '../../config/config';
 import { normalizeReasoningEffort, normalizeSpeed, supportsFastSpeed } from '../../providers/reasoning-capabilities';
 import { registerBrowserSessionMetadata } from '../browser-tools';
 import { broadcastWS as gatewayBroadcastWS } from '../comms/broadcaster';
-import { addPendingRuntimeSteerForBackgroundAgent, addPendingRuntimeSteerForSession, finishLiveRuntime, registerLiveRuntime } from '../live-runtime-registry';
+import { addPendingRuntimeSteerForBackgroundAgent, addPendingRuntimeSteerForSession, finishLiveRuntime, registerLiveRuntime, findLiveRuntime } from '../live-runtime-registry';
 import { addMessage, getSession, getWorkspace, getActivatedToolCategories, persistBackgroundResultMessage, replaceHistory, setActivatedToolCategories, setWorkspace } from '../session';
 import { normalizeToolCategory } from '../tool-builder';
 import { getActiveAllowedWorkspaces, getActiveWorkspace, hasActiveWorkspaceScope, runWithWorkspace } from '../../tools/workspace-context';
@@ -271,7 +271,8 @@ export function registerBackgroundCompletionWake(callback: (sessionId: string) =
 
 function persistBackgroundReceipt(record: EphemeralBackgroundRecord): void {
   if (record.state === 'completed' || record.state === 'failed') {
-    record.continuationHistory = getSession(backgroundRuntimeSessionId(record)).history.slice();
+    const history = getSession(backgroundRuntimeSessionId(record)).history;
+    if (history.length) record.continuationHistory = history.slice();
   }
   saveBackgroundExecution(record);
   if (!record.spawnerSessionId) return;
@@ -761,8 +762,10 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
         });
       }
 
+      let executionError = '';
       // Forward every SSE event to the spawner's UI session so the user sees activity in real time
       const sendSSE = (event: string, data: any) => {
+        if (event === 'error') executionError = String(data?.message || data?.error || 'Background execution interrupted');
         const name = String(data?.action || data?.name || data?.tool || '');
         const callId = String(data?.toolCallId || data?.tool_call_id || data?.callId
           || (data?.stepNum !== undefined ? `step:${data.stepNum}:${name}` : ''));
@@ -857,6 +860,7 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
           return;
         }
 
+        if (executionError) throw new Error(executionError);
         const toolSummary = toolCallLog.length > 0
           ? `\n\n---\n**Tool calls made:**\n${toolCallLog.join('\n')}`
           : '';
@@ -1217,8 +1221,25 @@ export function backgroundSteer(backgroundId: string, message: string, options: 
 } = {}): EphemeralBackgroundSteerResult {
   const rec = _ephemeralBackgroundRuns.get(String(backgroundId || '').trim());
   if (!rec) return { id: String(backgroundId || '').trim(), state: 'failed', queued: false, error: 'Background agent not found.' };
+  if (isBackgroundTerminal(rec) && findLiveRuntime(runtime => runtime.taskId === rec.id && runtime.kind === 'background_agent')) {
+    return { id: rec.id, state: rec.state, queued: false, error: 'The prior execution is still settling. Retry after it stops.' };
+  }
   if (isBackgroundTerminal(rec)) {
-    return { id: rec.id, state: rec.state, queued: false, error: `Background agent is already ${rec.state}.` };
+    if (rec.state === 'completed' || rec.operatorCancelled || rec.error === 'Aborted by operator.') return { id: rec.id, state: rec.state, queued: false, error: `Background agent is already ${rec.state}; completed or cancelled work cannot be resumed.` };
+    if (!String(message || '').trim()) return { id: rec.id, state: rec.state, queued: false, error: 'A continuation message is required.' };
+    if (!_bgDeps?.handleChat || rec.customTools || rec.outstandingTools.length || !rec.workDir || !safeBackgroundDirectory(rec.workDir)) return { id: rec.id, state: rec.state, queued: false, error: rec.outstandingTools.length ? 'Resume blocked: unresolved tool outcomes must be reconciled before any action can be replayed.' : 'Resume blocked: original tools or working directory unavailable.' };
+    rec.resumed = true;
+    rec.state = 'queued';
+    delete rec.error; delete rec.result; delete rec.completedAt; delete rec.mergedAt; delete rec.deliveredAt;
+    rec.backgroundStream = createBackgroundAgentStream();
+    const history = getSession(backgroundRuntimeSessionId(rec)).history;
+    if (history.length) rec.continuationHistory = history.slice();
+    else if (rec.continuationHistory?.length) replaceHistory(backgroundRuntimeSessionId(rec), rec.continuationHistory as any, { historyChangeSource: 'replace_history' });
+    addMessage(backgroundRuntimeSessionId(rec), { role: 'user', content: message, timestamp: Date.now(), messageKind: 'background_agent_steer', backgroundAgentId: rec.id } as any);
+    rec.continuationHistory = getSession(backgroundRuntimeSessionId(rec)).history.slice();
+    persistBackgroundReceipt(rec);
+    rec.promise = startBackgroundExecution(rec, `${rec.prompt}\n\nContinuation instruction: ${message}`);
+    return { id: rec.id, state: rec.state, queued: true };
   }
   const text = String(message || '').trim();
   if (!text) return { id: rec.id, state: rec.state, queued: false, error: 'A steering message is required.' };

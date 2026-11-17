@@ -14,6 +14,7 @@ import { OWNER_CONSENT_HEADER, verifyConsent } from '../../security/secure-acces
 import { AccessError } from '../../security/secure-access';
 import { protectedPluginStorageAvailable } from '../../security/plugin-credential-state';
 import { getSecureAccess, secureAccessCredentials, secureAccessStatus, prepareProtectedLogin, submitProtectedLogin, cancelProtectedLogin } from '../../security/secure-access-runtime';
+import { isSecureAccessBlocking } from '../../security/secure-access-waits';
 const defaultRuntime = { getSecureAccess, secureAccessCredentials, secureAccessStatus, prepareProtectedLogin, submitProtectedLogin, cancelProtectedLogin };
 /** Gateway authentication/account access are mounted by server-v2. No secret bodies logged here. */
 export function secureInputTransportAllowed(req: Pick<Request, 'headers' | 'socket' | 'is'>): boolean {
@@ -133,7 +134,9 @@ const safe = (fn: (req: any) => any) => async (req: any, res: any) => {
 // `owner` tells each surface whether it can approve here; surfaces without proof render a fail-closed state.
 router.get('/api/secure-access/status', safe(async req => ({ ...(await secureAccessStatus()), owner: ownerSurfaceState(req, proof), entry: { canEnter: ownerProofOk(req, proof) || pairedEntryOk(req, entryProof) } })));
 
-router.get('/api/secure-access/requests', safe(req => ({ requests: getSecureAccess().listRequests(typeof req.query.sessionId === 'string' ? req.query.sessionId : undefined) })));
+router.get('/api/secure-access/requests', safe(req => ({ requests: getSecureAccess().listRequests(typeof req.query.sessionId === 'string' ? req.query.sessionId : undefined).map(r => ({ ...r, blocking: isSecureAccessBlocking(r.id) })) })));
+// True while (or after) a model turn is blocked on this card: the chat must not get a duplicate continuation message.
+router.get('/api/secure-access/blocking/:id', safe(req => ({ blocking: isSecureAccessBlocking(String(req.params.id || '')) })));
 router.get('/api/secure-access/credentials', safe(() => ({ credentials: secureAccessCredentials() })));
 router.post('/api/secure-access/requests', safe(req => ({ request: getSecureAccess().create({ sessionId: req.body.sessionId, label: req.body.label, purpose: req.body.purpose, origin: req.body.origin, mode: req.body.mode, identifier: req.body.identifier }) })));
 router.post('/api/secure-access/requests/:id/submit', safe(req => ({ credential: getSecureAccess().submit(req.params.id, { identifier: req.body.identifier, secret: req.body.secret, remember: req.body.remember === true, generated: req.body.generated === true, recoveryConfirmed: req.body.recoveryConfirmed === true }, { entryOnly: req.res.locals.pairedEntryOnly === true }) })));
