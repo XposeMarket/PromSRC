@@ -129,6 +129,8 @@ import { normalizeReasoningEffort } from '../../providers/reasoning-capabilities
 import { getSession, addMessage, getHistory, getHistoryForApiCall, getActiveHistoryForApiCall, getActiveHistoryForPersistence, getRecentToolObservationsForContext, getWorkingContextForContext, recordWorkingContextPacket, persistToolLog, getWorkspace, setWorkspace, cleanupSessions, listSessionSummaries, searchSessionSummaries, recordSessionCompaction, deleteSession, renameSession, setSessionPinned, reorderSessionSidebar, autoNameSession, replaceHistory, touchSession, flushSession, markSessionReadForMobile, markSessionUnreadForMobile, getCreativeMode, getCreativeReferences, formatCreativeReferencesForPrompt, getActivatedToolCategories, activateToolCategory, captureToolCategoryActivationState, restoreToolCategoryActivationState, getActivatedSkillIds, getActivatedSkillResources, activateSkillForSession, activateSkillResourceForSession, getSessionDisplayTitle, isBusinessContextEnabled, getSessionPersistenceStatus, type TurnOrigin, type VoiceRoomMetadata, type VoiceRoomParticipant } from '../session';
 import { SessionSettlementError, settleSessionWithGuards, unsettleSessionSafely } from '../session-settlement';
 import { clearChatModelRoute, setChatModelRoute } from '../session';
+import { bindExternalAgentForRequest } from '../external-agents/turn-runner';
+import { isExternalAgentId } from '../external-agents/types';
 import { mergeHistoryWithExistingMessageMetadata } from '../history-reconciliation';
 import { buildDurableChatTraceFromFrames, buildDurableChatTraceFromProcessEntries } from '../durable-chat-trace';
 import { extractTurnFileTouches, mergeTurnFileTouches, type TurnFileTouch } from '../file-change-summary';
@@ -2146,6 +2148,23 @@ router.post('/api/chat', async (req, res) => {
   } catch (err: any) {
     res.status(400).json({ error: err?.message || 'Invalid session id.' });
     return;
+  }
+  // Agent choice (stage 3 live agents): fixed on the first message of a new
+  // chat, immutable after. A different agent later is 409 agent_locked.
+  {
+    const rawAgent = req.body?.agent;
+    const requestedAgent = rawAgent && typeof rawAgent === 'object'
+      ? { id: String(rawAgent.id || '').trim().toLowerCase(), cwd: typeof rawAgent.cwd === 'string' ? rawAgent.cwd : undefined }
+      : (typeof rawAgent === 'string' && rawAgent.trim() ? { id: rawAgent.trim().toLowerCase() } : null);
+    if (requestedAgent && requestedAgent.id !== 'prometheus' && !isExternalAgentId(requestedAgent.id)) {
+      res.status(400).json({ success: false, code: 'unknown_agent', error: 'Unknown agent.' });
+      return;
+    }
+    const bound = bindExternalAgentForRequest(resolvedSessionId, requestedAgent as any);
+    if (!bound.ok) {
+      res.status(bound.status).json({ success: false, code: bound.code, error: bound.error, sessionId: resolvedSessionId });
+      return;
+    }
   }
   const turnTiming = createTurnTimingRecorder(resolvedSessionId, {
     startedAt: Date.now(),

@@ -5,7 +5,8 @@ import { createTurnTimingRecorder, type TurnTimingRecorder } from '../../../chat
 import { enqueuePostTurnJob } from '../../../chat/post-turn-queue';
 import { getConfig } from '../../../../config/config';
 import { captureModelUsageLogCursor, readModelUsageEventsForSession, readModelUsageEventsSince } from '../../../../providers/model-usage';
-import { getSession, addMessage, getHistory, recordWorkingContextPacket, persistToolLog, getWorkspace, type TurnOrigin } from '../../../session';
+import { getSession, addMessage, getHistory, recordWorkingContextPacket, persistToolLog, getWorkspace, getSessionExternalAgent, type TurnOrigin } from '../../../session';
+import { externalAgentRefusal, runExternalAgentTurn } from '../../../external-agents/turn-runner';
 import { buildDurableChatTraceFromFrames, buildDurableChatTraceFromProcessEntries } from '../../../durable-chat-trace';
 import { type BrainRunBudgetOptions } from '../../../agents-runtime/brain-run-budget';
 import { type TurnRouteSnapshot } from '../../../chat/turn-route-snapshot';
@@ -136,6 +137,40 @@ export async function runInteractiveTurn(
     waitMs: Date.now() - admissionWaitStartedAt,
     queueWaitMs: runtimeAdmissionLease.waitMs,
   });
+  // Live connected agent (stage 3: the user's own Codex). Branch BEFORE any
+  // Prometheus model route, slash/goal command, skill match, prompt, memory,
+  // compaction or tool. Prometheus only sends the user's text and stores the
+  // transcript. A bound chat never falls back to a native turn.
+  const externalBinding = getSessionExternalAgent(sessionId);
+  if (externalBinding) {
+    const automaticNativeTurn = flags?.syntheticGoalContinuation === true
+      || flags?.syntheticSubagentCompletion === true
+      || flags?.syntheticThreadSupervisionReview === true
+      || flags?.supervisionLoop === true
+      || flags?.syntheticInternalWatch === true
+      || flags?.syntheticRestartRecovery === true
+      || flags?.directSubagentChat === true
+      || /^\s*\[Timer fired\]/i.test(String(message || ''))
+      || isMainChatGoalContinuation(message)
+      || turnOriginInput?.channel === 'system';
+    if (automaticNativeTurn) {
+      const text = externalAgentRefusal(externalBinding, 'Automatic Prometheus turns (goals, timers, wakes, recovery)');
+      console.warn(`[ExternalAgent] Refused an automatic native turn for session ${sessionId} (bound to ${externalBinding.agentId}).`);
+      try { sendSSE('info', { message: text, source: 'external_agent' }); } catch {}
+      return { type: 'chat', text };
+    }
+    const externalResult = await runExternalAgentTurn({
+      sessionId,
+      message,
+      sendSSE,
+      abortSignal,
+      turnOrigin: normalizeTurnOrigin(turnOriginInput, sessionId),
+      clientRequestId: normalizeClientRequestId(requestMeta?.clientRequestId) || undefined,
+      attachmentCount: Array.isArray(attachments) ? attachments.length : 0,
+      attachmentPreviews,
+    }, externalBinding);
+    return externalResult as unknown as HandleChatResult;
+  }
   // Admission boundary: an explicit chatModelRoute or the current Main Chat
   // default is captured once and stays immutable through this whole turn.
   let turnRouteSnapshot: TurnRouteSnapshot;
