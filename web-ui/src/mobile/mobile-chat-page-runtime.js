@@ -14,6 +14,7 @@ import { createMobileChatCamera } from './mobile-chat-camera.js';
 import { finalizeMobileMainPlan } from './mobile-plan-finalize.js';
 import { createMobileSilenceBackstop, claimMobileFinalize, selectMobileTurnRowsToFinalize } from './mobile-turn-lifecycle.js';
 import { rememberMobileStreamOwner } from './mobile-stream-owner.js';
+import { mountMobileAgentRow, mobileAgentFieldForSend, mobileAgentStreamEvent, syncMobileAgentRequests } from '../chat/external-agent-mobile.js';
 import { attachNativePicker } from './mobile-native-picker.js';
 import { mountSecureAccessDock, createSecureAccessContinuation } from '../features/secure-access/secure-access-core.js';
 import { installComposerSecretGuard } from '../features/secure-access/protected-plugin-entry.js';
@@ -1003,6 +1004,9 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
   const targetChip = page.querySelector('#pm-chat-target-chip');
   const projectChip = page.querySelector('#pm-new-chat-project');
   const contextDock = page.querySelector('#pm-new-chat-context-dock');
+  // Live connected agent row (first row of the dock; hidden unless an agent is on).
+  if (contextDock) mountMobileAgentRow(contextDock, { request: mobileGatewayFetch });
+  else if (requestedSession) syncMobileAgentRequests(requestedSession, mobileGatewayFetch).catch(() => {});
   const micBtn = page.querySelector('#pm-chat-mic-btn');
   const modeLauncher = page.querySelector('#pm-chat-mode-launcher');
   const modeVoiceButton = page.querySelector('#pm-chat-mode-voice');
@@ -7747,12 +7751,14 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       clientRequestId,
       excludedSkillIds: excludedSkillIds.length ? excludedSkillIds : undefined,
       selectedSkillIds: selectedSkillIds.length ? selectedSkillIds : undefined,
+      agent: mobileAgentFieldForSend(actualSessionId),
     }, {
       onAccepted: () => { requestAccepted = true; },
       onEvent: (evt) => {
         hideReconnectingStatus();
         noteMobileLiveStreamActivity(actualSessionId);
         window.__pmMobileContextStreamEvent?.(evt, { sessionId: actualSessionId });
+        if (mobileAgentStreamEvent(evt, actualSessionId, mobileGatewayFetch)) return;
         const applied = applyMobileChatStreamEvent(aiTurn, evt);
         if (applied === 'final' || applied === 'done' || applied === 'error') finishAiTurn();
       },

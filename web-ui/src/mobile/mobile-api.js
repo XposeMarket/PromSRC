@@ -2507,7 +2507,7 @@ export async function requestMobileUpdate({ action = 'check', confirm = false, s
  *
  * Returns an { abort } controller.
  */
-export function streamChat({ message, sessionId = MOBILE_CHAT_SESSION_ID, attachments, attachmentPreviews, signal, callerContext, clientRequestId, excludedSkillIds, selectedSkillIds, idleTimeoutMs = MOBILE_STREAM_IDLE_TIMEOUT_MS }, handlers = {}) {
+export function streamChat({ message, sessionId = MOBILE_CHAT_SESSION_ID, attachments, attachmentPreviews, signal, callerContext, clientRequestId, excludedSkillIds, selectedSkillIds, agent, idleTimeoutMs = MOBILE_STREAM_IDLE_TIMEOUT_MS }, handlers = {}) {
   const ctrl = new AbortController();
   // A caller/Stop abort is a stop. The idle watchdog's internal abort is a
   // transport stall and must reach onError as a recoverable disconnect.
@@ -2561,6 +2561,8 @@ export function streamChat({ message, sessionId = MOBILE_CHAT_SESSION_ID, attach
         callerContext: typeof callerContext === 'string' && callerContext.trim() ? callerContext.trim() : undefined,
         excludedSkillIds: Array.isArray(excludedSkillIds) && excludedSkillIds.length ? excludedSkillIds : undefined,
         selectedSkillIds: Array.isArray(selectedSkillIds) && selectedSkillIds.length ? selectedSkillIds : undefined,
+        // Live connected agent chosen on the new-chat dock (first message only).
+        agent: agent && typeof agent === 'object' && agent.id ? agent : undefined,
       }),
       signal: ctrl.signal,
     };
