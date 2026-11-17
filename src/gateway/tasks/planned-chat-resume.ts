@@ -20,7 +20,7 @@ export async function continuePlannedChat(id: string, runTurn?: typeof import('.
     const signal = { aborted: false, signal: controller.signal, reason: '' };
     const origin = sid.startsWith('mobile_') ? { channel: 'mobile' as const, surface: 'mobile_app' as const, device: 'phone' as const } : { channel: 'web' as const, surface: 'desktop_web' as const, device: 'desktop' as const };
     const runtimeId = registerLiveRuntime({ kind: 'main_chat', label: 'Resumed planned chat', sessionId: sid, source: 'web', detail: row.title, abortSignal: signal,
-      onAbort: reason => { signal.aborted = true; signal.reason = reason; controller.abort(); }, recoveryPolicy: 'mark_interrupted',
+      onAbort: () => { signal.aborted = true; controller.abort(); }, recoveryPolicy: 'mark_interrupted',
       recoveryData: { message: 'Continue the unfinished plan from its saved progress.', origin } });
     const message = 'Continue the unfinished plan from its saved progress. Do not repeat completed steps.';
     const context = `Saved plan: ${row.title}\n${row.runtimeProgress.items.map((item, i) => `${i + 1}. [${item.status}] ${item.text}`).join('\n')}\nKeep completed steps. Use complete_plan_step only with verified evidence.`;

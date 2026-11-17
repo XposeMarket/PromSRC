@@ -206,7 +206,7 @@ export function retriggerInterruptedMainChat(runtime: InterruptedMainChatRuntime
     clientRequestId: runtime.clientRequestId || undefined,
     abortSignal,
     deferTerminalCleanup: true,
-    onAbort: reason => { abortSignal.reason = reason; abortController.abort(); },
+    onAbort: () => abortController.abort(),
     recoveryPolicy: 'mark_interrupted',
     recoveryData: {
       ...stripInheritedRecoveryMarks(recoveryData),
