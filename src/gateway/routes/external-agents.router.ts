@@ -71,6 +71,23 @@ router.post('/api/external-agents/requests/:requestId/respond', (req, res) => {
   res.json({ success: true });
 });
 
+/** Which agent runs this chat (summary only; nothing from the agent's auth). */
+router.get('/api/external-agents/sessions/:sessionId', (req, res) => {
+  const binding = getSessionExternalAgent(String(req.params.sessionId || ''));
+  res.json({
+    success: true,
+    externalAgent: binding
+      ? {
+          agentId: binding.agentId,
+          cwd: binding.cwd,
+          hasUpstream: !!binding.upstreamSessionId,
+          ...(binding.lastTurn?.status ? { lastTurnStatus: binding.lastTurn.status } : {}),
+          upstreamMissing: binding.lastTurn?.status === 'failed' && /can't find this session/i.test(String(binding.lastTurn?.error || '')),
+        }
+      : null,
+  });
+});
+
 router.post('/api/external-agents/sessions/:sessionId/new-upstream', (req, res) => {
   const binding = startFreshUpstreamSession(String(req.params.sessionId || ''));
   if (!binding) {
