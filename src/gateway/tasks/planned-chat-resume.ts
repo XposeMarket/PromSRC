@@ -17,10 +17,11 @@ export async function continuePlannedChat(id: string, runTurn?: typeof import('.
   try {
     const runInteractiveTurn = runTurn || (await import('../routes/chat/pipeline/interactive-turn')).runInteractiveTurn;
     const controller = new AbortController();
-    const signal = { aborted: false, signal: controller.signal };
+    const signal = { aborted: false, signal: controller.signal, reason: '' };
+    const origin = sid.startsWith('mobile_') ? { channel: 'mobile' as const, surface: 'mobile_app' as const, device: 'phone' as const } : { channel: 'web' as const, surface: 'desktop_web' as const, device: 'desktop' as const };
     const runtimeId = registerLiveRuntime({ kind: 'main_chat', label: 'Resumed planned chat', sessionId: sid, source: 'web', detail: row.title, abortSignal: signal,
-      onAbort: () => { signal.aborted = true; controller.abort(); }, recoveryPolicy: 'mark_interrupted',
-      recoveryData: { message: 'Continue the unfinished plan from its saved progress.', origin: { channel: 'web', surface: 'desktop_web', device: 'desktop' } } });
+      onAbort: reason => { signal.aborted = true; signal.reason = reason; controller.abort(); }, recoveryPolicy: 'mark_interrupted',
+      recoveryData: { message: 'Continue the unfinished plan from its saved progress.', origin } });
     const message = 'Continue the unfinished plan from its saved progress. Do not repeat completed steps.';
     const context = `Saved plan: ${row.title}\n${row.runtimeProgress.items.map((item, i) => `${i + 1}. [${item.status}] ${item.text}`).join('\n')}\nKeep completed steps. Use complete_plan_step only with verified evidence.`;
     resumePlannedChatRun(row.runtimeId, runtimeId, sid);
@@ -30,9 +31,9 @@ export async function continuePlannedChat(id: string, runTurn?: typeof import('.
       if (event === 'progress_state') recordPlannedChatProgress(runtimeId, sid, data, row.title, row.runtimeId, row.originPrompt);
       if (event === 'error') failed = true;
       recordPlannedChatActivity(runtimeId, event, data);
-    }, undefined, signal, context, undefined, undefined, undefined, undefined, { runtimeId }, sid.startsWith('mobile_') ? { channel: 'mobile', surface: 'mobile_app', device: 'phone' } : undefined)
+    }, undefined, signal, context, undefined, undefined, undefined, undefined, { runtimeId }, origin)
       .catch(error => { failed = true; console.warn('[planned-chat] Resume failed:', error); })
-      .finally(() => { finishPlannedChatRun(runtimeId, signal.aborted ? 'interrupted' : failed ? 'failed' : 'completed'); finishLiveRuntime(runtimeId); resuming.delete(sid); });
+      .finally(() => { finishPlannedChatRun(runtimeId, signal.aborted ? (/watchdog|restart|shutdown/i.test(signal.reason) ? 'interrupted' : 'cancelled') : failed ? 'failed' : 'completed'); finishLiveRuntime(runtimeId); resuming.delete(sid); });
     return { success: true, sessionId: sid };
   } catch (error: any) { resuming.delete(sid); return { success: false, error: String(error?.message || error) }; }
 }

@@ -1534,7 +1534,7 @@ export async function handleChatUntraced(
       declaredPlanSummary = prior.title;
       resumedPlanContext = `Continue this saved plan without repeating completed steps:\n${prior.runtimeProgress.items.map((item, i) => `${i + 1}. [${item.status}] ${item.text}`).join('\n')}`;
       progressState.source = 'declared';
-      progressState.items = prior.runtimeProgress.items.map((item, index) => ({ id: `resumed_${index}`, text: item.text, status: item.status === 'completed' ? 'done' : item.status as RuntimeProgressItem['status'] }));
+      progressState.items = prior.runtimeProgress.items.map((item, index) => ({ id: `resumed_${index}`, text: item.text, status: item.status === 'completed' ? 'done' : item.status === 'failed' ? 'pending' : item.status as RuntimeProgressItem['status'] }));
       progressState.activeIndex = progressState.items.findIndex(item => !['done', 'skipped'].includes(item.status));
       stepCursor = Math.max(0, progressState.activeIndex);
       progressState.manualStepAdvance = true;

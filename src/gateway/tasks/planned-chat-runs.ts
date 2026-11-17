@@ -260,6 +260,8 @@ export class PlannedChatRunStore {
       return row.status === 'completed' && row.runtimeProgress.items.every(item => ['done', 'completed', 'skipped'].includes(item.status)) ? 'completed' : 'paused';
     };
     for (const row of rows) if (effective(row) === 'running' && !newestRunning.has(row.sessionId)) newestRunning.set(row.sessionId, row.runtimeId);
+    const newest = new Map<string, string>();
+    for (const row of rows) if (!newest.has(row.sessionId)) newest.set(row.sessionId, row.runtimeId);
     const superseded = new Set(rows.map(row => row.resumedFromRuntimeId).filter(Boolean));
     return rows.filter(row => !superseded.has(row.runtimeId)).map(row => {
       const { activity, originPrompt, ...rest } = row;
@@ -268,7 +270,7 @@ export class PlannedChatRunStore {
         ...rest,
         status: effective(row) === 'running' && newestRunning.get(row.sessionId) === row.runtimeId && pending.some(item => item.sessionId === row.sessionId && (typeof item.createdAt === 'number' ? item.createdAt : Date.parse(String(item.createdAt || ''))) >= row.createdAt) ? 'awaiting_user_input' : effective(row),
         source: 'Chat', channel: 'Chat', startedAt: row.createdAt, lastProgressAt: row.updatedAt,
-        currentStepIndex: row.runtimeProgress.activeIndex, supportedActions: effective(row) === 'paused' ? ['open_chat', 'resume'] : ['open_chat'],
+        currentStepIndex: row.runtimeProgress.activeIndex, supportedActions: effective(row) === 'paused' && newest.get(row.sessionId) === row.runtimeId && !pending.some(item => item.sessionId === row.sessionId) ? ['open_chat', 'resume'] : ['open_chat'],
         // Compact list fields; full originPrompt/activity come from the detail route.
         ...(originPrompt ? { originalAssignment: String(originPrompt).slice(0, 280) } : {}),
         ...(last ? { lastToolCall: { name: last.name, kind: last.kind, t: last.t } } : {}),
@@ -330,5 +332,5 @@ export function findResumableChatPlan(sessionId: string, message: string) {
   if (!/^\s*(?:continue|resume|pick up|keep going)\b/i.test(message)) return undefined;
   const newest = listPlannedChatRuns().find(row => row.sessionId === sessionId);
   if (newest?.status === 'paused') return store().get(newest.runtimeId);
-  return newest?.status === 'running' && newest.resumedFromRuntimeId ? store().get(newest.resumedFromRuntimeId) : undefined;
+  return newest?.status === 'running' && newest.resumedFromRuntimeId ? store().get(newest.runtimeId) : undefined;
 }

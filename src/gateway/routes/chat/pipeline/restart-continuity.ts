@@ -189,7 +189,7 @@ export function retriggerInterruptedMainChat(runtime: InterruptedMainChatRuntime
     ? Math.floor(priorRecoveryAttempts) + 1
     : 1;
   const abortController = new AbortController();
-  const abortSignal = { aborted: false, signal: abortController.signal };
+  const abortSignal = { aborted: false, signal: abortController.signal, reason: '' };
   const rootTurnContextId = String(recoveryData.rootTurnId || runtime.id || '').trim() || undefined;
   // Everything the interrupted runtime changed, plus what it had itself
   // inherited from earlier restarts of the same turn.
@@ -206,7 +206,7 @@ export function retriggerInterruptedMainChat(runtime: InterruptedMainChatRuntime
     clientRequestId: runtime.clientRequestId || undefined,
     abortSignal,
     deferTerminalCleanup: true,
-    onAbort: () => abortController.abort(),
+    onAbort: reason => { abortSignal.reason = reason; abortController.abort(); },
     recoveryPolicy: 'mark_interrupted',
     recoveryData: {
       ...stripInheritedRecoveryMarks(recoveryData),
@@ -346,7 +346,7 @@ export function retriggerInterruptedMainChat(runtime: InterruptedMainChatRuntime
       channelLabel: 'restart recovery',
     } as any, { disableCompactionCheck: true, disableMemoryFlushCheck: true });
   }).finally(() => {
-    finishPlannedChatRun(runtimeId, abortSignal.aborted ? 'interrupted' : plannedRunFailed ? 'failed' : 'completed');
+    finishPlannedChatRun(runtimeId, abortSignal.aborted ? (/watchdog|restart|shutdown/i.test(abortSignal.reason) ? 'interrupted' : 'cancelled') : plannedRunFailed ? 'failed' : 'completed');
     finishLiveRuntime(runtimeId);
     mainChatTurnCoordinator.release(admissionLease);
     setModelBusy(false);

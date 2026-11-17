@@ -26,6 +26,21 @@ async function main() {
  assert.equal(plans.listPlannedChatRuns()[0].status,'completed');
  assert.equal((await resume.continuePlannedChat(plans.listPlannedChatRuns()[0].id,run)).success,false,'completed immutable');
  assert.equal((await resume.continuePlannedChat('chat-plan:missing',run)).success,false);
- console.log('PASS original-thread Resume, saved context, one card, duplicate/terminal/missing guards');
+ const registry = require('../live-runtime-registry');
+ for (const [reason, expected] of [['operator_abort','cancelled'],['gateway_shutdown','paused']]) {
+   const id = `seed-${reason}`; plans.recordPlannedChatProgress(id,sid,progress,''); plans.finishPlannedChatRun(id,'failed');
+   for(let i=0;i<100 && plans.getPlannedChatRunDetail(id)?.status!=='paused';i++) await sleep();
+   assert.equal((await resume.continuePlannedChat(id,run)).success,true);
+   for(let i=0;i<100 && plans.listPlannedChatRuns()[0]?.runtimeId===id;i++) await sleep();
+   const active = registry.listLiveRuntimes().find((r:any)=>r.sessionId===sid);
+   registry.abortLiveRuntime(active.id,reason); release();
+   for(let i=0;i<100 && plans.listPlannedChatRuns()[0]?.status!==expected;i++) await sleep();
+   assert.equal(plans.listPlannedChatRuns()[0].status,expected);
+ }
+ const {buildNeedsYouItems}=require('../needs-you');
+ const pending=buildNeedsYouItems({proposals:[{id:'approval',status:'pending',requiresSrcEdit:true,sourceSessionId:sid}]});
+ assert.equal(pending[0].sessionId,sid,'sourceSessionId normalized before resume guard');
+ assert(!plans.listPlannedChatRuns(pending).find((r:any)=>r.sessionId===sid).supportedActions.includes('resume'),'pending approval hides Resume');
+ console.log('PASS original-thread Resume, saved context, one card, duplicate/terminal/missing guards, Stop cancellation, shutdown pause, normalized approval guard');
 }
 main().then(()=>process.exit(0),e=>{console.error(e);process.exit(1)});
