@@ -82,7 +82,7 @@ router.get('/api/external-agents/sessions/:sessionId', (req, res) => {
           cwd: binding.cwd,
           hasUpstream: !!binding.upstreamSessionId,
           ...(binding.lastTurn?.status ? { lastTurnStatus: binding.lastTurn.status } : {}),
-          upstreamMissing: binding.lastTurn?.status === 'failed' && /can't find this session/i.test(String(binding.lastTurn?.error || '')),
+          upstreamMissing: binding.lastTurn?.upstreamMissing === true || (binding.lastTurn?.status === 'failed' && /can't find this session/i.test(String(binding.lastTurn?.error || ''))),
         }
       : null,
   });
@@ -138,7 +138,7 @@ router.get('/api/external-agents/:id/folders', (req, res) => {
   const id = requireAgentId(req, res);
   if (!id) return;
   try {
-    const groups = listAgentGroups(id).groups
+    const groups = listAgentGroups(id === 'claude-code' ? 'claude' : id).groups
       .filter((group) => group.path)
       .sort((a, b) => b.updatedAt - a.updatedAt)
       .slice(0, 20)

@@ -94,6 +94,8 @@ export interface ExternalTurnInput {
   images?: Array<{ path: string }>;
   signal: AbortSignal;
   emit: (event: ExternalAgentEvent) => void;
+  /** Persist before the first upstream prompt. */
+  onSessionBound?: (upstreamSessionId: string) => void;
   /** Request card id factory input: the adapter builds everything except requestId/agentId/sessionId. */
   requestUser: (
     req: Omit<ExternalUserRequest, 'requestId' | 'agentId' | 'sessionId'>,
@@ -137,7 +139,7 @@ export interface ExternalAgentBinding {
   cwd: string;
   upstreamSessionId?: string;
   boundAt: string;
-  lastTurn?: { status: 'completed' | 'interrupted' | 'failed'; upstreamTurnId?: string; endedAt: string; error?: string };
+  lastTurn?: { status: 'completed' | 'interrupted' | 'failed'; upstreamTurnId?: string; endedAt: string; error?: string; upstreamMissing?: boolean };
 }
 
 /** Compact form carried on session summaries. Never carries anything from the agent's auth. */
@@ -165,6 +167,7 @@ export function normalizeExternalAgentBinding(input: any): ExternalAgentBinding 
     ...(lastStatus ? {
       lastTurn: {
         status: lastStatus,
+        ...(last.upstreamMissing === true ? { upstreamMissing: true } : {}),
         ...(String(last.upstreamTurnId || '').trim() ? { upstreamTurnId: String(last.upstreamTurnId).trim().slice(0, 300) } : {}),
         endedAt: String(last.endedAt || '').trim().slice(0, 40) || new Date().toISOString(),
         ...(String(last.error || '').trim() ? { error: String(last.error).trim().slice(0, 300) } : {}),

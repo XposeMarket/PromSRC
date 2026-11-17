@@ -503,17 +503,20 @@ export class CodexAdapter implements ExternalAgentAdapter {
           throw error;
         }
       }
+      input.onSessionBound?.(threadId);
+      if (input.signal.aborted) return { upstreamSessionId: threadId, status: 'interrupted', finalText: '' };
       input.emit({ type: 'state', phase: 'running' });
       const text = sanitizeAgentText(input.text);
       const boundThreadId = threadId;
       return await new Promise<ExternalTurnResult>((resolve) => {
-        const onAbort = () => this.interrupt(ctx, client);
+        const requestLifetime = new AbortController();
+        const onAbort = () => { requestLifetime.abort(); this.interrupt(ctx, client); };
         const ctx: TurnContext = {
           threadId: boundThreadId,
           turnId: '',
           emit: input.emit,
           requestUser: input.requestUser,
-          signal: input.signal,
+          signal: requestLifetime.signal,
           messageOrder: [],
           messageText: new Map(),
           outputTail: new Map(),
@@ -527,6 +530,7 @@ export class CodexAdapter implements ExternalAgentAdapter {
           finish: (status, error) => {
             if (ctx.done) return;
             ctx.done = true;
+            requestLifetime.abort();
             if (ctx.graceTimer) clearTimeout(ctx.graceTimer);
             this.turns.delete(boundThreadId);
             input.signal.removeEventListener('abort', onAbort);

@@ -4,6 +4,8 @@
  * enable/verify run the agent's own status path.
  */
 import { CodexAdapter } from './adapters/codex';
+import { ClaudeCodeAdapter } from './adapters/claude-code';
+import { AcpAdapter } from './adapters/acp';
 import { getExternalAgentEntry, readExternalAgentStore, updateExternalAgentEntry } from './store';
 import { cancelPendingRequests } from './pending-requests';
 import {
@@ -25,6 +27,8 @@ const DETECT_TTL_MS = 60_000;
 
 function ensureDefaults(): void {
   if (!adapters.has('codex')) adapters.set('codex', new CodexAdapter());
+  if (!adapters.has('claude-code')) adapters.set('claude-code', new ClaudeCodeAdapter());
+  for (const id of ['hermes', 'cursor', 'openclaw'] as const) if (!adapters.has(id)) adapters.set(id, new AcpAdapter(id));
 }
 
 /** Tests: replace an adapter (for example one that runs the fake app-server). */
@@ -67,7 +71,7 @@ function snapshotFrom(adapter: ManagedAdapter, found: boolean): ExternalAgentSna
     status = 'checking';
     statusText = `Checking ${adapter.name}…`;
   }
-  const fixHint = status === 'signed_out' ? `Run \`${adapter.id} login\` in a terminal, then Check again.` : undefined;
+  const fixHint = status === 'signed_out' ? `Sign in through your own ${adapter.name} installation, then Check again.` : undefined;
   return {
     id: adapter.id,
     name: adapter.name,

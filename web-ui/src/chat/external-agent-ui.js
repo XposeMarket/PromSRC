@@ -110,13 +110,14 @@ export async function loadAgentFolders(id) {
 export async function loadSessionBinding(sessionId, force = false) {
   const sid = String(sessionId || '').trim();
   if (!sid) return null;
-  if (!force && st.bindings.has(sid)) return st.bindings.get(sid);
+  if (!force && st.bindings.get(sid)) return st.bindings.get(sid);
   let binding = null;
   try {
     const data = await call(`/api/external-agents/sessions/${encodeURIComponent(sid)}`);
     binding = data?.externalAgent || null;
   } catch { binding = null; }
   st.bindings.set(sid, binding);
+  if (binding?.upstreamMissing) showMissingSession(sid);
   return binding;
 }
 
@@ -140,7 +141,7 @@ function cardHtml(req) {
   if (Array.isArray(d.questions)) {
     for (const q of d.questions) {
       const opts = Array.isArray(q.options) && q.options.length
-        ? `<div class="ea-card-choices">${q.options.map((o) => `<label class="ea-card-choice"><input type="radio" name="ea-q-${esc(req.requestId)}-${esc(q.id)}" value="${esc(o.id)}"><span>${esc(o.label)}</span></label>`).join('')}</div>`
+        ? `<div class="ea-card-choices">${q.options.map((o) => `<label class="ea-card-choice"><input type="${q.multi ? 'checkbox' : 'radio'}" name="ea-q-${esc(req.requestId)}-${esc(q.id)}" value="${esc(o.id)}"><span>${esc(o.label)}</span></label>`).join('')}</div>`
         : `<input class="ea-card-input" type="text" data-ea-q="${esc(q.id)}" autocomplete="off">`;
       rows.push(`<div class="ea-card-q" data-ea-qid="${esc(q.id)}"><div class="ea-card-q-prompt">${esc(q.prompt)}</div>${opts}</div>`);
     }
@@ -156,10 +157,10 @@ function cardHtml(req) {
 function collectAnswers(el, req) {
   const answers = {};
   for (const q of (req.detail?.questions || [])) {
-    const picked = el.querySelector(`input[name="ea-q-${CSS.escape(req.requestId)}-${CSS.escape(q.id)}"]:checked`);
+    const picked = [...el.querySelectorAll(`input[name="ea-q-${CSS.escape(req.requestId)}-${CSS.escape(q.id)}"]:checked`)];
     const typed = el.querySelector(`input[data-ea-q="${CSS.escape(q.id)}"]`);
-    const value = picked ? picked.value : (typed ? typed.value.trim() : '');
-    if (value) answers[q.id] = [value];
+    const values = picked.length ? picked.map((input) => input.value) : (typed?.value.trim() ? [typed.value.trim()] : []);
+    if (values.length) answers[q.id] = values;
   }
   return answers;
 }
@@ -216,6 +217,7 @@ export function removeExternalAgentRequest(requestId) {
 export async function syncExternalAgentRequests(sessionId) {
   const sid = String(sessionId || '').trim();
   for (const [id, entry] of st.cards) if (entry.request.sessionId !== sid) removeExternalAgentRequest(id);
+  for (const recovery of document.querySelectorAll('[data-ea-recovery-session]')) if (recovery.dataset.eaRecoverySession !== sid) recovery.remove();
   if (!sid || !cachedSessionBinding(sid)) return;
   try {
     const data = await call(`/api/external-agents/requests?sessionId=${encodeURIComponent(sid)}`);
@@ -223,6 +225,28 @@ export async function syncExternalAgentRequests(sessionId) {
     for (const req of (Array.isArray(data?.requests) ? data.requests : [])) { live.add(req.requestId); showExternalAgentRequest(req, sid); }
     for (const id of [...st.cards.keys()]) if (!live.has(id)) removeExternalAgentRequest(id);
   } catch { /* keep what is shown */ }
+}
+
+function showMissingSession(sessionId) {
+  const id = `ea-missing-${sessionId}`;
+  if (document.getElementById(id)) return;
+  const section = document.createElement('section');
+  section.id = id;
+  section.dataset.eaRecoverySession = sessionId;
+  section.className = 'ea-card';
+  section.innerHTML = '<p>The original agent session could not be found. Your chat history is still here.</p><button type="button">Start a new agent session in this chat</button><p role="status"></p>';
+  section.querySelector('button').addEventListener('click', async (event) => {
+    event.target.disabled = true;
+    try {
+      const data = await call(`/api/external-agents/sessions/${encodeURIComponent(sessionId)}/new-upstream`, { method: 'POST', body: {} });
+      if (data?.success === false) throw new Error(data.error || 'Could not start fresh.');
+      st.bindings.delete(String(sessionId));
+      section.remove();
+      await loadSessionBinding(sessionId, true);
+      notify();
+    } catch (error) { section.querySelector('[role=status]').textContent = error.message; event.target.disabled = false; }
+  });
+  cardHost().appendChild(section);
 }
 
 /** Stream hook: returns true when the event was an external-agent event. */
@@ -237,7 +261,13 @@ export function handleExternalAgentStreamEvent(event, sessionId) {
     removeExternalAgentRequest(event.requestId);
     return true;
   }
-  if (event.type === 'external_agent_state') return true;
+  if (event.type === 'external_agent_state') {
+    // The backend emits this only after binding. Do not clear selection on a failed send.
+    setAgentChoice('prometheus');
+    loadSessionBinding(sessionId, true).then(() => { notify(); }).catch(() => {});
+    if (event.phase === 'upstream_missing') showMissingSession(sessionId);
+    return true;
+  }
   if (event.type === 'done' || event.type === 'error') {
     for (const [id, entry] of st.cards) if (entry.request.sessionId === sessionId) removeExternalAgentRequest(id);
   }

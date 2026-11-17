@@ -14,6 +14,8 @@ import {
   onExternalAgentsChange, selectableAgents, setAgentChoice, syncExternalAgentRequests,
 } from './external-agent-ui.js';
 
+import { mountMinimalAgentComposer } from './external-agent-composer.js';
+
 const ui = { host: null, menuOpen: false, lastSession: '', lastEmpty: null, folders: [], typed: '' };
 
 function chatView() { return document.getElementById('chat-view'); }
@@ -34,7 +36,8 @@ function ensureHost() {
   ui.host.className = 'ea-switcher';
   ui.host.id = 'ea-agent-switcher';
   ui.host.hidden = true;
-  row.insertBefore(ui.host, row.firstChild);
+  const plus = row.querySelector('.ea-composer-more');
+  if (plus) plus.after(ui.host); else row.insertBefore(ui.host, row.firstChild);
   ui.host.addEventListener('click', onClick);
   ui.host.addEventListener('keydown', onKey);
   return ui.host;
@@ -61,6 +64,7 @@ function setModelReadOnly(agentId) {
 }
 
 function render() {
+  mountMinimalAgentComposer(selectableAgents().length > 0 || !!cachedSessionBinding(activeSession()));
   const host = ensureHost();
   if (!host) return;
   const sid = activeSession();
@@ -154,8 +158,6 @@ window.__promExternalAgent = {
     if (cachedSessionBinding(sessionId)) return undefined; // already bound: the server knows
     const field = agentFieldForNewChat();
     if (!field) return undefined;
-    setAgentChoice('prometheus');
-    loadSessionBinding(sessionId, true).then(() => render()).catch(() => {});
     return field;
   },
   onStreamEvent(event, sessionId) {

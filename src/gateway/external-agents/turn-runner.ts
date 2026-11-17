@@ -26,6 +26,8 @@ import { createPendingRequest } from './pending-requests';
 import { getExternalAgentAdapter, isExternalAgentUsable, registerLiveExternalTurn } from './registry';
 import type { ExternalAgentBinding, ExternalAgentEvent, ExternalAgentId, ExternalUserRequest } from './types';
 
+const activeExternalSessions = new Set<string>();
+
 export interface ExternalAgentRequestInput {
   id: ExternalAgentId | 'prometheus';
   cwd?: string;
@@ -195,6 +197,7 @@ export async function runExternalAgentTurn(params: ExternalTurnRunParams, bindin
   if (outer?.aborted || params.abortSignal?.aborted) controller.abort('operator_abort');
   else outer?.addEventListener('abort', onOuterAbort, { once: true });
   const unregister = registerLiveExternalTurn(binding.agentId, () => controller.abort('agent_disabled'));
+  activeExternalSessions.add(sessionId);
 
   let streamed = '';
   const emit = (event: ExternalAgentEvent) => {
@@ -257,12 +260,17 @@ export async function runExternalAgentTurn(params: ExternalTurnRunParams, bindin
       signal: controller.signal,
       emit,
       requestUser,
+      onSessionBound: (upstreamSessionId) => {
+        const current = getSessionExternalAgent(sessionId) || binding;
+        setSessionExternalAgent(sessionId, { ...current, upstreamSessionId });
+      },
     });
   } catch (error: any) {
     result = { upstreamSessionId: binding.upstreamSessionId || '', status: 'failed' as const, finalText: '', error: String(error?.message || error).slice(0, 300) };
   } finally {
     outer?.removeEventListener('abort', onOuterAbort);
     unregister();
+    activeExternalSessions.delete(sessionId);
   }
 
   const endedAt = Date.now();
@@ -273,6 +281,7 @@ export async function runExternalAgentTurn(params: ExternalTurnRunParams, bindin
     ...(result.upstreamSessionId ? { upstreamSessionId: result.upstreamSessionId } : {}),
     lastTurn: {
       status: result.status,
+      ...(result.upstreamMissing ? { upstreamMissing: true } : {}),
       ...(result.upstreamTurnId ? { upstreamTurnId: result.upstreamTurnId } : {}),
       endedAt: new Date(endedAt).toISOString(),
       ...(result.error ? { error: result.error } : {}),
@@ -313,7 +322,7 @@ export async function runExternalAgentTurn(params: ExternalTurnRunParams, bindin
 /** Explicit user action after "can't find this session": the next message starts a fresh upstream session. */
 export function startFreshUpstreamSession(sessionId: string): ExternalAgentBinding | null {
   const binding = getSessionExternalAgent(sessionId);
-  if (!binding) return null;
+  if (!binding || activeExternalSessions.has(sessionId)) return null;
   const { upstreamSessionId: _drop, lastTurn: _last, ...rest } = binding;
   return setSessionExternalAgent(sessionId, { ...rest }) || null;
 }

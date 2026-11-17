@@ -112,6 +112,33 @@ async function main(): Promise<void> {
       assert.strictEqual(types.sanitizeAgentText('a😀b', 2), 'a');
     }
 
+    // Review: identity is bound before prompt submission; cancelling at binding sends no prompt.
+    {
+      const a = makeAdapter();
+      fs.writeFileSync(logFile, '');
+      const abort = new AbortController();
+      let bound = '';
+      const result = await a.runTurn({ sessionId: 'bind-stop', cwd: workspace, text: 'must not send', signal: abort.signal,
+        emit: () => {}, requestUser: async () => ({ optionId: 'decline' }),
+        onSessionBound: (id) => { bound = id; assert.ok(!readLog().some((x) => x.method === 'turn/start')); abort.abort(); },
+      });
+      assert.ok(bound);
+      assert.equal(result.status, 'interrupted');
+      assert.ok(!readLog().some((x) => x.method === 'turn/start'));
+      await a.shutdown();
+    }
+    // Unanswered request cards expire on normal completion and process death.
+    for (const text of ['PENDING_END', 'PENDING_CRASH']) {
+      const a = makeAdapter();
+      let seen = false;
+      await a.runTurn({ sessionId: text, cwd: workspace, text, signal: new AbortController().signal, emit: () => {},
+        requestUser: (card, opts) => { seen = true; return pending.createPendingRequest({ ...card, agentId: 'codex', sessionId: text }, { signal: opts?.signal, cancelResponse: { optionId: 'decline' } }); },
+      });
+      assert.equal(seen, true);
+      assert.equal(pending.listPendingRequests(text).length, 0, 'terminal turn cannot retain answerable cards');
+      await a.shutdown();
+    }
+
     // ── first turn: thread/start with ONLY cwd; deltas in order; second turn reuses the thread ──
     const adapter = makeAdapter('ready');
     let threadId = '';
@@ -445,6 +472,7 @@ async function runSessionChecks(ctx: Record<string, any>): Promise<void> {
     const missing = await runner.runExternalAgentTurn({ sessionId: 'ea_codex', message: 'x', sendSSE: () => undefined }, sessions.getSessionExternalAgent('ea_codex')!);
     assert.match(missing.text, /can't find this session/);
     assert.strictEqual(sessions.getSessionExternalAgent('ea_codex')!.upstreamSessionId, 'missing-1');
+    assert.strictEqual(sessions.getSessionExternalAgent('ea_codex')!.lastTurn?.upstreamMissing, true, 'missing-session recovery survives normalization and reload');
     assert.ok(!runner.startFreshUpstreamSession('ea_codex')!.upstreamSessionId, 'fresh only on explicit request');
   } finally {
     await adapter.shutdown().catch(() => undefined);
