@@ -205,6 +205,7 @@ try {
   const started = await orchestrator.connect(created.id, { approved: true });
   assert.equal(started.state, 'awaiting_oauth');
   assert.equal(expectedAccountReceived, 'account-1');
+  // Fresh connect with no stored token requests exactly the plan scopes.
   assert.deepEqual(requestedScopesReceived, ['repo']);
   assert.equal(started.requiredUserAction?.type, 'oauth');
   const pending = await orchestrator.continue(created.id);
@@ -325,6 +326,56 @@ try {
     assert.equal(isConnectionRecord({ ...base, account: { provider: 'google_drive', token: 'x' } }), false, 'unknown identity keys stay rejected');
   }
 
+
+  // 2026-11-16 Gmail: Plugins reconnect planned read-only scopes and replaced a
+  // send-capable token with gmail.readonly, so every send 403'd. A reconnect must
+  // carry forward scopes already granted on the stored token (never downgrade).
+  {
+    const upDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prom-oauth-nodowngrade-'));
+    try {
+      const READ = 'https://www.googleapis.com/auth/gmail.readonly';
+      const SEND = 'https://www.googleapis.com/auth/gmail.send';
+      const MODIFY = 'https://www.googleapis.com/auth/gmail.modify';
+      let received;
+      let connected = true;
+      const gmailBridge = {
+        id: 'gmail', name: 'Gmail',
+        start: (_acct, scopes) => { received = scopes; return { success: true, authUrl: 'https://accounts.test/auth?state=x', flowId: 'gmail' }; },
+        poll: async () => null,
+        isConnected: () => connected,
+        metadata: () => ({ grantedScopes: connected ? [READ, SEND, MODIFY, 'openid'] : undefined, refreshAvailable: true, clientIdConfigured: true, clientSecretConfigured: true }),
+        verify: async () => ({ account: { provider: 'gmail', providerAccountId: 'g1', email: 'g@example.test' } }),
+        clear: () => {},
+      };
+      const upAdapters = new ConnectionAdapterRegistry();
+      upAdapters.register(new ConnectorOAuthConnectionAdapter({ gmail: gmailBridge }));
+      const upPlans = {
+        resolve: async ({ serviceId, requestedCapabilities }) => ({
+          id: 'gmail-plan', serviceId, serviceName: 'Gmail', pluginId: 'gmail',
+          strategy: { id: 'gmail-oauth', adapter: 'connector-oauth', capabilities: requestedCapabilities, readOnly: true,
+            authentication: { type: 'oauth2', scopes: [READ, 'openid'] }, configuration: {} },
+          requestedCapabilities, summary: 'Gmail read-only plan.', createdAt: new Date().toISOString(),
+        }),
+      };
+      const upOrch = new ConnectionOrchestrator({ attempts: new ConnectionAttemptStore(upDir), connections: new ConnectionStore(upDir), adapters: upAdapters, activity: new ConnectionActivityStore(upDir), plans: upPlans });
+      const a = upOrch.create({ serviceId: 'gmail', requestedCapabilities: [], readOnly: true });
+      await upOrch.plan(a.id);
+      const s = await upOrch.connect(a.id, { approved: true });
+      assert.equal(s.state, 'awaiting_oauth');
+      assert(received.includes(SEND) && received.includes(MODIFY), `reconnect must keep granted send/modify scopes, got ${received}`);
+      assert(received.includes(READ));
+      assert.deepEqual(s.requiredUserAction?.scopes, received, 'the sign-in card must show the scopes actually requested');
+
+      // Fresh install (no stored token): still exactly the read-only plan, no write scopes added.
+      connected = false;
+      const b = upOrch.create({ serviceId: 'gmail', requestedCapabilities: [], readOnly: true });
+      await upOrch.plan(b.id);
+      await upOrch.connect(b.id, { approved: true });
+      assert.deepEqual(received, [READ, 'openid'], 'first connect must not request write scopes');
+    } finally {
+      fs.rmSync(upDir, { recursive: true, force: true });
+    }
+  }
 
   console.log('PASS: connector OAuth contract, PKCE/state/callback safeguards, account continuity, grants, safe exposure, and revoke lifecycle');
 } finally {
