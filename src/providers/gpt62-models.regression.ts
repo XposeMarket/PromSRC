@@ -32,7 +32,7 @@ for (const [model, input, output, cacheRead, cacheWrite] of [
     assert.equal(long.cacheWriteCostMicros, cacheWrite * 200);
     assert.equal(long.inputCostMicros, (272001 - 100) * input * 2);
   }
-  for (const file of ['pages/SettingsPage.js', 'mobile/mobile-settings.js', 'components/agent-model-picker.js', 'legacy-desktop-bootstrap.js']) {
+  for (const file of ['pages/SettingsPage.js', 'mobile/mobile-settings.js', 'mobile/mobile-model-badge.js', 'components/agent-model-picker.js', 'legacy-desktop-bootstrap.js']) {
     assert.ok(fs.readFileSync(`web-ui/src/${file}`, 'utf8').includes(`'${model}'`), file);
   }
 }
