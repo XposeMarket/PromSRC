@@ -18,7 +18,7 @@ const invoke = new Function('getProcessSupervisor', 'boundedProcessWait', 'proce
 const runs = [];
 try {
   fs.writeFileSync(path.join(fixture, 'long.cjs'), 'setTimeout(()=>{console.log("final-output");process.exit(0)},32000)');
-  const run = await supervisor.spawn({ command: `"${process.execPath}" long.cjs`, cwd: fixture, mode: 'background', captureOutput: true }); runs.push(run);
+  const run = await supervisor.spawn({ command: `${process.platform === 'win32' ? '& ' : ''}"${process.execPath}" long.cjs`, cwd: fixture, mode: 'background', captureOutput: true }); runs.push(run);
   for (const native of [true, false]) {
     const controller = new AbortController(); const token = { aborted: false, ...(native ? { signal: controller.signal } : {}) };
     const started = Date.now(); const timer = setTimeout(() => { token.aborted = true; if (native) controller.abort(); }, 150);
@@ -27,11 +27,11 @@ try {
   }
   let progress = 0; const started = Date.now();
   const result = await invoke({ runId: run.runId, timeout_ms: 300000 }, { sendSSE: (event) => { assert.equal(event, 'tool_progress'); progress++; } });
-  assert.equal(result.error, false); assert.match(result.result, /final-output/); assert.ok(Date.now() - started > 30000); assert.ok(progress >= 2);
+  assert.equal(result.error, false, JSON.stringify(result)); assert.match(result.result, /final-output/); assert.ok(Date.now() - started > 30000); assert.ok(progress >= 2);
   assert.equal(result.extra.terminationReason, 'exit');
   const missing = await invoke({ runId: 'nonexistent' }, {}); assert.equal(missing.error, true);
   fs.writeFileSync(path.join(fixture, 'fail.cjs'), 'console.error("expected failure");process.exit(7)');
-  const failed = await supervisor.spawn({ command: `"${process.execPath}" fail.cjs`, cwd: fixture, mode: 'background', captureOutput: true }); runs.push(failed);
+  const failed = await supervisor.spawn({ command: `${process.platform === 'win32' ? '& ' : ''}"${process.execPath}" fail.cjs`, cwd: fixture, mode: 'background', captureOutput: true }); runs.push(failed);
   const failedResult = await invoke({ runId: failed.runId, timeoutMs: 10000 }, {});
   assert.equal(failedResult.error, true); assert.match(failedResult.result, /expected failure/);
   console.log('PASS real >30s completion in one wait, progress, native/main-style and flag/agent-style abort without kill, missing run, nonzero exit');
