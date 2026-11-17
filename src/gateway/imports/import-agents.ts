@@ -4,6 +4,7 @@ import path from 'path';
 
 import {
   discoverImportSources,
+  agentConversationRoot,
   isTranscriptFile,
   listCodexRolloutFiles,
   type DiscoveredImportSource,
@@ -443,6 +444,72 @@ function indexAgent(ctx: AgentContext): IndexedFile[] {
   });
 }
 
+/**
+ * Async warm-up of the grouping cache for an opened agent. Same context and file
+ * list as indexAgent, but cold files are read in batches of 24 with a macrotask
+ * yield between batches, so a first open of a large agent cannot block the event
+ * loop. Cache hits never yield. Unknown agent or no files: return quietly; the
+ * synchronous listing that runs afterwards reports the real error.
+ */
+export type AgentListing = { agentId: string; root: string; adapter: ImportAdapterId; files: AgentIndexedFile[] };
+
+export async function warmAgentIndex(agentId: string, options: ImportDiscoveryOptions = {}): Promise<AgentListing> {
+  const id = agentIdForProvider(agentId);
+  const { root, adapter } = agentConversationRoot(id, options);
+  const files: AgentIndexedFile[] = [];
+  // Reject symlinks in every root component, not just entries below it.
+  let component = root;
+  while (true) {
+    const stat = await fs.promises.lstat(component);
+    if (stat.isSymbolicLink()) throw new Error('Linked transcript roots are not supported.');
+    const parent = path.dirname(component);
+    if (parent === component) break;
+    component = parent;
+  }
+  let visited = 0;
+  const walk = async (current: string, relative: string, depth: number): Promise<void> => {
+    if (depth > MAX_SCAN_DEPTH || files.length >= MAX_AGENT_FILES) return;
+    let entries: fs.Dirent[];
+    try { entries = await fs.promises.readdir(current, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      if (files.length >= MAX_AGENT_FILES) break;
+      if (++visited % 24 === 0) await new Promise<void>((resolve) => setImmediate(resolve));
+      const id = relative ? `${relative}/${entry.name}` : entry.name;
+      if (!isSafeTranscriptName(id) || entry.isSymbolicLink()) continue;
+      const absolutePath = path.join(current, entry.name);
+      let stat: fs.Stats;
+      try { stat = await fs.promises.lstat(absolutePath); } catch { continue; }
+      if (stat.isSymbolicLink()) continue;
+      if (stat.isDirectory()) { await walk(absolutePath, id, depth + 1); continue; }
+      if (!stat.isFile() || !(adapter === 'codex-local' ? /^rollout[-_].+\.jsonl$/i.test(entry.name) : isTranscriptFile(id, adapter))) continue;
+      const file = { id, absolutePath, bytes: stat.size, updatedAt: stat.mtimeMs };
+      const facts = groupingFacts(file, adapter);
+      files.push({ ...file, group: groupForFile(file, adapter, facts), sourceConversationId: facts.sourceConversationId });
+    }
+  };
+  await walk(root, '', 0);
+  files.sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id));
+  return { agentId: id, root, adapter, files };
+}
+
+
+/**
+ * For the search module (import-search.ts): the opened-row file listing with
+ * grouping, plus the agent root. Same reads as `listAgentChats` (stat listing
+ * plus the cached grouping head); no transcript body is read here.
+ */
+export function listAgentIndexedFiles(agentId: string, options: ImportDiscoveryOptions = {}): { agentId: string; root: string; adapter: ImportAdapterId; files: AgentIndexedFile[] } {
+  const ctx = agentContext(agentId, options);
+  return { agentId: ctx.agentId, root: ctx.root, adapter: ctx.adapter, files: indexAgent(ctx) };
+}
+
+export type AgentIndexedFile = IndexedFile;
+
+/** The stage 1 credential-name guard, exported so search never opens what listing refuses. */
+export function isSafeAgentTranscriptName(relativePath: string): boolean {
+  return isSafeTranscriptName(relativePath);
+}
+
 function summarizeGroups(files: IndexedFile[]): { groups: AgentGroup[]; looseChats: number; totalChats: number } {
   const groups = new Map<string, AgentGroup>();
   let looseChats = 0;
@@ -461,9 +528,9 @@ function summarizeGroups(files: IndexedFile[]): { groups: AgentGroup[]; looseCha
   };
 }
 
-export function listAgentGroups(agentId: string, options: ImportDiscoveryOptions = {}): { agentId: string; groups: AgentGroup[]; looseChats: number; totalChats: number } {
-  const ctx = agentContext(agentId, options);
-  return { agentId: ctx.agentId, ...summarizeGroups(indexAgent(ctx)) };
+export function listAgentGroups(agentId: string, options: ImportDiscoveryOptions = {}, listing?: AgentListing): { agentId: string; groups: AgentGroup[]; looseChats: number; totalChats: number } {
+  const ctx = listing || agentContext(agentId, options);
+  return { agentId: ctx.agentId, ...summarizeGroups(listing?.files || indexAgent(ctx as AgentContext)) };
 }
 
 export interface AgentChatPageOptions extends ImportDiscoveryOptions {
@@ -475,11 +542,11 @@ export interface AgentChatPageOptions extends ImportDiscoveryOptions {
   preview?: boolean;
 }
 
-export function listAgentChats(agentId: string, options: AgentChatPageOptions = {}): {
+export function listAgentChats(agentId: string, options: AgentChatPageOptions = {}, listing?: AgentListing): {
   agentId: string; chats: AgentChatEntry[]; total: number; offset: number; limit: number; hasMore: boolean;
 } {
-  const ctx = agentContext(agentId, options);
-  let files = indexAgent(ctx);
+  const ctx = listing || agentContext(agentId, options);
+  let files = listing?.files || indexAgent(ctx as AgentContext);
   if (options.group === 'loose') files = files.filter((file) => !file.group);
   else if (options.group) files = files.filter((file) => file.group?.key === options.group);
   const offset = Math.max(0, Math.floor(Number(options.offset) || 0));
@@ -597,9 +664,10 @@ export function preflightAgentSelection(
   selection: AgentSelection,
   isAlreadyImported: (input: { provider: string; adapter: ImportAdapterId; sourceConversationId: string }) => boolean,
   options: ImportDiscoveryOptions = {},
+  listing?: AgentListing,
 ): AgentPreflight {
-  const ctx = agentContext(agentId, options);
-  const resolved = resolveAgentSelection(indexAgent(ctx), selection);
+  const ctx = listing ? { ...listing, source: { provider: listing.agentId, label: KNOWN_AGENTS[listing.agentId]?.name || listing.agentId } } : agentContext(agentId, options);
+  const resolved = resolveAgentSelection(listing?.files || indexAgent(ctx as AgentContext), selection);
   let alreadyImported = 0;
   for (const file of resolved.files) {
     if (file.sourceConversationId && isAlreadyImported({ provider: ctx.source.provider, adapter: ctx.adapter, sourceConversationId: file.sourceConversationId })) {
