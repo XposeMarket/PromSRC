@@ -551,6 +551,9 @@ let sessionIndexCache: SessionIndex | null = null;
 // poll made one stale summary turn into a full transcript-corpus rebuild on
 // every request/restart, which is catastrophic on large workspaces.
 let sessionIndexRepairCheckAttempted = false;
+// mtime of _index.json when it was last loaded from disk. Transcripts written
+// after it may have missed their index commit (crash between the two renames).
+let sessionIndexDiskMtimeMs = 0;
 let sidebarOrderSequence = 0;
 
 function allocateSidebarOrder(): number {
@@ -1249,6 +1252,11 @@ function loadSessionIndex(): SessionIndex {
         if (normalized) summaries[normalized.id] = normalized;
       }
     }
+    try {
+      sessionIndexDiskMtimeMs = fs.statSync(p).mtimeMs;
+    } catch {
+      sessionIndexDiskMtimeMs = 0;
+    }
     sessionIndexCache = {
       summaries,
       updatedAt: Number.isFinite(Number(parsed?.updatedAt)) ? Number(parsed.updatedAt) : Date.now(),
@@ -1671,59 +1679,103 @@ function isStaleIndexedSummary(summary: SessionSummary): boolean {
     || (summary.messageCount > 1 && preview === String(summary.title || '').trim());
 }
 
-function scheduleStaleSessionSummaryRepair(index: SessionIndex): void {
+function shouldIndexSummary(summary: SessionSummary): boolean {
+  return summary.messageCount > 0 || !!summary.pinnedAt || !!summary.voiceRoom;
+}
+
+function scheduleSessionIndexReconcile(index: SessionIndex): void {
   if (sessionIndexRepairPromise) return;
   const staleIds = Object.values(index.summaries).filter(isStaleIndexedSummary).map((summary) => summary.id);
-  if (!staleIds.length) return;
-  sessionIndexRepairPromise = repairStaleSessionSummaries(staleIds)
+  sessionIndexRepairPromise = reconcileSessionIndex(staleIds, sessionIndexDiskMtimeMs)
     .catch((err) => {
-      console.warn('[Session] Stale session index repair failed:', err);
+      console.warn('[Session] Background session index reconcile failed:', err);
     })
     .finally(() => {
       sessionIndexRepairPromise = null;
     });
 }
 
+const yieldToEventLoop = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+/** Summary for one chat without blocking: in-memory session first, else an async file read. */
+async function readSessionSummaryAsync(id: string): Promise<SessionSummary | null> {
+  const cached = sessions.get(id);
+  if (cached) return buildSessionSummary(cached);
+  let raw: string;
+  try {
+    raw = await fs.promises.readFile(getSessionPath(id), 'utf-8');
+  } catch {
+    return null;
+  }
+  try {
+    return buildSessionSummaryFromData(id, JSON.parse(raw));
+  } catch {
+    return null;
+  }
+}
+
 /**
- * Rehydrate only the listed index rows, one transcript at a time with an event
- * loop yield between files. Rows rewritten by a live session write while a
- * file was being read are left alone: that write is newer than the transcript.
- * Rows whose transcript is missing or unreadable are kept as-is.
+ * Background index reconcile, one transcript at a time with event-loop yields:
+ * 1. Rehydrate only the stale rows. A row rewritten by a live save while its
+ *    file was being read is left alone (that write is newer). Rows whose
+ *    transcript is missing or unreadable are kept as-is.
+ * 2. Re-add chats whose transcript is newer than the index we loaded but have
+ *    no row (a crash between the transcript and index renames). Older
+ *    unindexed files (empty chats) are skipped by mtime, never read.
+ * The final index write waits until the snapshot drain is idle, then saves
+ * synchronously, so no in-flight async index rename can overwrite it.
  */
-async function repairStaleSessionSummaries(staleIds: string[]): Promise<void> {
+async function reconcileSessionIndex(staleIds: string[], indexMtimeMs: number): Promise<void> {
   let changed = false;
   for (const id of staleIds) {
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await yieldToEventLoop();
     const before = loadSessionIndex().summaries[id];
     if (!before) continue;
-    let summary: SessionSummary | null = null;
-    const cached = sessions.get(id);
-    if (cached) {
-      summary = buildSessionSummary(cached);
-    } else {
-      let raw: string;
-      try {
-        raw = await fs.promises.readFile(getSessionPath(id), 'utf-8');
-      } catch {
-        continue;
-      }
-      try {
-        summary = buildSessionSummaryFromData(id, JSON.parse(raw));
-      } catch {
-        summary = null;
-      }
-    }
+    const summary = await readSessionSummaryAsync(id);
     if (!summary) continue;
     const current = loadSessionIndex();
     if (current.summaries[id] !== before) continue;
-    if (summary.messageCount > 0 || !!summary.pinnedAt || !!summary.voiceRoom) {
+    if (shouldIndexSummary(summary)) {
       current.summaries[id] = { ...summary, sidebarOrder: summary.sidebarOrder ?? before.sidebarOrder };
     } else {
       delete current.summaries[id];
     }
     changed = true;
   }
-  if (changed) saveSessionIndex(loadSessionIndex());
+
+  if (indexMtimeMs > 0) {
+    let names: string[] = [];
+    try {
+      names = await fs.promises.readdir(SESSION_DIR);
+    } catch {
+      names = [];
+    }
+    for (const name of names) {
+      if (!name.endsWith('.json') || name === '_index.json') continue;
+      const id = name.slice(0, -5);
+      if (!isSafeStorageId(id) || INTERNAL_SESSION_ID_RE.test(id)) continue;
+      if (loadSessionIndex().summaries[id]) continue;
+      let mtimeMs = 0;
+      try {
+        mtimeMs = (await fs.promises.stat(getSessionPath(id))).mtimeMs;
+      } catch {
+        continue;
+      }
+      if (mtimeMs <= indexMtimeMs) continue;
+      const summary = await readSessionSummaryAsync(id);
+      if (!summary || !shouldIndexSummary(summary)) continue;
+      const current = loadSessionIndex();
+      if (current.summaries[id]) continue; // a live save indexed it meanwhile
+      current.summaries[id] = summary;
+      changed = true;
+    }
+  }
+
+  if (!changed) return;
+  while (sessionSnapshotDrainActive || sessionSnapshotDrainScheduled || pendingSessionSnapshots.size) {
+    await new Promise<void>((resolve) => sessionPersistenceIdleWaiters.add(resolve));
+  }
+  saveSessionIndex(loadSessionIndex());
 }
 
 /** Resolves once any in-flight background index repair has finished. */
@@ -1754,7 +1806,7 @@ function getSortedSessionSummaries(
         // read that stalls boot past the supervisor health probe; a row whose
         // preview legitimately starts with its title used to retrigger it on
         // every boot. Stale rows are rehydrated individually in the background.
-        scheduleStaleSessionSummaryRepair(index);
+        scheduleSessionIndexReconcile(index);
       }
     }
   }

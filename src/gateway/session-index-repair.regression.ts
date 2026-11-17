@@ -4,14 +4,16 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-// Regression for the Nov 17 2026 boot stall: one stale index row (for example a
+// Regression for the Nov 17 2026 boot stall: one stale index row (a
 // single-message chat whose 60-char preview equals its 60-char title) used to
 // trigger a synchronous rebuild of EVERY transcript on the first sidebar list
 // request after boot. On a ~2 GB corpus that blocked the event loop ~25 s, the
 // supervisor health probe timed out and every page loaded empty.
 
-function writeSession(dir: string, id: string, data: Record<string, unknown>): void {
-  fs.writeFileSync(path.join(dir, `${id}.json`), JSON.stringify({ id, ...data }));
+function writeSession(dir: string, id: string, data: Record<string, unknown>, mtimeMs?: number): void {
+  const file = path.join(dir, `${id}.json`);
+  fs.writeFileSync(file, JSON.stringify({ id, ...data }));
+  if (mtimeMs !== undefined) fs.utimesSync(file, mtimeMs / 1000, mtimeMs / 1000);
 }
 
 async function main(): Promise<void> {
@@ -23,6 +25,7 @@ async function main(): Promise<void> {
 
   try {
     const now = Date.now();
+    const indexTime = now - 60_000;
     const longText = 'Pls fix these formatting issues on the approval cards in the task page and chat overlay too';
     const assistant = {
       role: 'assistant',
@@ -35,52 +38,72 @@ async function main(): Promise<void> {
     writeSession(sessionDir, 'web_healthy', {
       channel: 'web', createdAt: now - 10_000, lastActiveAt: now - 1_000,
       history: [{ role: 'user', content: 'hello there', timestamp: now - 2_000 }, assistant],
-    });
-    // Stale row: single long user message, so the truncated preview equals the title.
+    }, indexTime - 5_000);
+    // Genuinely stale row (old lastModel derivation version) -> repaired in the background.
     writeSession(sessionDir, 'web_stale', {
       channel: 'web', createdAt: now - 20_000, lastActiveAt: now - 5_000,
-      history: [{ role: 'user', content: longText, timestamp: now - 5_000 }],
-    });
-    // On disk but missing from the index. A full rebuild would add it; a targeted
-    // repair must not, so its absence proves no corpus scan ran on the request path.
-    writeSession(sessionDir, 'web_unindexed', {
-      channel: 'web', createdAt: now - 30_000, lastActiveAt: now - 3_000,
-      history: [{ role: 'user', content: 'not in the index', timestamp: now - 3_000 }, assistant],
-    });
+      history: [{ role: 'user', content: 'stale chat', timestamp: now - 5_000 }, assistant],
+    }, indexTime - 5_000);
+    // One-message chat whose truncated preview equals its title, current version.
+    // This is the row that forced a full rebuild every boot. It must NOT be
+    // treated as stale: its transcript deliberately differs, so any re-read
+    // would change the indexed title.
+    writeSession(sessionDir, 'web_one_msg', {
+      channel: 'web', createdAt: now - 25_000, lastActiveAt: now - 6_000, title: 'TRANSCRIPT TITLE',
+      history: [{ role: 'user', content: longText, timestamp: now - 6_000 }],
+    }, indexTime - 5_000);
+    // Unindexed and OLDER than the index (e.g. an empty chat): must not be read or added,
+    // proving no corpus-wide rebuild ran.
+    writeSession(sessionDir, 'web_old_unindexed', {
+      channel: 'web', createdAt: now - 30_000, lastActiveAt: now - 30_000,
+      history: [{ role: 'user', content: 'old orphan', timestamp: now - 30_000 }, assistant],
+    }, indexTime - 10_000);
+    // Unindexed and NEWER than the index: a crash between the transcript and
+    // index renames. Background reconcile must re-add it.
+    writeSession(sessionDir, 'web_crash_orphan', {
+      channel: 'web', createdAt: now - 2_000, lastActiveAt: now - 2_000,
+      history: [{ role: 'user', content: 'saved right before a crash', timestamp: now - 2_000 }, assistant],
+    }, now);
 
     const indexRow = (id: string, extra: Record<string, unknown>) => ({
       id, channel: 'web', createdAt: now - 10_000, lastActiveAt: now - 1_000, lastMessageAt: now - 1_000,
       lastModelVersion: 2, lastModel: { providerId: 'anthropic', model: 'claude-opus-5-5' }, ...extra,
     });
-    fs.writeFileSync(path.join(sessionDir, '_index.json'), JSON.stringify({
-      updatedAt: now,
+    const indexPath = path.join(sessionDir, '_index.json');
+    fs.writeFileSync(indexPath, JSON.stringify({
+      updatedAt: indexTime,
       summaries: {
         web_healthy: indexRow('web_healthy', { messageCount: 2, title: 'hello there', preview: 'Fixed.' }),
-        web_stale: indexRow('web_stale', {
-          messageCount: 1, title: longText.slice(0, 60), preview: longText, lastModelVersion: 1,
-        }),
+        web_stale: indexRow('web_stale', { messageCount: 2, title: 'stale chat', preview: 'Fixed.', lastModelVersion: 1 }),
+        web_one_msg: indexRow('web_one_msg', { messageCount: 1, title: longText.slice(0, 60), preview: longText }),
       },
     }));
+    fs.utimesSync(indexPath, indexTime / 1000, indexTime / 1000);
 
     const sessionApi = await import('./session');
 
     const started = Date.now();
     const first = sessionApi.listSessionSummaries({ channel: 'web', scope: 'all', state: 'all', limit: 50, offset: 0 });
-    const ids = first.sessions.map((s) => s.id).sort();
-    assert.deepEqual(ids, ['web_healthy', 'web_stale'], 'first list is served from the index without a corpus rebuild');
+    assert.deepEqual(
+      first.sessions.map((s) => s.id).sort(),
+      ['web_healthy', 'web_one_msg', 'web_stale'],
+      'first list is served straight from the index, no synchronous corpus rebuild',
+    );
     assert.ok(Date.now() - started < 2_000, 'first list returns promptly');
 
+    // A live save lands while the background reconcile is running. The final
+    // index must contain both the live row and the repaired rows.
+    sessionApi.addMessage('web_live', { role: 'user', content: 'typed during boot', timestamp: Date.now() });
     await sessionApi.waitForSessionIndexRepair();
+    await sessionApi.flushPendingSessionWrites();
 
-    const index = JSON.parse(fs.readFileSync(path.join(sessionDir, '_index.json'), 'utf-8'));
-    assert.equal(index.summaries.web_unindexed, undefined, 'background repair touches only stale rows, never the whole corpus');
+    const index = JSON.parse(fs.readFileSync(indexPath, 'utf-8'));
     assert.equal(index.summaries.web_stale.lastModelVersion, 2, 'stale row was rehydrated from its transcript');
-    assert.equal(index.summaries.web_stale.messageCount, 1);
+    assert.equal(index.summaries.web_one_msg.title, longText.slice(0, 60), 'one-message preview==title row is not re-read');
     assert.equal(index.summaries.web_healthy.title, 'hello there', 'healthy rows are left as-is');
-
-    // A second list in the same process must not schedule another repair pass.
-    sessionApi.listSessionSummaries({ channel: 'web', scope: 'all', state: 'all', limit: 50, offset: 0 });
-    await sessionApi.waitForSessionIndexRepair();
+    assert.equal(index.summaries.web_old_unindexed, undefined, 'older unindexed transcripts are not scanned in');
+    assert.ok(index.summaries.web_crash_orphan, 'transcript newer than the index is recovered into it');
+    assert.ok(index.summaries.web_live, 'a live save during reconcile is not lost');
 
     console.log('session index repair regression: ok');
   } finally {
@@ -89,8 +112,7 @@ async function main(): Promise<void> {
 }
 
 async function emptyIndexStillRebuilds(): Promise<void> {
-  // Separate process-level module state is not available here, so the empty-index
-  // path is covered by running this file's second scenario in a child process.
+  // Module state is per process, so the empty-index path runs in a child.
   const { spawnSync } = await import('node:child_process');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'prom-session-index-empty-'));
   try {
