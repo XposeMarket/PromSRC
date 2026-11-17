@@ -450,7 +450,7 @@ function openImportCatalogSheet(onChanged) {
   const paint = (head) => {
     list.innerHTML = `${head ? `<p class="pm-import-head">${escapeHtml(head)}</p>` : ''}${entries.length ? entries.map((e, i) => `
       <div class="pm-import-row">
-        <div class="pm-import-row-text"><strong>${escapeHtml(e.name)}</strong><span>${escapeHtml(e.catalogLabel)}${e.category ? ` · ${escapeHtml(e.category)}` : ''}</span><small>${escapeHtml(String(e.description || '').slice(0, 140))}</small>${e.note || (!e.installable && e.reason) ? `<small class="pm-import-note">${escapeHtml(e.note || e.reason)}</small>` : ''}</div>
+        <div class="pm-import-row-text"><strong>${escapeHtml(e.name)}</strong><span>${escapeHtml(e.catalogLabel)}${e.category ? ` · ${escapeHtml(e.category)}` : ''}</span><small>${escapeHtml(String(e.description || '').length > 140 ? String(e.description).slice(0, 139).trimEnd() + '…' : String(e.description || ''))}</small>${e.note || (!e.installable && e.reason) ? `<small class="pm-import-note">${escapeHtml(e.note || e.reason)}</small>` : ''}</div>
         ${e.imported ? '<span class="pm-import-done">Imported</span>' : e.installable ? `<button type="button" class="pm-import-btn" data-import-index="${i}">Import</button>` : ''}
       </div>`).join('') : '<p class="pm-plugins-empty">No matches.</p>'}`;
   };
