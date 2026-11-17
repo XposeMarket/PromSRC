@@ -340,9 +340,116 @@ async function main(): Promise<void> {
   }
 }
 
-/** Session binding + turn branch checks. Filled in once turn-runner.ts lands. */
-async function runSessionChecks(_ctx: Record<string, any>): Promise<void> {
-  // placeholder (replaced in the session-binding commit)
+/** Session binding + turn branch checks (fake app-server only). */
+async function runSessionChecks(ctx: Record<string, any>): Promise<void> {
+  const { root, workspace, fakeCommand, fakeEnv } = ctx;
+  const sessions = await import('../session');
+  const store = await import('./store');
+  const registry = await import('./registry');
+  const runner = await import('./turn-runner');
+  const { CodexAdapter } = await import('./adapters/codex');
+  store.setExternalAgentStorePathForTests(path.join(root, 'external-agents.json'));
+  store.updateExternalAgentEntry('codex', { enabled: true, lastStatus: 'ready', lastStatusText: 'Connected' });
+  const adapter = new CodexAdapter({ resolveCommand: fakeCommand, env: fakeEnv('ready'), clientVersion: 'test', requestTimeoutMs: 5000 });
+  registry.setExternalAgentAdapterForTests(adapter);
+
+  try {
+    // Native session: no binding, never enters the branch, cannot be bound later.
+    sessions.getSession('ea_native');
+    sessions.addMessage('ea_native', { role: 'user', content: 'hello', timestamp: Date.now() } as any, { disableCompactionCheck: true, disableMemoryFlushCheck: true });
+    const nativeBind = runner.bindExternalAgentForRequest('ea_native', null);
+    assert.deepStrictEqual(nativeBind, { ok: true, binding: null, created: false });
+    assert.strictEqual(sessions.getSessionExternalAgent('ea_native'), undefined);
+    const late = runner.bindExternalAgentForRequest('ea_native', { id: 'codex' });
+    assert.strictEqual(late.ok, false);
+    assert.strictEqual((late as any).code, 'agent_locked');
+
+    // The branch sits before every native step, and the native path still calls handleChat.
+    const itSource = fs.readFileSync(path.join(__dirname, '..', 'routes', 'chat', 'pipeline', 'interactive-turn.ts'), 'utf8');
+    const branchAt = itSource.indexOf('const externalBinding = getSessionExternalAgent(sessionId);');
+    assert.ok(branchAt > 0, 'branch present');
+    for (const marker of ['captureChatTurnRouteSnapshot(sessionId)', 'handleMainChatGoalCommand(', 'autoAttachChatInputResources(', 'addMessage(sessionId, userMsg', 'handleChat(']) {
+      const at = itSource.indexOf(marker);
+      assert.ok(at > branchAt, `branch precedes ${marker}`);
+    }
+    const hcSource = fs.readFileSync(path.join(__dirname, '..', 'routes', 'chat', 'pipeline', 'handle-chat.ts'), 'utf8');
+    assert.ok(hcSource.includes('const boundAgent = getSessionExternalAgent(String(sessionId'), 'handleChat backstop present');
+
+    // Imported chat + live agent are rejected.
+    const imported = sessions.getSession('ea_imported');
+    (imported as any).externalImport = { version: 1, source: { provider: 'codex' }, continuation: 'prometheus', sourceResume: 'unsupported', importedAt: new Date().toISOString() };
+    const importBind = runner.bindExternalAgentForRequest('ea_imported', { id: 'codex' });
+    assert.strictEqual((importBind as any).code, 'imported_chat');
+    assert.throws(() => sessions.setSessionExternalAgent('ea_imported', { version: 1, agentId: 'codex', cwd: workspace, boundAt: new Date().toISOString() }));
+
+    // New chat binds on the first message; a different agent later is agent_locked.
+    const bind = runner.bindExternalAgentForRequest('ea_codex', { id: 'codex', cwd: workspace });
+    assert.ok(bind.ok && bind.created && bind.binding?.agentId === 'codex');
+    assert.strictEqual((runner.bindExternalAgentForRequest('ea_codex', { id: 'prometheus' }) as any).code, 'agent_locked');
+    assert.ok(runner.bindExternalAgentForRequest('ea_codex', { id: 'codex' }).ok);
+    assert.strictEqual((runner.bindExternalAgentForRequest('ea_badcwd', { id: 'codex', cwd: path.join(root, 'nope') }) as any).code, 'bad_cwd');
+
+    // A real turn through the runner: SSE mapping, transcript, binding update.
+    const events: Array<[string, any]> = [];
+    const binding = sessions.getSessionExternalAgent('ea_codex')!;
+    const result = await runner.runExternalAgentTurn({ sessionId: 'ea_codex', message: 'hi there', sendSSE: (e, d) => events.push([e, d]) }, binding);
+    assert.strictEqual(result.text, 'Hello world');
+    const names = events.map(([e]) => e);
+    assert.deepStrictEqual(names.filter((n) => n === 'token').length, 2);
+    assert.ok(names.indexOf('tool_call') < names.indexOf('tool_result'));
+    const toolCall = events.find(([e]) => e === 'tool_call')![1];
+    assert.strictEqual(toolCall.observed, true, 'tool rows are observed (display only)');
+    assert.strictEqual(toolCall.external, true);
+    const history = sessions.getSession('ea_codex').history;
+    assert.strictEqual(history[history.length - 2].role, 'user');
+    assert.strictEqual(history[history.length - 1].content, 'Hello world');
+    assert.strictEqual((history[history.length - 1] as any).externalAgent.agentId, 'codex');
+    const after = sessions.getSessionExternalAgent('ea_codex')!;
+    assert.ok(after.upstreamSessionId?.startsWith('thr-'));
+    assert.strictEqual(after.lastTurn?.status, 'completed');
+    assert.strictEqual(sessions.getSession('ea_codex').title, 'hi there', 'named without a model call');
+
+    // Persisted file carries the binding and nothing from the agent's auth.
+    sessions.flushSession('ea_codex');
+    const files = fs.readdirSync(root, { recursive: true } as any).map(String).filter((f: string) => /ea_codex\.json$/.test(f));
+    assert.ok(files.length >= 1, 'session file written');
+    const saved = JSON.parse(fs.readFileSync(path.join(root, files[0]), 'utf8'));
+    assert.strictEqual(saved.externalAgent.agentId, 'codex');
+    assert.ok(!JSON.stringify(saved).includes('someone@example.com'));
+
+    // Slash commands that drive the native loop are refused with a plain line.
+    const slash = await runner.runExternalAgentTurn({ sessionId: 'ea_codex', message: '/goal ship it', sendSSE: () => undefined }, after);
+    assert.strictEqual(slash.externalAgent.status, 'refused');
+    assert.match(slash.text, /doesn't apply here/);
+
+    // Timers cannot target a bound chat.
+    const timers = await import('../timers/timer-store');
+    assert.throws(() => timers.createMainChatTimer({ sessionId: 'ea_codex', instruction: 'later', dueAt: new Date(Date.now() + 60_000) }), /connected agent/);
+
+    // Turning the agent off: bound chat stays readable and says so; on again: usable.
+    await registry.disableExternalAgent('codex');
+    assert.strictEqual(adapter.isRunning(), false, 'idle process closed');
+    const off = await runner.runExternalAgentTurn({ sessionId: 'ea_codex', message: 'still there?', sendSSE: () => undefined }, after);
+    assert.strictEqual(off.externalAgent.status, 'refused');
+    assert.match(off.text, /turned off/);
+    assert.strictEqual((runner.bindExternalAgentForRequest('ea_new', { id: 'codex' }) as any).code, 'agent_unavailable');
+    assert.ok(sessions.getSessionExternalAgent('ea_codex'), 'binding kept while off');
+    const back = await registry.enableExternalAgent('codex');
+    assert.strictEqual(back?.status, 'ready');
+    const again = await runner.runExternalAgentTurn({ sessionId: 'ea_codex', message: 'back', sendSSE: () => undefined }, sessions.getSessionExternalAgent('ea_codex')!);
+    assert.strictEqual(again.externalAgent.status, 'completed');
+
+    // Upstream session missing: explicit message, never silently replaced.
+    sessions.setSessionExternalAgent('ea_codex', { ...sessions.getSessionExternalAgent('ea_codex')!, upstreamSessionId: 'missing-1' });
+    await adapter.shutdown();
+    const missing = await runner.runExternalAgentTurn({ sessionId: 'ea_codex', message: 'x', sendSSE: () => undefined }, sessions.getSessionExternalAgent('ea_codex')!);
+    assert.match(missing.text, /can't find this session/);
+    assert.strictEqual(sessions.getSessionExternalAgent('ea_codex')!.upstreamSessionId, 'missing-1');
+    assert.ok(!runner.startFreshUpstreamSession('ea_codex')!.upstreamSessionId, 'fresh only on explicit request');
+  } finally {
+    await adapter.shutdown().catch(() => undefined);
+    registry.setExternalAgentAdapterForTests(null);
+  }
 }
 
 main().then(() => process.exit(0)).catch((error) => {
