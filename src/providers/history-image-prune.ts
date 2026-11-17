@@ -29,13 +29,74 @@ export function historyImageKeepFromEnv(): number {
   return Number.isFinite(n) && n >= 0 ? Math.floor(n) : DEFAULT_HISTORY_IMAGE_KEEP;
 }
 
+export const DEFAULT_HISTORY_IMAGE_MAX_AGE = 4;
+
+/**
+ * Age bound for unprotected images: an image is pruned once more than this many
+ * assistant messages come after the message holding it. 0 = no age bound.
+ */
+export function historyImageMaxAgeFromEnv(): number {
+  const raw = String(process.env.PROMETHEUS_HISTORY_IMAGE_MAX_AGE ?? '').trim();
+  if (!raw) return DEFAULT_HISTORY_IMAGE_MAX_AGE;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : DEFAULT_HISTORY_IMAGE_MAX_AGE;
+}
+
 function isImagePart(part: any): boolean {
   return !!part && typeof part === 'object' && (part.type === 'image_url' || part.type === 'image' || part.type === 'input_image');
 }
 
-function isInjectedSystemUserMessage(message: ChatMessage): boolean {
-  if (!Array.isArray(message.content)) return false;
-  return message.content.some((part: any) => part?.type === 'text' && /^\s*\[SYSTEM:/.test(String(part.text || '')));
+/**
+ * Leading bracket tag of a runtime-injected user message: "[SYSTEM: ...]" (tool-category
+ * activation, handle-chat.ts), "[MEDIA_DIRECT_OBSERVATION]" (media-analysis-preview.ts:28),
+ * "[SAVED_REFERENCE_OBSERVATION]" (media-analysis-preview.ts:108),
+ * "[REFERENCE_OBSERVATION_UNAVAILABLE]" (handle-chat.ts:2828), "[MEDIA_OBSERVATION_UNAVAILABLE]" (handle-chat.ts:2820ish).
+ */
+const RUNTIME_BRACKET_TAG = /^\s*\[(SYSTEM:|[A-Z][A-Z0-9_ ]{2,}\])/;
+
+/**
+ * Unmarked runtime user strings (no bracket tag), pushed as role user by the gateway/adapter.
+ * Prefix match on the trimmed leading text.
+ */
+export const RUNTIME_CONTINUATION_PREFIXES: readonly string[] = [
+  // handle-chat.ts:4513, 4559, 4653, 4678 — post-check "Do not finalize yet..." guards.
+  'Do not finalize yet',
+  // anthropic-adapter.ts:737 — resume prompt after completed tool results.
+  'Continue the active user request from the completed results above.',
+];
+
+/**
+ * Unmarked runtime strings whose leading text is variable (handle-chat.ts:4603 prefixes an
+ * advisor-hint line), so they are matched anywhere in the first 400 characters.
+ */
+export const RUNTIME_CONTINUATION_CONTAINS: readonly string[] = [
+  'Do not stop. Call the next browser tool now and continue execution.',
+];
+
+/** First text of string or array content (array: first text part, any position). */
+function firstText(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    for (const part of content as any[]) {
+      if (part?.type === 'text' && typeof part.text === 'string') return part.text;
+    }
+  }
+  return '';
+}
+
+/**
+ * True for user-role messages the runtime injected rather than the human typed.
+ * Such messages must never take the protected "real user turn" slot.
+ */
+export function isRuntimeUserMessage(message: ChatMessage): boolean {
+  if (message?.role !== 'user') return false;
+  const text = firstText(message.content);
+  if (!text) return false;
+  if (RUNTIME_BRACKET_TAG.test(text)) return true;
+  const trimmed = text.trimStart();
+  if (RUNTIME_CONTINUATION_PREFIXES.some((p) => trimmed.startsWith(p))) return true;
+  const head = trimmed.slice(0, 400);
+  return RUNTIME_CONTINUATION_CONTAINS.some((s) => head.includes(s));
 }
 
 /** Count images inside a content array, including nested tool_result content. */
@@ -83,22 +144,37 @@ export interface HistoryImagePruneResult {
   prunedImages: number;
 }
 
-export function pruneHistoryImages(messages: ChatMessage[], keep = historyImageKeepFromEnv()): HistoryImagePruneResult {
+export function pruneHistoryImages(
+  messages: ChatMessage[],
+  keep = historyImageKeepFromEnv(),
+  maxAge = historyImageMaxAgeFromEnv(),
+): HistoryImagePruneResult {
   const list = Array.isArray(messages) ? messages : [];
   let totalImages = 0;
   for (const m of list) totalImages += countImages(m?.content);
-  if (keep <= 0 || totalImages <= keep) return { messages: list, totalImages, prunedImages: 0 };
+  if (keep <= 0) return { messages: list, totalImages, prunedImages: 0 };
 
-  // Latest real user turn: its own attachments are protected.
+  // Latest real user turn (not a runtime-injected message): its own attachments are protected.
   let protectedIndex = -1;
   for (let i = list.length - 1; i >= 0; i -= 1) {
     const m = list[i];
-    if (m?.role === 'user' && !isInjectedSystemUserMessage(m)) { protectedIndex = i; break; }
+    if (m?.role === 'user' && !isRuntimeUserMessage(m)) { protectedIndex = i; break; }
+  }
+
+  // assistantsAfter[i] = assistant messages strictly after index i (age of an image in message i).
+  const assistantsAfter = new Array<number>(list.length).fill(0);
+  let seenAssistants = 0;
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    assistantsAfter[i] = seenAssistants;
+    if (list[i]?.role === 'assistant') seenAssistants += 1;
   }
 
   let keptUnprotected = 0;
   let prunedImages = 0;
+  let currentAge = 0;
   const shouldPrune = () => {
+    // Age bound first: an old unprotected image never takes a count slot.
+    if (maxAge > 0 && currentAge > maxAge) { prunedImages += 1; return true; }
     if (keptUnprotected < keep) { keptUnprotected += 1; return false; }
     prunedImages += 1;
     return true;
@@ -107,6 +183,7 @@ export function pruneHistoryImages(messages: ChatMessage[], keep = historyImageK
   for (let i = list.length - 1; i >= 0; i -= 1) {
     const m = list[i];
     if (i === protectedIndex || !Array.isArray(m?.content) || countImages(m.content) === 0) continue;
+    currentAge = assistantsAfter[i];
     const pruned = pruneContent(m.content as any[], shouldPrune);
     if (pruned.changed) out[i] = { ...m, content: pruned.content as any };
   }

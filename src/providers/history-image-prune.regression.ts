@@ -128,6 +128,61 @@ async function adapterE2E(): Promise<void> {
   assert.ok(JSON.stringify(body.messages).includes('[SYSTEM: Browser screenshot e5]'));
 }
 
+// 6. Runtime-injected user turns never take the protected (real user) slot.
+const attachments3 = (): ChatMessage => ({ role: 'user', content: [img('p1'), img('p2'), img('p3'), { type: 'text', text: 'look at these' }] as any });
+{
+  // (i) string "[SYSTEM: ...]" runtime message after the user's attachments.
+  const history: ChatMessage[] = [attachments3(), asst('a'), tool('a'), { role: 'user', content: '[SYSTEM: tool categories refreshed: browser_automation]' }];
+  const r = pruneHistoryImages(history, 2);
+  assert.equal(r.prunedImages, 0, 'string [SYSTEM: message stole protection');
+  assert.ok(JSON.stringify(r.messages).includes('p1AAAA'));
+}
+{
+  // (ii) bracket-tag array runtime message carrying an image.
+  const media: ChatMessage = { role: 'user', content: [{ type: 'text', text: '[MEDIA_DIRECT_OBSERVATION]\nVisual inputs from browser_vision_screenshot.' }, img('m1')] as any };
+  const history: ChatMessage[] = [attachments3(), asst('a'), tool('a'), media];
+  const r = pruneHistoryImages(history, 2);
+  assert.equal(r.prunedImages, 0, '[MEDIA_DIRECT_OBSERVATION] stole protection');
+  const out = JSON.stringify(r.messages);
+  assert.ok(out.includes('p1AAAA') && out.includes('p2AAAA') && out.includes('p3AAAA'));
+}
+// (iii) unmarked continuation-guard strings pushed as role user.
+for (const guard of [
+  'Do not finalize yet. This is an explicit /visual command.',
+  'Do not finalize yet: a declared plan is still in progress.',
+  'Continue the active user request from the completed results above.',
+]) {
+  const history: ChatMessage[] = [attachments3(), asst('a'), tool('a'), { role: 'user', content: guard }];
+  const r = pruneHistoryImages(history, 2);
+  assert.equal(r.prunedImages, 0, `guard "${guard.slice(0, 30)}" stole protection`);
+}
+// 7. Age bound: unprotected images age out after maxAge assistant messages.
+{
+  const shot: ChatMessage = { role: 'tool', tool_call_id: 'shot', content: [img('one'), { type: 'text', text: 'screenshot' }] as any };
+  const iterations = (n: number): ChatMessage[] => {
+    const out: ChatMessage[] = [];
+    for (let i = 1; i <= n; i += 1) out.push(asst(`it${i}`), tool(`it${i}`));
+    return out;
+  };
+  // (iv) one screenshot, then 38 image-free iterations -> pruned.
+  const long = pruneHistoryImages([{ role: 'user', content: 'check the page' }, shot, ...iterations(38)], 2);
+  assert.equal(long.totalImages, 1);
+  assert.equal(long.prunedImages, 1, 'single screenshot must age out');
+  assert.ok(!JSON.stringify(long.messages).includes('oneAAAA'));
+  // (v) one screenshot, then 3 assistant messages -> kept.
+  const short = pruneHistoryImages([{ role: 'user', content: 'check the page' }, shot, ...iterations(3)], 2);
+  assert.equal(short.prunedImages, 0);
+  assert.ok(JSON.stringify(short.messages).includes('oneAAAA'));
+  // (vi) real user attachment, then 38 iterations -> kept (protected).
+  const attached: ChatMessage = { role: 'user', content: [img('att'), { type: 'text', text: 'here is the flyer' }] as any };
+  const user = pruneHistoryImages([attached, ...iterations(38)], 2);
+  assert.equal(user.prunedImages, 0, 'real user attachment must never age out');
+  assert.ok(JSON.stringify(user.messages).includes('attAAAA'));
+  // maxAge 0 disables the age bound.
+  const noAge = pruneHistoryImages([{ role: 'user', content: 'check the page' }, shot, ...iterations(38)], 2, 0);
+  assert.equal(noAge.prunedImages, 0);
+}
+
 adapterE2E().then(() => {
   console.log('history-image-prune regression: PASS');
 }).catch((err) => {
