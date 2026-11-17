@@ -3819,6 +3819,29 @@ export function autoNameSession(id: string, title: string): SessionSummary | nul
   return buildSessionSummary(session);
 }
 
+/**
+ * Live connected-agent binding for a session, without creating a session that
+ * does not exist. Native-turn entry points use this to refuse bound chats.
+ */
+export function getSessionExternalAgent(id: string): ExternalAgentBinding | undefined {
+  const sessionId = String(id || '').trim();
+  if (!sessionId) return undefined;
+  const cached = sessions.get(sessionId);
+  if (cached) return cached.externalImport ? undefined : cached.externalAgent;
+  if (!sessionExists(sessionId)) return undefined;
+  const session = getSession(sessionId);
+  return session.externalImport ? undefined : session.externalAgent;
+}
+
+/** Write the binding (or clear it with null in tests). Never set alongside externalImport. */
+export function setSessionExternalAgent(id: string, binding: ExternalAgentBinding | null): ExternalAgentBinding | undefined {
+  const session = getSession(id);
+  if (binding && session.externalImport) throw new Error('An imported chat cannot be bound to a live agent.');
+  session.externalAgent = binding ? normalizeExternalAgentBinding(binding) : undefined;
+  flushSession(id);
+  return session.externalAgent;
+}
+
 export function cleanupSessions(nowMs: number = Date.now()): { deleted: number; scanned: number } {
   ensureSessionDir();
   let deleted = 0;
