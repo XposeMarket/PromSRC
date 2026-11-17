@@ -15,6 +15,15 @@ import {
 } from '../imports/import-service';
 import { discoverImportSources } from '../imports/import-discovery';
 import { listAgentChats, listAgentGroups, listImportAgents, preflightAgentSelection, type AgentSelection } from '../imports/import-agents';
+import {
+  cancelSearchIndex,
+  deleteAgentSearchIndex,
+  deleteAllSearchIndexes,
+  listIndexedAgents,
+  searchAgentChats,
+  searchIndexStatus,
+  startSearchIndex,
+} from '../imports/import-search';
 import type { ConversationImportMode, ImportAdapterId, ImportJobKind, SetupImportScope } from '../imports/import-types';
 
 export const router = Router();
@@ -109,6 +118,87 @@ router.get('/api/imports/agents/:agentId/chats', (req, res) => {
     });
   } catch (error) {
     res.status(400).json({ success: false, error: errorMessage(error) });
+  }
+});
+
+/**
+ * Stage 2 search. Title search reads only bounded heads (titles) and stores
+ * nothing. Message search uses the opt-in local index (import-search.sqlite).
+ * Query text and snippets are never logged; responses are never cached.
+ */
+router.get('/api/imports/agents/:agentId/search', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  try {
+    const q = typeof req.query.q === 'string' ? req.query.q : '';
+    res.json({
+      success: true,
+      ...searchAgentChats(String(req.params.agentId || ''), {
+        q,
+        scope: String(req.query.scope || '') === 'all' ? 'all' : 'title',
+        offset: Number(req.query.offset || 0),
+        limit: Number(req.query.limit || 50),
+      }),
+    });
+  } catch (error) {
+    res.status(400).json({ success: false, error: errorMessage(error) });
+  }
+});
+
+router.get('/api/imports/agents/:agentId/search-index', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  try {
+    res.json({ success: true, status: searchIndexStatus(String(req.params.agentId || '')) });
+  } catch (error) {
+    res.status(400).json({ success: false, error: errorMessage(error) });
+  }
+});
+
+/** Explicit user action only: turns message search on for this agent and builds (or joins) its index. */
+router.post('/api/imports/agents/:agentId/search-index', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  try {
+    res.json({ success: true, status: startSearchIndex(String(req.params.agentId || '')) });
+  } catch (error) {
+    res.status(400).json({ success: false, error: errorMessage(error) });
+  }
+});
+
+router.post('/api/imports/agents/:agentId/search-index/cancel', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  try {
+    const agentId = String(req.params.agentId || '');
+    res.json({ success: true, ...cancelSearchIndex(agentId), status: searchIndexStatus(agentId) });
+  } catch (error) {
+    res.status(400).json({ success: false, error: errorMessage(error) });
+  }
+});
+
+/** Switch off: deletes this agent's index rows. Works for agents no longer detected. */
+router.delete('/api/imports/agents/:agentId/search-index', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  try {
+    res.json({ success: true, ...deleteAgentSearchIndex(String(req.params.agentId || '')) });
+  } catch (error) {
+    res.status(400).json({ success: false, error: errorMessage(error) });
+  }
+});
+
+router.get('/api/imports/search-index', (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  try {
+    res.json({ success: true, ...listIndexedAgents() });
+  } catch (error) {
+    res.status(500).json({ success: false, error: errorMessage(error) });
+  }
+});
+
+/** "Delete search index" in the tools area: wipes every agent's index. */
+router.delete('/api/imports/search-index', (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  try {
+    res.json({ success: true, ...deleteAllSearchIndexes() });
+  } catch (error) {
+    res.status(500).json({ success: false, error: errorMessage(error) });
   }
 });
 

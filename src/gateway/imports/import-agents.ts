@@ -443,6 +443,23 @@ function indexAgent(ctx: AgentContext): IndexedFile[] {
   });
 }
 
+/**
+ * For the search module (import-search.ts): the opened-row file listing with
+ * grouping, plus the agent root. Same reads as `listAgentChats` (stat listing
+ * plus the cached grouping head); no transcript body is read here.
+ */
+export function listAgentIndexedFiles(agentId: string, options: ImportDiscoveryOptions = {}): { agentId: string; root: string; adapter: ImportAdapterId; files: AgentIndexedFile[] } {
+  const ctx = agentContext(agentId, options);
+  return { agentId: ctx.agentId, root: ctx.root, adapter: ctx.adapter, files: indexAgent(ctx) };
+}
+
+export type AgentIndexedFile = IndexedFile;
+
+/** The stage 1 credential-name guard, exported so search never opens what listing refuses. */
+export function isSafeAgentTranscriptName(relativePath: string): boolean {
+  return isSafeTranscriptName(relativePath);
+}
+
 function summarizeGroups(files: IndexedFile[]): { groups: AgentGroup[]; looseChats: number; totalChats: number } {
   const groups = new Map<string, AgentGroup>();
   let looseChats = 0;
