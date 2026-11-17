@@ -444,6 +444,27 @@ function indexAgent(ctx: AgentContext): IndexedFile[] {
 }
 
 /**
+ * Async warm-up of the grouping cache for an opened agent. Same context and file
+ * list as indexAgent, but cold files are read in batches of 24 with a macrotask
+ * yield between batches, so a first open of a large agent cannot block the event
+ * loop. Cache hits never yield. Unknown agent or no files: return quietly; the
+ * synchronous listing that runs afterwards reports the real error.
+ */
+export async function warmAgentIndex(agentId: string, options: ImportDiscoveryOptions = {}): Promise<void> {
+  let ctx: AgentContext;
+  try { ctx = agentContext(agentId, options); } catch { return; }
+  let uncached = 0;
+  for (const file of listAgentFiles(ctx.root, ctx.adapter)) {
+    const cached = factsCache.get(file.absolutePath);
+    if (cached && cached.size === file.bytes && cached.mtime === file.updatedAt) continue;
+    groupingFacts(file, ctx.adapter);
+    uncached += 1;
+    if (uncached % 24 === 0) await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+}
+
+
+/**
  * For the search module (import-search.ts): the opened-row file listing with
  * grouping, plus the agent root. Same reads as `listAgentChats` (stat listing
  * plus the cached grouping head); no transcript body is read here.

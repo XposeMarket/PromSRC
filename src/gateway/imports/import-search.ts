@@ -6,6 +6,7 @@ import type { ImportDiscoveryOptions } from './import-discovery';
 import {
   isSafeAgentTranscriptName,
   listAgentIndexedFiles,
+  warmAgentIndex,
   messageOf,
   readHeadFacts,
   type AgentChatEntry,
@@ -250,6 +251,7 @@ export interface AgentSearchOptions extends ImportDiscoveryOptions {
 }
 
 export async function searchAgentChats(agentId: string, options: AgentSearchOptions = {}): Promise<AgentSearchResult> {
+  await warmAgentIndex(agentId, options);
   const listing = listAgentIndexedFiles(agentId, options);
   const query = String(options.q || '').slice(0, MAX_QUERY_CHARS);
   const scope = options.scope === 'all' ? 'all' : 'title';
@@ -435,6 +437,7 @@ async function readMessages(file: string, budget: { tickBytes: number }, isCance
 
 async function runBuild(job: BuildJob, options: ImportDiscoveryOptions): Promise<void> {
   await yieldTick(); // never run on the request path
+  await warmAgentIndex(job.agentId, options);
   const listing = listAgentIndexedFiles(job.agentId, options);
   const db = openDb(true);
   if (!db) throw new Error(messageSearchAvailability().reason || 'Message search is unavailable.');

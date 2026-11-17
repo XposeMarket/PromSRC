@@ -199,6 +199,24 @@ async function main(): Promise<void> {
   assert.deepEqual(agents.listImportAgents({ homeDir: bare, localAppData: path.join(bare, 'l'), appData: path.join(bare, 'r') }).agents, []);
 
   fs.rmSync(root, { recursive: true, force: true });
+  // --- 6. Large agent: cold warm-up yields; warm cache does not; sync path still right.
+  const bigOpts2 = { homeDir: path.join(root, 'home-large'), localAppData, appData };
+  for (let index = 0; index < 60; index += 1) {
+    write(`home-large/.codex/sessions/2026/08/10/rollout-l${index}.jsonl`, codex(`sess-l${index}`, alpha, `Large task ${index}`, `large ${index}`));
+  }
+  agents.clearAgentFactsCache();
+  let ticked = false;
+  const pending = agents.warmAgentIndex('codex', bigOpts2);
+  setImmediate(() => { ticked = true; });
+  await pending;
+  assert.equal(ticked, true, 'cold warm-up yields to the event loop');
+  let ticked2 = false;
+  const pending2 = agents.warmAgentIndex('codex', bigOpts2);
+  setImmediate(() => { ticked2 = true; });
+  await pending2;
+  assert.equal(ticked2, false, 'warm cache does not yield');
+  assert.equal(agents.listAgentGroups('codex', bigOpts2).totalChats, 60, 'sync listing correct after warm-up');
+
   console.log('import-agents regression passed');
 }
 

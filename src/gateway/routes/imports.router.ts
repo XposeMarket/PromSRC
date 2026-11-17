@@ -14,7 +14,7 @@ import {
   rollbackImportJob,
 } from '../imports/import-service';
 import { discoverImportSources } from '../imports/import-discovery';
-import { listAgentChats, listAgentGroups, listImportAgents, preflightAgentSelection, type AgentSelection } from '../imports/import-agents';
+import { listAgentChats, listAgentGroups, listImportAgents, preflightAgentSelection, warmAgentIndex, type AgentSelection } from '../imports/import-agents';
 import {
   cancelSearchIndex,
   deleteAgentSearchIndex,
@@ -96,16 +96,18 @@ router.get('/api/imports/agents', (_req, res) => {
   }
 });
 
-router.get('/api/imports/agents/:agentId/groups', (req, res) => {
+router.get('/api/imports/agents/:agentId/groups', async (req, res) => {
   try {
+    await warmAgentIndex(String(req.params.agentId || ''));
     res.json({ success: true, ...listAgentGroups(String(req.params.agentId || '')) });
   } catch (error) {
     res.status(400).json({ success: false, error: errorMessage(error) });
   }
 });
 
-router.get('/api/imports/agents/:agentId/chats', (req, res) => {
+router.get('/api/imports/agents/:agentId/chats', async (req, res) => {
   try {
+    await warmAgentIndex(String(req.params.agentId || ''));
     res.setHeader('Cache-Control', 'no-store');
     res.json({
       success: true,
@@ -129,6 +131,7 @@ router.get('/api/imports/agents/:agentId/chats', (req, res) => {
 router.get('/api/imports/agents/:agentId/search', async (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   try {
+    await warmAgentIndex(String(req.params.agentId || ''));
     const q = typeof req.query.q === 'string' ? req.query.q : '';
     res.json({
       success: true,
@@ -144,9 +147,10 @@ router.get('/api/imports/agents/:agentId/search', async (req, res) => {
   }
 });
 
-router.get('/api/imports/agents/:agentId/search-index', (req, res) => {
+router.get('/api/imports/agents/:agentId/search-index', async (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   try {
+    await warmAgentIndex(String(req.params.agentId || ''));
     res.json({ success: true, status: searchIndexStatus(String(req.params.agentId || '')) });
   } catch (error) {
     res.status(400).json({ success: false, error: errorMessage(error) });
@@ -154,9 +158,10 @@ router.get('/api/imports/agents/:agentId/search-index', (req, res) => {
 });
 
 /** Explicit user action only: turns message search on for this agent and builds (or joins) its index. */
-router.post('/api/imports/agents/:agentId/search-index', (req, res) => {
+router.post('/api/imports/agents/:agentId/search-index', async (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   try {
+    await warmAgentIndex(String(req.params.agentId || ''));
     res.json({ success: true, status: startSearchIndex(String(req.params.agentId || '')) });
   } catch (error) {
     res.status(400).json({ success: false, error: errorMessage(error) });
@@ -210,8 +215,9 @@ function normalizeSelection(body: any): AgentSelection {
 }
 
 /** Exact counts for the confirmation dialog, plus the bounded job requests to send to POST /api/imports/jobs. */
-router.post('/api/imports/agents/:agentId/preflight', (req, res) => {
+router.post('/api/imports/agents/:agentId/preflight', async (req, res) => {
   try {
+    await warmAgentIndex(String(req.params.agentId || ''));
     const owner = ownerId();
     const workspacePath = getConfig().getWorkspacePath();
     const result = preflightAgentSelection(
