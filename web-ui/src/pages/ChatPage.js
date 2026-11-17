@@ -7625,8 +7625,52 @@ if (typeof window !== 'undefined' && !window.__PROM_DESKTOP_VISUAL_STATE_LISTENE
   });
 }
 
+// Heartbeat output used to create one sidebar chat per run (heartbeat_<agent>_<ms>).
+// It now lives in one stable thread per agent (auto_heartbeat_<agent>). Fold any
+// legacy per-run entries into that thread so the sidebar shows one chat per agent.
+const LEGACY_HEARTBEAT_RUN_ID_RE = /^heartbeat_(.+)_(\d{10,})$/;
+function heartbeatMessageKey(m) {
+  return `${m?.role === 'ai' ? 'assistant' : m?.role} ${String(m?.content || '').slice(0, 200)}`;
+}
+function mergeHeartbeatHistories(base, extra) {
+  const out = Array.isArray(base) ? base.slice() : [];
+  const seen = new Set(out.map(heartbeatMessageKey));
+  for (const m of Array.isArray(extra) ? extra : []) {
+    const key = heartbeatMessageKey(m);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(m);
+  }
+  return out.sort((a, b) => (Number(a?.timestamp) || 0) - (Number(b?.timestamp) || 0));
+}
+function foldLegacyHeartbeatSessions(list) {
+  if (!Array.isArray(list) || !list.some((s) => LEGACY_HEARTBEAT_RUN_ID_RE.test(String(s?.id || '')))) return list;
+  const kept = [];
+  const threads = new Map();
+  for (const s of list) {
+    const id = String(s?.id || '');
+    const legacy = LEGACY_HEARTBEAT_RUN_ID_RE.exec(id);
+    const stableMatch = /^auto_heartbeat_(.+)$/.exec(id);
+    const agentId = legacy ? legacy[1] : (stableMatch ? stableMatch[1] : '');
+    if (!agentId) { kept.push(s); continue; }
+    const threadId = `auto_heartbeat_${agentId}`;
+    const prev = threads.get(threadId);
+    if (!prev) {
+      const seeded = { ...s, id: threadId, title: `💓 ${agentId} heartbeat`, automated: true };
+      threads.set(threadId, seeded);
+      kept.push(seeded);
+      continue;
+    }
+    prev.history = mergeHeartbeatHistories(prev.history, s.history);
+    prev.unread = Boolean(prev.unread || s.unread);
+    prev.createdAt = Math.min(Number(prev.createdAt) || Date.now(), Number(s.createdAt) || Date.now());
+    prev.updatedAt = Math.max(Number(prev.updatedAt) || 0, Number(s.updatedAt) || 0);
+  }
+  return kept;
+}
+
 function setChatSessions(next) {
-  const sessions = (Array.isArray(next) ? next : [])
+  const sessions = foldLegacyHeartbeatSessions(Array.isArray(next) ? next : [])
     .filter((session) => !isInternalChatSession(session))
     .filter(hasPersistableChatSessionContent);
   if (typeof window.setChatSessionsRef === 'function') {
@@ -9063,6 +9107,12 @@ function upsertAutomatedSession(as, opts = {}) {
     source: String(as.source || ''),
     unread: markUnread,
   };
+  if (/^auto_heartbeat_/i.test(String(as.id))) {
+    // Keep older runs (folded from legacy per-run chats) in the agent's single thread.
+    window.chatSessions = foldLegacyHeartbeatSessions(window.chatSessions);
+    const prior = window.chatSessions.find(s => s.id === as.id);
+    if (prior) nextSession.history = mergeHeartbeatHistories(nextSession.history, prior.history);
+  }
   const existingIdx = window.chatSessions.findIndex(s => s.id === as.id);
   if (existingIdx === -1) window.chatSessions.push(nextSession);
 	  else window.chatSessions[existingIdx] = { ...window.chatSessions[existingIdx], ...nextSession };
