@@ -17,6 +17,7 @@ interface InstructionInput {
 }
 const sandbox = {
   buildRealtimeVoiceAgentInstructions: (_input: InstructionInput): string => { throw new Error('builder not loaded'); },
+  budgetRealtimeInstructions: (_value: string, _max?: number): string => { throw new Error('budgeter not loaded'); },
   REALTIME_AGENT_INSTRUCTIONS_MAX: 36000,
   buildVoiceTimeContext: () => ({ source: 'test' }),
   voiceAgentTargetIdentity: () => ({ isSubagent: false, label: 'Prometheus' }),
@@ -43,4 +44,22 @@ for (const marker of ['[USER]', '[/USER]', '[SOUL]', '[/SOUL]', '[MEMORY_REFEREN
 assert.ok(compacted.includes('[trimmed to fit the realtime voice budget]'), 'oversized blocks are visibly trimmed');
 const unbracketed = sandbox.buildRealtimeVoiceAgentInstructions({ contextBlock: 'protected '.repeat(5000), contextPacket: {} });
 assert.ok(unbracketed.length <= 36000 && unbracketed.includes('## Current time'), 'unbracketed oversized context is capped without throwing');
+// Real USER.md/SOUL.md content has its own "## " headings. They must not be read
+// as the end of the personal-context section (that left most of it uncompacted
+// and the hard cap then cut off tool routing, continuity and the current time).
+const headed = `[USER]\n## operational_rules\n${'- user rule line\n'.repeat(1500)}## identity\n${'- identity fact\n'.repeat(600)}[/USER]\n[SOUL]\n## Voice\n${'soul line '.repeat(1500)}\n[/SOUL]`;
+const headedOut = sandbox.buildRealtimeVoiceAgentInstructions({ contextBlock: headed, contextPacket: {}, conversationSummary: 'Headed continuity summary', conversationTranscript: 'user: latest thing said' });
+assert.ok(headedOut.length <= 36000, `headed context fits the cap (${headedOut.length})`);
+for (const marker of ['[/USER]', '[SOUL]', '[/SOUL]', 'Headed continuity summary', 'user: latest thing said', '## When to call which tool', '## End tool-routing guidance', '## Current time', 'Personality:']) assert.ok(headedOut.includes(marker), `headed: preserves ${marker}`);
+assert.ok(!headedOut.includes('...[truncated]'), 'headed context is compacted, not hard-truncated');
+// A big profile plus a long summary must squeeze personal context further
+// before any tool routing is cut.
+const squeezed = sandbox.buildRealtimeVoiceAgentInstructions({ contextBlock: `[USER]\n${'user fact '.repeat(4000)}\n[/USER]`, contextPacket: {}, conversationSummary: `SQUEEZE_SUMMARY ${'summary text '.repeat(1400)}` });
+assert.ok(squeezed.length <= 36000, `squeezed fits the cap (${squeezed.length})`);
+for (const marker of ['[USER]', '[/USER]', 'SQUEEZE_SUMMARY', '## When to call which tool', '## End tool-routing guidance', '## Current time']) assert.ok(squeezed.includes(marker), `squeezed: preserves ${marker}`);
+// Re-budgeting an already budgeted prompt (the Codex bridge route does this) is a no-op.
+assert.equal(sandbox.budgetRealtimeInstructions(headedOut, 36000), headedOut);
+// With no personal-context section at all, the hard cap still keeps the tail.
+const rawTail = sandbox.budgetRealtimeInstructions(`${'filler '.repeat(9000)}\n## Current time\n{"source":"test"}`, 36000);
+assert.ok(rawTail.length <= 36000 && rawTail.endsWith('{"source":"test"}'), 'last-resort cap keeps the current time tail');
 console.log('realtime instructions regression: context priority, cap, continuity and oversized-context compaction checks passed');
