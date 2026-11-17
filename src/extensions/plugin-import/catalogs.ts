@@ -11,6 +11,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { fetchPublicUrl } from '../../tools/outbound-url-guard.js';
+import { readBodyLimited } from './source.js';
 import { getPrometheusLayout } from '../../runtime/storage-layout.js';
 
 export type CatalogId = 'claude-official' | 'openai-official' | 'codex-personal';
@@ -42,7 +43,6 @@ export const CATALOGS: readonly CatalogDef[] = Object.freeze([
 
 export type CatalogSource =
   | { kind: 'github'; repo: string; path: string; ref?: string; sha?: string }
-  | { kind: 'git'; url: string; path: string; ref?: string; sha?: string }
   | { kind: 'local'; dir: string }
   | { kind: 'unsupported'; reason: string };
 
@@ -84,7 +84,9 @@ export function toCatalogSource(s: any, base: CatalogBase): CatalogSource {
   };
   if (typeof s === 'string') return rel(s);
   if (!s || typeof s !== 'object') return bad('missing source');
-  const sha = typeof s.sha === 'string' && SHA.test(s.sha) ? s.sha.toLowerCase() : undefined;
+  // A pin that is present but malformed must never degrade into an unpinned install.
+  if (s.sha !== undefined && (typeof s.sha !== 'string' || !SHA.test(s.sha))) return bad('catalog pins an invalid commit; refusing to install an unpinned copy');
+  const sha = typeof s.sha === 'string' ? s.sha.toLowerCase() : undefined;
   const ref = typeof s.ref === 'string' && s.ref.trim() ? s.ref.trim() : undefined;
   switch (s.source) {
     case 'local':
@@ -103,8 +105,7 @@ export function toCatalogSource(s: any, base: CatalogBase): CatalogSource {
       if (p === null) return bad('path escapes the repo');
       const gh = url.match(GH_URL);
       if (gh) return { kind: 'github', repo: `${gh[1]}/${gh[2]}`, path: p, ref, sha };
-      if (/^https:\/\//i.test(url)) return { kind: 'git', url, path: p, ref, sha };
-      return bad('only https sources are supported');
+      return bad('only GitHub-hosted plugins can be imported');
     }
     case 'command':
       return bad('installs by running a shell command; Prometheus never runs catalog install commands');
@@ -186,11 +187,8 @@ async function fetchCatalogJson(url: string, fetcher: CatalogFetcher): Promise<a
   if (!OFFICIAL_CATALOG_URLS.includes(url)) throw new Error('catalog URL is not on the built-in allowlist');
   const res = await fetcher(url, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(10_000) });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const len = Number(res.headers.get('content-length') || 0);
-  if (len > MAX_CATALOG_BYTES) throw new Error('catalog is too large');
-  const text = await res.text();
-  if (text.length > MAX_CATALOG_BYTES) throw new Error('catalog is too large');
-  return JSON.parse(text.replace(/^\uFEFF/, ''));
+  const body = await readBodyLimited(res, MAX_CATALOG_BYTES, 'Catalog');
+  return JSON.parse(body.toString('utf8').replace(/^\uFEFF/, ''));
 }
 
 /** Load one catalog: fresh cache -> live fetch -> stale cache -> another harness's local copy -> unavailable. */

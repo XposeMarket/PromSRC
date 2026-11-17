@@ -79,7 +79,14 @@ function within(root: string, rel: unknown): string | null {
   if (typeof rel !== 'string' || !rel.trim()) return null;
   const abs = path.resolve(root, rel.replace(/\$\{CLAUDE_PLUGIN_ROOT\}/g, '.'));
   const base = path.resolve(root);
-  return abs === base || abs.startsWith(base + path.sep) ? abs : null;
+  if (!(abs === base || abs.startsWith(base + path.sep))) return null;
+  // Existing paths are checked again by real path so a symlink/junction can't point outside the plugin.
+  try {
+    const rb = fs.realpathSync.native(base);
+    const ra = fs.realpathSync.native(abs);
+    if (!(ra === rb || ra.startsWith(rb + path.sep))) return null;
+  } catch { /* missing path: the lexical check above stands */ }
+  return abs;
 }
 
 function asList(v: unknown): string[] {
@@ -227,7 +234,12 @@ export function validateAgentPluginsManifest(raw: any): string[] {
   if (raw.$schema !== AGENT_PLUGINS_SCHEMA) return [`unsupported Agent Plugins version (${String(raw.$schema).slice(0, 120)}); Prometheus reads 1.0.0`];
   if (typeof raw.name !== 'string' || raw.name.length > 64 || !AGENT_PLUGIN_NAME.test(raw.name)) problems.push('name must be 1-64 chars of a-z, 0-9, "." and "-" with no "--" or ".."');
   for (const k of Object.keys(raw)) if (!AGENT_PLUGIN_KEYS.has(k)) problems.push(`unknown top-level field "${k}"`);
-  if (raw.author !== undefined && (typeof raw.author !== 'object' || Array.isArray(raw.author))) problems.push('author must be an object');
+  for (const k of ['version', 'description', 'homepage', 'repository', 'license']) if (raw[k] !== undefined && typeof raw[k] !== 'string') problems.push(`${k} must be a string`);
+  if (raw.keywords !== undefined && (!Array.isArray(raw.keywords) || raw.keywords.some((x: unknown) => typeof x !== 'string'))) problems.push('keywords must be a list of strings');
+  if (raw.author !== undefined) {
+    if (!raw.author || typeof raw.author !== 'object' || Array.isArray(raw.author)) problems.push('author must be an object');
+    else for (const k of ['name', 'email', 'url']) if (raw.author[k] !== undefined && typeof raw.author[k] !== 'string') problems.push(`author.${k} must be a string`);
+  }
   if (raw.extensions !== undefined) {
     if (!raw.extensions || typeof raw.extensions !== 'object' || Array.isArray(raw.extensions)) problems.push('extensions must be an object');
     else for (const [ns, v] of Object.entries(raw.extensions)) if (!v || typeof v !== 'object' || Array.isArray(v)) problems.push(`extensions["${ns}"] must be an object`);
@@ -240,6 +252,9 @@ export function readAgentPluginsMcp(raw: any): { servers: PluginMcpServer[]; pro
   const problems: string[] = [];
   if (!raw || typeof raw !== 'object') return { servers: [], problems: ['mcp.json is not an object'] };
   if (raw.$schema !== AGENT_PLUGINS_MCP_SCHEMA) problems.push('mcp.json $schema must be the Agent Plugins 1.0.0 MCP schema');
+  for (const k of Object.keys(raw)) if (k !== '$schema' && k !== 'mcpServers') problems.push(`mcp.json: unknown top-level field "${k}"`);
+  const strList = (v: unknown) => Array.isArray(v) && v.every((x) => typeof x === 'string');
+  const strMap = (v: unknown) => !!v && typeof v === 'object' && !Array.isArray(v) && Object.values(v as object).every((x) => typeof x === 'string');
   const servers: PluginMcpServer[] = [];
   const map = raw.mcpServers;
   if (!map || typeof map !== 'object' || Array.isArray(map)) return { servers, problems: [...problems, 'mcp.json needs an mcpServers object'] };
@@ -250,12 +265,15 @@ export function readAgentPluginsMcp(raw: any): { servers: PluginMcpServer[]; pro
       if (typeof cfg.command !== 'string' || !cfg.command) { problems.push(`${where}: stdio needs command`); continue; }
       const extra = Object.keys(cfg).filter((k) => !['type', 'command', 'args', 'env', 'cwd'].includes(k));
       if (extra.length) { problems.push(`${where}: unknown field(s) ${extra.join(', ')}`); continue; }
+      if (cfg.args !== undefined && !strList(cfg.args)) { problems.push(`${where}: args must be a list of strings`); continue; }
+      if (cfg.env !== undefined && !strMap(cfg.env)) { problems.push(`${where}: env must map names to strings`); continue; }
       if (cfg.env && Object.keys(cfg.env).some((k) => k === 'PLUGIN_ROOT' || k === 'PLUGIN_DATA')) { problems.push(`${where}: env may not set PLUGIN_ROOT/PLUGIN_DATA`); continue; }
       if (cfg.cwd !== undefined && (typeof cfg.cwd !== 'string' || !/^(?:\.\/|\$\{PLUGIN_ROOT\}(?:\/|$)|\$\{PLUGIN_DATA\}(?:\/|$))/.test(cfg.cwd))) { problems.push(`${where}: cwd must start with ./, \${PLUGIN_ROOT} or \${PLUGIN_DATA}`); continue; }
     } else if (cfg.type === 'streamable-http' || cfg.type === 'sse') {
       if (typeof cfg.url !== 'string' || !cfg.url) { problems.push(`${where}: ${cfg.type} needs url`); continue; }
       const extra = Object.keys(cfg).filter((k) => !['type', 'url', 'headers'].includes(k));
       if (extra.length) { problems.push(`${where}: unknown field(s) ${extra.join(', ')}`); continue; }
+      if (cfg.headers !== undefined && !strMap(cfg.headers)) { problems.push(`${where}: headers must map names to strings`); continue; }
     } else { problems.push(`${where}: type must be stdio, streamable-http or sse`); continue; }
     servers.push({ id: sanitizePluginId(id), config: cfg });
   }

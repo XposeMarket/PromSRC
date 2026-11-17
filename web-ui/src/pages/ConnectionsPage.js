@@ -2127,7 +2127,7 @@ function renderImportTab() {
     <div style="display:flex;flex-direction:column;gap:12px">
       <div class="pam-hint">Bring in skills, slash commands, agents, MCP servers and hooks made for Claude Code, Codex / OpenAI, Hermes Agent or OpenClaw. Hosted ChatGPT apps and Python/TypeScript plugin runtimes can't run here and are listed as not importable. Imported MCP servers and hooks stay off until you turn them on.</div>
       <div style="display:grid;grid-template-columns:1fr auto;gap:8px">
-        <input id="pim-source" class="pam-input" placeholder="Folder, owner/repo, owner/repo#subdir, GitHub URL or https git URL"/>
+        <input id="pim-source" class="pam-input" placeholder="Folder, owner/repo, owner/repo#subdir or GitHub URL"/>
         <button class="pam-btn" data-pim-action="install-source">Import</button>
       </div>
       <div id="pim-status" class="pam-hint"></div>

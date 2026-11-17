@@ -13,6 +13,7 @@ import path from 'path';
 import fs from 'fs';
 import { log } from '../security/log-scrubber';
 import { SecretVault } from '../security/vault';
+import { checkImportedMcpLaunch } from '../extensions/plugin-import/activation-gate.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -521,6 +522,11 @@ export class MCPManager {
     const cfg = this.configs.find(c => c.id === id);
     if (!cfg) return { success: false, error: 'Server config not found' };
     if (!cfg.enabled) return { success: false, error: 'Server is disabled' };
+    // Imported-plugin servers must pass the activation gate on every launch, whichever
+    // path set enabled:true (generic MCP save, agent upsert, startup auto-connect).
+    let gate: string | null;
+    try { gate = checkImportedMcpLaunch(cfg); } catch (e: any) { gate = `Imported plugin check failed: ${e?.message || e}`; }
+    if (gate) return { success: false, error: gate };
 
     await this.disconnect(id);
 
@@ -558,7 +564,14 @@ export class MCPManager {
 
         // CRIT-02: shell: false always — args are passed as a list, not a shell string.
         // This prevents metacharacter injection via cfg.args on all platforms.
-        const cwd = cfg.cwd && fs.existsSync(cfg.cwd) ? cfg.cwd : undefined;
+        // A declared working directory that is missing fails the launch; never fall back to the gateway's cwd.
+        if (cfg.cwd && !fs.existsSync(cfg.cwd)) {
+          session.status = 'error';
+          session.error = `Working directory not found: ${cfg.cwd}`;
+          resolve({ success: false, error: session.error });
+          return;
+        }
+        const cwd = cfg.cwd || undefined;
         const resolvedArgs = this.resolveArgSecrets(cfg.args || []);
         if (resolvedArgs.missingRefs.length > 0) {
           session.status = 'error';

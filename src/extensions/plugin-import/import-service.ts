@@ -19,12 +19,13 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { findPluginDirs, findSkillDirs, readPluginBundle, readSkillBundle, sanitizePluginId, summarizeBundle, type PluginBundle, type PluginFormat, type PluginHookSpec } from './formats.js';
-import { materializeGit, materializeGithub, isInside, safeSubpath, type Fetcher } from './source.js';
+import { materializeGithub, isInside, safeSubpath, type Fetcher } from './source.js';
 import { resolveCatalogEntry, type CatalogEntry, type CatalogLoadOptions } from './catalogs.js';
 import { resolveUserPluginsDir, EXTENSION_DESCRIPTOR_FILENAME } from '../loader.js';
 import { reloadExtensions } from '../reload.js';
 
-export const IMPORT_LEDGER_FILENAME = 'imported-plugin.json';
+import { IMPORT_LEDGER_FILENAME, mcpConfigHash } from './activation-gate.js';
+export { IMPORT_LEDGER_FILENAME, mcpConfigHash };
 
 export interface ImportedPluginLedger {
   id: string;
@@ -208,7 +209,7 @@ export interface ResolvedSource { dir: string; cleanup: () => void; provenance: 
  * Resolve an install source to a local plugin directory.
  * Accepts: local dir, owner/repo[#subdir], https://github.com/o/r[#subdir],
  * GitHub tree URL (https://github.com/o/r/tree/<ref>/<subdir>), or another
- * https git URL[#subdir]. GitHub sources download a zip (no git needed).
+ * GitHub only for remote sources: they download as a zip through the guarded fetch (no git).
  */
 export async function resolvePluginSource(source: string, userDir: string, opts: { fetcher?: Fetcher } = {}): Promise<ResolvedSource> {
   const text = String(source || '').trim();
@@ -223,11 +224,7 @@ export async function resolvePluginSource(source: string, userDir: string, opts:
   if (tree) m = await materializeGithub({ repo: `${tree[1]}/${tree[2]}`, ref: tree[3], path: tree[4] }, stagingRoot(userDir), opts);
   else if (gh) m = await materializeGithub({ repo: `${gh[1]}/${gh[2]}`, path: gh[3] || '' }, stagingRoot(userDir), opts);
   else if (short) m = await materializeGithub({ repo: short[1], path: short[2] || '' }, stagingRoot(userDir), opts);
-  else if (/^https:\/\//i.test(text)) {
-    const [url, sub] = text.split('#');
-    m = await materializeGit({ url, path: sub || '' }, stagingRoot(userDir));
-    return { dir: m.dir, cleanup: m.cleanup, provenance: { url, path: m.path, commit: m.commit } };
-  } else throw new Error(`Unsupported plugin source "${text}". Use a local folder, owner/repo, a GitHub URL, or another https git URL.`);
+  else throw new Error(`Unsupported plugin source "${text}". Use a local folder, owner/repo[#subdir] or a GitHub URL (other hosts are not fetched).`);
   return { dir: m.dir, cleanup: m.cleanup, provenance: { repo: m.repo, path: m.path, ref: m.ref, commit: m.commit } };
 }
 
@@ -239,10 +236,6 @@ export async function resolveCatalogSource(entry: CatalogEntry, userDir: string,
   if (s.kind === 'github') {
     const m = await materializeGithub({ repo: s.repo, path: s.path, ref: s.ref, sha: s.sha }, stagingRoot(userDir), opts);
     return { dir: m.dir, cleanup: m.cleanup, provenance: { ...base, repo: s.repo, path: m.path, ref: s.ref, commit: m.commit } };
-  }
-  if (s.kind === 'git') {
-    const m = await materializeGit({ url: s.url, path: s.path, ref: s.ref, sha: s.sha }, stagingRoot(userDir));
-    return { dir: m.dir, cleanup: m.cleanup, provenance: { ...base, url: s.url, path: m.path, ref: s.ref, commit: m.commit } };
   }
   if (!fs.existsSync(s.dir)) throw new Error(`${entry.name}: local path ${s.dir} does not exist`);
   return { dir: s.dir, cleanup: () => {}, provenance: base };
@@ -308,6 +301,8 @@ export interface ConvertedMcpServer {
   note?: string;
   /** Non-empty = this server cannot be represented safely; it is skipped with a warning. */
   problems: string[];
+  /** Env var names passed through by name from the gateway environment (value never stored). */
+  passthrough: string[];
 }
 
 const ROOT_VARS = /\$\{(?:CLAUDE_PLUGIN_ROOT|CODEX_PLUGIN_ROOT|PLUGIN_ROOT)\}/g;
@@ -340,6 +335,9 @@ export function convertMcpServer(pluginId: string, server: { id: string; config:
     return `\${vault:${vaultKey(name)}}`;
   });
   const emptyAfterDefaults = (v: string) => !v.trim() || /^bearer\s*$/i.test(v.trim());
+  const passthrough: string[] = [];
+  // A plugin may only name its own secrets; Prometheus vault syntax in plugin config could read unrelated credentials.
+  if (/\$\{vault:|"vault:/.test(JSON.stringify(src))) problems.push('config contains Prometheus vault references; plugins may only reference their own secrets by name');
 
   const cfg: Record<string, any> = { id, name: `${pluginId}: ${server.id}`, description: `Imported from plugin ${pluginId}` };
   const type = String(src.type || src.transport || (src.command ? 'stdio' : 'http')).toLowerCase();
@@ -348,15 +346,24 @@ export function convertMcpServer(pluginId: string, server: { id: string; config:
     cfg.command = roots(src.command);
     if (ENV_REF.test(cfg.command)) problems.push('command uses an environment placeholder, which is not supported');
     ENV_REF.lastIndex = 0;
+    if (src.args !== undefined && !(Array.isArray(src.args) && src.args.every((a: unknown) => typeof a === 'string' || typeof a === 'number'))) problems.push('args must be a list of strings');
     cfg.args = (Array.isArray(src.args) ? src.args : []).map((a: any) => secrets(a));
+    if (src.env !== undefined && (!src.env || typeof src.env !== 'object' || Array.isArray(src.env))) problems.push('env must map names to strings');
     const env: Record<string, string> = {};
-    for (const [k, v] of Object.entries(src.env || {})) { const val = secrets(v); if (!emptyAfterDefaults(val)) env[k] = val; }
+    // The user already has NAME in the gateway environment and no saved secret: pass it through by name.
+    const fromGateway = (name: string) => !vault?.has(vaultKey(name)) && typeof process.env[name] === 'string' && process.env[name] !== '';
+    for (const [k, v] of Object.entries(src.env || {})) {
+      if (typeof v === 'string' && v === `\${${k}}` && fromGateway(k)) { if (!passthrough.includes(k)) passthrough.push(k); continue; }
+      const val = secrets(v); if (!emptyAfterDefaults(val)) env[k] = val;
+    }
     for (const k of Array.isArray(src.env_vars) ? src.env_vars : []) {
-      if (typeof k !== 'string' || env[k]) continue;
+      if (typeof k !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(k) || env[k] || passthrough.includes(k)) continue;
+      if (fromGateway(k)) { passthrough.push(k); continue; }
       env[k] = `\${vault:${vaultKey(k)}}`;
       if (!secretKeys.includes(k)) secretKeys.push(k);
     }
     if (Object.keys(env).length) cfg.env = env;
+    if (passthrough.length) cfg.envPassthrough = passthrough;
     if (src.cwd !== undefined) {
       const raw = String(src.cwd);
       const abs = path.resolve(rootPath, roots(raw).replace(/^\.\//, ''));
@@ -387,7 +394,7 @@ export function convertMcpServer(pluginId: string, server: { id: string; config:
   if (missing.length) notes.push(`Needs secret(s): ${missing.join(', ')}`);
   if (optional.length) notes.push(`optional ${optional.join(', ')} not set (defaults used; reinstall after saving them)`);
   cfg.enabled = false;
-  return { config: cfg, secretKeys, optional, enabled: missing.length === 0, note: notes.join('; ') || undefined, problems };
+  return { config: cfg, secretKeys, optional, enabled: missing.length === 0, note: notes.join('; ') || undefined, problems, passthrough };
 }
 
 
@@ -500,6 +507,12 @@ export async function installBundle(bundle: PluginBundle, source: string, deps: 
     throw new Error(`Nothing usable to import from "${bundle.name}".${unsupported.length ? ` Not importable: ${unsupported.map((u) => `${u.part} (${u.reason})`).join('; ')}` : ''}`);
   }
 
+  // Two parts of one plugin must not map to the same id (one would silently replace the other).
+  const dupes = (ids: string[]) => ids.filter((x, i) => ids.indexOf(x) !== i);
+  const dupSkills = dupes([...planned.skills, ...planned.commands, ...planned.agents]);
+  const dupMcp = dupes(planned.mcp);
+  if (dupSkills.length || dupMcp.length) throw new Error(`"${bundle.name}" maps several parts to the same id: ${[...new Set([...dupSkills, ...dupMcp])].slice(0, 8).join(', ')}`);
+
   // 2. Refuse to replace skills/MCP servers that this import does not own.
   const owned = new Set([...(existing?.skills || []), ...(existing?.mcpServers || []).map((s) => s.id)]);
   const others = listImportedPlugins(userDir).filter((l) => l.id !== id);
@@ -519,15 +532,35 @@ export async function installBundle(bundle: PluginBundle, source: string, deps: 
   try {
     const stagedPkg = path.join(temp, 'package');
     copyPackage(bundle.root, stagedPkg);
-
-    // 4. Swap: remove the old import (data kept), then install the new one.
-    if (existing) await uninstallPlugin(id, deps, { keepDir: true });
-    fs.mkdirSync(pluginDir, { recursive: true });
     const packageDir = path.join(pluginDir, 'files');
-    fs.rmSync(packageDir, { recursive: true, force: true });
-    try { fs.renameSync(stagedPkg, packageDir); } catch { fs.cpSync(stagedPkg, packageDir, { recursive: true }); }
     const dataDir = pluginDataDir(userDir, id);
+
+    // 4. Convert every MCP server up front (pure; paths point at the final package dir).
+    const converted: Array<{ server: { id: string }; conv?: ConvertedMcpServer; error?: string }> = parts.has('mcp') ? bundle.mcpServers.map((server) => {
+      try { return { server, conv: convertMcpServer(id, server, packageDir, deps.vault, { dataDir }) }; }
+      catch (err: any) { return { server, error: String(err?.message || err).slice(0, 240) }; }
+    }) : [];
+
+    // 5. Swap with rollback: the previous install keeps working until the new one is fully written.
+    fs.mkdirSync(pluginDir, { recursive: true });
+    const previousPkg = path.join(temp, 'previous-files');
+    const previousMcp = new Map<string, any>();
+    for (const c of deps.mcp.getConfigs()) {
+      if ((existing?.mcpServers || []).some((s) => s.id === c.id) || planned.mcp.includes(c.id)) previousMcp.set(c.id, JSON.parse(JSON.stringify(c)));
+    }
+    const movePath = (from: string, to: string) => {
+      try { fs.renameSync(from, to); } catch { fs.cpSync(from, to, { recursive: true }); fs.rmSync(from, { recursive: true, force: true }); }
+    };
+    if (fs.existsSync(packageDir)) movePath(packageDir, previousPkg);
+    movePath(stagedPkg, packageDir);
     fs.mkdirSync(dataDir, { recursive: true });
+    const rollback = () => {
+      try { fs.rmSync(packageDir, { recursive: true, force: true }); if (fs.existsSync(previousPkg)) movePath(previousPkg, packageDir); } catch { /* best effort */ }
+      for (const mid of planned.mcp) if (!previousMcp.has(mid)) { try { deps.mcp.deleteConfig(mid); } catch { /* best effort */ } }
+      for (const cfg of previousMcp.values()) { try { deps.mcp.upsertConfig(cfg); } catch { /* best effort */ } }
+      if (existing) { try { writeLedger(existing); } catch { /* best effort */ } }
+    };
+    try {
 
     const stageSkill = async (dir: string, skillId: string) => {
       try {
@@ -557,12 +590,12 @@ export async function installBundle(bundle: PluginBundle, source: string, deps: 
     const mcpServers: ImportedMcpEntry[] = [];
     const mcpReport: InstallPluginResult['mcpServers'] = [];
     if (parts.has('mcp')) {
-      for (const server of bundle.mcpServers) {
+      for (const { server, conv, error } of converted) {
         try {
-          const conv = convertMcpServer(id, server, packageDir, deps.vault, { dataDir });
+          if (error || !conv) { warnings.push(`mcp ${server.id}: ${error || 'conversion failed'}`); continue; }
           if (conv.problems.length) { warnings.push(`mcp ${server.id}: ${conv.problems.join('; ')}`); continue; }
           deps.mcp.upsertConfig({ ...conv.config, enabled: false });
-          mcpServers.push({ id: conv.config.id, secretKeys: conv.secretKeys, optional: conv.optional, enabled: false, activation: 'pending', ready: conv.enabled });
+          mcpServers.push({ id: conv.config.id, secretKeys: conv.secretKeys, optional: conv.optional, passthrough: conv.passthrough.length ? conv.passthrough : undefined, enabled: false, activation: 'pending', ready: conv.enabled });
           mcpReport.push({ id: conv.config.id, enabled: false, activation: 'pending', note: conv.note });
         } catch (err: any) {
           warnings.push(`mcp ${server.id}: ${String(err?.message || err).slice(0, 240)}`);
@@ -578,6 +611,11 @@ export async function installBundle(bundle: PluginBundle, source: string, deps: 
       provenance: options.provenance && Object.keys(options.provenance).length ? options.provenance : undefined,
     };
     writeLedger(ledger);
+    // Drop what the previous version owned and this one no longer ships.
+    if (existing) {
+      for (const sid of existing.skills) if (!skillIds.includes(sid)) { try { deps.skills.deleteSkill(sid); } catch { /* best effort */ } }
+      for (const s of existing.mcpServers) if (!mcpServers.some((m) => m.id === s.id)) { try { void deps.mcp.disconnect?.(s.id); deps.mcp.deleteConfig(s.id); } catch { /* best effort */ } }
+    }
     fs.writeFileSync(path.join(pluginDir, EXTENSION_DESCRIPTOR_FILENAME), JSON.stringify({
       id, kind: 'integration', name: bundle.name,
       description: bundle.description || `Imported ${bundle.format} plugin`,
@@ -595,6 +633,7 @@ export async function installBundle(bundle: PluginBundle, source: string, deps: 
     if (mcpReport.length) nextSteps.push(`${mcpReport.length} MCP server(s) imported but OFF. They run third-party code; turn on with plugin_ops(action:"activate_mcp", id:"${id}") only when the user wants them (it asks for approval).`);
     if (hooks.length) nextSteps.push(`${hooks.length} hook(s) imported but inactive. They run shell commands; enable with plugin_ops(action:"approve_hooks", id:"${id}") only when the user asks.`);
     return { id, format: bundle.format, skills: skillIds, mcpServers: mcpReport, hooks: hooks.length, hooksApproved: false, unsupported, warnings, nextSteps, partial: warnings.length > 0, provenance: ledger.provenance };
+    } catch (err) { rollback(); throw err; }
   } finally {
     try { fs.rmSync(temp, { recursive: true, force: true }); } catch {}
   }
@@ -627,7 +666,7 @@ export function getImportedPlugin(id: string, userPluginsDir?: string): Imported
   return readLedger(path.join(userPluginsDir || resolveUserPluginsDir(), sanitizePluginId(id)));
 }
 
-export interface UninstallResult { id: string; removedSkills: string[]; removedMcp: string[]; failed: string[]; dataKept?: string }
+export interface UninstallResult { id: string; removedSkills: string[]; removedMcp: string[]; failed: string[]; dataKept?: string; skipped?: string[] }
 
 /** Remove an import and everything it owns. Plugin data is kept unless purgeData is set. */
 export async function uninstallPlugin(id: string, deps: PluginImportDeps, options: { keepDir?: boolean; purgeData?: boolean } = {}): Promise<UninstallResult> {
@@ -636,8 +675,19 @@ export async function uninstallPlugin(id: string, deps: PluginImportDeps, option
   const ledger = readLedger(pluginDir);
   if (!ledger) throw new Error(`No imported plugin "${id}".`);
   const failed: string[] = [];
-  const removedSkills = ledger.skills.filter((s) => { try { return deps.skills.deleteSkill(s); } catch { failed.push(`skill ${s}`); return false; } });
-  const removedMcp = ledger.mcpServers.map((s) => s.id).filter((s) => { try { return deps.mcp.deleteConfig(s); } catch { failed.push(`MCP ${s}`); return false; } });
+  // Only remove what this import still owns: skip ids another import claims and MCP configs replaced by something else.
+  const others = listImportedPlugins(userDir).filter((l) => l.id !== ledger.id);
+  const claimed = (rid: string) => others.some((l) => l.skills.includes(rid) || l.mcpServers.some((m) => m.id === rid));
+  const skipped: string[] = [];
+  const removedSkills = ledger.skills.filter((s) => {
+    if (claimed(s)) { skipped.push(`skill ${s}`); return false; }
+    try { return deps.skills.deleteSkill(s); } catch { failed.push(`skill ${s}`); return false; }
+  });
+  const removedMcp = ledger.mcpServers.map((s) => s.id).filter((s) => {
+    const cfg = deps.mcp.getConfigs().find((c) => c.id === s) as any;
+    if (claimed(s) || (cfg?.description && cfg.description !== `Imported from plugin ${ledger.id}`)) { skipped.push(`MCP ${s}`); return false; }
+    try { void deps.mcp.disconnect?.(s); return deps.mcp.deleteConfig(s); } catch { failed.push(`MCP ${s}`); return false; }
+  });
   if (!options.keepDir) fs.rmSync(pluginDir, { recursive: true, force: true });
   else { for (const f of fs.readdirSync(pluginDir)) fs.rmSync(path.join(pluginDir, f), { recursive: true, force: true }); }
   let dataKept: string | undefined;
@@ -646,19 +696,12 @@ export async function uninstallPlugin(id: string, deps: PluginImportDeps, option
     else dataKept = ledger.dataDir;
   }
   if (!deps.skipReload && !options.keepDir) { try { reloadExtensions(); } catch {} }
-  return { id: ledger.id, removedSkills, removedMcp, failed, dataKept };
+  return { id: ledger.id, removedSkills, removedMcp, failed, dataKept, ...(skipped.length ? { skipped } : {}) };
 }
 
 // ── MCP activation (separate from secret readiness) ───────────────────────────
 
-/** Stable hash of an MCP config, ignoring the enabled flag. A changed config needs fresh approval. */
-export function mcpConfigHash(cfg: Record<string, any> | undefined | null): string {
-  if (!cfg) return '';
-  const { enabled: _enabled, ...rest } = cfg;
-  const stable = (v: any): any => Array.isArray(v) ? v.map(stable)
-    : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, stable(v[k])])) : v;
-  return crypto.createHash('sha256').update(JSON.stringify(stable(rest))).digest('hex').slice(0, 32);
-}
+// mcpConfigHash lives in activation-gate.ts so the MCP manager's launch gate and the importer hash identically.
 
 function missingSecrets(ledger: ImportedPluginLedger, s: ImportedMcpEntry, deps: PluginImportDeps): string[] {
   const has = (k: string) => !!deps.vault?.has(`plugins.${ledger.id}.${k}`);
@@ -677,6 +720,8 @@ export interface McpActivationRow { id: string; activation: 'pending' | 'active'
  * approved now and start as soon as the secret is saved.
  */
 export async function activateMcpServers(id: string, deps: PluginImportDeps): Promise<McpActivationRow[]> {
+  // Connect only after the approval is on disk: the MCP manager's launch gate reads the ledger.
+  const toConnect: string[] = [];
   const ledger = getImportedPlugin(id, deps.userPluginsDir);
   if (!ledger) throw new Error(`No imported plugin "${id}".`);
   const out: McpActivationRow[] = [];
@@ -689,11 +734,12 @@ export async function activateMcpServers(id: string, deps: PluginImportDeps): Pr
     if (!missing.length) {
       deps.mcp.upsertConfig({ ...cfg, enabled: true });
       s.enabled = true;
-      try { await deps.mcp.connect?.(s.id); } catch { /* reported by the MCP page; config stays enabled */ }
+      toConnect.push(s.id);
     }
     out.push({ id: s.id, activation: 'active', enabled: s.enabled, missing });
   }
   writeLedger(ledger);
+  for (const sid of toConnect) { try { await deps.mcp.connect?.(sid); } catch { /* reported by the MCP page; config stays enabled */ } }
   return out;
 }
 

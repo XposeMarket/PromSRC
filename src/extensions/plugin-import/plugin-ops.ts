@@ -31,7 +31,7 @@ export const PLUGIN_OPS_TOOL_DEF = {
       'Imports skills, slash commands (as skills), agents (as role skills), MCP servers and command hooks. Hosted ChatGPT apps and Python/TypeScript plugin runtimes are reported as not importable. ' +
       'Typical flow: catalog(query) to search the Claude official + OpenAI official catalogs -> inspect(entry) -> install(entry). ' +
       'Other actions: scan (plugins installed in Claude Code/Codex/Hermes/OpenClaw on this computer) | skills (standalone skill folders: ~/.hermes/skills, ~/.openclaw/skills, ~/.agents/skills, ~/.claude/skills, ~/.codex/skills) | ' +
-      'install(source) for a local folder, owner/repo[#subdir], GitHub URL or https git URL | list | uninstall(id, purge_data?) | ' +
+      'install(source) for a local folder, owner/repo[#subdir] or GitHub URL | list | uninstall(id, purge_data?) | ' +
       'activate_mcp(id) / deactivate_mcp(id): turn an import\'s MCP servers on/off (on = runs third-party code, needs the user\'s approval) | approve_hooks(id) / revoke_hooks(id) | enable_mcp(id): re-check after the user saved a secret. ' +
       'Imported MCP servers and hooks start OFF. Never pass secrets; the user saves them on the Plugins page.',
     parameters: {
@@ -40,7 +40,7 @@ export const PLUGIN_OPS_TOOL_DEF = {
       properties: {
         action: { type: 'string', enum: [...PLUGIN_OPS_ACTIONS] },
         entry: { type: 'string', description: 'Catalog entry id from catalog, e.g. "claude-official:feature-dev" or "openai-official:figma" (inspect/install).' },
-        source: { type: 'string', description: 'Local folder, owner/repo[#subdir], GitHub URL/tree URL, or https git URL (inspect/install). Use entry instead for catalog items.' },
+        source: { type: 'string', description: 'Local folder, owner/repo[#subdir], or GitHub URL/tree URL (inspect/install). Other hosts are not supported. Use entry instead for catalog items.' },
         id: { type: 'string', description: 'Imported plugin id (uninstall/activate_mcp/deactivate_mcp/enable_mcp/approve_hooks/revoke_hooks).' },
         catalog: { type: 'string', enum: CATALOGS.map((c) => c.id), description: 'catalog: limit to one catalog.' },
         query: { type: 'string', description: 'Filter text for catalog/scan/skills.' },

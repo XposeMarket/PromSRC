@@ -2,16 +2,12 @@
  * Turn an install source into a local plugin directory WITHOUT requiring git
  * for GitHub sources (zip archive via codeload.github.com + JSZip), with hard
  * limits: download size, file count, extracted bytes, path depth, no symlinks,
- * no traversal, no case-colliding paths. Non-GitHub https repos fall back to an
- * async `git clone` (git must be installed for those only).
+ * no traversal, no case-colliding paths. Only GitHub is supported as a remote
+ * host: every byte comes through the guarded public fetch (no git, no other hosts).
  */
 import fs from 'fs';
 import path from 'path';
-import { execFile } from 'child_process';
-import { promisify } from 'util';
 import { fetchPublicUrl } from '../../tools/outbound-url-guard.js';
-
-const execFileAsync = promisify(execFile);
 
 export const ARCHIVE_LIMITS = Object.freeze({
   downloadBytes: 200 * 1024 * 1024,
@@ -59,6 +55,49 @@ export async function resolveGithubCommit(repo: string, ref: string, fetcher: Fe
 
 export interface ExtractResult { files: number; bytes: number; prefix: string }
 
+const mb = (n: number) => `${Math.max(0.1, Math.round((n / 1048576) * 10) / 10)} MB`;
+
+/** Read a response body, aborting as soon as it passes `limit` bytes (never buffers past the limit). */
+export async function readBodyLimited(res: Response, limit: number, what = 'Download'): Promise<Buffer> {
+  const declared = Number(res.headers.get('content-length') || 0);
+  if (declared > limit) throw new Error(`${what} is larger than ${mb(limit)}`);
+  if (!res.body) return Buffer.alloc(0);
+  const reader = (res.body as any).getReader();
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > limit) {
+      try { await reader.cancel(); } catch { /* already closed */ }
+      throw new Error(`${what} is larger than ${mb(limit)}`);
+    }
+    chunks.push(Buffer.from(value));
+  }
+  return Buffer.concat(chunks, total);
+}
+
+/** Inflate one zip entry, stopping as soon as it passes `budget` bytes. */
+function inflateLimited(file: any, budget: number): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let n = 0;
+    let settled = false;
+    const stream = file.internalStream('nodebuffer');
+    stream
+      .on('data', (chunk: Buffer) => {
+        if (settled) return;
+        n += chunk.length;
+        if (n > budget) { settled = true; try { stream.pause(); } catch { /* ignore */ } reject(new Error('over budget')); return; }
+        chunks.push(chunk);
+      })
+      .on('error', (err: unknown) => { if (!settled) { settled = true; reject(err); } })
+      .on('end', () => { if (!settled) { settled = true; resolve(Buffer.concat(chunks, n)); } })
+      .resume();
+  });
+}
+
 /**
  * Extract only `subpath` of a GitHub zipball (top folder "<repo>-<ref>/") into dest.
  * Rejects the whole archive on traversal, symlinks, case collisions or limit overruns.
@@ -72,9 +111,12 @@ export async function extractGithubZip(buffer: Buffer, subpath: string, dest: st
   if (!prefix) throw new Error('Empty archive');
   const want = subpath ? `${prefix}/${subpath}/` : `${prefix}/`;
   const seen = new Set<string>();
-  const plan: Array<{ rel: string; file: any }> = [];
+  const plan: Array<{ rel: string; file: any; mode: number }> = [];
   for (const name of names) {
-    const n = name.replace(/\\/g, '/');
+    // JSZip normalizes names like "a/../../x"; judge the ORIGINAL archive path, not the cleaned one.
+    const original = String(zip.files[name]?.unsafeOriginalName ?? name);
+    if (original !== name || original.includes('\\')) throw new Error(`Unsafe archive path: ${original.slice(0, 120)}`);
+    const n = name;
     if (!n.startsWith(`${prefix}/`)) throw new Error(`Archive entry outside the top folder: ${n.slice(0, 120)}`);
     if (!n.startsWith(want)) continue;
     const rel = n.slice(want.length).replace(/\/$/, '');
@@ -88,21 +130,27 @@ export async function extractGithubZip(buffer: Buffer, subpath: string, dest: st
     const key = rel.toLowerCase();
     if (seen.has(key)) throw new Error(`Archive has case-colliding paths (${rel.slice(0, 120)})`);
     seen.add(key);
-    if (!file.dir) plan.push({ rel, file });
+    if (!file.dir) plan.push({ rel, file, mode });
   }
   if (!plan.length) throw new Error(subpath ? `Path "${subpath}" not found in the archive` : 'Archive has no files');
   if (plan.length > limits.files) throw new Error(`Plugin has ${plan.length} files (limit ${limits.files})`);
   const root = path.resolve(dest);
   let bytes = 0;
   // Sequential writes keep memory bounded and stop at the first overrun.
-  for (const { rel, file } of plan) {
+  for (const { rel, file, mode } of plan) {
     const target = path.resolve(root, ...rel.split('/'));
     if (!isInside(root, path.dirname(target)) && path.dirname(target) !== root) throw new Error(`Unsafe archive path: ${rel.slice(0, 120)}`);
-    const content: Buffer = await file.async('nodebuffer');
+    let content: Buffer;
+    try { content = await inflateLimited(file, limits.extractedBytes - bytes); }
+    catch (err: any) {
+      if (String(err?.message) === 'over budget') throw new Error(`Plugin is larger than ${mb(limits.extractedBytes)} unpacked`);
+      throw err;
+    }
     bytes += content.length;
-    if (bytes > limits.extractedBytes) throw new Error(`Plugin is larger than ${Math.round(limits.extractedBytes / 1048576)} MB unpacked`);
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.writeFileSync(target, content);
+    // Keep executable bits so bundled MCP launchers still start on macOS/Linux.
+    if (process.platform !== 'win32' && (mode & 0o111)) { try { fs.chmodSync(target, 0o755); } catch { /* best effort */ } }
   }
   return { files: plan.length, bytes, prefix };
 }
@@ -124,9 +172,7 @@ export async function materializeGithub(
   const limits = opts.limits || ARCHIVE_LIMITS;
   const res = await fetcher(url, { headers: { 'User-Agent': 'Prometheus-plugin-import' }, signal: AbortSignal.timeout(120_000) });
   if (!res.ok) throw new Error(`Download failed for ${src.repo}@${target}: HTTP ${res.status}`);
-  if (Number(res.headers.get('content-length') || 0) > limits.downloadBytes) throw new Error(`Repository archive is larger than ${Math.round(limits.downloadBytes / 1048576)} MB`);
-  const buf = Buffer.from(await res.arrayBuffer());
-  if (buf.length > limits.downloadBytes) throw new Error(`Repository archive is larger than ${Math.round(limits.downloadBytes / 1048576)} MB`);
+  const buf = await readBodyLimited(res, limits.downloadBytes, 'Repository archive');
   fs.mkdirSync(stagingDir, { recursive: true });
   const dest = fs.mkdtempSync(path.join(stagingDir, 'gh-'));
   const cleanup = () => { try { fs.rmSync(dest, { recursive: true, force: true }); } catch {} };
@@ -138,30 +184,3 @@ export async function materializeGithub(
   return { dir: dest, cleanup, commit, repo: src.repo, path: sub, ref: src.ref };
 }
 
-/** Clone a non-GitHub https repo (async, needs git). Pinned commits are verified. */
-export async function materializeGit(src: { url: string; path?: string; ref?: string; sha?: string }, stagingDir: string): Promise<Materialized> {
-  if (!/^https:\/\/[^\s@]+$/i.test(src.url)) throw new Error('Only https git URLs without credentials are supported');
-  const sub = safeSubpath(src.path);
-  if (src.ref && !REF.test(src.ref)) throw new Error(`Invalid git ref "${src.ref}"`);
-  fs.mkdirSync(stagingDir, { recursive: true });
-  const dest = fs.mkdtempSync(path.join(stagingDir, 'git-'));
-  const cleanup = () => { try { fs.rmSync(dest, { recursive: true, force: true }); } catch {} };
-  const git = (args: string[]) => execFileAsync('git', args, { cwd: dest, timeout: 120_000, windowsHide: true, maxBuffer: 4 * 1024 * 1024 });
-  try {
-    try { await git(['init', '-q']); } catch (err: any) {
-      throw new Error(err?.code === 'ENOENT' ? `Installing from ${src.url} needs git, which is not installed. GitHub sources do not need git.` : String(err?.message || err));
-    }
-    await git(['remote', 'add', 'origin', src.url]);
-    await git(['fetch', '--depth', '1', 'origin', src.sha || src.ref || 'HEAD']);
-    await git(['-c', 'advice.detachedHead=false', 'checkout', '-q', 'FETCH_HEAD']);
-    const head = String((await git(['rev-parse', 'HEAD'])).stdout).trim().toLowerCase();
-    if (src.sha && head !== src.sha.toLowerCase()) throw new Error(`Pinned commit ${src.sha} not found (got ${head})`);
-    fs.rmSync(path.join(dest, '.git'), { recursive: true, force: true });
-    const dir = sub ? path.resolve(dest, ...sub.split('/')) : dest;
-    if (!isInside(dest, dir) || !fs.existsSync(dir)) throw new Error(`Path "${sub}" not found in ${src.url}`);
-    return { dir, cleanup, commit: head, path: sub, ref: src.ref };
-  } catch (err: any) {
-    cleanup();
-    throw new Error(`git fetch failed for ${src.url}: ${String(err?.stderr || err?.message || err).slice(0, 300)}`);
-  }
-}
