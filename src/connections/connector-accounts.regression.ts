@@ -63,6 +63,22 @@ assert.equal(listConnectorAccounts(dir, 'gmail').length, 0);
   assert.equal(routeIncomingAccount(dir, 'gmail', 'oauth', { email: 'alex@example.com' }, () => def), '');
 }
 
+// Resolve against a private fixture, never the running gateway's account store.
+{
+  const cfg = require('../config/config').getConfig();
+  const prevDir = cfg.getConfigDir;
+  cfg.getConfigDir = () => dir;
+  try {
+    const { resolveAccountRef } = require('./connector-account-service');
+    const accounts = [{slug:'alice',label:'billing',username:'shared'}, {slug:'billing',label:'Primary credential',username:'shared'}].map(a => ({...a,kind:'credential',addedAt:'fixture'}));
+    fs.writeFileSync(path.join(dir, 'connector-accounts.json'), JSON.stringify({fixture:{accounts}}));
+    assert.deepEqual(resolveAccountRef('fixture','billing'),{slug:'billing'});
+    assert.match(resolveAccountRef('fixture','@shared').error, /Ambiguous/);
+    assert.match(resolveAccountRef('fixture','Primary credential').error, /Ambiguous/);
+    assert.deepEqual(resolveAccountRef('fixture','default'),{slug:''});
+  } finally { cfg.getConfigDir = prevDir; }
+}
+
 // 8c. Review #892 finding 3: credential make-default = swap + move to the planned slug, with no throw,
 // and the bindings and index agree afterwards.
 {

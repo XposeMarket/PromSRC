@@ -69,9 +69,12 @@ export function resolveAccountRef(id: string, ref: unknown): { slug: string } | 
   const norm = raw.toLowerCase().replace(/^@/, '');
   const accounts = listConnectorAccounts(dir(), id);
   const def = defaultAccountSummary(id);
-  if ([def.email, def.username, def.label].some((v) => v && v.toLowerCase().replace(/^@/, '') === norm)) return { slug: '' };
-  const hit = accounts.find((a) => [a.slug, a.label, a.email, a.username].some((v) => v && v.toLowerCase().replace(/^@/, '') === norm));
-  if (hit) return { slug: hit.slug };
+  const exact = accounts.find((a) => a.slug === raw.toLowerCase());
+  if (exact) return { slug: exact.slug };
+  const matches = [{ ...def, slug: '' }, ...accounts].filter((a) =>
+    [a.label, a.email, a.username].some((v) => v && v.toLowerCase().replace(/^@/, '') === norm));
+  if (matches.length === 1) return { slug: matches[0].slug };
+  if (matches.length > 1) return { error: `Ambiguous ${id} account "${raw}". Use an exact account ID: ${matches.map(a => a.slug || 'default').join(', ')}.` };
   const options = [`default (${def.label})`, ...accounts.map((a) => `${a.slug} (${a.label})`)].join(', ');
   return { error: `Unknown ${id} account "${raw}". Available accounts: ${options}. Omit "account" to use the default.` };
 }
