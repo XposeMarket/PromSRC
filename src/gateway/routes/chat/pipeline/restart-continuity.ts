@@ -2,7 +2,7 @@ import { recordPlannedChatProgress, recordPlannedChatActivity, finishPlannedChat
 
 import { claimRuntimeRecovery, releaseRuntimeRecoveryClaim } from '../../../runtime/recovery-claims';
 import { type MainChatStreamState } from '../../../chat/main-chat-stream-store';
-import { addMessage, getHistory } from '../../../session';
+import { addMessage, getHistory, getSessionExternalAgent } from '../../../session';
 import { evaluateRestartReplay } from '../../../chat/restart-replay-guard';
 import { mergeTurnFileTouches, type TurnFileTouch } from '../../../file-change-summary';
 import { listActiveBackgroundIdsForSession } from '../../../tasks/task-runner';
@@ -146,6 +146,13 @@ export function retriggerInterruptedMainChat(runtime: InterruptedMainChatRuntime
   const recoveryData = runtime?.recoveryData || {};
   const message = String(recoveryData.message || runtime?.detail || '').trim();
   if (!sessionId || !message) return false;
+  // A chat run by a connected agent (Codex) is never replayed by Prometheus.
+  // The next user message resumes the upstream thread; nothing is resent here.
+  if (getSessionExternalAgent(sessionId)) {
+    console.warn(`[RuntimeRecovery] Skipped replay of ${sessionId}: bound to a connected agent.`);
+    if (runtime?.id) markDurableRuntimeRecovered(String(runtime.id), 'completed', { recovery: 'replay_skipped_external_agent' });
+    return false;
+  }
 
   // Never re-answer a request that was already answered after the interruption
   // (the original turn kept running on a draining gateway, or a crashed
