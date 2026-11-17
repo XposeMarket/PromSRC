@@ -99,7 +99,7 @@ export async function openConnectFlow(fetchJson, target, options = {}) {
     if (action?.type === 'oauth' && attempt.state === 'awaiting_oauth') {
       const phone = window.matchMedia('(max-width: 767px)').matches;
       const phoneHandoff = action.desktopRequired && phone && !action.preferSystemBrowser;
-      text('p', phoneHandoff ? 'Your app credentials are saved. Authorize your account here using the secure browser. No computer needed.' : action.desktopRequired && phone ? 'This provider requires system-browser sign-in.' : 'Continue to the provider to sign in and choose access.', 'sa-muted');
+      text('p', phoneHandoff ? 'Your app credentials are saved. Authorize your account here using the secure browser. No computer needed.' : action.desktopRequired && phone ? `${title()} only returns sign-in to your computer, so finish this on the PC: open Prometheus there and tap Reconnect, or ask Prom to open it in Chrome on the PC. This sheet updates by itself once you allow access.` : 'Continue to the provider to sign in and choose access.', 'sa-muted');
       if (phoneHandoff) button(`Authorize ${title()} on this phone`, openPhoneOAuth, true);
       else if (!(action.desktopRequired && phone)) button(`Sign in with ${title()}`, () => openOAuth(action), true);
       button('Check sign-in', () => act('continue'));

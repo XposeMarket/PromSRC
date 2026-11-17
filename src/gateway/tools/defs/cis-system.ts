@@ -65,7 +65,7 @@ export function getCisSystemTools(): any[] {
     {
       type: 'function', function: {
       name: 'secure_access',
-      description: 'Protected saved access. Request an owner-only secure input card; list metadata; prepare protected sign-in using cred_ID. NEVER pass passwords, keys, raw vault paths, or OTP values. Fill does not submit: the owner approves sign-in in Saved access. No posting/sending/spending authority. Teams/jobs unsupported in this release; use browser login takeover when unsupported.',
+      description: 'Protected saved access. Request an owner-only secure input card; list metadata; prepare protected sign-in using cred_ID. NEVER pass passwords, keys, raw vault paths, or OTP values. request and fill BLOCK like ask_prometheus_questions: the call returns only after the owner saves/declines the card or approves/declines the sign-in, so do not send a separate message asking them to; act on the returned status. Fill does not submit by itself: the owner approves sign-in in the card. No posting/sending/spending authority. Teams/jobs unsupported in this release; use browser login takeover when unsupported.',
       parameters: { type: 'object', properties: {
         action: { type: 'string', enum: ['status', 'request', 'list', 'fill', 'revoke'] },
         credential_id: { type: 'string', description: 'Opaque cred_ ID, never a vault path.' },

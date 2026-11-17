@@ -99,7 +99,7 @@ export function normalizeProviderModel(providerId: string, model: string): strin
 export function inferProviderForBareModel(model?: string): string | null {
   const raw = String(model || '').trim().toLowerCase();
   if (!raw || raw.includes('/')) return null;
-  if (OPENAI_CODEX_MODEL_ALIASES[raw]) return 'openai_codex';
+  if (OPENAI_CODEX_MODEL_ALIASES[raw] || raw === 'gpt-6.2-astra' || raw === 'gpt-6.2-sol') return 'openai_codex';
   if (/^gpt-(?:5\.6|6(?:\.1)?)-(?:sol|luna|terra|astra)(?:$|[-.])/.test(raw)) return 'openai_codex';
   if (ANTHROPIC_MODEL_ALIASES[raw]) return 'anthropic';
   if (/^claude-/.test(raw)) return 'anthropic';

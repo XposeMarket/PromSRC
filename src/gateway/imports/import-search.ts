@@ -27,6 +27,11 @@ import {
  * or base64). The index is never sent to a model, never part of memory or a
  * session, and query text and snippets are never logged. Turning the switch
  * off deletes that agent's rows; deleting all removes the database file.
+ *
+ * Freshness: an indexed row only counts (and only produces hits or snippets) while
+ * its size and mtime still match the current source file. A changed or deleted chat
+ * is stale: its old text is suppressed, it is not counted as indexed, and the state
+ * is `partial` until a refresh build re-reads it.
  */
 
 export const MAX_MESSAGE_CHARS = 8_000;
@@ -284,7 +289,8 @@ export async function searchAgentChats(agentId: string, options: AgentSearchOpti
   const availability = messageSearchAvailability();
   const db = availability.ok ? openDb(false) : null;
   const enabled = isEnabled(db, listing.agentId);
-  const indexedChats = enabled ? countIndexed(db, listing.agentId) : 0;
+  const fresh = enabled ? freshIndexRows(db, listing.agentId, listing.files) : { ids: new Set<string>(), truncated: 0 };
+  const indexedChats = fresh.ids.size;
   const building = jobs.has(listing.agentId);
   const messageSearch: AgentSearchResult['messageSearch'] = !availability.ok
     ? { state: 'unavailable', reason: availability.reason, indexedChats: 0 }
@@ -294,11 +300,10 @@ export async function searchAgentChats(agentId: string, options: AgentSearchOpti
   const messageHits = new Set<string>();
   const fts = scope === 'all' && enabled && db ? buildFtsQuery(query) : '';
   if (fts) {
-    const current = new Set(listing.files.map((file) => file.id));
     try {
       const rows = db.prepare('SELECT DISTINCT file_id FROM messages WHERE messages MATCH ? AND agent_id = ?').all(fts, listing.agentId);
-      // Only chats that are in this agent row right now; never a vanished file.
-      for (const row of rows) if (current.has(String(row.file_id))) messageHits.add(String(row.file_id));
+      // Only fresh rows: a changed or vanished chat's old text must not be found.
+      for (const row of rows) if (fresh.ids.has(String(row.file_id))) messageHits.add(String(row.file_id));
     } catch {
       // A malformed expression returns no message hits, not an error.
     }
@@ -340,9 +345,22 @@ export async function searchAgentChats(agentId: string, options: AgentSearchOpti
   };
 }
 
-function countIndexed(db: SqliteDatabase | null, agentId: string): number {
-  if (!db) return 0;
-  return Number(db.prepare('SELECT COUNT(*) AS n FROM files WHERE agent_id = ?').get(agentId)?.n || 0);
+/**
+ * Index rows that still match the current source file (size + mtime). A row for a
+ * changed or vanished chat is stale: it never produces a hit and never counts as indexed.
+ */
+function freshIndexRows(db: SqliteDatabase | null, agentId: string, files: AgentIndexedFile[]): { ids: Set<string>; truncated: number } {
+  const ids = new Set<string>();
+  let truncated = 0;
+  if (!db) return { ids, truncated };
+  const byId = new Map(files.map((file) => [file.id, file] as const));
+  for (const row of db.prepare('SELECT file_id, size, mtime, truncated FROM files WHERE agent_id = ?').all(agentId)) {
+    const file = byId.get(String(row.file_id));
+    if (!file || Number(row.size) !== file.bytes || Number(row.mtime) !== file.updatedAt) continue;
+    ids.add(file.id);
+    if (Number(row.truncated) === 1) truncated += 1;
+  }
+  return { ids, truncated };
 }
 
 // ---- index build -----------------------------------------------------------------
@@ -543,7 +561,7 @@ export function startSearchIndex(agentId: string, options: ImportDiscoveryOption
     lastErrors.delete(id);
     jobs.set(id, job);
   }
-  return searchIndexStatus(id, options, listing.files.length);
+  return searchIndexStatus(id, options, listing.files);
 }
 
 const lastErrors = new Map<string, string>();
@@ -584,21 +602,24 @@ export interface SearchIndexStatus {
  * Status for one agent. Does not require the agent to still be detected, so a
  * vanished agent's index stays reachable and deletable.
  */
-export function searchIndexStatus(agentId: string, options: ImportDiscoveryOptions = {}, knownTotal?: number): SearchIndexStatus {
+export function searchIndexStatus(agentId: string, options: ImportDiscoveryOptions = {}, knownFiles?: AgentIndexedFile[]): SearchIndexStatus {
   const id = String(agentId || '').trim().toLowerCase();
   const availability = messageSearchAvailability();
-  let totalChats = knownTotal ?? -1;
-  if (totalChats < 0) {
-    try { totalChats = listAgentIndexedFiles(id, options).files.length; } catch { totalChats = 0; }
+  let files: AgentIndexedFile[] | undefined = knownFiles;
+  if (!files) {
+    try { files = listAgentIndexedFiles(id, options).files; } catch { files = []; }
   }
+  const totalChats = files.length;
   if (!availability.ok) {
     return { agentId: id, messageSearch: 'unavailable', reason: availability.reason, enabled: false, building: false, cancelling: false, indexedChats: 0, totalChats, truncatedChats: 0, indexBytes: 0, agentBytes: 0 };
   }
   const db = openDb(false);
   const enabled = isEnabled(db, id);
   const job = jobs.get(id);
-  const indexedChats = db ? countIndexed(db, id) : 0;
-  const truncatedChats = db ? Number(db.prepare('SELECT COUNT(*) AS n FROM files WHERE agent_id = ? AND truncated = 1').get(id)?.n || 0) : 0;
+  // Only rows that match the current source count as indexed; stale rows wait for the refresh build.
+  const fresh = db && enabled ? freshIndexRows(db, id, files) : { ids: new Set<string>(), truncated: 0 };
+  const indexedChats = fresh.ids.size;
+  const truncatedChats = fresh.truncated;
   let agentBytes = 0;
   if (db) {
     const mine = Number(db.prepare('SELECT COALESCE(SUM(chars), 0) AS n FROM files WHERE agent_id = ?').get(id)?.n || 0);
@@ -631,7 +652,7 @@ export function deleteAgentSearchIndex(agentId: string): { agentId: string; dele
   if (!messageSearchAvailability().ok) throw new Error('Cannot remove one agent while the database engine is unavailable. Use Delete search index to remove the whole file.');
   const db = openDb(false);
   if (!db) return { agentId: id, deleted: true, removedChats: 0 };
-  const removedChats = countIndexed(db, id);
+  const removedChats = db ? Number(db.prepare('SELECT COUNT(*) AS n FROM files WHERE agent_id = ?').get(id)?.n || 0) : 0;
   db.transaction(() => {
     db.prepare('DELETE FROM messages WHERE agent_id = ?').run(id);
     db.prepare('DELETE FROM files WHERE agent_id = ?').run(id);

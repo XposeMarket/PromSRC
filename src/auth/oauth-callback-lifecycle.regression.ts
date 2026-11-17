@@ -61,6 +61,9 @@ function fixture(file: string) {
       if (id === '../gateway/runtime/preview-mode') return { assertTokenRefreshAllowed() {} };
       if (id === '../extensions/xai-extension-adapter') return { refreshXAITools() {} };
       if (id === './oauth-callback-lifecycle') return load('oauth-callback-lifecycle');
+      if (id === '../security/plugin-credential-state') return { assertPluginCredentialUse: () => 0, pluginCredentialState: () => ({ stopped: false, history: [] }), setPluginCredentialState() {} };
+      if (id === '../connections/connector-accounts') return { accountKeySuffix: () => '', routeIncomingAccount: () => '', runWithConnectorAccounts: (_ids: any, _slug: any, fn: () => any) => fn() };
+      if (id === '../integrations/gateway-oauth-callback') return { GATEWAY_OAUTH_CALLBACK_PREFIX: '/oauth/connector/callback/', gatewayPublicOrigin: () => '', awaitGatewayOAuthCallback: () => new Promise(() => undefined) };
       throw new Error(`Unexpected dependency: ${id}`);
     };
     vm.runInContext(`(function(require,exports){${js}\n})`, context, { filename: name + '.ts' })(requireMock, exports);

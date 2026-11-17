@@ -34,6 +34,8 @@ export interface ContextBudget {
 type KnownModelProfile = Partial<Omit<ModelContextProfile, 'providerId' | 'model' | 'source'>>;
 
 const KNOWN_MODEL_PROFILES: Array<{ provider: RegExp; model: RegExp; profile: KnownModelProfile }> = [
+  // GPT-6.2: keep standard usage below the long-context tariff boundary.
+  { provider: /^(openai|openai_codex)$/i, model: /^gpt-6\.2-(?:astra|sol)(?:-|$)/i, profile: { contextWindowTokens: 272000, maxContextWindowTokens: 1050000, maxOutputTokens: 128000, tokenizer: 'openai', supportsReasoningTokens: true } },
   // Verified Codex catalog maximum; the default working window is not the maximum.
   // ChatGPT web backend (openai_codex/chatgpt). Without this it fell through to
   // the small default and compacted at ~30k (2026-09-25).

@@ -56,6 +56,7 @@ export class GmailConnector extends OAuthConnector {
       callbackPort: CALLBACK_PORT,
       callbackPath: '/auth/callback/gmail',
       revokeUrl: 'https://oauth2.googleapis.com/revoke',
+      webClient: true,
     };
     super(cfg, configDir);
   }

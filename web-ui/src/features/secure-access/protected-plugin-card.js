@@ -9,6 +9,9 @@ const X_FIELDS = Object.freeze([
   { key: 'clientSecret', label: 'OAuth 2.0 Client Secret (optional, not API Secret Key)', secret: true, required: false },
 ]);
 const X_AUTH_HOSTS = new Set(['twitter.com', 'x.com']);
+function safeKeyPage(value) {
+  try { const url = new URL(String(value || '')); return url.protocol === 'https:' && !url.username && !url.password ? url.href : ''; } catch { return ''; }
+}
 
 export const PROTECTED_ERROR_TEXT = Object.freeze({
   OWNER_SURFACE_REQUIRED: OWNER_SURFACE_MESSAGE,
@@ -128,6 +131,12 @@ export async function openProtectedPluginCard(fetchJson, options = {}) {
       for (const field of fields) {
         const input = el('input', { class: 'sa-input', type: field.secret === false ? 'text' : 'password', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false', 'data-prom-secret': 'true', required: field.required === true, 'aria-label': String(field.label || field.key) });
         inputs.push(input); form.append(el('label', { class: 'sa-field' }, el('span', { class: 'sa-lbl', text: String(field.label || field.key) }), input));
+      }
+      const keyUrl = !nativeApp && service !== 'x' ? safeKeyPage(services.find(item => String(item.id) === service)?.keyUrl) : '';
+      if (keyUrl) {
+        const link = el('a', { class: 'sa-btn', href: keyUrl, target: '_blank', rel: 'noopener noreferrer', text: 'Get your key' });
+        link.addEventListener('click', ev => { if (typeof window.openPrometheusExternalLink === 'function') { ev.preventDefault(); window.openPrometheusExternalLink(keyUrl, { target: '_blank', features: 'noopener,noreferrer' }); } });
+        form.prepend(el('p', { class: 'sa-muted', text: 'Open the provider page, create a key, then paste it here.' }), link);
       }
       const save = el('button', { class: 'sa-btn sa-pri', type: 'submit', text: nativeApp || service === 'x' ? 'Save and continue to sign-in' : 'Save key' });
       form.append(save);

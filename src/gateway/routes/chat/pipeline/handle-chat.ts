@@ -1,3 +1,5 @@
+import { findResumableChatPlan } from '../../../tasks/planned-chat-runs';
+
 
 import { inferReferenceImageMimeType } from './context-preparation';
 import { recordSessionToolCeiling } from '../../../agents-runtime/tool-ceiling';
@@ -1142,6 +1144,7 @@ export async function handleChatUntraced(
   };
 
   let declaredPlanSummary = '';
+  let resumedPlanContext = '';
   const emitProgressState = (reason: string) => {
     const payload = {
       taskSummary: declaredPlanSummary,
@@ -1533,6 +1536,20 @@ export async function handleChatUntraced(
   };
   if (seedProgressFromStoredGoalPlan()) {
     tools = buildProviderToolSurface(initialGenerationOverride).provider;
+  } else if (!backgroundPlanToolsActive && !hasDurableTaskPlan) {
+    const prior = findResumableChatPlan(sessionId, message);
+    if (prior) {
+      declaredPlanSummary = prior.title;
+      resumedPlanContext = `Continue this saved plan without repeating completed steps:\n${prior.runtimeProgress.items.map((item, i) => `${i + 1}. [${item.status}] ${item.text}`).join('\n')}`;
+      progressState.source = 'declared';
+      progressState.items = prior.runtimeProgress.items.map((item, index) => ({ id: `resumed_${index}`, text: item.text, status: item.status === 'completed' ? 'done' : item.status === 'failed' ? 'pending' : item.status as RuntimeProgressItem['status'] }));
+      progressState.activeIndex = progressState.items.findIndex(item => !['done', 'skipped'].includes(item.status));
+      stepCursor = Math.max(0, progressState.activeIndex);
+      progressState.manualStepAdvance = true;
+      planStepToolsActive = true;
+      emitProgressState('plan_resumed');
+      tools = buildProviderToolSurface(initialGenerationOverride).provider;
+    }
   }
 
   // Tools that gather information â€” do NOT advance the step cursor.
@@ -2710,7 +2727,7 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
   const messages: any[] = [
     {
       role: 'system',
-      content: buildSystemPrompt('full'),
+      content: buildSystemPrompt('full') + (resumedPlanContext ? `\n\n[SAVED_PLAN]\n${resumedPlanContext}\n[/SAVED_PLAN]` : ''),
     },
   ];
 
@@ -4840,7 +4857,7 @@ Do not produce prose. Use the canonical thread tool now.` });
         finalText = trimGrokRunawayRepetition(finalText) || emptyModelFinalFallback;
       }
       console.log(`[v2] FINAL: ${finalText.slice(0, 150)}`);
-      if (progressState.items.length >= 2) {
+      if (!progressState.manualStepAdvance && progressState.items.length >= 2) {
         for (const item of progressState.items) {
           if (item.status === 'in_progress') item.status = 'done';
           else if (item.status === 'pending') item.status = 'skipped';
