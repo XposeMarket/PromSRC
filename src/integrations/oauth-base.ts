@@ -10,7 +10,7 @@ import http from 'http';
 import crypto from 'crypto';
 import { getVault } from '../security/vault.js';
 import { GATEWAY_OAUTH_CALLBACK_PREFIX, awaitGatewayOAuthCallback, gatewayPublicOrigin } from './gateway-oauth-callback.js';
-import { accountKeySuffix, addAccountArmed, routeIncomingAccount, runWithConnectorAccounts, type AccountIdentity } from '../connections/connector-accounts.js';
+import { accountKeySuffix, addAccountArmed, listConnectorAccounts, routeIncomingAccount, runWithConnectorAccounts, type AccountIdentity } from '../connections/connector-accounts.js';
 
 export interface OAuthConnectorConfig {
   id: string;
@@ -346,7 +346,9 @@ export abstract class OAuthConnector {
       // while this refresh was in flight). Never hand that account's token to this call.
       const sameAccount = (existing.account_id && current.account_id === existing.account_id)
         || (existing.account_email && current.account_email?.toLowerCase() === existing.account_email.toLowerCase())
-        || (!existing.account_id && !existing.account_email);
+        // No stored identity: we can't prove it's the same account, so only trust the slot when
+        // this connector has no extra accounts (no make-default/remove swap could have happened).
+        || (!existing.account_id && !existing.account_email && listConnectorAccounts(this.configDir, this.cfg.id).length === 0);
       if (!sameAccount) throw new Error(`${this.cfg.name} account changed while refreshing. Retry the request.`);
       return current;
     }
