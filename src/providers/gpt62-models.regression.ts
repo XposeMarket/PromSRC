@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { resolveTaskModelRef } from '../gateway/tasks/task-model-ref.js';
 import { CODEX_MODELS } from './openai-codex-adapter.js';
 import { getReasoningCapability, normalizeReasoningEffort, supportsFastSpeed } from './reasoning-capabilities.js';
 import { resolveModelPricing, estimateModelUsageCost } from './model-pricing.js';
@@ -11,6 +12,9 @@ for (const [model, input, output, cacheRead, cacheWrite] of [
 ] as const) {
   assert.ok(CODEX_MODELS.includes(model));
   for (const provider of ['openai', 'openai_codex']) {
+    const manifest = JSON.parse(fs.readFileSync(`src/extensions/bundled/providers/${provider}/prometheus.extension.json`, 'utf8'));
+    assert.ok(manifest.runtime.options.staticModels.includes(model), `${provider} offline catalog`);
+    assert.equal(resolveTaskModelRef({ executorProvider: model }, { defaultProvider: () => 'anthropic' })?.providerId, 'openai_codex');
     const capability = getReasoningCapability(provider, model);
     assert.deepEqual(capability.efforts, ['low', 'medium', 'high', 'xhigh', 'max']);
     assert.notEqual(normalizeReasoningEffort(provider, model, 'none'), 'none');
