@@ -9,6 +9,7 @@
  */
 
 import type { LLMProvider, ChatMessage, ChatOptions, ChatResult, GenerateOptions, GenerateResult, ModelInfo, ModelUsage, ProviderID } from './LLMProvider';
+import { pruneHistoryImages } from './history-image-prune';
 import { contentToString, stripCacheMarker } from './content-utils';
 import { getConfig } from '../config/config';
 import { normalizeReasoningEffort, normalizeSpeed } from './reasoning-capabilities';
@@ -304,16 +305,17 @@ export class OpenAICompatAdapter implements LLMProvider {
 
   async chat(messages: ChatMessage[], model: string, options?: ChatOptions): Promise<ChatResult> {
     // OpenAI Codex OAuth requires a specific system prompt to validate CLI authorization
-    let finalMessages = sanitizeCacheMarkers(messages);
+    const prunedMessages = pruneHistoryImages(messages).messages;
+    let finalMessages = sanitizeCacheMarkers(prunedMessages);
     if (this.id === 'openai_codex') {
       const CODEX_SYSTEM = 'You are Codex, based on GPT-5. You are running as a coding agent in the Codex CLI on a user\'s local machine.';
-      const hasSystem = messages.length > 0 && messages[0].role === 'system';
-      const systemContent = hasSystem ? contentToString(messages[0].content) : '';
+      const hasSystem = prunedMessages.length > 0 && prunedMessages[0].role === 'system';
+      const systemContent = hasSystem ? contentToString(prunedMessages[0].content) : '';
       if (!hasSystem) {
-        finalMessages = [{ role: 'system', content: CODEX_SYSTEM }, ...messages];
+        finalMessages = [{ role: 'system', content: CODEX_SYSTEM }, ...prunedMessages];
       } else if (!systemContent.includes('Codex')) {
         const mergedSystem = systemContent ? `${CODEX_SYSTEM}\n\n${systemContent}` : CODEX_SYSTEM;
-        finalMessages = [{ role: 'system', content: mergedSystem }, ...messages.slice(1)];
+        finalMessages = [{ role: 'system', content: mergedSystem }, ...prunedMessages.slice(1)];
       }
     }
 	    const body: any = {
