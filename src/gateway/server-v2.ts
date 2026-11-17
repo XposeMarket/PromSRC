@@ -183,6 +183,8 @@ import { router as hubRouter, setHubRouterDeps } from './routes/hub.router';
 import { router as onboardingRouter } from './routes/onboarding.router';
 import { router as migrationRouter } from './routes/migration.router';
 import { router as importsRouter } from './routes/imports.router';
+import { router as externalAgentsRouter } from './routes/external-agents.router';
+import { shutdownExternalAgents } from './external-agents/registry';
 import { router as processesRouter } from './routes/processes.router';
 import { router as processHygieneRouter } from './routes/process-hygiene.router';
 import { router as codingRouter } from './routes/coding.router';
@@ -1080,6 +1082,7 @@ app.use('/', requireGatewayAuth, requireAccountAccess, obsidianRouter);
 app.use('/', requireGatewayAuth, requireAccountAccess, hubRouter);
 app.use('/', requireGatewayAuth, requireAccountAccess, migrationRouter);
 app.use('/', requireGatewayAuth, requireAccountAccess, importsRouter);
+app.use('/', requireGatewayAuth, requireAccountAccess, externalAgentsRouter);
 app.use('/', requireGatewayAuth, requireAccountAccess, processesRouter);
 app.use('/', requireGatewayAuth, requireAccountAccess, processHygieneRouter);
 app.use('/', requireGatewayAuth, requireAccountAccess, codingRouter);
@@ -1724,6 +1727,8 @@ async function gracefulShutdown(signal: 'SIGINT' | 'SIGTERM'): Promise<void> {
   try { heartbeatRunner.stop(); } catch {}
   try { brainRunner.stop('gateway_shutdown'); } catch {}
   try { shutdownCodexRealtimeBridge(); } catch {}
+  // Live connected agents: cancel pending requests and stop every agent child (no orphans).
+  try { await Promise.race([shutdownExternalAgents(), new Promise((resolve) => setTimeout(resolve, 3_000))]); } catch {}
   shutdownMark('services stopped');
   try { flushAllSessions(); } catch (err: any) {
     console.warn('[Gateway] Session flush failed:', err?.message || err);
