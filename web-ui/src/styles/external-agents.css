@@ -140,3 +140,9 @@ body.ea-agent-codex #chat-context-window-btn { display: none !important; }
   #chat-view .ea-minimal-composer .agent-toggle { gap: 4px; }
   #chat-view .ea-minimal-composer .ea-switcher { margin-right: 0; }
 }
+
+/* Override the native desktop display:contents grid only while this layout owns it. */
+body:not(.pm-mobile-active) #chat-view > .chat-input-area.ea-minimal-composer { display: flex; flex-direction: column; gap: 6px; }
+body:not(.pm-mobile-active) #chat-view > .chat-input-area.ea-minimal-composer > .chat-input-row { display: flex; width: 100%; }
+body:not(.pm-mobile-active) #chat-view > .chat-input-area.ea-minimal-composer > .agent-toggle { display: flex; width: 100%; margin-bottom: 0; }
+body:not(.pm-mobile-active) #chat-view > .chat-input-area.ea-minimal-composer .chat-hint { flex: 1; }

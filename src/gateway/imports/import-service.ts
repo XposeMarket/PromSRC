@@ -695,6 +695,9 @@ async function commitConversationJob(job: ImportJob): Promise<ImportJob> {
   delete result.cancelledAt;
   let cancelledAt = -1;
   for (let index = 0; index < conversations.length; index += 1) {
+    // Yield a macrotask so a cancel request can be handled between chats.
+    if (index > 0) await new Promise<void>((resolve) => setImmediate(resolve));
+
     const conversation = conversations[index];
     if (cancelRequests.has(job.id)) {
       // Cancel takes effect between chats: the chat in flight always finishes
