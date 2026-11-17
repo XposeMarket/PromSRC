@@ -133,9 +133,31 @@ export class ConnectorOAuthConnectionAdapter implements ConnectionAdapter {
     if (!strategy) return this.planRequired();
     const bridge = this.bridgeFor(context);
     const expectedAccountId = String(context.attempt.metadata?.expectedAccountId || '').trim() || undefined;
-    const requestedScopes = Array.isArray(strategy.authentication?.scopes)
+    const planScopes = Array.isArray(strategy.authentication?.scopes)
       ? strategy.authentication.scopes.map(String)
       : undefined;
+    // Reconnecting must never silently downgrade access the user already granted.
+    // Plugins Connect plans read-only by default, so without this a Gmail reconnect
+    // replaced a send-capable token with a gmail.readonly one and every send then
+    // failed with 403 insufficient scopes (2026-11-16). New write scopes still need
+    // an explicit request; this only carries forward scopes already on the token.
+    // Based on the STORED token's metadata, not current usability: an expired or
+    // reauth-required token is exactly when users reconnect. Only carried forward
+    // for the same account; switching accounts never inherits another account's grants.
+    let alreadyGranted: string[] = [];
+    if (planScopes) {
+      const stored = await bridge.metadata();
+      const storedIds = [stored.account?.providerAccountId, stored.account?.email]
+        .map((value) => String(value || '').trim().toLowerCase()).filter(Boolean);
+      const sameAccount = !expectedAccountId || storedIds.includes(expectedAccountId.toLowerCase());
+      if (sameAccount) {
+        alreadyGranted = (stored.grantedScopes || [])
+          .flatMap((scope) => String(scope || '').split(/[\s,]+/))
+          .map((scope) => scope.trim())
+          .filter(Boolean);
+      }
+    }
+    const requestedScopes = planScopes ? [...new Set([...planScopes, ...alreadyGranted])] : undefined;
     const started = await bridge.start(expectedAccountId, requestedScopes, context.attempt.id);
     if ((started as any).needsCredentials || (started.error && !bridge.isConnected?.() && !(await bridge.metadata()).clientIdConfigured)) {
       return { state: 'awaiting_secure_input', configuration: { protectedPluginSetup: bridge.id } };
@@ -158,7 +180,7 @@ export class ConnectorOAuthConnectionAdapter implements ConnectionAdapter {
         type: 'oauth',
         label: `Sign in with ${bridge.name}`,
         authorizationUrl: started.authUrl,
-        scopes: strategy.authentication?.scopes,
+        scopes: requestedScopes,
         opensExternalBrowser: true,
         desktopRequired: true,
         desktopReason: /google|gmail|drive|ga4/i.test(bridge.id)
