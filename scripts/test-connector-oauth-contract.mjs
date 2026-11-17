@@ -205,8 +205,9 @@ try {
   const started = await orchestrator.connect(created.id, { approved: true });
   assert.equal(started.state, 'awaiting_oauth');
   assert.equal(expectedAccountReceived, 'account-1');
-  // Fresh connect with no stored token requests exactly the plan scopes.
-  assert.deepEqual(requestedScopesReceived, ['repo']);
+  // The mock reports a stored token for the SAME account (account-1) holding repo + read:user,
+  // so reconnecting keeps read:user instead of downgrading to the plan's ['repo'] (2026-11-16).
+  assert.deepEqual(requestedScopesReceived, ['repo', 'read:user']);
   assert.equal(started.requiredUserAction?.type, 'oauth');
   const pending = await orchestrator.continue(created.id);
   assert.equal(pending.state, 'awaiting_oauth');
