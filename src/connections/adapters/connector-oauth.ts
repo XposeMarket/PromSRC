@@ -182,11 +182,14 @@ export class ConnectorOAuthConnectionAdapter implements ConnectionAdapter {
         authorizationUrl: started.authUrl,
         scopes: requestedScopes,
         opensExternalBrowser: true,
+        // Web-client flows return through the public gateway callback, so any device can finish them.
+        ...((started as any).web ? { desktopRequired: false } : {
         desktopRequired: true,
         desktopReason: /google|gmail|drive|ga4/i.test(bridge.id)
           ? 'The authorization code returns to a loopback callback owned by the local desktop gateway. Google rejects sign-in from embedded/automated browsers ("Couldn\'t sign you in"), so open this URL in the system Chrome on the PC (Start-Process), where the user is already signed in, and complete consent there with desktop tools. Do not use the in-app browser for Google.'
           : 'The authorization code returns to a loopback callback owned by the local desktop gateway. From a phone, ask Prom to open this sign-in in the in-app browser (it runs on the PC, so the callback works) and hand you the login card.',
         preferSystemBrowser: /google|gmail|drive|ga4/i.test(bridge.id),
+        }),
       },
     };
   }

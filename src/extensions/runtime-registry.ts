@@ -63,6 +63,7 @@ function firstSentence(text: string, max = 90): string {
 export function buildConnectorWrapperDefinition(spec: ConnectorWrapperSpec): any {
   const properties: Record<string, any> = {
     action: { type: 'string', enum: Object.keys(spec.actions), description: 'Which operation to run. Pass that operation\'s arguments alongside.' },
+    account: CONNECTOR_ACCOUNT_PROPERTY,
   };
   for (const action of Object.values(spec.actions)) {
     for (const [key, schema] of Object.entries<any>(action.parameters?.properties || {})) {
@@ -135,13 +136,23 @@ function descriptorContracts(manifest: LoadedExtensionDescriptor) {
   };
 }
 
+/** Optional multi-account selector shared by every connector tool (see connections/connector-accounts.ts). */
+export const CONNECTOR_ACCOUNT_PROPERTY = {
+  type: 'string',
+  description: 'Optional. Which connected account to use (email, @username or account id from connector_list). Omit for the default account.',
+};
+
 function toFunctionTool(tool: RegisteredTool): any {
+  const parameters = tool.parameters || { type: 'object', required: [], properties: {} };
+  const isConnectorTool = /^(connector_|x_api_)/.test(tool.name);
   return {
     type: 'function',
     function: {
       name: tool.name,
       description: tool.description,
-      parameters: tool.parameters || { type: 'object', required: [], properties: {} },
+      parameters: isConnectorTool && !(parameters as any).properties?.account
+        ? { ...parameters, properties: { ...((parameters as any).properties || {}), account: CONNECTOR_ACCOUNT_PROPERTY } }
+        : parameters,
     },
   };
 }

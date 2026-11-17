@@ -142,6 +142,7 @@ export function effectiveBlockingWaitDeadline(wait: BlockingWait): number {
     'request_final_action_approval']);
   const blocking = unconditional.has(wait.name)
     || (wait.name === 'background_ops' && ['wait', 'join'].includes(action))
+    || (wait.name === 'secure_access' && ['request', 'fill'].includes(action))
     || (['workspace_run', 'video_project'].includes(wait.name) && action === 'wait');
   if (!blocking || !Number.isFinite(wait.startedAt)) return 0;
   const declared = Number(wait.args?.timeout_ms ?? wait.args?.wait_ms ?? wait.args?.timeoutMs ?? BLOCKING_WAIT_DEFAULT_MS);

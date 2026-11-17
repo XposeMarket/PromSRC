@@ -30,6 +30,7 @@ export class GoogleDriveConnector extends OAuthConnector {
       callbackPort: 19425,
       callbackPath: '/auth/callback/google-drive',
       revokeUrl: 'https://oauth2.googleapis.com/revoke',
+      webClient: true,
     };
     super(cfg, configDir);
   }

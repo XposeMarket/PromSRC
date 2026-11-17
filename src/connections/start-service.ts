@@ -26,12 +26,21 @@ export class ConnectionStartService {
       const discovery = this.orchestrator.discover(selector);
       if (!attempt || discovery.status !== 'resolved' || discovery.canonicalServiceId !== attempt.serviceId
         || (input.kind && attempt.metadata?.pluginKind !== input.kind)) throw new Error('SERVICE_IDENTITY_MISMATCH');
-      if (attempt.state !== 'awaiting_secure_input' || Date.now() - Date.parse(attempt.updatedAt) <= 15 * 60_000) return attempt;
-      this.orchestrator.cancel(attempt.id);
+      // A closed attempt (e.g. closed by Disconnect) is never resumed; start fresh instead.
+      if (attempt.state !== 'cancelled' && attempt.state !== 'failed') {
+        // Any unfinished attempt idle for 15+ minutes (e.g. stuck in 'registering' from a
+        // failed verify) is abandoned, never resumed: resuming showed "Setup is complete"
+        // without ever asking for credentials again (Raul, 2026-11-12).
+        if (attempt.state === 'connected' || Date.now() - Date.parse(attempt.updatedAt) <= 15 * 60_000) return attempt;
+        this.orchestrator.abandon(attempt.id);
+      }
     }
     let created = this.orchestrator.create({ serviceId: selector, readOnly: true });
-    if (created.state === 'awaiting_secure_input' && Date.now() - Date.parse(created.updatedAt) > 15 * 60_000) {
-      this.orchestrator.cancel(created.id);
+    // create() reuses any unfinished attempt for this service. One left idle for 15+ minutes
+    // (e.g. stuck in 'registering' after a failed verify) must be abandoned, or Connect shows
+    // "Setup is complete" without ever asking for credentials (Raul, 2026-11-12).
+    if (created.state !== 'connected' && created.state !== 'requested' && Date.now() - Date.parse(created.updatedAt) > 15 * 60_000) {
+      this.orchestrator.abandon(created.id);
       created = this.orchestrator.create({ serviceId: selector, readOnly: true });
     }
     return created.plan || created.state !== 'requested' ? created : this.orchestrator.plan(created.id);

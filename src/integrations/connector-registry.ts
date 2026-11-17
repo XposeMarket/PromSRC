@@ -65,7 +65,9 @@ const COMPLETED_CALLBACK_TTL_MS = 10 * 60 * 1000;
 export function startOAuthFlowForConnector(id: string, expectedAccountId?: string, requestedScopes?: string[]): OAuthStartResult | { success: false; error: string } {
   const connector = connectors.get(id);
   if (!connector) return { success: false, error: `Unknown connector: ${id}` };
-  if (pendingCallbacks.has(id)) return { success: false, error: `${id} authorization is already in progress.` };
+  // A newer attempt supersedes a stale/abandoned listener instead of dead-ending
+  // ("authorization is already in progress" after closing the sheet mid-flow).
+  if (pendingCallbacks.has(id)) cancelConnectorOAuth(id);
   completedCallbacks.delete(id);
 
   // Generate and validate the provider URL before binding a local callback

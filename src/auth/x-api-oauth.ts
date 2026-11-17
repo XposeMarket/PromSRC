@@ -21,6 +21,23 @@ import path from 'path';
 import { exec } from 'child_process';
 import { getVault } from '../security/vault';
 import { log } from '../security/log-scrubber';
+import { accountKeySuffix, routeIncomingAccount, runWithConnectorAccounts } from '../connections/connector-accounts';
+import { GATEWAY_OAUTH_CALLBACK_PREFIX, awaitGatewayOAuthCallback, gatewayPublicOrigin } from '../integrations/gateway-oauth-callback';
+
+const PHONE_SIGNIN_VAULT_KEY = 'x.api.phone_signin';
+
+/** Phone sign-in: the X app also lists <public gateway>/oauth/connector/callback/x as a callback URI. */
+export function isXPhoneSignInEnabled(configDir: string): boolean {
+  try { return getVault(configDir).get(PHONE_SIGNIN_VAULT_KEY, 'x-api-oauth:phone:load')?.expose() === '1'; } catch { return false; }
+}
+export function setXPhoneSignIn(configDir: string, enabled: boolean): void {
+  if (enabled) getVault(configDir).set(PHONE_SIGNIN_VAULT_KEY, '1', 'x-api-oauth:phone:save');
+  else getVault(configDir).delete(PHONE_SIGNIN_VAULT_KEY, 'x-api-oauth:phone:clear');
+}
+export function xPhoneRedirectUri(): string {
+  const origin = gatewayPublicOrigin();
+  return origin ? `${origin}${GATEWAY_OAUTH_CALLBACK_PREFIX}x` : '';
+}
 
 const AUTHORIZATION_URL = 'https://x.com/i/oauth2/authorize';
 const TOKEN_URL = 'https://api.x.com/2/oauth2/token';
@@ -285,16 +302,33 @@ export function clearXApiCredentials(configDir: string): void {
   log.security('[x-api-oauth] Credentials cleared from vault');
 }
 
+/** Default X account keeps the original slot; extra accounts (connector-accounts.ts) get a suffix. */
+function tokensKey(): string { return `${TOKENS_VAULT_KEY}${accountKeySuffix('x')}`; }
+
+function defaultXIdentity(configDir: string): { username?: string; accountId?: string } | null {
+  try {
+    const secret = getVault(configDir).get(TOKENS_VAULT_KEY, 'x-api-oauth:identity');
+    const tokens = secret ? JSON.parse(secret.expose()) as XApiTokens : null;
+    return tokens?.access_token ? { username: tokens.username, accountId: tokens.user_id } : null;
+  } catch { return null; }
+}
+
+/** Store a NEW grant: default slot, or an extra account when add-account mode is armed. */
+function saveIncomingTokens(configDir: string, tokens: XApiTokens): void {
+  const slug = routeIncomingAccount(configDir, 'x', 'x', { username: tokens.username, accountId: tokens.user_id }, () => defaultXIdentity(configDir));
+  runWithConnectorAccounts(['x'], slug, () => saveTokens(configDir, tokens));
+}
+
 function saveTokens(configDir: string, tokens: XApiTokens): void {
-  getVault(configDir).set(TOKENS_VAULT_KEY, JSON.stringify(tokens), 'x-api-oauth:tokens:save');
-  // Backward compatibility: older social_intel reads vault://social_x_token.
-  getVault(configDir).set(LEGACY_SOCIAL_X_TOKEN_KEY, tokens.access_token, 'x-api-oauth:legacy-token:save');
+  getVault(configDir).set(tokensKey(), JSON.stringify(tokens), 'x-api-oauth:tokens:save');
+  // Backward compatibility: older social_intel reads vault://social_x_token (default account only).
+  if (!accountKeySuffix('x')) getVault(configDir).set(LEGACY_SOCIAL_X_TOKEN_KEY, tokens.access_token, 'x-api-oauth:legacy-token:save');
   log.security('[x-api-oauth] Tokens saved to vault');
 }
 
 export function loadXApiTokens(configDir: string): XApiTokens | null {
   if (pluginCredentialState(configDir, 'x').stopped) return null;
-  const secret = getVault(configDir).get(TOKENS_VAULT_KEY, 'x-api-oauth:tokens:load');
+  const secret = getVault(configDir).get(tokensKey(), 'x-api-oauth:tokens:load');
   if (!secret) return null;
   try {
     const tokens = JSON.parse(secret.expose()) as XApiTokens;
@@ -371,7 +405,7 @@ async function exchangeAuthorizationCode(configDir: string, code: string, flow: 
   };
   flow.lifecycle!.assertActive();
   assertPluginCredentialUse(configDir, 'x', generation);
-  saveTokens(configDir, tokens);
+  saveIncomingTokens(configDir, tokens);
   return tokens;
 }
 
@@ -452,7 +486,7 @@ export function getXApiOAuthStatus(configDir: string): XApiOAuthStatus {
 }
 
 let connectionAttemptOwner: string | undefined;
-export async function startXApiOAuthFlowBackground(configDir: string, options: { openBrowser?: boolean; attemptId?: string } = {}): Promise<{ authUrl: string } | { error: string; needsCredentials?: boolean; redirectUri?: string }> {
+export async function startXApiOAuthFlowBackground(configDir: string, options: { openBrowser?: boolean; attemptId?: string } = {}): Promise<{ authUrl: string; web?: boolean } | { error: string; needsCredentials?: boolean; redirectUri?: string }> {
   assertPluginCredentialUse(configDir, 'x');
   const credentials = loadXApiCredentials(configDir);
   if (!credentials) {
@@ -472,23 +506,48 @@ export async function startXApiOAuthFlowBackground(configDir: string, options: {
   connectionAttemptOwner = options.attemptId;
   const verifier = generateVerifier();
   const state = crypto.randomBytes(16).toString('hex');
+  const phoneRedirect = isXPhoneSignInEnabled(configDir) ? xPhoneRedirectUri() : '';
+  const redirectUri = phoneRedirect || credentials.redirect_uri;
   const params = new URLSearchParams({
     response_type: 'code',
     client_id: credentials.client_id,
-    redirect_uri: credentials.redirect_uri,
+    redirect_uri: redirectUri,
     scope: credentials.scopes.join(' '),
     state,
     code_challenge: generateChallenge(verifier),
     code_challenge_method: 'S256',
   });
   const authUrl = `${AUTHORIZATION_URL}?${params.toString()}`;
-  const flow: NonNullable<typeof _activeFlow> = { verifier, state, authUrl, createdAt: Date.now(), redirectUri: credentials.redirect_uri, credentials };
+  const flow: NonNullable<typeof _activeFlow> = { verifier, state, authUrl, createdAt: Date.now(), redirectUri, credentials };
   _activeFlow = flow;
   _bgResult = { done: false };
   const lifecycle = flow.lifecycle = new OAuthCallbackLifecycle<BgOAuthResult>(
     () => _activeFlow === flow,
     result => { _activeFlow = null; _bgResult = result; },
   );
+
+  if (phoneRedirect) {
+    // Returns through the public gateway route, so any device (phone Safari) can finish sign-in.
+    void awaitGatewayOAuthCallback('x', 10 * 60 * 1000, async (code, returnedState, error) => {
+      if (returnedState !== state) return { success: false, error: 'OAuth state mismatch.' };
+      if (error || !code) {
+        const msg = error || 'No code returned by X.';
+        lifecycle.finish({ done: true, success: false, error: msg });
+        return { success: false, error: msg };
+      }
+      if (!lifecycle.claim()) return { success: false, error: 'OAuth callback already handled or expired.' };
+      try {
+        const tokens = await exchangeAuthorizationCode(configDir, code, flow);
+        lifecycle.finish({ done: true, success: true, username: tokens.username, user_id: tokens.user_id });
+        return { success: true, account_email: tokens.username ? `@${tokens.username}` : undefined };
+      } catch (err: any) {
+        const msg = String(err?.message || err);
+        lifecycle.finish({ done: true, success: false, error: msg });
+        return { success: false, error: msg };
+      }
+    }).then((result) => { if (!result.success) lifecycle.finish({ done: true, success: false, error: result.error }); });
+    return { authUrl, web: true };
+  }
 
   const callbackUrl = new URL(credentials.redirect_uri);
   const server = http.createServer(async (req, res) => {

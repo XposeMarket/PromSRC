@@ -1,4 +1,5 @@
 import { openConnectFlow } from '../features/connectors/connect-flow.js';
+import { mountConnectorAccounts } from '../features/connectors/connector-accounts-ui.js';
 import { postJson as connectionOwnerPost } from '../features/secure-access/secure-access-core.js';
 /**
  * ConnectionsPage.js
@@ -627,7 +628,18 @@ function openConnectorView(id) {
   if (isConnected) {
     const verify = document.createElement('button'); verify.className = 'cv-btn-connect'; verify.type = 'button'; verify.textContent = 'Ask Prom to verify';
     verify.onclick = () => { closeConnectorView(); window.sendChat?.(`I connected the ${connector.name} plugin (connector:${connector.id}). Please verify its connection and available features using safe, read-only checks. Do not post, send, or spend.`); };
-    document.getElementById('cv-actions')?.append(verify);
+    const actionsHost = document.getElementById('cv-actions');
+    if (actionsHost) {
+      // Multi-account: current account, extra accounts, and "Add another account".
+      const accountsHost = document.createElement('div');
+      actionsHost.append(accountsHost);
+      mountConnectorAccounts(accountsHost, {
+        fetchJson: (path, opts = {}) => api(path, opts), connectorId: connector.id, name: connector.name, connected: true, accountLabel: connector.account || connector.accountEmail,
+        startConnect: () => openConnectFlow(api, { serviceId: connector.id, kind: 'connector' }, { onChanged: loadConnectionsState, onVerify: message => { closeConnectorView(); window.sendChat?.(message); } }),
+        onVerify: (message) => { closeConnectorView(); window.sendChat?.(message); },
+      });
+    }
+    actionsHost?.append(verify);
   }
   if (connector.isUserPlugin) {
     const actionsEl = document.getElementById('cv-actions');

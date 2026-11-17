@@ -14,8 +14,9 @@ async function main(): Promise<void> {
   const connections = new ConnectionStore(dir);
   const cleared: string[] = [];
   const adapter = { id: 'api-key', disconnect: async (_c: any, conn: any) => { cleared.push(conn.credentialRef); } };
+  const attempts = new ConnectionAttemptStore(dir);
   const orchestrator = new ConnectionOrchestrator({
-    attempts: new ConnectionAttemptStore(dir), connections, activity: new ConnectionActivityStore(dir),
+    attempts, connections, activity: new ConnectionActivityStore(dir),
     adapters: { resolve: () => adapter } as any, plans: { resolve: async () => ({}) as any },
   });
   const base = {
@@ -34,6 +35,16 @@ async function main(): Promise<void> {
   assert.equal(k.credentialRef, undefined, 'deleted credential reference is dropped');
   assert.deepEqual(k.registeredTools, ['connector_demo_list'], 'tools stay registered for reconnect');
   assert.deepEqual(k.availableTools, []);
+
+  // A setup attempt left in 'registering' must not survive Disconnect, or Connect resumes it
+  // and claims "Setup is complete" without asking for credentials (2026-11-12).
+  const k2 = connections.create({ ...base, serviceId: 'demo2', strategyId: 'demo-key', adapterId: 'api-key', credentialRef: 'vault:connection.credentials.y' } as any);
+  const stale = attempts.create({ serviceId: 'demo2', requestedCapabilities: [], readOnly: true } as any);
+  attempts.update(stale.id, { state: 'planning' });
+  attempts.update(stale.id, { state: 'registering', connectionId: k2.id, plan: { strategy: { adapter: 'api-key' } } as any });
+  await orchestrator.disconnect(k2.id);
+  const closed = attempts.get(stale.id)!;
+  assert.ok(['failed', 'cancelled'].includes(closed.state), `stale attempt closed on disconnect (got ${closed.state})`);
 
   await orchestrator.disconnect(oauth.id);
   const o = connections.get(oauth.id)!;
