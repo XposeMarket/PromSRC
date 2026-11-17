@@ -3188,6 +3188,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
         }
         let terminal = '';
         aiTurn._pmRecoveryReplay = true;
+        beginMobileReplayRenderBatch();
         try {
           for (const frame of events) {
             if (!isCurrentRecoveryTarget()) return;
@@ -3199,10 +3200,12 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
             }
           }
         } finally {
+          endMobileReplayRenderBatch();
           delete aiTurn._pmRecoveryReplay;
         }
         _mergeMobileWorkflowTraceFromProcessEntries(aiTurn);
         if (!isCurrentRecoveryTarget()) return;
+        flushMobileReplayRenderBatch();
         if (terminal) {
           await recoverBackgroundDock(events);
           if (!isCurrentRecoveryTarget()) return;
@@ -3296,6 +3299,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
         });
         let terminal = '';
         localAiTurn._pmRecoveryReplay = true;
+        beginMobileReplayRenderBatch();
         try {
           for (const frame of replayEvents) {
             if (!isCurrentRecoveryTarget()) return;
@@ -3307,9 +3311,11 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
             }
           }
         } finally {
+          endMobileReplayRenderBatch();
           delete localAiTurn._pmRecoveryReplay;
         }
         _mergeMobileWorkflowTraceFromProcessEntries(localAiTurn);
+        if (isCurrentRecoveryTarget()) flushMobileReplayRenderBatch();
         if (terminal || localAiTurn._pmFinalReceived) {
           if (!isCurrentRecoveryTarget()) return;
           finalizeMobileLiveAiTurn(localAiTurn);
@@ -3528,7 +3534,31 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
     _flushThreadRender(threadEl, body, requestedSession);
   }
 
+  // Recovery replay can apply hundreds of frames (tool calls/results, model
+  // tool-prep events, plan updates) in one synchronous loop. Rendering the
+  // live row after every frame froze the phone before the trace appeared on
+  // long threads, so replay defers rendering and paints once when it ends.
+  let mobileReplayRenderDepth = 0;
+  let mobileReplayRenderDirty = false;
+  function beginMobileReplayRenderBatch() {
+    mobileReplayRenderDepth += 1;
+  }
+  function endMobileReplayRenderBatch() {
+    mobileReplayRenderDepth = Math.max(0, mobileReplayRenderDepth - 1);
+  }
+  function flushMobileReplayRenderBatch() {
+    if (mobileReplayRenderDepth > 0 || !mobileReplayRenderDirty) return;
+    mobileReplayRenderDirty = false;
+    _renderMobileMainPlanDock(mainPlanDock, requestedSession);
+    renderThreadNow();
+    updateChatComposerSpace();
+  }
+
   function renderStreamingThreadNow() {
+    if (mobileReplayRenderDepth > 0) {
+      mobileReplayRenderDirty = true;
+      return;
+    }
     const timerKey = String(requestedSession || 'chat');
     mobileStreamRenderScheduler.cancel(`mobile:thread:${timerKey}`);
     mobileStreamRenderScheduler.cancel(`mobile:patch:${timerKey}`);
@@ -3538,6 +3568,10 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
   }
 
   function renderThreadSoon() {
+    if (mobileReplayRenderDepth > 0) {
+      mobileReplayRenderDirty = true;
+      return;
+    }
     if (!_scheduleMobileStreamingPatch(threadEl, body, requestedSession, 16)) {
       _scheduleThreadRender(threadEl, body, requestedSession, 16);
     }
@@ -4363,6 +4397,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
     sideState.thread = [];
     sideState.sideThreadRendered = false;
     setMobileSideBusy(false);
+    _cancelSideCloseCleanup();
     if (sideTitleEl) sideTitleEl.innerHTML = agentTitleHtml(record);
     if (sideSubtitleEl) {
       const status = String(record.status || 'running').toLowerCase();
@@ -4413,6 +4448,10 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
   }
 
   function renderMobileSideSheet() {
+    // A closed sheet is invisible: skip the full rebuild (streams and polls can
+    // keep firing after close). sideThreadRendered stays false from close, so the
+    // next open does a fresh full render with the latest state.
+    if (!sideSheet?.classList.contains('open')) return;
     syncMobileSideSheetViewport();
     if (!sideThreadEl) return;
     const openBackgroundId = String(sideState.backgroundAgentId || '').trim();
@@ -4536,10 +4575,12 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
   let _sideRenderTimer = null;
   function scheduleSideRenderSoon() {
     if (_sideRenderTimer) return; // leading-guard coalesce
+    // ~2 frames: a full side-thread rebuild per token at 60Hz janked long
+    // threads on phones; 40ms still reads as live typing.
     _sideRenderTimer = setTimeout(() => {
       _sideRenderTimer = null;
       renderMobileSideSheet();
-    }, 16);
+    }, 40);
   }
   function flushSideRender() {
     if (_sideRenderTimer) { clearTimeout(_sideRenderTimer); _sideRenderTimer = null; }
@@ -4632,7 +4673,10 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
     sideState.link = result.link;
     sideState.thread = Array.isArray(result.thread) ? result.thread : [];
     sideState.sideThreadRendered = false;
-    setMobileSideBusy(false);
+    // Reopening while this side chat is still streaming must keep the Stop
+    // button and block a second overlapping send.
+    setMobileSideBusy(!!sideState.abort && sideState.streamingSideId === String(result.link?.id || ''));
+    _cancelSideCloseCleanup();
     sideInput?.setAttribute('placeholder', 'Follow up');
     if (sideTitleEl) sideTitleEl.textContent = result.link?.title || 'Side Chat';
     if (sideSubtitleEl) sideSubtitleEl.textContent = `Prometheus · ${String(parentSessionId).startsWith('mobile_') ? 'Mobile' : 'Chat'}`;
@@ -4649,17 +4693,33 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
     }
   }
 
+  // Mode classes that change the panel's geometry/material are only cleared
+  // once the slide-out finishes; removing them up front made the panel jump to
+  // a different size mid-animation.
+  let _sideCloseCleanupTimer = null;
+  function _cancelSideCloseCleanup() {
+    if (_sideCloseCleanupTimer) clearTimeout(_sideCloseCleanupTimer);
+    _sideCloseCleanupTimer = null;
+  }
+
   function closeMobileSideChatSheet() {
+    if (!sideSheet?.classList.contains('open')) return;
+    sideInput?.blur?.();
+    sideSheet.classList.remove('open');
+    sideSheet.setAttribute('aria-hidden', 'true');
+    sideSheet.setAttribute('inert', '');
     stopMobileBackgroundAgentDetailRefresh();
+    if (_sideRenderTimer) { clearTimeout(_sideRenderTimer); _sideRenderTimer = null; }
     sideState.backgroundAgentId = '';
     sideState.backgroundTraceExpanded = null;
     sideState.sideThreadRendered = false;
-    sideSheet?.classList.remove('background-agent-detail-mode');
-    sideSheet?.classList.remove('open');
-    sideSheet?.setAttribute('aria-hidden', 'true');
-    sideSheet?.setAttribute('inert', '');
-    sideInput?.setAttribute('placeholder', 'Follow up');
-    sideInput?.blur?.();
+    _cancelSideCloseCleanup();
+    _sideCloseCleanupTimer = setTimeout(() => {
+      _sideCloseCleanupTimer = null;
+      if (sideSheet.classList.contains('open')) return;
+      sideSheet.classList.remove('background-agent-detail-mode');
+      sideInput?.setAttribute('placeholder', 'Follow up');
+    }, 420);
   }
 
   function applyMobileSideStreamEvent(aiTurn, evt) {
@@ -4725,7 +4785,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
             else _appendMobileLiveTrace(aiTurn, 'info', messageText);
           }
         }
-        renderMobileSideSheet();
+        scheduleSideRenderSoon();
         return 'streaming';
       case 'heartbeat':
         return 'streaming';
@@ -4739,7 +4799,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
         aiTurn.toolActivityStarted = true;
         _appendMobileProcess(aiTurn, 'tool', _mobileToolLabel(evt), evt);
         _applyMobileToolActivity(aiTurn, 'call', evt);
-        renderMobileSideSheet();
+        flushSideRender();
         return 'streaming';
       case 'tool_result':
         if (mobileCompactionEventAction(evt) === 'context_compaction') {
@@ -4753,7 +4813,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
         _collectMediaFromToolEvent(aiTurn, evt);
         _appendMobileProcess(aiTurn, evt.error ? 'error' : 'result', _mobileToolResultLabel(evt), evt);
         _applyMobileToolActivity(aiTurn, 'result', evt);
-        renderMobileSideSheet();
+        flushSideRender();
         return 'streaming';
       case 'vision_injected':
         _moveMobileWorkflowBubbleBeforeTool(aiTurn);
@@ -4894,6 +4954,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
       agentExecutionMode: 'execute',
     };
     thread.push(aiTurn);
+    sideState.streamingSideId = sideId;
     setMobileSideBusy(true);
     renderMobileSideSheet();
     const clientRequestId = _newMobileClientRequestId(sideId);
@@ -4925,9 +4986,13 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
     } };
 
     function finishMobileSideTurn() {
+      const ownsSideState = sideState.streamingSideId === sideId;
       if (sideTurnFinished) {
-        setMobileSideBusy(false);
-        sideState.abort = null;
+        if (ownsSideState) {
+          setMobileSideBusy(false);
+          sideState.abort = null;
+          sideState.streamingSideId = '';
+        }
         return;
       }
       sideTurnFinished = true;
@@ -4940,8 +5005,13 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
       aiTurn.timestamp = Number(aiTurn.timestamp || Date.now()) || Date.now();
       aiTurn.content = String(aiTurn.body?.text || '');
       _mergeMobileLiveTraceIntoProcess(aiTurn);
-      setMobileSideBusy(false);
-      sideState.abort = null;
+      if (ownsSideState) {
+        // Only clear busy/abort if no other view took over (e.g. a background
+        // agent steer in flight) and this stream still owns them.
+        if (!sideState.backgroundAgentId) setMobileSideBusy(false);
+        sideState.abort = null;
+        sideState.streamingSideId = '';
+      }
       const links = _loadMobileSideChatLinks();
       const idx = links.findIndex((item) => item.id === sideId);
       if (idx >= 0) {
@@ -6580,6 +6650,10 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
         return 'streaming';
       case 'progress_state':
         _applyMobileMainPlanProgress(evt, requestedSession);
+        if (mobileReplayRenderDepth > 0) {
+          mobileReplayRenderDirty = true;
+          return 'streaming';
+        }
         _renderMobileMainPlanDock(mainPlanDock, requestedSession);
         updateChatComposerSpace();
         return 'streaming';
@@ -8866,24 +8940,87 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
   sideAttachBtn?.addEventListener('click', () => pmToast('Side chat attachments are coming next. Attach files in the main chat first.', 'info'));
   sideMicBtn?.addEventListener('click', () => pmToast('Side chat dictation is coming next. Use the main mic for now.', 'info'));
 
-  let sideDragY = null;
-  sideHandle?.addEventListener('touchstart', (event) => {
-    sideDragY = event.touches?.[0]?.clientY ?? null;
-    if (sidePanel) sidePanel.style.transition = 'none';
+  // Swipe down to close the side chat / background agent sheet. The drag can
+  // start on the handle or header, or anywhere in the thread while it is
+  // scrolled to the top. Panel and scrim follow the finger (CSS vars on the
+  // sheet so the keyboard-open transform rule cannot fight the drag); release
+  // past a distance or flick-velocity threshold closes, otherwise it springs back.
+  let sideDrag = null;
+  function _endSideDrag() {
+    sideSheet?.classList.remove('is-dragging');
+    sideSheet?.style.removeProperty('--pm-side-drag-y');
+    sideSheet?.style.removeProperty('--pm-side-drag-scrim');
+  }
+  sidePanel?.addEventListener('touchstart', (event) => {
+    sideDrag = null;
+    if (!sideSheet?.classList.contains('open') || (event.touches?.length || 0) !== 1) return;
+    const target = event.target;
+    if (target?.closest?.('.pm-mobile-side-composer, .pm-mobile-side-plan, .pm-mobile-side-close, input, textarea, select, [contenteditable="true"]')) return;
+    const touch = event.touches[0];
+    const inThread = !!(sideThreadEl && sideThreadEl.contains(target));
+    sideDrag = {
+      startX: touch.clientX,
+      startY: touch.clientY,
+      lastY: touch.clientY,
+      lastT: event.timeStamp || performance.now(),
+      velocity: 0,
+      offset: 0,
+      fromChrome: !!target?.closest?.('.pm-mobile-side-handle, .pm-mobile-side-header'),
+      inThread,
+      startScrollTop: inThread ? sideThreadEl.scrollTop : 0,
+      active: false,
+      rejected: false,
+    };
   }, { passive: true });
-  sideHandle?.addEventListener('touchmove', (event) => {
-    if (sideDragY == null || !sidePanel) return;
-    const dy = (event.touches?.[0]?.clientY ?? sideDragY) - sideDragY;
-    if (dy > 0) sidePanel.style.transform = `translateY(${dy}px)`;
-  }, { passive: true });
-  sideHandle?.addEventListener('touchend', (event) => {
-    if (sideDragY == null || !sidePanel) return;
-    const dy = (event.changedTouches?.[0]?.clientY ?? sideDragY) - sideDragY;
-    sidePanel.style.transition = '';
-    sidePanel.style.transform = '';
-    if (dy > 80) closeMobileSideChatSheet();
-    sideDragY = null;
-  }, { passive: true });
+  sidePanel?.addEventListener('touchmove', (event) => {
+    const drag = sideDrag;
+    const touch = event.touches?.[0];
+    if (!drag || drag.rejected || !touch || !sidePanel) return;
+    const dx = touch.clientX - drag.startX;
+    const dy = touch.clientY - drag.startY;
+    if (!drag.active) {
+      const atTop = drag.fromChrome
+        || !drag.inThread
+        || (drag.startScrollTop <= 0 && sideThreadEl.scrollTop <= 0);
+      // iOS commits to native scrolling (rubber-band) on the first unprevented
+      // move, so claim a downward pull from the top before the slop decides.
+      if (atTop && dy > 0 && Math.abs(dy) >= Math.abs(dx) && event.cancelable) event.preventDefault();
+      if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+      const vertical = Math.abs(dy) > Math.abs(dx) * 1.2;
+      if (!vertical || dy <= 0 || !atTop) { drag.rejected = true; return; }
+      drag.active = true;
+      drag.startY = touch.clientY; // start from the finger, no slop jump
+      drag.lastY = touch.clientY;
+      sideInput?.blur?.();
+      sideSheet?.classList.add('is-dragging');
+    }
+    if (event.cancelable) event.preventDefault();
+    const now = event.timeStamp || performance.now();
+    const dt = Math.max(1, now - drag.lastT);
+    drag.velocity = drag.velocity * 0.6 + ((touch.clientY - drag.lastY) / dt) * 0.4;
+    drag.lastY = touch.clientY;
+    drag.lastT = now;
+    drag.offset = Math.max(0, touch.clientY - drag.startY);
+    const height = Math.max(1, sidePanel.getBoundingClientRect().height || window.innerHeight || 1);
+    sideSheet?.style.setProperty('--pm-side-drag-y', `${drag.offset}px`);
+    sideSheet?.style.setProperty('--pm-side-drag-scrim', String(Math.max(0, 1 - drag.offset / height)));
+  }, { passive: false });
+  const _finishSideDrag = (cancelled) => {
+    const drag = sideDrag;
+    sideDrag = null;
+    if (!drag?.active) return;
+    const height = Math.max(1, sidePanel?.getBoundingClientRect().height || window.innerHeight || 1);
+    const shouldClose = !cancelled && (
+      drag.offset > Math.min(140, height * 0.25)
+      || (drag.velocity > 0.45 && drag.offset > 24)
+    );
+    // Removing is-dragging and (when closing) .open in the same frame lets the
+    // CSS transition run from the finger position to the resting/closed spot.
+    _endSideDrag();
+    if (shouldClose) closeMobileSideChatSheet();
+  };
+  sidePanel?.addEventListener('touchend', () => _finishSideDrag(false), { passive: true });
+  sidePanel?.addEventListener('touchcancel', () => _finishSideDrag(true), { passive: true });
 
   attachBtn?.addEventListener('click', (event) => {
     event.preventDefault();
