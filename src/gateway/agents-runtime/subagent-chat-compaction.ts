@@ -64,10 +64,11 @@ export function externalizeInlineImage(dataUrl: string, dir = agentTraceImageCac
 }
 
 function compactString(value: string, externalize: InlineImageExternalizer): string {
-  if (value.length >= AGENT_TRACE_INLINE_IMAGE_MIN_CHARS && /^data:/i.test(value)) {
-    if (/^data:image\//i.test(value)) return externalize(value) || '[inline image omitted]';
-    return '[inline data omitted]';
+  // Image data URLs are always externalized (any length) so small thumbnails survive the text cap.
+  if (/^data:image\//i.test(value)) {
+    return externalize(value) || (value.length < 64 * 1024 ? value : '[inline image omitted]');
   }
+  if (value.length >= AGENT_TRACE_INLINE_IMAGE_MIN_CHARS && /^data:/i.test(value)) return '[inline data omitted]';
   if (value.length > AGENT_TRACE_MAX_STRING_CHARS) {
     return `${value.slice(0, AGENT_TRACE_MAX_STRING_CHARS)}… [truncated ${value.length - AGENT_TRACE_MAX_STRING_CHARS} chars]`;
   }

@@ -69,11 +69,6 @@ function readChatFile(file: string): SubagentChatFile {
   }
 }
 
-function readMessagesFile(file: string): SubagentChatMessage[] {
-  const parsed = readChatFile(file);
-  return Array.isArray(parsed.messages) ? parsed.messages : [];
-}
-
 /** Shallow metadata copy whose trace arrays are compacted (no inline images, bounded strings). */
 function compactMetadataTraces(raw: any): Record<string, any> {
   const metadata = raw && typeof raw === 'object' ? { ...raw } : {};
@@ -117,10 +112,9 @@ function normalizeDurableFields(message: any): SubagentChatMessage {
 
 function sameTrace(a: unknown, b: unknown): boolean {
   if (a === b) return true;
-  if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
-  if (!a.length) return true;
-  const last = (list: any[]) => String(list[list.length - 1]?.id ?? JSON.stringify(list[list.length - 1]).slice(0, 200));
-  return last(a) === last(b);
+  if (!Array.isArray(a) || !Array.isArray(b)) return false;
+  // Deep equality: a shared last id must never hide a differing trace.
+  try { return JSON.stringify(a) === JSON.stringify(b); } catch { return false; }
 }
 
 /**
@@ -152,9 +146,58 @@ function writeFileAtomic(file: string, text: string): void {
   }
 }
 
+const BACKUP_DIR_NAME = 'backup-pre-trace-compaction';
+const BACKUP_MIN_BYTES = 1024 * 1024;
+
+function hasTraceStorageVersion(file: string): boolean {
+  const fd = fs.openSync(file, 'r');
+  try {
+    const head = Buffer.alloc(4096);
+    const n = fs.readSync(fd, head, 0, head.length, 0);
+    return /"traceStorageVersion"\s*:\s*\d+/.test(head.toString('utf-8', 0, n));
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/** Copies an unversioned >= 1 MB chat file to the backup folder via tmp + size check + rename. Throws on failure. */
+function ensurePreCompactionBackup(file: string): void {
+  const size = fs.statSync(file).size;
+  if (size < BACKUP_MIN_BYTES) return;
+  const backupDir = path.join(path.dirname(file), BACKUP_DIR_NAME);
+  const backupFile = path.join(backupDir, path.basename(file));
+  if (fs.existsSync(backupFile) && fs.statSync(backupFile).size === size) return;
+  fs.mkdirSync(backupDir, { recursive: true });
+  const tmp = `${backupFile}.tmp-${process.pid}-${Date.now()}`;
+  try {
+    fs.copyFileSync(file, tmp);
+    if (fs.statSync(tmp).size !== size) throw new Error(`backup size mismatch for ${path.basename(file)}`);
+    fs.renameSync(tmp, backupFile);
+  } catch (err) {
+    try { fs.unlinkSync(tmp); } catch {}
+    throw err;
+  }
+}
+
+/** Single guard for every rewrite of an existing unversioned chat file. Throws if no verified backup exists. */
+function ensureBackupBeforeRewrite(file: string): void {
+  if (!fs.existsSync(file) || hasTraceStorageVersion(file)) return;
+  ensurePreCompactionBackup(file);
+}
+
+function writeChatFileSafely(agentId: string, messages: SubagentChatMessage[], state: SubagentChatContextState = {}): void {
+  try {
+    writeChatFile(agentId, messages, state);
+  } catch (err: any) {
+    console.warn(`[agent-chat] write skipped for ${sanitizeAgentId(agentId)} (original kept): ${err?.message || err}`);
+  }
+}
+
 function writeChatFile(agentId: string, messages: SubagentChatMessage[], state: SubagentChatContextState = {}): void {
   fs.mkdirSync(chatDir(), { recursive: true });
-  writeFileAtomic(chatPath(agentId), JSON.stringify({
+  const file = chatPath(agentId);
+  ensureBackupBeforeRewrite(file);
+  writeFileAtomic(file, JSON.stringify({
     agentId,
     traceStorageVersion: AGENT_CHAT_TRACE_STORAGE_VERSION,
     messages: messages.slice(-MAX_MESSAGES_PER_AGENT).map((message) => toStoredChatMessage(message as any)),
@@ -162,9 +205,6 @@ function writeChatFile(agentId: string, messages: SubagentChatMessage[], state: 
     ...(state.contextSummaryUpdatedAt ? { contextSummaryUpdatedAt: state.contextSummaryUpdatedAt } : {}),
   }, null, 2));
 }
-
-const BACKUP_DIR_NAME = 'backup-pre-trace-compaction';
-const BACKUP_MIN_BYTES = 1024 * 1024;
 
 /**
  * One-time, in-place upgrade of a chat file written before trace compaction.
@@ -176,15 +216,7 @@ export function upgradeChatFileStorage(file: string): SubagentChatFile {
   const parsed = readChatFile(file);
   if (!Array.isArray(parsed.messages) || parsed.traceStorageVersion === AGENT_CHAT_TRACE_STORAGE_VERSION) return parsed;
   try {
-    const size = fs.statSync(file).size;
-    if (size >= BACKUP_MIN_BYTES) {
-      const backupDir = path.join(path.dirname(file), BACKUP_DIR_NAME);
-      const backupFile = path.join(backupDir, path.basename(file));
-      if (!fs.existsSync(backupFile)) {
-        fs.mkdirSync(backupDir, { recursive: true });
-        fs.copyFileSync(file, backupFile);
-      }
-    }
+    ensurePreCompactionBackup(file);
     const messages = parsed.messages.map((raw: any) => {
       if (!raw || typeof raw !== 'object') return raw;
       const next: Record<string, any> = { ...raw };
@@ -194,7 +226,8 @@ export function upgradeChatFileStorage(file: string): SubagentChatFile {
       if (next.metadata && typeof next.metadata === 'object') next.metadata = compactMetadataTraces(next.metadata);
       return toStoredChatMessage(next);
     });
-    const upgraded: SubagentChatFile = { ...parsed, messages, traceStorageVersion: AGENT_CHAT_TRACE_STORAGE_VERSION };
+    // Version key first so it stays in the file head where hasTraceStorageVersion looks.
+    const upgraded: SubagentChatFile = { traceStorageVersion: AGENT_CHAT_TRACE_STORAGE_VERSION, ...parsed, messages };
     writeFileAtomic(file, JSON.stringify(upgraded, null, 2));
     return upgraded;
   } catch (err: any) {
@@ -217,7 +250,9 @@ export function getSubagentChatHistory(agentId: string, limit = 100): SubagentCh
     const legacyFile = chatPath(agentId, legacyChatDir());
     const primaryParsed = upgradeChatFileStorage(file);
     const primaryMessages = Array.isArray(primaryParsed.messages) ? primaryParsed.messages : [];
-    const legacyMessages = legacyFile !== file ? readMessagesFile(legacyFile) : [];
+    const legacyParsed = legacyFile !== file ? upgradeChatFileStorage(legacyFile) : {};
+    const legacyMessages = Array.isArray(legacyParsed.messages) ? legacyParsed.messages : [];
+    const primaryIds = new Set(primaryMessages.map((msg: any) => String(msg?.id || '')));
     const seen = new Set<string>();
     const messagesNear = new Map<string, number>();
     const messages = [...legacyMessages, ...primaryMessages]
@@ -240,9 +275,10 @@ export function getSubagentChatHistory(agentId: string, limit = 100): SubagentCh
         return true;
       });
     const persistable = messages.filter((msg: any) => msg?.metadata?.source !== 'task_recovery');
-    if ((!fs.existsSync(file) || legacyMessages.length) && persistable.length) {
-      const state = getSubagentChatContextState(agentId);
-      writeChatFile(agentId, persistable, state);
+    // Rewrite only when the primary file is missing or a legacy message is not in it yet.
+    const hasNewLegacy = persistable.some((msg: any) => !primaryIds.has(String(msg.id)));
+    if ((!fs.existsSync(file) || hasNewLegacy) && persistable.length) {
+      writeChatFileSafely(agentId, persistable, getSubagentChatContextState(agentId));
     }
     return messages.slice(-Math.max(1, limit));
   } catch {
@@ -286,7 +322,7 @@ export function appendSubagentChatMessage(
       return true;
     })
     .slice(-MAX_MESSAGES_PER_AGENT);
-  writeChatFile(agentId, trimmed, getSubagentChatContextState(agentId));
+  writeChatFileSafely(agentId, trimmed, getSubagentChatContextState(agentId));
   return normalizedSaved;
 }
 
@@ -324,7 +360,7 @@ export function setSubagentChatContextState(
         ts: Number(message.ts || message.timestamp || Date.now()) || Date.now(),
       }))
     : getSubagentChatHistory(agentId, MAX_MESSAGES_PER_AGENT);
-  writeChatFile(agentId, messages, {
+  writeChatFileSafely(agentId, messages, {
     latestContextSummary: String(state.latestContextSummary || '').trim() || undefined,
     contextSummaryUpdatedAt: Number(state.contextSummaryUpdatedAt || 0) || undefined,
   });

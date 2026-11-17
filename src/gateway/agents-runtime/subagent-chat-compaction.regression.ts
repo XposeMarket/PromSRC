@@ -118,6 +118,65 @@ try {
   assert.equal('liveTraceEntries' in lite.metadata, false);
   assert.equal('processEntries' in lite.metadata, false);
 
+  // Finding 1: same last id, different content -> top-level copy kept.
+  {
+    const top = [{ id: 'same', text: 'A' }];
+    const kept = toStoredChatMessage({ id: 'm2', liveTraceEntries: top, metadata: { liveTraceEntries: [{ id: 'same', text: 'B' }] } });
+    assert.deepEqual(kept.liveTraceEntries, top, 'differing trace with same last id is kept');
+  }
+
+  // Finding 5: 1,800-char image data URL is externalized, not truncated.
+  {
+    const small = `data:image/png;base64,${'Q'.repeat(1_800)}`;
+    assert.equal(compactTraceValue(small, () => '/api/canvas/generated-image-preview?cache=thumb.png'), '/api/canvas/generated-image-preview?cache=thumb.png');
+    assert.equal(compactTraceValue(small, () => null), small, 'small unstorable image kept intact');
+  }
+
+  // Finding 2: backup dir cannot be created (path is a file) -> original untouched.
+  {
+    const blockedFile = path.join(chats, 'blocked.json');
+    fs.writeFileSync(blockedFile, JSON.stringify({ agentId: 'blocked', messages: [{ id: 'b1', agentId: 'blocked', role: 'user', content: 'x'.repeat(1_100_000), ts: 1 }] }, null, 2));
+    const blockedBackupDir = path.join(chats, 'backup-pre-trace-compaction');
+    fs.rmSync(blockedBackupDir, { recursive: true, force: true });
+    fs.writeFileSync(blockedBackupDir, 'not a directory');
+    const blockedBefore = fs.readFileSync(blockedFile);
+    appendSubagentChatMessage('blocked', { role: 'user', content: 'new message' });
+    assert.ok(fs.readFileSync(blockedFile).equals(blockedBefore), 'original byte-identical when backup cannot be made');
+    fs.rmSync(blockedBackupDir);
+  }
+
+  // Finding 3: truncated backup is redone to full size before compaction.
+  {
+    const partialFile = path.join(chats, 'partial.json');
+    fs.writeFileSync(partialFile, JSON.stringify({ agentId: 'partial', messages: [{ id: 'p1', agentId: 'partial', role: 'user', content: 'y'.repeat(1_100_000), ts: 1 }] }, null, 2));
+    const partialSize = fs.statSync(partialFile).size;
+    const partialBackupDir = path.join(chats, 'backup-pre-trace-compaction');
+    fs.mkdirSync(partialBackupDir, { recursive: true });
+    fs.writeFileSync(path.join(partialBackupDir, 'partial.json'), 'trunc');
+    getSubagentChatHistory('partial', 5);
+    assert.equal(fs.statSync(path.join(partialBackupDir, 'partial.json')).size, partialSize, 'partial backup redone to full size');
+  }
+
+  // Finding 4: legacy-dir file upgraded once; a repeat read changes neither file.
+  {
+    const legacyDir = path.join(dir, 'workspace', '.prometheus', 'agent-chats');
+    fs.mkdirSync(legacyDir, { recursive: true });
+    const legacyFile = path.join(legacyDir, 'legleg.json');
+    fs.writeFileSync(legacyFile, JSON.stringify({ agentId: 'legleg', messages: [
+      { id: 'l1', agentId: 'legleg', role: 'user', content: 'legacy question', ts: 1000 },
+      { id: 'l2', agentId: 'legleg', role: 'agent', content: 'legacy answer', ts: 2000, liveTraceEntries: trace, metadata: { liveTraceEntries: trace } },
+    ] }, null, 2));
+    const primaryFile = path.join(chats, 'legleg.json');
+    assert.equal(getSubagentChatHistory('legleg', 10).length, 2);
+    assert.equal(JSON.parse(fs.readFileSync(legacyFile, 'utf8')).traceStorageVersion, AGENT_CHAT_TRACE_STORAGE_VERSION, 'legacy file upgraded');
+    assert.ok(fs.existsSync(path.join(legacyDir, 'backup-pre-trace-compaction', 'legleg.json')), 'legacy backup written');
+    const legacyMtime = fs.statSync(legacyFile).mtimeMs;
+    const primaryMtime = fs.statSync(primaryFile).mtimeMs;
+    assert.equal(getSubagentChatHistory('legleg', 10).length, 2);
+    assert.equal(fs.statSync(legacyFile).mtimeMs, legacyMtime, 'legacy not rewritten on repeat read');
+    assert.equal(fs.statSync(primaryFile).mtimeMs, primaryMtime, 'primary not rewritten on repeat read');
+  }
+
   console.log('subagent-chat-compaction regression: PASS');
 } finally {
   config.getConfigDir = origConfigDir;
