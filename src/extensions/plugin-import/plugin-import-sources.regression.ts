@@ -144,7 +144,7 @@ async function zipOf(files: Record<string, string>): Promise<Buffer> {
   const evilBuf = Buffer.from(await z2.generateAsync({ type: 'uint8array' }));
   await assert.rejects(() => extractGithubZip(evilBuf, '', fs.mkdtempSync(path.join(tmp, 'x2-'))), /Unsafe|outside/);
   assert.ok(!fs.existsSync(path.join(tmp, 'escape.txt')), 'traversal entry never written');
-  await assert.rejects(() => extractGithubZip(good, '', fs.mkdtempSync(path.join(tmp, 'x3-')), { downloadBytes: 1e9, extractedBytes: 1e9, files: 1, depth: 24 }), /files|limit|too many/i, 'file-count limit enforced');
+  await assert.rejects(() => extractGithubZip(good, '', fs.mkdtempSync(path.join(tmp, 'x3-')), { downloadBytes: 1e9, extractedBytes: 1e9, files: 1, depth: 24 } as any), /files|limit|too many/i, 'file-count limit enforced');
 
   const ghFetcher = (archive: Buffer) => async (url: string) => {
     if (url.startsWith('https://codeload.github.com/')) return new Response(new Uint8Array(archive), { status: 200 });
@@ -171,7 +171,7 @@ async function zipOf(files: Record<string, string>): Promise<Buffer> {
     userPluginsDir: path.join(tmp, 'user-plugins-skills'),
   });
   assert.equal(skillRows.length, 2);
-  assert.ok(skillRows.some((r) => /deploy-k8s/.test(r.id) && /devops/.test(r.id)), 'nested skill ids keep their relative path');
+  assert.ok(skillRows.some((r) => /deploy-k8s/.test(String(r.id)) && /devops/.test(String(r.id))), 'nested skill ids keep their relative path');
 
   // ── 6. Install: durable package copy, conflict refusal, activation gate ──────
   const skills = new Map<string, string>();
