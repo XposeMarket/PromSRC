@@ -141,9 +141,22 @@ export class ConnectorOAuthConnectionAdapter implements ConnectionAdapter {
     // replaced a send-capable token with a gmail.readonly one and every send then
     // failed with 403 insufficient scopes (2026-11-16). New write scopes still need
     // an explicit request; this only carries forward scopes already on the token.
-    const alreadyGranted = planScopes && bridge.isConnected?.()
-      ? ((await bridge.metadata()).grantedScopes || []).map((scope) => String(scope || '').trim()).filter(Boolean)
-      : [];
+    // Based on the STORED token's metadata, not current usability: an expired or
+    // reauth-required token is exactly when users reconnect. Only carried forward
+    // for the same account; switching accounts never inherits another account's grants.
+    let alreadyGranted: string[] = [];
+    if (planScopes) {
+      const stored = await bridge.metadata();
+      const storedIds = [stored.account?.providerAccountId, stored.account?.email]
+        .map((value) => String(value || '').trim().toLowerCase()).filter(Boolean);
+      const sameAccount = !expectedAccountId || storedIds.includes(expectedAccountId.toLowerCase());
+      if (sameAccount) {
+        alreadyGranted = (stored.grantedScopes || [])
+          .flatMap((scope) => String(scope || '').split(/[\s,]+/))
+          .map((scope) => scope.trim())
+          .filter(Boolean);
+      }
+    }
     const requestedScopes = planScopes ? [...new Set([...planScopes, ...alreadyGranted])] : undefined;
     const started = await bridge.start(expectedAccountId, requestedScopes, context.attempt.id);
     if ((started as any).needsCredentials || (started.error && !bridge.isConnected?.() && !(await bridge.metadata()).clientIdConfigured)) {

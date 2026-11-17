@@ -366,8 +366,31 @@ try {
       assert(received.includes(READ));
       assert.deepEqual(s.requiredUserAction?.scopes, received, 'the sign-in card must show the scopes actually requested');
 
+      // Expired / reauth-required token (isConnected false) still has stored grants: must not downgrade.
+      let storedGrants = [READ, SEND, MODIFY, 'openid'];
+      gmailBridge.isConnected = () => false;
+      gmailBridge.metadata = () => ({ account: { providerAccountId: 'g1', email: 'g@example.test' }, grantedScopes: storedGrants, refreshAvailable: false, clientIdConfigured: true, clientSecretConfigured: true });
+      const r = upOrch.create({ serviceId: 'gmail', requestedCapabilities: [], readOnly: true });
+      await upOrch.plan(r.id);
+      await upOrch.connect(r.id, { approved: true });
+      assert(received.includes(SEND) && received.includes(MODIFY), `reauth reconnect must keep stored grants, got ${received}`);
+
+      // Switching to a different account must NOT inherit the stored account's grants.
+      const sw = upOrch.create({ serviceId: 'gmail', requestedCapabilities: [], readOnly: true, metadata: { expectedAccountId: 'other-account' } });
+      await upOrch.plan(sw.id);
+      await upOrch.connect(sw.id, { approved: true });
+      assert.deepEqual(received, [READ, 'openid'], 'account switch must not inherit grants');
+
+      // Comma-separated provider scope strings (GitHub style) are normalized.
+      storedGrants = ['repo,read:user'];
+      const cm = upOrch.create({ serviceId: 'gmail', requestedCapabilities: [], readOnly: true });
+      await upOrch.plan(cm.id);
+      await upOrch.connect(cm.id, { approved: true });
+      assert(received.includes('repo') && received.includes('read:user') && !received.some((s) => s.includes(',')), `scopes must be normalized, got ${received}`);
+
       // Fresh install (no stored token): still exactly the read-only plan, no write scopes added.
       connected = false;
+      gmailBridge.metadata = () => ({ refreshAvailable: false, clientIdConfigured: true, clientSecretConfigured: true });
       const b = upOrch.create({ serviceId: 'gmail', requestedCapabilities: [], readOnly: true });
       await upOrch.plan(b.id);
       await upOrch.connect(b.id, { approved: true });
