@@ -63,6 +63,21 @@ export function deleteAccountPluginCredential(directory: string, serviceId: stri
   getVault(directory).delete(binding.reference.replace(/^vault:/, ''), 'protected-plugin:account-remove');
 }
 
+/** Move an extra account's binding to another EMPTY extra slot. Never touches the default slot. */
+export function moveAccountPluginCredential(directory: string, serviceId: string, from: string, to: string): void {
+  if (!from || !to) throw new Error('DEFAULT_ACCOUNT_PROTECTED');
+  const bindings = read(directory);
+  const source = bindingKeyForSlug(serviceId, from);
+  const destination = bindingKeyForSlug(serviceId, to);
+  if (!bindings[source]) throw new Error('ACCOUNT_NOT_FOUND');
+  if (bindings[destination]) throw new Error('ACCOUNT_SLOT_TAKEN');
+  bindings[destination] = bindings[source];
+  delete bindings[source];
+  const file = path.join(directory, 'plugin-credential-bindings.json');
+  const temp = `${file}.${randomUUID()}.tmp`;
+  fs.writeFileSync(temp, JSON.stringify(bindings), { mode: 0o600 }); fs.renameSync(temp, file);
+}
+
 /** Swap the default binding with an extra account's binding (make default). */
 export function swapAccountPluginCredential(directory: string, serviceId: string, slug: string): void {
   const bindings = read(directory);

@@ -8,7 +8,7 @@ import { routeIncomingAccount, runWithConnectorAccounts, removeAccountRecord } f
 import { beginAddAccount, cancelAddAccount, getConnectorAccountsView, makeDefaultConnectorAccount, removeConnectorAccount } from '../../connections/connector-account-service';
 import { pluginCredentialState } from '../../security/plugin-credential-state';
 import { requireProtectedOwner, secureInputTransportAllowed } from './secure-access.router';
-import { PAIRED_PLUGIN_DISCONNECT_ADAPTERS, pluginSetupSurfaceState, requirePluginDisconnect, requirePluginSetupAdapter } from './plugin-setup-access';
+import { PAIRED_PLUGIN_DISCONNECT_ADAPTERS, pluginSetupSurfaceState, requirePluginDisconnect, requirePluginSetup, requirePluginSetupAdapter } from './plugin-setup-access';
 
 export const router = Router();
 // N1: the redaction wrapper is scoped to connection routes only (router is mounted at '/').
@@ -206,13 +206,13 @@ router.get('/api/connector-accounts/:id', (req, res) => {
 });
 
 // Arming add mode only routes the NEXT completed sign-in/credential to a new account slot.
-router.post('/api/connector-accounts/:id/add', (req, res) => {
-  if (!secureInputTransportAllowed(req) || !pluginSetupSurfaceState(req).canConfigure) { res.status(403).json({ success: false, error: 'OWNER_SURFACE_REQUIRED' }); return; }
+// Same guard as plugin credential setup: paired device (revalidated) or exact-request desktop consent.
+router.post('/api/connector-accounts/:id/add', (req, res, next) => requirePluginSetup(req, res, next), (req, res) => {
   try { res.json({ success: true, ...beginAddAccount(req.params.id, { label: req.body?.label, hint: req.body?.hint }) }); }
   catch (error: any) { res.status(400).json({ success: false, error: error?.message || String(error) }); }
 });
 
-router.post('/api/connector-accounts/:id/cancel-add', (req, res) => {
+router.post('/api/connector-accounts/:id/cancel-add', (req, res, next) => requirePluginSetup(req, res, next), (req, res) => {
   try { cancelAddAccount(req.params.id); res.json({ success: true }); }
   catch (error: any) { res.status(400).json({ success: false, error: error?.message || String(error) }); }
 });

@@ -97,7 +97,7 @@ export function mountConnectorAccounts(host, opts) {
   async function addAccount() {
     errLine.textContent = '';
     try {
-      const res = await postJson(opts.fetchJson, api('/add'), {});
+      const res = await postJson(opts.fetchJson, api('/add'), {}, `Add another ${opts.name} account`);
       if (res?.success === false) throw new Error(res.error);
       view = res; render();
       await opts.startConnect();

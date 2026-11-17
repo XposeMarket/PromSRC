@@ -445,6 +445,14 @@ export async function refreshXApiTokens(configDir: string): Promise<XApiTokens> 
     stored_at: existing.stored_at || Date.now(),
   };
   assertPluginCredentialUse(configDir, 'x', generation);
+  // Compare-and-swap: make default / remove may have moved accounts while the request was in
+  // flight. Only save if this slot still holds the grant we refreshed; never write one account's
+  // token into a slot that now belongs to another, and never return another account's token.
+  const current = loadXApiTokens(configDir);
+  if (!current || current.refresh_token !== existing.refresh_token) {
+    if (current && current.user_id && current.user_id === existing.user_id) return current;
+    throw new Error('X account changed while refreshing. Retry the request.');
+  }
   saveTokens(configDir, tokens);
   return tokens;
 }

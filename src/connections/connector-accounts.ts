@@ -120,7 +120,10 @@ export function routeIncomingAccount(
   const data = readAccountIndex(dir);
   const current = data[id];
   const existing = current?.accounts?.find((a) => sameIdentity(a, identity));
-  const adding = addAccountArmed(dir, id);
+  // Presence, not the display TTL: an add that expired (or a slow callback) must never
+  // downgrade a new identity into a default-slot overwrite. Cancel-add disarms explicitly
+  // and also kills the in-flight sign-in (connector-account-service.ts).
+  const adding = current?.adding;
   if (!adding) return existing?.slug || '';
   const target = entry(data, id);
   delete target.adding;
@@ -148,13 +151,17 @@ export function removeAccountRecord(dir: string, id: string, slug: string): Conn
 }
 
 /** Replace the record of `slug` (now the default) with the previous default under `newSlug`. */
-export function replaceAccountRecord(dir: string, id: string, slug: string, previousDefault: Omit<ConnectorAccount, 'slug' | 'addedAt'> | null): string | undefined {
+export function planReplacementSlug(dir: string, id: string, slug: string, previousDefault: Omit<ConnectorAccount, 'slug' | 'addedAt'>): string {
+  const rest = (readAccountIndex(dir)[id]?.accounts || []).filter((a) => a.slug !== slug);
+  return uniqueSlug(rest, previousDefault.username || previousDefault.email?.split('@')[0] || previousDefault.label || 'account');
+}
+export function replaceAccountRecord(dir: string, id: string, slug: string, previousDefault: Omit<ConnectorAccount, 'slug' | 'addedAt'> | null, plannedSlug?: string): string | undefined {
   const data = readAccountIndex(dir);
   const target = entry(data, id);
   const rest = target.accounts.filter((a) => a.slug !== slug);
   let newSlug: string | undefined;
   if (previousDefault) {
-    newSlug = uniqueSlug(rest, previousDefault.username || previousDefault.email?.split('@')[0] || previousDefault.label || 'account');
+    newSlug = plannedSlug || uniqueSlug(rest, previousDefault.username || previousDefault.email?.split('@')[0] || previousDefault.label || 'account');
     rest.push({ ...previousDefault, slug: newSlug, addedAt: new Date().toISOString() });
   }
   target.accounts = rest;

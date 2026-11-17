@@ -4,9 +4,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  accountKeySuffix, armAddAccount, bindingKeyFor, listConnectorAccounts, removeAccountRecord,
-  replaceAccountRecord, routeIncomingAccount, runWithConnectorAccounts,
+  accountKeySuffix, armAddAccount, bindingKeyFor, disarmAddAccount, listConnectorAccounts, planReplacementSlug,
+  removeAccountRecord, replaceAccountRecord, routeIncomingAccount, runWithConnectorAccounts,
 } from './connector-accounts';
+import { moveAccountPluginCredential, swapAccountPluginCredential } from './plugin-credential-binding';
 import { waitForSecureAccess, notifySecureAccessSteer, isSecureAccessBlocking } from '../security/secure-access-waits';
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'prom-accts-'));
@@ -46,6 +47,40 @@ assert.deepEqual(listConnectorAccounts(dir, 'x').map((a) => a.slug), ['mainaccou
 // 8. Remove.
 assert.ok(removeAccountRecord(dir, 'gmail', slug));
 assert.equal(listConnectorAccounts(dir, 'gmail').length, 0);
+
+// 8b. Review #892 finding 1: an add flag past its display TTL must still route a NEW identity
+// to a new slot. It must never be downgraded into an overwrite of the default.
+{
+  armAddAccount(dir, 'gmail', { label: 'Late' });
+  const idx = JSON.parse(fs.readFileSync(path.join(dir, 'connector-accounts.json'), 'utf8'));
+  idx.gmail.adding.at = Date.now() - 60 * 60_000; // an hour old, past ADD_ACCOUNT_TTL_MS
+  fs.writeFileSync(path.join(dir, 'connector-accounts.json'), JSON.stringify(idx));
+  const late = routeIncomingAccount(dir, 'gmail', 'oauth', { email: 'late.signin@gmail.com' }, () => def);
+  assert.notEqual(late, '', 'late grant of a new identity must not land in the default slot');
+  removeAccountRecord(dir, 'gmail', late);
+  // Cancelled add (flag removed): an unseen identity with no add mode is a plain reconnect of the default.
+  disarmAddAccount(dir, 'gmail');
+  assert.equal(routeIncomingAccount(dir, 'gmail', 'oauth', { email: 'alex@example.com' }, () => def), '');
+}
+
+// 8c. Review #892 finding 3: credential make-default = swap + move to the planned slug, with no throw,
+// and the bindings and index agree afterwards.
+{
+  const bfile = path.join(dir, 'plugin-credential-bindings.json');
+  fs.writeFileSync(bfile, JSON.stringify({ vercel: { reference: 'vault:A', attemptId: 'a1' }, 'vercel::acct::team': { reference: 'vault:B', attemptId: 'b1' } }));
+  fs.writeFileSync(path.join(dir, 'connector-accounts.json'), JSON.stringify({ vercel: { accounts: [{ slug: 'team', label: 'Team', kind: 'credential', addedAt: 'x' }] } }));
+  const prev = { label: 'Primary credential', kind: 'credential' as const };
+  const planned = planReplacementSlug(dir, 'vercel', 'team', prev);
+  swapAccountPluginCredential(dir, 'vercel', 'team');
+  moveAccountPluginCredential(dir, 'vercel', 'team', planned);
+  replaceAccountRecord(dir, 'vercel', 'team', prev, planned);
+  const b = JSON.parse(fs.readFileSync(bfile, 'utf8'));
+  assert.equal(b.vercel.reference, 'vault:B', 'chosen account is now default');
+  assert.equal(b[`vercel::acct::${planned}`].reference, 'vault:A', 'previous default kept under its new slug');
+  assert.equal(b['vercel::acct::team'], undefined, 'old slot emptied');
+  assert.deepEqual(listConnectorAccounts(dir, 'vercel').map((a) => a.slug), [planned], 'index matches bindings');
+  assert.throws(() => moveAccountPluginCredential(dir, 'vercel', planned, ''), /DEFAULT_ACCOUNT_PROTECTED/);
+}
 
 // 9. Blocking secure_access wait: resolves, steers and marks blocking.
 (async () => {

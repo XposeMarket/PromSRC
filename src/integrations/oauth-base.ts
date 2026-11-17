@@ -342,6 +342,12 @@ export abstract class OAuthConnector {
       // Reconnected or disconnected while the request was in flight: keep what is stored now.
       const current = this.loadTokens();
       if (!current) throw new Error(`${this.cfg.name} not connected. Connect via the Connections panel.`);
+      // Multi-account: the slot may now hold a DIFFERENT account (make default / remove ran
+      // while this refresh was in flight). Never hand that account's token to this call.
+      const sameAccount = (existing.account_id && current.account_id === existing.account_id)
+        || (existing.account_email && current.account_email?.toLowerCase() === existing.account_email.toLowerCase())
+        || (!existing.account_id && !existing.account_email);
+      if (!sameAccount) throw new Error(`${this.cfg.name} account changed while refreshing. Retry the request.`);
       return current;
     }
     this.saveTokens(tokens);

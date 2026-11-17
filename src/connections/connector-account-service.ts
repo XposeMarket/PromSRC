@@ -2,12 +2,12 @@
 import { getConfig } from '../config/config';
 import { getVault } from '../security/vault';
 import { getConnector } from '../integrations/connector-registry';
-import { getXApiOAuthStatus } from '../auth/x-api-oauth';
+import { cancelXApiOAuthFlow, getXApiOAuthStatus } from '../auth/x-api-oauth';
 import {
   armAddAccount, addAccountArmed, disarmAddAccount, isAccountSlug, lastAddedAccount, listConnectorAccounts,
-  removeAccountRecord, replaceAccountRecord, slotSuffix, type ConnectorAccount, type ConnectorAccountKind,
+  planReplacementSlug, removeAccountRecord, replaceAccountRecord, slotSuffix, type ConnectorAccount, type ConnectorAccountKind,
 } from './connector-accounts';
-import { deleteAccountPluginCredential, hasBoundPluginCredential, swapAccountPluginCredential } from './plugin-credential-binding';
+import { deleteAccountPluginCredential, hasBoundPluginCredential, moveAccountPluginCredential, swapAccountPluginCredential } from './plugin-credential-binding';
 import { invalidateConnectionToolSurfaceCache } from './tool-surface';
 
 const dir = () => getConfig().getConfigDir();
@@ -50,10 +50,17 @@ export function getConnectorAccountsView(id: string): ConnectorAccountsView {
 
 export function beginAddAccount(id: string, opts: { label?: unknown; hint?: unknown } = {}): ConnectorAccountsView {
   if (!/^[a-z0-9_.-]{1,64}$/i.test(id)) throw new Error('INVALID_CONNECTOR');
+  // A sign-in already in flight must never be retargeted into the new account slot.
+  cancelPendingSignIn(id);
   armAddAccount(dir(), id, opts);
   return getConnectorAccountsView(id);
 }
-export function cancelAddAccount(id: string): void { disarmAddAccount(dir(), id); }
+/** Cancelling also kills the in-flight sign-in, so its grant can never land in the default slot. */
+export function cancelAddAccount(id: string): void { cancelPendingSignIn(id); disarmAddAccount(dir(), id); }
+
+function cancelPendingSignIn(id: string): void {
+  try { if (id === 'x') cancelXApiOAuthFlow(); else getConnector(id)?.cancelFlow(); } catch { /* best effort */ }
+}
 
 /** Resolve a model/user supplied account reference (slug, label, email or @username) to a slug; '' = default. */
 export function resolveAccountRef(id: string, ref: unknown): { slug: string } | { error: string } {
@@ -91,38 +98,44 @@ function swapVault(a: string, b: string, caller: string): void {
   if (va) vault.set(b, va, caller); else vault.delete(b, caller);
 }
 
-/** Make an extra account the default; the previous default becomes an extra account. */
+/**
+ * Make an extra account the default; the previous default becomes an extra account.
+ * The previous default's new slug is chosen BEFORE storage moves, so storage and the index
+ * always agree; a failed second move rolls the first one back.
+ */
 export function makeDefaultConnectorAccount(id: string, slug: string): ConnectorAccountsView {
   if (!isAccountSlug(slug)) throw new Error('INVALID_ACCOUNT');
   const target = listConnectorAccounts(dir(), id).find((a) => a.slug === slug);
   if (!target) throw new Error('ACCOUNT_NOT_FOUND');
   const kind = accountKindFor(id);
   const previous = defaultAccountSummary(id);
-  if (kind === 'oauth') swapVault(oauthKey(id, ''), oauthKey(id, slug), `accounts:default:${id}`);
-  else if (kind === 'x') {
-    swapVault(X_TOKENS, `${X_TOKENS}${slotSuffix(slug)}`, 'accounts:default:x');
-    try {
-      const tokens = JSON.parse(getVault(dir()).get(X_TOKENS, 'accounts:default:x')?.expose() || '{}');
-      if (tokens.access_token) getVault(dir()).set(X_LEGACY, tokens.access_token, 'accounts:default:x');
-    } catch { /* legacy mirror is best effort */ }
-  } else swapAccountPluginCredential(dir(), id, slug);
-  const newSlug = replaceAccountRecord(dir(), id, slug, previous.connected
+  const prevRecord = previous.connected
     ? { label: previous.label, kind, email: previous.email, username: previous.username }
-    : null);
-  // The swapped-in default was stored under `slug`; the previous default now lives under `newSlug`.
-  if (newSlug && newSlug !== slug) {
-    if (kind === 'oauth') swapVault(oauthKey(id, newSlug), oauthKey(id, slug), `accounts:default:${id}`);
-    else if (kind === 'x') swapVault(`${X_TOKENS}${slotSuffix(newSlug)}`, `${X_TOKENS}${slotSuffix(slug)}`, 'accounts:default:x');
-    else swapAccountSlot(id, slug, newSlug);
+    : null;
+  const newSlug = prevRecord ? planReplacementSlug(dir(), id, slug, prevRecord) : undefined;
+  const move = newSlug && newSlug !== slug ? newSlug : undefined;
+  const caller = `accounts:default:${id}`;
+  if (kind === 'credential') {
+    swapAccountPluginCredential(dir(), id, slug); // target -> default, old default -> `slug`
+    if (move) {
+      try { moveAccountPluginCredential(dir(), id, slug, move); }
+      catch (error) { try { swapAccountPluginCredential(dir(), id, slug); } catch { /* original error reported */ } throw error; }
+    }
+  } else {
+    const key = (s: string) => (kind === 'x' ? `${X_TOKENS}${slotSuffix(s)}` : oauthKey(id, s));
+    swapVault(key(''), key(slug), caller);
+    if (move) {
+      try { swapVault(key(move), key(slug), caller); } // empty `move` slot: a plain move
+      catch (error) { try { swapVault(key(''), key(slug), caller); } catch { /* original error reported */ } throw error; }
+    }
+    if (kind === 'x') {
+      try {
+        const tokens = JSON.parse(getVault(dir()).get(X_TOKENS, caller)?.expose() || '{}');
+        if (tokens.access_token) getVault(dir()).set(X_LEGACY, tokens.access_token, caller);
+      } catch { /* legacy mirror is best effort */ }
+    }
   }
+  replaceAccountRecord(dir(), id, slug, prevRecord, newSlug);
   invalidateConnectionToolSurfaceCache();
   return getConnectorAccountsView(id);
-}
-
-/** Move a credential binding from `from` slot to `to` slot (credential plugins). */
-function swapAccountSlot(id: string, from: string, to: string): void {
-  // swapAccountPluginCredential swaps default<->slug; emulate a move with two swaps through the default.
-  swapAccountPluginCredential(dir(), id, from); // default <-> from
-  swapAccountPluginCredential(dir(), id, to);   // default <-> to (empty: moves default to `to`)
-  swapAccountPluginCredential(dir(), id, from); // restore default
 }
