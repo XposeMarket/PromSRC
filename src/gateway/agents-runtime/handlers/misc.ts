@@ -9,6 +9,8 @@ import { executeAnalyzeVideo } from './../../../tools/media-analysis';
 import { listWorkspaceHistory, restoreWorkspaceCheckpoint, restoreWorkspaceSnapshot } from './../../../workspace-history';
 import { DEFAULT_FILE_TOOL_EXCLUDES, buildFileIntelligence, buildNoMatchHints, collectGrepMatchesInText, compareGrepMatches, createSearchMatcher, formatGrepToolResult, matchesGlobList, parseGlobList, readSimpleGitignore, resolveResultCharBudget, shouldSkipSearchPath, summarizeFileForTool, type SearchMatcher } from './../../../tools/file-intelligence';
 import { getProcessSupervisor } from './../../process/supervisor';
+import { boundedProcessWait, processWaitBudget } from './../../process/bounded-wait';
+import type { ProcessRunExit } from './../../process/types';
 import { capCommandOutput, resolveCommandOutputLimit } from './../command-output-cap';
 import { normalizeDevSourcePatchsetArgs, splitLinesEolSafe } from './../../dev-source-patchset';
 import { executeAgentBuilderTool } from './../agent-builder-integration';
@@ -1625,24 +1627,37 @@ export async function handleMiscTool(ctx: handleMiscToolContext): Promise<Awaite
         if (!runId) return { name, args, result: 'runId is required', error: true };
         const supervisor = getProcessSupervisor();
         if (!supervisor.get(runId)) return { name, args, result: `No process found for ${runId}`, error: true };
-        const requestedWaitMs = Number(args.timeoutMs ?? args.timeout_ms ?? 10_000);
-        const waitMs = Number.isFinite(requestedWaitMs) ? Math.max(1_000, Math.min(30_000, requestedWaitMs)) : 10_000;
-        let waitTimer: NodeJS.Timeout | null = null;
-        const exit = await Promise.race([
-          supervisor.wait(runId),
-          new Promise<null>((resolve) => { waitTimer = setTimeout(() => resolve(null), waitMs); }),
-        ]);
-        if (waitTimer) clearTimeout(waitTimer);
-        if (!exit) {
+        const waitMs = processWaitBudget(args.timeoutMs ?? args.timeout_ms);
+        const observation = await boundedProcessWait<ProcessRunExit>({
+          timeoutMs: waitMs,
+          cancellation: deps.abortSignal,
+          subscribe: (complete, fail) => supervisor.observeExit(runId, complete, fail),
+          onProgress: (elapsedMs) => deps.sendSSE?.('tool_progress', {
+            toolCallId: deps.toolCallId, action: name, name, phase: 'waiting',
+            message: `Waiting for ${runId}: ${Math.floor(elapsedMs / 1000)}s elapsed (up to ${waitMs / 1000}s).`,
+            show_pill: true,
+          }),
+        });
+        if (observation.kind === 'cancelled') return {
+          name, args, result: `Stopped waiting for ${runId}; this wait did not terminate the process.`,
+          error: true, extra: { runId, cancelled: true, waitMs },
+        };
+        if (observation.kind === 'unavailable') return {
+          name, args, result: `Completion unavailable for ${runId}; inspect process_status before retrying.`,
+          error: true, extra: { runId, unavailable: true, waitMs },
+        };
+        if (observation.kind === 'deadline') {
           const run = supervisor.get(runId);
+          if (!run) return { name, args, result: `Process ${runId} is unavailable.`, error: true, extra: { runId, unavailable: true, waitMs } };
           const tail = capCommandOutput(supervisor.log(runId).combined, { maxChars: args.maxChars ?? args.max_chars, runId });
           return {
             name, args,
             result: `${runId} is ${run?.state || 'running'} after ${Math.round(waitMs / 1000)}s.\n${tail || '(no output yet)'}\nUse process_status/process_log for progress or call process_wait again.`,
             error: false,
-            extra: { runId, stillRunning: true },
+            extra: { runId, stillRunning: run.state !== 'exited', waitMs, ...(run.waitingForInputHint ? { waitingForInputHint: true } : {}) },
           };
         }
+        const exit = observation.value;
         const output = [exit.stdout, exit.stderr].filter(Boolean).join('\n').trim();
         const outcome = classifyCommandTermination({ code: exit.exitCode, timedOut: exit.timedOut, reason: exit.reason, signal: exit.exitSignal });
         return {
