@@ -12,6 +12,7 @@ import type { TerminalWorkspaceChangeResult } from '../coding/terminal-change-tr
 import { createManagedTerminalWorkspaceTracker, type ManagedTerminalWorkspaceTracker } from './terminal-workspace-worker-client';
 import { enqueueAsyncAppend } from '../../runtime/async-file-queue';
 import { ProcessOutputBatcher } from './output-batcher';
+import { CompletionObservers } from './completion-observers';
 import { withNpmShimsOnPath } from './npm-shims';
 import { lockFreeGitReadOptions } from '../../runtime/git-read';
 import { claimWarmPowerShell, prewarmPowerShell, sendWarmScript } from './warm-powershell';
@@ -825,6 +826,17 @@ export class ProcessSupervisor {
     const run = this.active.get(runId);
     if (!run) return false;
     return run.closeStdin();
+  }
+
+  private readonly completionObservers = new CompletionObservers<ProcessRunExit>();
+
+  observeExit(runId: string, complete: (exit: ProcessRunExit | null) => void, fail: (error: unknown) => void): () => void {
+    const run = this.active.get(runId);
+    if (run) return this.completionObservers.subscribe(run, () => run.wait(), complete, fail);
+    // Historical/missing runs settle promptly; make delivery detachable as well.
+    let subscribed = true;
+    void this.wait(runId).then((exit) => { if (subscribed) complete(exit); }, (error) => { if (subscribed) fail(error); });
+    return () => { subscribed = false; };
   }
 
   async wait(runId: string): Promise<ProcessRunExit | null> {
