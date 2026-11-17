@@ -27029,7 +27029,7 @@ function startCodexBridgeRealtimeEventPoll(conn) {
           cache: 'no-store', signal: poll.controller.signal,
         });
         const data = await response.json().catch(() => ({}));
-        if (!response.ok || data?.success === false) break;
+        if (!response.ok || data?.success === false || data?.ended === true) break;
         for (const notification of (Array.isArray(data?.events) ? data.events : [])) {
           poll.afterId = Math.max(poll.afterId, Number(notification?.id || 0) || 0);
           const event = normalizeCodexBridgeRealtimeTranscript(notification);

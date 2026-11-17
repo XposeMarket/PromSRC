@@ -162,9 +162,9 @@ export function clampRealtimeInstructions(value: string, max = REALTIME_AGENT_IN
 
 /**
  * Fit realtime instructions into the budget without losing the parts a voice
- * session cannot work without. Order: cap oversized personal context to its
- * share, drop disposable sections, compact personal context further, and only
- * then hard-cap while keeping the tail (tool rules end marker, current time).
+ * session cannot work without. Order: drop the worker packet, compact oversized
+ * personal context, then recent messages, then tool routing, and only then
+ * hard-cap while keeping the tail (current time).
  */
 export function budgetRealtimeInstructions(value: string, max = REALTIME_AGENT_INSTRUCTIONS_MAX): string {
   let text = String(value || '').trim();
@@ -225,18 +225,25 @@ export function budgetRealtimeInstructions(value: string, max = REALTIME_AGENT_I
     text = text.slice(0, to - remove) + text.slice(to);
   };
   // A large USER/SOUL/MEMORY must not push out tool routing and conversation
-  // continuity: personal context gets at most 60% of the budget.
+  // continuity. Personal context is compacted only as far as the overflow
+  // requires, in steps: down to 35% of the budget before any continuity is
+  // cut, down to 15% before tool routing is cut, and fully only as a last step.
   let compacted = false;
-  const initial = personalBounds();
-  const personalShare = Math.floor(max * 0.6);
-  if (initial && initial.bodyEnd - initial.bodyStart > personalShare) {
-    compacted = compactPersonalContext(Math.min(initial.bodyEnd - initial.bodyStart - personalShare, text.length - max));
-  }
+  const compactPersonalTo = (share: number) => {
+    if (text.length <= max) return;
+    const bounds = personalBounds();
+    if (!bounds) return;
+    const over = bounds.bodyEnd - bounds.bodyStart - Math.max(0, Math.floor(share));
+    if (over <= 0) return;
+    compacted = compactPersonalContext(Math.min(over, text.length - max)) || compacted;
+  };
   trimSection('## Worker context packet', '## Current time');
-  trimSection('## When to call which tool', '## End tool-routing guidance');
+  compactPersonalTo(max * 0.35);
   trimSection('### Recent messages', '### End recent messages');
   trimSection('## Shared Voice Room transcript', '## End shared voice room transcript');
-  if (text.length > max) compacted = compactPersonalContext(text.length - max) || compacted;
+  compactPersonalTo(max * 0.15);
+  trimSection('## When to call which tool', '## End tool-routing guidance');
+  compactPersonalTo(0);
   if (text.length > max) {
     // Last resort: cut the middle, never the tail that holds the current time.
     const marker = '\n...[truncated]\n';

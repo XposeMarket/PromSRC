@@ -52,6 +52,11 @@ const headedOut = sandbox.buildRealtimeVoiceAgentInstructions({ contextBlock: he
 assert.ok(headedOut.length <= 36000, `headed context fits the cap (${headedOut.length})`);
 for (const marker of ['[/USER]', '[SOUL]', '[/SOUL]', 'Headed continuity summary', 'user: latest thing said', '## When to call which tool', '## End tool-routing guidance', '## Current time', 'Personality:']) assert.ok(headedOut.includes(marker), `headed: preserves ${marker}`);
 assert.ok(!headedOut.includes('...[truncated]'), 'headed context is compacted, not hard-truncated');
+// A big profile plus a long summary must squeeze personal context further
+// before any tool routing is cut.
+const squeezed = sandbox.buildRealtimeVoiceAgentInstructions({ contextBlock: `[USER]\n${'user fact '.repeat(4000)}\n[/USER]`, contextPacket: {}, conversationSummary: `SQUEEZE_SUMMARY ${'summary text '.repeat(1400)}` });
+assert.ok(squeezed.length <= 36000, `squeezed fits the cap (${squeezed.length})`);
+for (const marker of ['[USER]', '[/USER]', 'SQUEEZE_SUMMARY', '## When to call which tool', '## End tool-routing guidance', '## Current time']) assert.ok(squeezed.includes(marker), `squeezed: preserves ${marker}`);
 // Re-budgeting an already budgeted prompt (the Codex bridge route does this) is a no-op.
 assert.equal(sandbox.budgetRealtimeInstructions(headedOut, 36000), headedOut);
 // With no personal-context section at all, the hard cap still keeps the tail.

@@ -244,10 +244,38 @@ export class CodexAppServerBridge {
   private nextRealtimeEventId = 1;
   private idleSweepTimer: ReturnType<typeof setInterval> | null = null;
 
+  private lastIdleSweepAt = 0;
+
+  /** Client keepalive for connected sessions that do not poll events (Voice Room standby). */
+  touchRealtimeSessions(sessionIds: string[]): number {
+    let touched = 0;
+    for (const id of sessionIds) {
+      const session = this.sessions.get(String(id || '').trim());
+      if (!session) continue;
+      session.lastActivityAt = Date.now();
+      touched += 1;
+    }
+    return touched;
+  }
+
+  hasRealtimeSession(sessionId: string): boolean {
+    return this.sessions.has(String(sessionId || '').trim());
+  }
+
   private ensureIdleSweep(): void {
     if (this.idleSweepTimer) return;
+    this.lastIdleSweepAt = Date.now();
     this.idleSweepTimer = setInterval(() => {
-      const cutoff = Date.now() - REALTIME_SESSION_IDLE_MS;
+      const now = Date.now();
+      const late = now - this.lastIdleSweepAt > 150_000;
+      this.lastIdleSweepAt = now;
+      if (late) {
+        // The machine slept or the event loop stalled: clients could not poll
+        // either, so give every session a fresh window instead of expiring it.
+        for (const session of this.sessions.values()) session.lastActivityAt = now;
+        return;
+      }
+      const cutoff = now - REALTIME_SESSION_IDLE_MS;
       for (const [sessionId, session] of [...this.sessions]) {
         if (session.lastActivityAt > cutoff) continue;
         console.warn('[codex-realtime-bridge] Stopping abandoned realtime session (no client poll or upstream event):', sessionId);
@@ -470,6 +498,10 @@ export class CodexAppServerBridge {
       session.eventWaiters.clear();
     }
     this.sessions.clear();
+    if (this.idleSweepTimer) {
+      clearInterval(this.idleSweepTimer);
+      this.idleSweepTimer = null;
+    }
     this.pendingRealtimeEvents.clear();
     for (const pending of this.pendingDynamicToolRequests.values()) clearTimeout(pending.timer);
     this.pendingDynamicToolRequests.clear();
