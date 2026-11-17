@@ -10,6 +10,7 @@ interface AsyncFileState {
   appendActive: boolean;
   pendingWrite: string | undefined;
   writeActive: boolean;
+  rotateAtBytes: number;
 }
 
 const states = new Map<string, AsyncFileState>();
@@ -23,6 +24,7 @@ function getState(filePath: string): AsyncFileState {
       appendActive: false,
       pendingWrite: undefined,
       writeActive: false,
+      rotateAtBytes: 0,
     };
     states.set(filePath, state);
   }
@@ -37,6 +39,20 @@ function maybeReleaseState(filePath: string, state: AsyncFileState): void {
     && state.pendingWrite === undefined
   ) {
     states.delete(filePath);
+  }
+}
+
+/**
+ * Rename the file to `<file>.1` (replacing any previous .1) when it exceeds
+ * limitBytes. Runs inside the append chain, so it never races an append.
+ */
+async function rotateIfLarge(filePath: string, limitBytes: number): Promise<void> {
+  if (!(limitBytes > 0)) return;
+  try {
+    const st = await fs.promises.stat(filePath);
+    if (st.size > limitBytes) await fs.promises.rename(filePath, `${filePath}.1`);
+  } catch {
+    // Missing file or rename failure: telemetry only, never throw.
   }
 }
 
@@ -56,6 +72,7 @@ async function flushAppends(filePath: string, state: AsyncFileState): Promise<vo
       }
 
       await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+      await rotateIfLarge(filePath, state.rotateAtBytes);
       await fs.promises.appendFile(filePath, batch.join(''), 'utf8');
     }
   } catch {
@@ -112,10 +129,12 @@ export function enqueueAsyncAppend(
   filePath: string,
   contents: string,
   maxPendingBytes = DEFAULT_MAX_PENDING_APPEND_BYTES,
+  rotateAtBytes = 0,
 ): boolean {
   const value = String(contents || '');
   if (!value) return true;
   const state = getState(filePath);
+  if (rotateAtBytes > 0) state.rotateAtBytes = rotateAtBytes;
   const bytes = Buffer.byteLength(value, 'utf8');
   if (state.appendBytes + bytes > Math.max(1, maxPendingBytes)) return false;
   state.appendChunks.push(value);
