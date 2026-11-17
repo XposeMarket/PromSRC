@@ -709,6 +709,7 @@ function renderBgTasks() {
 
   // If no tasks at all
   restoreRequestCards();
+  bindPlannedResumeButtons(board);
   board.querySelectorAll('[data-planned-chat-session]').forEach(button => {
     button.onclick = event => bgtOpenOriginChat(event, button.dataset.plannedChatSession);
   });
@@ -819,7 +820,7 @@ function bgtCardHTML(t, col) {
     ${card.tool ? `<div class="bgt-lr-now">now: <code>${escHtml(card.tool)}</code></div>` : ''}
     ${card.stalledFor ? `<div class="bgt-lr-stall">No progress for ${escHtml(card.stalledFor)}. Probably stuck.</div>` : ''}
     ${card.attention ? `<div class="bgt-lr-attn tone-${card.tone}" title="${escHtml(card.attention)}"><strong>Prometheus:</strong> ${escHtml(card.attention)}</div>` : ''}`}
-    ${card.planned ? `<div class="bgt-lr-actions"><button class="bgt-icon-btn" style="width:auto;height:auto;padding:5px 10px;white-space:nowrap" data-planned-chat-session="${escHtml(t.sessionId || '')}">Open chat</button></div>` : ''}
+    ${card.planned ? `<div class="bgt-lr-actions">${t.supportedActions?.includes('resume') ? `<button class="bgt-icon-btn" style="width:auto;padding:5px 10px" data-planned-resume="${escHtml(t.id)}">Resume</button>` : ''}<button class="bgt-icon-btn" style="width:auto;height:auto;padding:5px 10px;white-space:nowrap" data-planned-chat-session="${escHtml(t.sessionId || '')}">Open chat</button></div>` : ''}
   </div>`;
 }
 
@@ -862,6 +863,18 @@ function bgtStartedFromHTML(view) {
   return `<div class="bgt-lr-origin-wrap"><div class="bgt-lr-label">Started from</div><div class="bgt-lr-origin">${escHtml(view.startedFrom.slice(0, 4000))}</div>${view.rawInstructions ? `<details class="bgt-lr-raw"><summary>Show full agent instructions</summary><pre>${escHtml(view.rawInstructions)}</pre></details>` : ''}</div>`;
 }
 
+function bindPlannedResumeButtons(root) {
+  root.querySelectorAll('[data-planned-resume]').forEach(button => {
+    button.onclick = async event => {
+      event.preventDefault(); event.stopPropagation(); button.disabled = true;
+      try {
+        const result = await api(`/api/bg-tasks/${encodeURIComponent(button.dataset.plannedResume)}/resume`, { method: 'POST' });
+        if (!result?.success) throw new Error(result?.error || 'Could not resume task');
+        button.textContent = 'Resuming…';
+      } catch (error) { button.disabled = false; button.textContent = 'Retry resume'; button.title = error.message; }
+    };
+  });
+}
 function bgtRenderPlannedPanel(task, body) {
   const restoreTools = rememberTaskTools(body);
   const view = detailSections(task);
@@ -878,7 +891,8 @@ function bgtRenderPlannedPanel(task, body) {
     </div>
     <div data-bgt-pane="activity">${bgtActivityHTML(view.activity, task.id)}</div>
     <div data-bgt-pane="evidence">${renderTaskEvidence(view.evidence, renderMd, t => new Date(t).toLocaleString())}</div>
-    <div class="bgt-lr-actions"><button class="bgt-icon-btn" style="width:auto;height:auto;padding:6px 12px" data-planned-chat-session="${escHtml(task.sessionId || '')}">Open chat</button></div>`;
+    <div class="bgt-lr-actions">${task.supportedActions?.includes('resume') ? `<button class="bgt-icon-btn" style="width:auto;padding:6px 12px" data-planned-resume="${escHtml(task.id)}">Resume</button>` : ''}<button class="bgt-icon-btn" style="width:auto;height:auto;padding:6px 12px" data-planned-chat-session="${escHtml(task.sessionId || '')}">Open chat</button></div>`;
+  bindPlannedResumeButtons(body);
   body.querySelectorAll('[data-planned-chat-session]').forEach(button => {
     button.onclick = event => bgtOpenOriginChat(event, button.dataset.plannedChatSession);
   });
