@@ -62,6 +62,7 @@ export async function boundedProcessWait<T>(options: {
       }, 15_000));
       unsubscribe = options.subscribe((value) => {
         if (cancelled()) { onAbort(); return; }
+        if (clock.now() >= deadline) { finish({ kind: 'deadline' }); return; }
         finish(value === null ? { kind: 'unavailable' } : { kind: 'completed', value });
       }, (error) => {
         if (settled) return;

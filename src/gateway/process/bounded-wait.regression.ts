@@ -62,6 +62,11 @@ async function main() {
   const c = new Clock(); const token = { aborted: false };
   const race = boundedProcessWait({ cancellation: token, subscribe: (done) => { token.aborted = true; done('late'); return () => {}; } }, c);
   assert.equal((await race).kind, 'cancelled'); assert.equal(c.jobs.size, 0);
+  // Completion delivered before overdue timers still cannot exceed the deadline.
+  const overdueClock = new Clock(); let overdueComplete!: (v: string) => void;
+  const overdue = boundedProcessWait({ timeoutMs: 1000, subscribe: (done) => { overdueComplete = done; return () => {}; } }, overdueClock);
+  overdueClock.time = 1001; overdueComplete('late completion');
+  assert.equal((await overdue).kind, 'deadline'); assert.equal(overdueClock.jobs.size, 0);
   // Parallel observers of the same completion detach independently.
   const sharedClock = new Clock(); let sharedDone!: (v: string) => void;
   const sharedPromise = new Promise<string>((resolve) => { sharedDone = resolve; });
