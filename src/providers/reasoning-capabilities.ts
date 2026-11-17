@@ -55,7 +55,7 @@ export function getReasoningCapability(provider: string, model: string): Reasoni
     // ChatGPT (web backend): efforts carry ChatGPT modes, see
     // chatgpt-web/chatgpt-web-models.ts (low=Instant ... ultra=Pro).
     if (name === 'chatgpt') return { efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'], defaultEffort: 'high' };
-    if (/^gpt-6(?:\.1)?-(?:astra|sol|luna)(?:-|$)/.test(name)) return { efforts: [...OPENAI_56], defaultEffort: /^gpt-6-astra/.test(name) ? 'low' : 'medium' };
+    if (/^gpt-6(?:\.[12])?-(?:astra|sol|luna)(?:-|$)/.test(name)) return { efforts: [...OPENAI_56], defaultEffort: /^gpt-6-astra/.test(name) ? 'low' : 'medium' };
     // Codex exposes model-specific effort levels. Luna is the fast 5.6
     // variant and does not advertise Ultra; Sol/Terra do.
     if (/^gpt-5\.6-(?:sol|terra)(?:-|$)/.test(name)) return { efforts: [...CODEX_ULTRA], defaultEffort: 'medium' };
@@ -68,7 +68,7 @@ export function getReasoningCapability(provider: string, model: string): Reasoni
   }
 
   if (id === 'openai') {
-    if (/^gpt-6(?:\.1)?-(?:astra|sol|luna)(?:-|$)/.test(name)) return { efforts: [...OPENAI_56], defaultEffort: /^gpt-6-astra/.test(name) ? 'low' : 'medium' };
+    if (/^gpt-6(?:\.[12])?-(?:astra|sol|luna)(?:-|$)/.test(name)) return { efforts: [...OPENAI_56], defaultEffort: /^gpt-6-astra/.test(name) ? 'low' : 'medium' };
     if (/^gpt-5\.6(?:-(?:sol|terra|luna))?(?:-|$)/.test(name)) return { efforts: [...OPENAI_56], defaultEffort: 'medium' };
     if (/^gpt-5\.5(?:-|$)/.test(name)) return { efforts: [...OPENAI_MODERN], defaultEffort: 'medium' };
     if (/^gpt-5\.(?:[234])(?:-|$)/.test(name)) return { efforts: [...OPENAI_MODERN], defaultEffort: 'low' };
@@ -134,7 +134,7 @@ export function supportsFastSpeed(provider: string, model: string): boolean {
   if (id === 'anthropic') return /^claude-(?:(?:fable|mythos)-5-2|opus-(?:5|4-8))(?:-|$)/.test(name);
   if (id === 'openai' || id === 'openai_codex') {
     if (/^gpt-6\.1-terra(?:-|$)/.test(name)) return true;
-    return /^(?:gpt-6(?:\.1)?-(?:astra|sol|luna)|gpt-5\.6(?:-(?:sol|terra|luna))?|gpt-5\.5|gpt-5\.4(?:-mini)?|gpt-5\.2|gpt-5\.1|gpt-5(?:-mini)?|gpt-4\.1(?:-mini|-nano)?|gpt-4o(?:-mini)?|o3|o4-mini)(?:-\d{4}.*|$)/.test(name);
+    return /^(?:gpt-6(?:\.[12])?-(?:astra|sol|luna)|gpt-5\.6(?:-(?:sol|terra|luna))?|gpt-5\.5|gpt-5\.4(?:-mini)?|gpt-5\.2|gpt-5\.1|gpt-5(?:-mini)?|gpt-4\.1(?:-mini|-nano)?|gpt-4o(?:-mini)?|o3|o4-mini)(?:-\d{4}.*|$)/.test(name);
   }
   return false;
 }
