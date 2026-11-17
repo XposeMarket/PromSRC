@@ -437,9 +437,8 @@ function openImportCatalogSheet(onChanged) {
   wrap.innerHTML = `
     <div class="pm-plugin-sheet pm-import-sheet" role="dialog" aria-modal="true" aria-label="Import from other agents">
       <button class="pm-plugin-sheet-close" type="button" aria-label="Close">${ICONS.x}</button>
-      <h2 class="pm-import-title">Import from other agents</h2>
-      <p class="pm-plugin-sheet-note">Skills and MCP servers from the Claude and OpenAI official catalogs. Hosted ChatGPT apps can't run here. Imported MCP servers stay off until you turn them on.</p>
-      <input class="pm-import-search" type="search" placeholder="Search catalogs" autocomplete="off"/>
+      <h2 class="pm-import-title">Import plugins</h2>
+      <input class="pm-import-search" type="search" placeholder="Search" autocomplete="off"/>
       <div class="pm-import-list"><p class="pm-plugins-empty">Loading catalogs…</p></div>
     </div>`;
   const close = () => wrap.remove();
@@ -450,16 +449,15 @@ function openImportCatalogSheet(onChanged) {
   const paint = (head) => {
     list.innerHTML = `${head ? `<p class="pm-import-head">${escapeHtml(head)}</p>` : ''}${entries.length ? entries.map((e, i) => `
       <div class="pm-import-row">
-        <div class="pm-import-row-text"><strong>${escapeHtml(e.name)}</strong><span>${escapeHtml(e.catalogLabel)}${e.category ? ` · ${escapeHtml(e.category)}` : ''}</span><small>${escapeHtml(String(e.description || '').length > 140 ? String(e.description).slice(0, 139).trimEnd() + '…' : String(e.description || ''))}</small>${e.note || (!e.installable && e.reason) ? `<small class="pm-import-note">${escapeHtml(e.note || e.reason)}</small>` : ''}</div>
-        ${e.imported ? '<span class="pm-import-done">Imported</span>' : e.installable ? `<button type="button" class="pm-import-btn" data-import-index="${i}">Import</button>` : ''}
+        <div class="pm-import-row-text"><strong>${escapeHtml(e.name)}</strong><small>${escapeHtml(e.description || e.category || '')}</small></div>
+        ${e.imported ? '<span class="pm-import-done">Added</span>' : e.installable ? `<button type="button" class="pm-import-btn" data-import-index="${i}">Import</button>` : '<span class="pm-import-done">Can\'t run here</span>'}
       </div>`).join('') : '<p class="pm-plugins-empty">No matches.</p>'}`;
   };
   const load = async () => {
     try {
       const out = await importPost('/api/plugins/import/catalog', { query: search.value || '', limit: 60 });
       entries = out?.data?.entries || [];
-      const cats = (out?.data?.catalogs || []).map((c) => `${c.label}: ${c.count}${c.origin === 'none' ? ' (unavailable)' : c.origin === 'stale' ? ' (offline copy)' : ''}`).join(' · ');
-      paint(`${cats}${out?.data?.total > entries.length ? ` · showing ${entries.length} of ${out.data.total}` : ''}`);
+      paint('');
     } catch (err) {
       list.innerHTML = `<p class="pm-plugins-empty">Could not load catalogs: ${escapeHtml(err?.message || String(err))}</p>`;
     }
@@ -497,7 +495,7 @@ function footerMarkup() {
     <div class="pm-plugins-footer">
       <button class="pm-plugin-row compact" type="button" data-plugins-import-catalog>
         <span class="pm-plugin-logo small">${ICONS.refresh}</span>
-        <span class="pm-plugin-row-text"><strong>Import from Claude / OpenAI catalogs</strong></span><span class="pm-plugin-trail">${ICONS.chev}</span>
+        <span class="pm-plugin-row-text"><strong>Import plugins</strong></span><span class="pm-plugin-trail">${ICONS.chev}</span>
       </button>
       <button class="pm-plugin-row compact" type="button" data-route="#mobile/creative">
         <span class="pm-plugin-logo small">${ICONS.video}</span>
