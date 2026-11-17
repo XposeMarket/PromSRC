@@ -415,6 +415,19 @@ function seedSubagentChatSessionFromStore(agentId: string, sessionId: string, wo
   }
 }
 
+/**
+ * Session a scheduled run executes in. Agent turns are always isolated per run;
+ * only main-targeted systemEvent payloads inject into the current main chat.
+ */
+export function resolveScheduledRunSessionId(
+  job: Pick<CronJob, 'id' | 'sessionTarget' | 'payloadKind'>,
+  mainSessionId: string,
+  startedAt: number,
+): string {
+  if (job.sessionTarget === 'main' && job.payloadKind === 'systemEvent') return mainSessionId;
+  return `cron_${job.id}_${startedAt}`;
+}
+
 function shouldDeliverStandaloneScheduleToMain(job: CronJob, subagentId: string, teamId: string | null): boolean {
   if (!subagentId || teamId) return false;
   const normalizedSubagentId = String(subagentId || '').trim().toLowerCase();
@@ -1526,12 +1539,15 @@ export class CronScheduler {
     this.deps.broadcast({ type: 'tasks_update', jobs: this.store.jobs, config: this.store.heartbeat });
     this.deps.broadcast({ type: 'task_running', jobId: job.id, jobName: job.name });
 
-    // Fake sessionId for the cron call — isolated from user sessions
+    // Agent turns always run in their own isolated session. sessionTarget:'main'
+    // controls delivery (the auto_<jobId> thread), not where the model runs:
+    // the "main" session is just whichever chat the user touched last, so
+    // running there leaked that chat's context into the job and the job's turn
+    // into that chat. Only systemEvent payloads, which are meant to land in the
+    // main chat, still target it.
     const mainSessionId = this.deps.getMainSessionId?.() || 'default';
-    const targetSessionId = job.sessionTarget === 'main'
-      ? mainSessionId
-      : `cron_${job.id}_${Date.now()}`;
-    const isolatedRunSession = job.sessionTarget !== 'main';
+    const targetSessionId = resolveScheduledRunSessionId(job, mainSessionId, start);
+    const isolatedRunSession = targetSessionId !== mainSessionId;
     const scheduledTeamId = String((job as any).team_id || '').trim();
     let scheduledTeam = scheduledTeamId ? getManagedTeam(scheduledTeamId) : null;
     let teamSubagentId = String(job.subagent_id || '').trim();
@@ -2399,7 +2415,8 @@ export class CronScheduler {
       // appends to one continuous thread instead of spawning a fresh session.
       const sessionId = `auto_${job.id}`;
       const title = `Automated: ${job.name}`;
-      const runLabel = new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+      // Label with the run's start time (when it fired), not completion time.
+      const runLabel = new Date(start).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
       const userContent = `[Automated Task: ${job.name}]\nRun: ${runLabel}\n\n${job.prompt}`;
       let fullHistory: Array<{ role: string; content: string }> = [
         { role: 'user', content: userContent },
