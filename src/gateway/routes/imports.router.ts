@@ -98,8 +98,8 @@ router.get('/api/imports/agents', (_req, res) => {
 
 router.get('/api/imports/agents/:agentId/groups', async (req, res) => {
   try {
-    await warmAgentIndex(String(req.params.agentId || ''));
-    res.json({ success: true, ...listAgentGroups(String(req.params.agentId || '')) });
+    const listing = await warmAgentIndex(String(req.params.agentId || ''));
+    res.json({ success: true, ...listAgentGroups(String(req.params.agentId || ''), {}, listing) });
   } catch (error) {
     res.status(400).json({ success: false, error: errorMessage(error) });
   }
@@ -107,7 +107,7 @@ router.get('/api/imports/agents/:agentId/groups', async (req, res) => {
 
 router.get('/api/imports/agents/:agentId/chats', async (req, res) => {
   try {
-    await warmAgentIndex(String(req.params.agentId || ''));
+    const listing = await warmAgentIndex(String(req.params.agentId || ''));
     res.setHeader('Cache-Control', 'no-store');
     res.json({
       success: true,
@@ -116,7 +116,7 @@ router.get('/api/imports/agents/:agentId/chats', async (req, res) => {
         limit: Number(req.query.limit || 50),
         group: typeof req.query.group === 'string' ? req.query.group : undefined,
         preview: String(req.query.preview || '') === '1',
-      }),
+      }, listing),
     });
   } catch (error) {
     res.status(400).json({ success: false, error: errorMessage(error) });
@@ -131,7 +131,6 @@ router.get('/api/imports/agents/:agentId/chats', async (req, res) => {
 router.get('/api/imports/agents/:agentId/search', async (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   try {
-    await warmAgentIndex(String(req.params.agentId || ''));
     const q = typeof req.query.q === 'string' ? req.query.q : '';
     res.json({
       success: true,
@@ -150,8 +149,12 @@ router.get('/api/imports/agents/:agentId/search', async (req, res) => {
 router.get('/api/imports/agents/:agentId/search-index', async (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   try {
-    await warmAgentIndex(String(req.params.agentId || ''));
-    res.json({ success: true, status: searchIndexStatus(String(req.params.agentId || '')) });
+    const id = String(req.params.agentId || '');
+    let listing;
+    try { listing = await warmAgentIndex(id); } catch { /* vanished sources remain deletable */ }
+    let status = searchIndexStatus(id, {}, listing?.files.length ?? 0);
+    if (req.query.refresh === '1' && status.enabled && listing) status = startSearchIndex(id, {}, listing);
+    res.json({ success: true, status });
   } catch (error) {
     res.status(400).json({ success: false, error: errorMessage(error) });
   }
@@ -161,8 +164,8 @@ router.get('/api/imports/agents/:agentId/search-index', async (req, res) => {
 router.post('/api/imports/agents/:agentId/search-index', async (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   try {
-    await warmAgentIndex(String(req.params.agentId || ''));
-    res.json({ success: true, status: startSearchIndex(String(req.params.agentId || '')) });
+    const listing = await warmAgentIndex(String(req.params.agentId || ''));
+    res.json({ success: true, status: startSearchIndex(String(req.params.agentId || ''), {}, listing) });
   } catch (error) {
     res.status(400).json({ success: false, error: errorMessage(error) });
   }
@@ -217,13 +220,14 @@ function normalizeSelection(body: any): AgentSelection {
 /** Exact counts for the confirmation dialog, plus the bounded job requests to send to POST /api/imports/jobs. */
 router.post('/api/imports/agents/:agentId/preflight', async (req, res) => {
   try {
-    await warmAgentIndex(String(req.params.agentId || ''));
+    const listing = await warmAgentIndex(String(req.params.agentId || ''));
     const owner = ownerId();
     const workspacePath = getConfig().getWorkspacePath();
     const result = preflightAgentSelection(
       String(req.params.agentId || ''),
       normalizeSelection(req.body),
       (input) => isConversationAlreadyImported({ ...input, ownerId: owner, workspacePath }),
+      {}, listing,
     );
     res.json({ success: true, preflight: result });
   } catch (error) {

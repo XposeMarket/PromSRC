@@ -7,7 +7,7 @@ import {
   isSafeAgentTranscriptName,
   listAgentIndexedFiles,
   warmAgentIndex,
-  messageOf,
+  type AgentListing,
   readHeadFacts,
   type AgentChatEntry,
   type AgentIndexedFile,
@@ -121,6 +121,14 @@ function openDb(create: boolean): SqliteDatabase | null {
       tokenize = 'unicode61 remove_diacritics 2'
     );
   `);
+  // Version 2 uses a strict transcript allowlist. Never reuse permissively indexed text.
+  if (Number(db.pragma('user_version', { simple: true })) < 2) {
+    db.transaction(() => {
+      db.prepare('DELETE FROM messages').run();
+      db.prepare('DELETE FROM files').run();
+      db.pragma('user_version = 2');
+    })();
+  }
   dbHandle = db;
   dbHandlePath = file;
   return db;
@@ -251,8 +259,7 @@ export interface AgentSearchOptions extends ImportDiscoveryOptions {
 }
 
 export async function searchAgentChats(agentId: string, options: AgentSearchOptions = {}): Promise<AgentSearchResult> {
-  await warmAgentIndex(agentId, options);
-  const listing = listAgentIndexedFiles(agentId, options);
+  const listing = await warmAgentIndex(agentId, options);
   const query = String(options.q || '').slice(0, MAX_QUERY_CHARS);
   const scope = options.scope === 'all' ? 'all' : 'title';
   const offset = Math.max(0, Math.floor(Number(options.offset) || 0));
@@ -358,15 +365,39 @@ function yieldTick(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
 }
 
-/** User/assistant text only, via the stage 1 `messageOf`; everything else is skipped. */
-export function indexableMessage(record: any): { role: string; text: string } | null {
-  const message = messageOf(record);
-  if (!message || (message.role !== 'user' && message.role !== 'assistant')) return null;
-  let text = String(message.text || '');
-  if (!text.trim() || SYSTEM_TEXT.test(text)) return null;
+/** Persistent text has a stricter, adapter-specific allowlist than transient titles. */
+export function indexableMessage(record: any, adapter: AgentListing['adapter'] = 'codex-local'): { role: string; text: string; truncated: boolean } | null {
+  if (!record || typeof record !== 'object') return null;
+  let message: any;
+  let blockTypes: string[] = ['text'];
+  if (adapter === 'codex-local') {
+    if (record.type !== 'response_item' || record.payload?.type !== 'message') return null;
+    message = record.payload;
+    blockTypes = message.role === 'user' ? ['input_text'] : ['output_text'];
+  } else if (adapter === 'claude-code-local') {
+    if (!['user', 'assistant'].includes(record.type) || record.message?.role !== record.type || record.isMeta) return null;
+    message = record.message;
+  } else if (adapter === 'openclaw-local') {
+    if (record.type !== 'message') return null;
+    message = record.message;
+  } else if (adapter === 'hermes-local') {
+    if (record.type !== undefined && record.type !== 'message') return null;
+    message = record;
+  } else return null;
+  if (!message || !['user', 'assistant'].includes(message.role)) return null;
+  // Reject non-final channels and tool/command envelopes even if they carry a chat role.
+  for (const envelope of [record, message]) {
+    if (envelope.channel != null && envelope.channel !== 'final') return null;
+    if (envelope.recipient != null && envelope.recipient !== 'all') return null;
+    if (['tool_calls', 'tool_call', 'tool_call_id', 'function_call', 'command', 'output', 'tool_result', 'tool_use_id'].some((key) => envelope[key] != null)) return null;
+  }
+  const content = message.content;
+  let text = typeof content === 'string' && adapter !== 'codex-local' ? content : Array.isArray(content)
+    ? content.filter((part: any) => part && blockTypes.includes(part.type) && typeof part.text === 'string').map((part: any) => part.text).join(' ') : '';
+  if (!text.trim() || SYSTEM_TEXT.test(text) || /^\s*<(local-command|command-name|command-message|command-args|bash-input|bash-stdout|bash-stderr|system-reminder|file|tool)/i.test(text)) return null;
   text = text.replace(BASE64_RUN, ' ').replace(/\s+/g, ' ').trim();
   if (!text) return null;
-  return { role: message.role, text: text.slice(0, MAX_MESSAGE_CHARS) };
+  return { role: message.role, text: text.slice(0, MAX_MESSAGE_CHARS), truncated: text.length > MAX_MESSAGE_CHARS };
 }
 
 function insideRoot(root: string, file: string): boolean {
@@ -381,7 +412,7 @@ function insideRoot(root: string, file: string): boolean {
 }
 
 /** Reads one transcript in bounded async chunks and returns its indexable messages. */
-async function readMessages(file: string, budget: { tickBytes: number }, isCancelled: () => boolean): Promise<{ messages: Array<{ role: string; text: string }>; chars: number; truncated: boolean }> {
+async function readMessages(file: string, adapter: AgentListing['adapter'], budget: { tickBytes: number }, isCancelled: () => boolean): Promise<{ messages: Array<{ role: string; text: string }>; chars: number; truncated: boolean }> {
   const messages: Array<{ role: string; text: string }> = [];
   let chars = 0;
   let truncated = false;
@@ -399,15 +430,16 @@ async function readMessages(file: string, budget: { tickBytes: number }, isCance
       if (!trimmed || trimmed[0] !== '{') return true;
       let record: any;
       try { record = JSON.parse(trimmed); } catch { return true; }
-      const message = indexableMessage(record);
+      const message = indexableMessage(record, adapter);
       if (!message) return true;
+      if (message.truncated) truncated = true;
       const room = MAX_CHAT_CHARS - chars;
       if (room <= 0) { truncated = true; return false; }
       const text = message.text.length > room ? message.text.slice(0, room) : message.text;
       if (text.length < message.text.length) truncated = true;
       messages.push({ role: message.role, text });
       chars += text.length;
-      return chars < MAX_CHAT_CHARS;
+      return true; // inspect the next eligible message to distinguish an exact fit from omitted text
     };
     let keepGoing = true;
     while (keepGoing && position < limit) {
@@ -420,7 +452,7 @@ async function readMessages(file: string, budget: { tickBytes: number }, isCance
       const text = rest + buffer.subarray(0, bytesRead).toString('latin1');
       const lines = text.split('\n');
       rest = lines.pop() || '';
-      if (rest.length > 16 * 1024 * 1024) rest = ''; // one absurd line (e.g. an image) is skipped
+      if (rest.length > 16 * 1024 * 1024) { rest = ''; truncated = true; } // one absurd line (e.g. an image) is skipped
       for (const line of lines) {
         if (!takeLine(Buffer.from(line, 'latin1').toString('utf8'))) { keepGoing = false; break; }
       }
@@ -437,10 +469,12 @@ async function readMessages(file: string, budget: { tickBytes: number }, isCance
 
 async function runBuild(job: BuildJob, options: ImportDiscoveryOptions): Promise<void> {
   await yieldTick(); // never run on the request path
-  await warmAgentIndex(job.agentId, options);
-  const listing = listAgentIndexedFiles(job.agentId, options);
-  const db = openDb(true);
-  if (!db) throw new Error(messageSearchAvailability().reason || 'Message search is unavailable.');
+  if (job.cancelled) return;
+  const listing = await warmAgentIndex(job.agentId, options);
+  if (job.cancelled) return;
+  // Opt-in is established by startSearchIndex; a deleted build must never recreate it.
+  const db = openDb(false);
+  if (!db || !isEnabled(db, job.agentId)) return;
   job.total = listing.files.length;
   const known = new Map<string, { size: number; mtime: number }>();
   for (const row of db.prepare('SELECT file_id, size, mtime FROM files WHERE agent_id = ?').all(job.agentId)) {
@@ -471,12 +505,12 @@ async function runBuild(job: BuildJob, options: ImportDiscoveryOptions): Promise
     if (!isSafeAgentTranscriptName(file.id) || !insideRoot(listing.root, file.absolutePath)) { job.done += 1; continue; }
     let result;
     try {
-      result = await readMessages(file.absolutePath, budget, () => job.cancelled);
+      result = await readMessages(file.absolutePath, listing.adapter, budget, () => job.cancelled);
     } catch {
       job.done += 1;
       continue; // unreadable file: skipped, retried next build
     }
-    if (!dbHandle || !isEnabled(dbHandle, job.agentId)) break;
+    if (job.cancelled || dbHandle !== db || !isEnabled(db, job.agentId)) break;
     writeFile(file, result);
     job.done += 1;
     sinceYield += 1;
@@ -493,15 +527,15 @@ function setEnabled(db: SqliteDatabase, agentId: string, enabled: boolean): void
  * Turns message search on for one agent (explicit user action) and starts or
  * joins its index build. Returns immediately; poll `searchIndexStatus`.
  */
-export function startSearchIndex(agentId: string, options: ImportDiscoveryOptions = {}): SearchIndexStatus {
+export function startSearchIndex(agentId: string, options: ImportDiscoveryOptions = {}, prepared?: AgentListing): SearchIndexStatus {
   const availability = messageSearchAvailability();
   if (!availability.ok) throw new Error(availability.reason || 'Message search is unavailable.');
-  const listing = listAgentIndexedFiles(agentId, options); // validates the agent
+  const listing = prepared || listAgentIndexedFiles(agentId, options); // HTTP callers supply the async listing
   const id = listing.agentId;
   const db = openDb(true);
   if (!db) throw new Error('Message search is unavailable.');
   setEnabled(db, id, true);
-  if (!jobs.has(id)) {
+  if (!jobs.has(id) || jobs.get(id)?.cancelled) {
     const job: BuildJob = { agentId: id, total: listing.files.length, done: 0, cancelled: false, promise: Promise.resolve() };
     job.promise = runBuild(job, options)
       .catch((error) => { job.error = error instanceof Error ? error.message : String(error); lastErrors.set(id, job.error); })
@@ -594,7 +628,7 @@ export function deleteAgentSearchIndex(agentId: string): { agentId: string; dele
   const job = jobs.get(id);
   if (job) job.cancelled = true;
   lastErrors.delete(id);
-  if (!messageSearchAvailability().ok) return { agentId: id, deleted: false, removedChats: 0 };
+  if (!messageSearchAvailability().ok) throw new Error('Cannot remove one agent while the database engine is unavailable. Use Delete search index to remove the whole file.');
   const db = openDb(false);
   if (!db) return { agentId: id, deleted: true, removedChats: 0 };
   const removedChats = countIndexed(db, id);
@@ -615,9 +649,13 @@ export function deleteAgentSearchIndex(agentId: string): { agentId: string; dele
 function removeDbFiles(): void {
   closeDb();
   const file = importSearchDbPath();
-  for (const suffix of ['', '-wal', '-shm', '-journal']) {
-    try { fs.rmSync(file + suffix, { force: true }); } catch { /* ignore */ }
+  const failures: string[] = [];
+  for (const suffix of ['-wal', '-shm', '-journal', '']) {
+    try { fs.rmSync(file + suffix, { force: true }); }
+    catch { failures.push(suffix || 'database'); }
+    if (fs.existsSync(file + suffix) && !failures.includes(suffix || 'database')) failures.push(suffix || 'database');
   }
+  if (failures.length) throw new Error('Search is disabled, but some index files could not be deleted. Close other apps using the index and retry Delete search index.');
 }
 
 /** "Delete search index" in the tools area: every agent, the whole file. */
@@ -628,7 +666,12 @@ export function deleteAllSearchIndexes(): { deleted: boolean; agents: string[] }
   if (messageSearchAvailability().ok) {
     const db = openDb(false);
     if (db) {
-      try { agents = db.prepare('SELECT agent_id FROM agents').all().map((row: any) => String(row.agent_id)); } catch { agents = []; }
+      agents = db.prepare('SELECT agent_id FROM agents').all().map((row: any) => String(row.agent_id));
+      db.transaction(() => {
+        db.prepare('UPDATE agents SET enabled = 0').run();
+        db.prepare('DELETE FROM messages').run();
+        db.prepare('DELETE FROM files').run();
+      })();
     }
   }
   removeDbFiles();
@@ -638,7 +681,7 @@ export function deleteAllSearchIndexes(): { deleted: boolean; agents: string[] }
 /** Agents that have an index on disk, detected or not (so nothing is unreachable). */
 export function listIndexedAgents(): { agents: Array<{ agentId: string; enabled: boolean; indexedChats: number }>; indexBytes: number; messageSearch: 'available' | 'unavailable'; reason?: string } {
   const availability = messageSearchAvailability();
-  if (!availability.ok) return { agents: [], indexBytes: 0, messageSearch: 'unavailable', reason: availability.reason };
+  if (!availability.ok) return { agents: [], indexBytes: dbBytesOnDisk(), messageSearch: 'unavailable', reason: availability.reason };
   const db = openDb(false);
   if (!db) return { agents: [], indexBytes: 0, messageSearch: 'available' };
   const agents = db.prepare('SELECT a.agent_id AS agentId, a.enabled AS enabled, (SELECT COUNT(*) FROM files f WHERE f.agent_id = a.agent_id) AS n FROM agents a').all()

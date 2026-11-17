@@ -281,6 +281,22 @@ function chatGptExportCandidates(homeDir: string): CandidateDefinition[] {
   return out;
 }
 
+/** Resolve only the requested browsable root; no unrelated setup/export scans. */
+export function agentConversationRoot(agentId: string, options: ImportDiscoveryOptions = {}): { root: string; adapter: ImportAdapterId } {
+  const home = path.resolve(options.homeDir || os.homedir());
+  const local = path.resolve(options.localAppData || defaultLocalAppData(home));
+  const roots: Record<string, { root: string; adapter: ImportAdapterId }> = {
+    codex: { root: path.join(home, '.codex', 'sessions'), adapter: 'codex-local' },
+    claude: { root: path.join(home, '.claude', 'projects'), adapter: 'claude-code-local' },
+    hermes: { root: path.join(local, 'hermes', 'sessions'), adapter: 'hermes-local' },
+    openclaw: { root: path.join(home, '.openclaw'), adapter: 'openclaw-local' },
+  };
+  const result = roots[agentId];
+  if (!result) throw new Error('That agent has no chats to list. Scan again.');
+  return result;
+}
+
+
 function definitions(options: Required<Pick<ImportDiscoveryOptions, 'homeDir' | 'localAppData' | 'appData'>>): CandidateDefinition[] {
   const { homeDir, localAppData, appData } = options;
   return [

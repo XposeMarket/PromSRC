@@ -214,7 +214,7 @@ async function main(): Promise<void> {
   const pending2 = agents.warmAgentIndex('codex', bigOpts2);
   setImmediate(() => { ticked2 = true; });
   await pending2;
-  assert.equal(ticked2, false, 'warm cache does not yield');
+  assert.equal(ticked2, true, 'warm filesystem enumeration also yields');
   assert.equal(agents.listAgentGroups('codex', bigOpts2).totalChats, 60, 'sync listing correct after warm-up');
 
   console.log('import-agents regression passed');

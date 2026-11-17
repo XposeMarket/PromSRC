@@ -543,12 +543,12 @@ export function mountAgentsImports(container, options = {}) {
     render();
   }
 
-  async function loadIndexStatus(agentId) {
+  async function loadIndexStatus(agentId, refresh = false) {
     const entry = indexes.get(agentId) || { status: null, busy: false, error: '', notice: '', loaded: false, poll: 0 };
     entry.loaded = true;
     indexes.set(agentId, entry);
     try {
-      const data = await call(`/api/imports/agents/${encodeURIComponent(agentId)}/search-index`, { timeoutMs: 60000, cache: 'no-store', dedupe: false });
+      const data = await call(`/api/imports/agents/${encodeURIComponent(agentId)}/search-index${refresh ? '?refresh=1' : ''}`, { timeoutMs: 60000, cache: 'no-store', dedupe: false });
       const before = entry.status?.indexedChats;
       entry.status = data.status || null;
       entry.error = '';
@@ -636,7 +636,7 @@ export function mountAgentsImports(container, options = {}) {
   function renderSearchBox(agent) {
     const s = searchFor(agent.id);
     const entry = indexes.get(agent.id);
-    if (!entry?.loaded) setTimeout(() => { if (!indexes.get(agent.id)?.loaded) loadIndexStatus(agent.id); }, 0);
+    if (!entry?.loaded) setTimeout(() => { if (!indexes.get(agent.id)?.loaded) loadIndexStatus(agent.id, true); }, 0);
     const status = entry?.status;
     let msg = '';
     if (status?.messageSearch === 'unavailable') {
@@ -705,7 +705,7 @@ export function mountAgentsImports(container, options = {}) {
   function renderSearchTools() {
     if (!searchTools.loaded) { setTimeout(() => { if (!searchTools.loaded) loadSearchTools(); }, 0); return ''; }
     const notice = searchTools.notice ? `<span class="aip-ok" role="status">${esc(searchTools.notice)}</span>` : '';
-    if (!searchTools.agents.length) return notice ? `<div class="aip-search-tools">${notice}</div>` : '';
+    if (!searchTools.agents.length && !searchTools.indexBytes) return notice ? `<div class="aip-search-tools">${notice}</div>` : '';
     const names = searchTools.agents.map((a) => agentById(a.agentId)?.name || a.agentId).join(', ');
     return `<div class="aip-search-tools">
       <span class="aip-muted">Message search index for ${esc(names)}${searchTools.indexBytes ? ` · ${esc(formatBytes(searchTools.indexBytes))}` : ''}. Kept on this computer only.</span>
@@ -1161,7 +1161,7 @@ export function mountAgentsImports(container, options = {}) {
     const agentId = el.getAttribute('data-agent') || '';
     switch (act) {
       // Closing or switching rows drops the query, results and snippets from memory.
-      case 'open': for (const id of [...searches.keys()]) dropSearch(id); for (const entry of indexes.values()) entry.notice = ''; break;
+      case 'open': for (const id of [...searches.keys()]) dropSearch(id); for (const entry of indexes.values()) { entry.notice = ''; entry.loaded = false; } break;
       case 'search-clear': {
         dropSearch(agentId);
         render();

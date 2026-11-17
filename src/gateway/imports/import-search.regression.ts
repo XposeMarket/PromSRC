@@ -200,6 +200,51 @@ async function main(): Promise<void> {
     assert.equal(fs.existsSync(search.importSearchDbPath()), false, 'delete all removes the file');
     assert.equal(search.listIndexedAgents().agents.length, 0);
 
+    // Review regressions: persistent privacy allowlists and deletion lifecycle.
+    assert.equal(search.indexableMessage({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'thinking', text: 'PRIVATE_REASON' }] } }, 'claude-code-local'), null);
+    assert.equal(search.indexableMessage({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', content: 'PRIVATE_FILE' }] } }, 'claude-code-local'), null);
+    assert.equal(search.indexableMessage({ type: 'user', message: { role: 'user', content: '<local-command-stdout>PRIVATE_COMMAND</local-command-stdout>' } }, 'claude-code-local'), null);
+    assert.equal(search.indexableMessage({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'actual reply' }] } }, 'claude-code-local')?.text, 'actual reply');
+    assert.equal(search.indexableMessage(JSON.parse(assistant('word '.repeat(1700))))?.truncated, true);
+    search.startSearchIndex('codex', opts);
+    search.deleteAllSearchIndexes();
+    await search.waitForSearchIndex('codex');
+    assert.equal(fs.existsSync(search.importSearchDbPath()), false, 'cancelled queued build cannot recreate deleted DB');
+    search.startSearchIndex('codex', opts);
+    await search.waitForSearchIndex('codex');
+    const realRm = fs.rmSync;
+    (fs as any).rmSync = (file: any, ...args: any[]) => {
+      if (String(file) === search.importSearchDbPath()) throw Object.assign(new Error('busy'), { code: 'EBUSY' });
+      return (realRm as any)(file, ...args);
+    };
+    try { assert.throws(() => search.deleteAllSearchIndexes(), /could not be deleted/); }
+    finally { (fs as any).rmSync = realRm; }
+    assert.equal(search.searchIndexStatus('codex', opts).enabled, false, 'retained DB must not remain enabled');
+    assert.equal((await s('quasarwidget', 'all')).total, 0, 'retained DB no longer exposes messages');
+    search.closeImportSearchDb();
+    search.setFtsProbeForTest(() => ({ ok: false, reason: 'simulated unavailable' }));
+    assert.ok(search.listIndexedAgents().indexBytes > 0, 'retained file remains visible without database engine');
+    search.deleteAllSearchIndexes();
+    assert.equal(fs.existsSync(search.importSearchDbPath()), false, 'filesystem deletion works without database engine');
+    search.setFtsProbeForTest(null);
+
+    // Warm and cold large listings must allow heartbeat work, not synchronously stat 1,168 files.
+    const largeHome = path.join(root, 'large-home');
+    for (let i = 0; i < 1168; i++) write(`large-home/.codex/sessions/rollout-${i}.jsonl`, chat(`large-${i}`, [user(`Fixture ${i}`)]));
+    for (const state of ['cold', 'warm']) {
+      let beats = 0;
+      let maxGap = 0;
+      let last = performance.now();
+      const timer = setInterval(() => { const now = performance.now(); maxGap = Math.max(maxGap, now - last); last = now; beats++; }, 5);
+      try {
+        const result = await search.searchAgentChats('codex', { ...opts, homeDir: largeHome, q: 'fixture' });
+        assert.equal(result.total, 1168);
+        assert.ok(beats > 0, `${state} search yields heartbeat`);
+        assert.ok(maxGap < 250, `${state} max heartbeat gap ${maxGap}ms`);
+        console.log(`${state} 1168-chat heartbeat: ${beats} ticks, max gap ${Math.round(maxGap)}ms`);
+      } finally { clearInterval(timer); }
+    }
+
     // --- 10. FTS5 unavailable: title search still works. ------------------------
     search.closeImportSearchDb();
     search.setFtsProbeForTest(() => ({ ok: false, reason: 'simulated: no FTS5' }));
