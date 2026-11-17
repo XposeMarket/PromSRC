@@ -447,7 +447,9 @@ export function mountAgentsImports(container, options = {}) {
         if (!st.lists.has(listKey(agent.id, ''))) setTimeout(() => loadChats(agent.id, ''), 0);
         body = renderChatList(agent, '', true);
       }
-      chats = `${tabs}<div class="aip-tabpanel">${body}</div>`;
+      chats = info && !info.loading && !info.error && (info.groups.length || info.looseChats)
+        ? `${renderSearchBox(agent)}${searching(agent.id) ? `<div class="aip-tabpanel aip-search-results">${renderSearchResults(agent)}</div>` : `${tabs}<div class="aip-tabpanel">${body}</div>`}`
+        : `${tabs}<div class="aip-tabpanel">${body}</div>`;
     } else if (agent.conversationSource) {
       chats = renderWholeSource(agent);
     }
@@ -468,6 +470,247 @@ export function mountAgentsImports(container, options = {}) {
       <div class="aip-bar-copy">${lead}${detail ? `<div class="aip-muted aip-bar-detail">${esc(detail)}</div>` : ''}</div>
       <button class="aip-btn aip-btn-ghost" type="button" data-act="clear" data-agent="${esc(agent.id)}" ${sum.total ? '' : 'disabled'}>Clear</button>
       <button class="aip-btn" type="button" data-act="import" data-agent="${esc(agent.id)}" ${sum.total && !st.run?.active ? '' : 'disabled'}>Import…</button>
+    </div>`;
+  }
+
+  // ---- stage 2: search inside an opened row ---------------------------------
+  // Title search reads titles on the gateway and stores nothing. Message search
+  // is an explicit per-agent switch that keeps a local index on this computer;
+  // turning it off deletes that index. Query text and snippets live only in
+  // this in-memory view state and are dropped when the row closes.
+  const SEARCH_DEBOUNCE_MS = 250;
+  const searches = new Map(); // agentId -> { q, items, total, totalChats, hasMore, loading, error, seq, timer, abort, messageSearch }
+  const indexes = new Map(); // agentId -> { status, busy, error, notice, loaded, poll }
+  const searchTools = { loaded: false, loading: false, indexBytes: 0, agents: [], messageSearch: 'available', reason: '', busy: false, notice: '' };
+
+  function searchFor(agentId) {
+    if (!searches.has(agentId)) searches.set(agentId, { q: '', items: [], total: 0, totalChats: 0, hasMore: false, loading: false, error: '', seq: 0, timer: 0, abort: null, messageSearch: null });
+    return searches.get(agentId);
+  }
+
+  function searching(agentId) {
+    return !!searchFor(agentId).q.trim();
+  }
+
+  function dropSearch(agentId) {
+    const s = searches.get(agentId);
+    if (!s) return;
+    clearTimeout(s.timer);
+    try { s.abort?.abort(); } catch { /* ignore */ }
+    searches.delete(agentId);
+  }
+
+  function scheduleSearch(agentId) {
+    const s = searchFor(agentId);
+    clearTimeout(s.timer);
+    s.seq += 1;
+    try { s.abort?.abort(); } catch { /* ignore */ }
+    s.abort = null;
+    if (!s.q.trim()) { s.items = []; s.total = 0; s.hasMore = false; s.loading = false; s.error = ''; render(); return; }
+    s.loading = true;
+    s.timer = setTimeout(() => runSearch(agentId, false), SEARCH_DEBOUNCE_MS);
+    render();
+  }
+
+  async function runSearch(agentId, more) {
+    const s = searchFor(agentId);
+    const q = s.q.trim();
+    if (!q) return;
+    const seq = more ? s.seq : ++s.seq;
+    try { s.abort?.abort(); } catch { /* ignore */ }
+    const controller = typeof AbortController === 'function' ? new AbortController() : null;
+    s.abort = controller;
+    s.loading = true;
+    s.error = '';
+    if (!more) render();
+    const enabled = !!indexes.get(agentId)?.status?.enabled;
+    const offset = more ? s.items.length : 0;
+    const query = `q=${encodeURIComponent(q)}&scope=${enabled ? 'all' : 'title'}&offset=${offset}&limit=${PAGE_SIZE}`;
+    try {
+      const data = await call(`/api/imports/agents/${encodeURIComponent(agentId)}/search?${query}`, { timeoutMs: 120000, cache: 'no-store', dedupe: false, ...(controller ? { signal: controller.signal } : {}) });
+      if (searches.get(agentId) !== s || seq !== s.seq || s.q.trim() !== q) return; // stale
+      s.items = more ? [...s.items, ...(data.results || [])] : (data.results || []);
+      s.total = Number(data.total || 0);
+      s.totalChats = Number(data.totalChats || 0);
+      s.hasMore = !!data.hasMore;
+      s.messageSearch = data.messageSearch || null;
+      s.loading = false;
+    } catch (error) {
+      if (searches.get(agentId) !== s || seq !== s.seq) return;
+      s.loading = false;
+      s.error = error?.name === 'AbortError' ? '' : (error.message || 'Search failed.');
+    }
+    render();
+  }
+
+  async function loadIndexStatus(agentId) {
+    const entry = indexes.get(agentId) || { status: null, busy: false, error: '', notice: '', loaded: false, poll: 0 };
+    entry.loaded = true;
+    indexes.set(agentId, entry);
+    try {
+      const data = await call(`/api/imports/agents/${encodeURIComponent(agentId)}/search-index`, { timeoutMs: 60000, cache: 'no-store', dedupe: false });
+      const before = entry.status?.indexedChats;
+      entry.status = data.status || null;
+      entry.error = '';
+      if (entry.status?.building) schedulePoll(agentId);
+      if (before !== undefined && before !== entry.status?.indexedChats && searching(agentId)) runSearch(agentId, false);
+    } catch (error) {
+      entry.error = error.message;
+    }
+    render();
+  }
+
+  function schedulePoll(agentId) {
+    const entry = indexes.get(agentId);
+    if (!entry || entry.poll) return;
+    entry.poll = setTimeout(() => {
+      entry.poll = 0;
+      if (st.openId !== agentId) return; // row closed: stop polling (the build keeps going on the gateway)
+      loadIndexStatus(agentId);
+    }, POLL_MS);
+  }
+
+  async function toggleMessageSearch(agentId) {
+    const entry = indexes.get(agentId) || { status: null, busy: false, error: '', notice: '', loaded: true, poll: 0 };
+    indexes.set(agentId, entry);
+    if (entry.busy) return;
+    entry.busy = true;
+    entry.error = '';
+    entry.notice = '';
+    render();
+    try {
+      if (entry.status?.enabled) {
+        await call(`/api/imports/agents/${encodeURIComponent(agentId)}/search-index`, { method: 'DELETE', timeoutMs: 120000 });
+        entry.notice = 'Search index deleted';
+        searchTools.loaded = false;
+      } else {
+        const data = await call(`/api/imports/agents/${encodeURIComponent(agentId)}/search-index`, { method: 'POST', body: {}, timeoutMs: 120000 });
+        entry.status = data.status || null;
+        searchTools.loaded = false;
+      }
+    } catch (error) {
+      entry.error = error.message;
+    }
+    entry.busy = false;
+    await loadIndexStatus(agentId);
+    if (searching(agentId)) runSearch(agentId, false);
+  }
+
+  async function cancelIndexBuild(agentId) {
+    try { await call(`/api/imports/agents/${encodeURIComponent(agentId)}/search-index/cancel`, { method: 'POST', body: {} }); } catch { /* finished already */ }
+    loadIndexStatus(agentId);
+  }
+
+  async function loadSearchTools() {
+    if (searchTools.loading) return;
+    searchTools.loading = true;
+    try {
+      const data = await call('/api/imports/search-index', { cache: 'no-store', dedupe: false });
+      searchTools.indexBytes = Number(data.indexBytes || 0);
+      searchTools.agents = Array.isArray(data.agents) ? data.agents : [];
+      searchTools.messageSearch = data.messageSearch || 'available';
+      searchTools.reason = data.reason || '';
+    } catch { /* tools stay hidden */ }
+    searchTools.loading = false;
+    searchTools.loaded = true;
+    render();
+  }
+
+  async function deleteAllIndexes() {
+    if (!window.confirm('Delete the message search index for every agent? Your agents\' own chats are not touched.')) return;
+    searchTools.busy = true;
+    render();
+    try {
+      await call('/api/imports/search-index', { method: 'DELETE' });
+      searchTools.notice = 'Search index deleted';
+    } catch (error) {
+      searchTools.notice = `Could not delete the search index: ${error.message}`;
+    }
+    searchTools.busy = false;
+    searchTools.loaded = false;
+    for (const id of [...indexes.keys()]) { const entry = indexes.get(id); entry.status = null; entry.loaded = false; }
+    for (const id of [...searches.keys()]) if (searching(id)) runSearch(id, false);
+    render();
+  }
+
+  function renderSearchBox(agent) {
+    const s = searchFor(agent.id);
+    const entry = indexes.get(agent.id);
+    if (!entry?.loaded) setTimeout(() => { if (!indexes.get(agent.id)?.loaded) loadIndexStatus(agent.id); }, 0);
+    const status = entry?.status;
+    let msg = '';
+    if (status?.messageSearch === 'unavailable') {
+      msg = `<div class="aip-muted aip-search-note">Message search is not available here: ${esc(status.reason || 'full-text search is missing')}. Title search still works.</div>`;
+    } else if (status) {
+      const on = !!status.enabled;
+      const progress = status.building && status.progress
+        ? `<div class="aip-search-progress" role="status" aria-live="polite"><span>${status.cancelling ? 'Stopping after the current chat…' : `Indexed ${Number(status.progress.done).toLocaleString()} of ${plural(status.progress.total, 'chat')}`}</span>${status.cancelling ? '' : `<button class="aip-link" type="button" data-act="index-cancel" data-agent="${esc(agent.id)}">Cancel</button>`}</div>`
+        : on && status.indexedChats < status.totalChats
+          ? `<div class="aip-search-progress"><span>Indexed ${Number(status.indexedChats).toLocaleString()} of ${plural(status.totalChats, 'chat')}</span><button class="aip-link" type="button" data-act="index-resume" data-agent="${esc(agent.id)}">Continue indexing</button></div>`
+          : '';
+      const size = on && (status.agentBytes || status.indexBytes) ? `<span class="aip-muted aip-search-size">Index: ${esc(formatBytes(status.agentBytes || status.indexBytes))}</span>` : '';
+      msg = `<div class="aip-search-switch">
+          <label class="aip-switch">
+            <input type="checkbox" role="switch" data-act="msg-switch" data-agent="${esc(agent.id)}" ${on ? 'checked' : ''} ${entry.busy ? 'disabled' : ''} aria-checked="${on}">
+            <span class="aip-switch-track" aria-hidden="true"></span>
+            <span class="aip-switch-label">Search inside messages</span>
+          </label>
+          ${size}
+        </div>
+        <div class="aip-muted aip-search-note">Reads this agent's chat text and keeps a search index on this computer. Turn it off to delete the index.${status.truncatedChats ? ` ${plural(status.truncatedChats, 'very long chat')} indexed only in part.` : ''}</div>
+        ${progress}`;
+    }
+    const notice = entry?.notice ? `<div class="aip-ok aip-search-note" role="status">${esc(entry.notice)}</div>` : '';
+    const err = entry?.error || status?.error ? `<div class="aip-note aip-error">${esc(entry?.error || status?.error)}</div>` : '';
+    return `<div class="aip-search">
+        <div class="aip-search-field">
+          <input type="search" class="aip-search-input" data-field="search-${esc(agent.id)}" data-search="${esc(agent.id)}" value="${esc(s.q)}" placeholder="${status?.enabled ? 'Search titles and messages' : 'Search chat titles'}" aria-label="Search ${esc(agent.name)} chats" autocomplete="off" spellcheck="false" maxlength="200">
+          ${s.q ? `<button class="aip-search-clear" type="button" data-act="search-clear" data-agent="${esc(agent.id)}" aria-label="Clear search">×</button>` : ''}
+        </div>
+        ${msg}${notice}${err}
+      </div>`;
+  }
+
+  function renderSearchHit(agent, hit) {
+    const sel = selectionFor(agent.id);
+    // Server snippets are escaped HTML with only <b> around the match; strip anything else defensively.
+    const snippet = String(hit.snippetHtml || '').replace(/<(?!\/?b>)[^>]*>/g, '');
+    const where = hit.match === 'message' ? 'In a message' : 'In the title';
+    return `<label class="aip-chat aip-search-hit">
+      ${checkbox(chatChecked(sel, hit), `data-act="chat" data-agent="${esc(agent.id)}" data-chat="${esc(hit.id)}" data-group="${esc(hit.groupKey || '')}"`, hit.title || 'chat')}
+      <span class="aip-chat-copy">
+        <span class="aip-chat-title">${esc(hit.title || 'Untitled chat')}</span>
+        ${snippet ? `<span class="aip-chat-preview aip-snippet">${snippet}</span>` : ''}
+        <span class="aip-hit-where">${where}</span>
+      </span>
+      <span class="aip-chat-meta"><span class="aip-chat-group">${esc(hit.groupLabel || 'No project or folder')}</span><span>${esc(formatDate(hit.updatedAt))}</span></span>
+    </label>`;
+  }
+
+  function renderSearchResults(agent) {
+    const s = searchFor(agent.id);
+    if (s.error) return `<div class="aip-note aip-error">${esc(s.error)} <button class="aip-link" type="button" data-act="search-retry" data-agent="${esc(agent.id)}">Try again</button></div>`;
+    if (s.loading && !s.items.length) return '<div class="aip-note">Searching…</div>';
+    const ms = s.messageSearch;
+    const scopeNote = ms && (ms.state === 'building' || ms.state === 'partial') && s.totalChats
+      ? ` · Searching ${Number(ms.indexedChats).toLocaleString()} of ${plural(s.totalChats, 'chat')} so far`
+      : '';
+    const head = `<div class="aip-list-tools aip-search-count" role="status" aria-live="polite"><strong>${s.total === 1 ? '1 chat matches' : `${Number(s.total).toLocaleString()} chats match`}</strong><span class="aip-muted">${esc(scopeNote.replace(/^ · /, ''))}</span></div>`;
+    if (!s.items.length) return `${head}<div class="aip-note">No chats match. Clear the search to see every chat again.</div>`;
+    const remaining = Math.max(0, s.total - s.items.length);
+    return `${head}<div class="aip-chats">${s.items.map((hit) => renderSearchHit(agent, hit)).join('')}</div>
+      ${s.hasMore ? `<button class="aip-btn aip-btn-ghost aip-more" type="button" data-act="search-more" data-agent="${esc(agent.id)}" ${s.loading ? 'disabled' : ''}>${s.loading ? 'Loading…' : `Show ${Math.min(PAGE_SIZE, remaining)} more (${remaining.toLocaleString()} left)`}</button>` : ''}`;
+  }
+
+  function renderSearchTools() {
+    if (!searchTools.loaded) { setTimeout(() => { if (!searchTools.loaded) loadSearchTools(); }, 0); return ''; }
+    const notice = searchTools.notice ? `<span class="aip-ok" role="status">${esc(searchTools.notice)}</span>` : '';
+    if (!searchTools.agents.length) return notice ? `<div class="aip-search-tools">${notice}</div>` : '';
+    const names = searchTools.agents.map((a) => agentById(a.agentId)?.name || a.agentId).join(', ');
+    return `<div class="aip-search-tools">
+      <span class="aip-muted">Message search index for ${esc(names)}${searchTools.indexBytes ? ` · ${esc(formatBytes(searchTools.indexBytes))}` : ''}. Kept on this computer only.</span>
+      <button class="aip-btn aip-btn-ghost aip-danger" type="button" data-act="index-delete-all" ${searchTools.busy ? 'disabled' : ''}>Delete search index</button>
+      ${notice}
     </div>`;
   }
 
@@ -563,7 +806,7 @@ export function mountAgentsImports(container, options = {}) {
     const focusField = container.contains(document.activeElement) ? document.activeElement?.getAttribute?.('data-field') : '';
     container.innerHTML = `${renderHeader()}${renderRun()}${renderFileForm()}${body}
       <p class="aip-foot aip-muted">Finding an agent only lists its folders and file sizes. Chat titles and the last-message line are read when you open a row, shown here, and not saved. Login and credential files are never opened.</p>
-      ${renderHistory()}`;
+      ${renderHistory()}${st.historyOpen ? renderSearchTools() : ''}`;
     container.querySelectorAll('input[data-indeterminate]').forEach((el) => { el.indeterminate = true; });
     if (focusField) {
       const el = container.querySelector(`[data-field="${focusField}"]`);
@@ -902,6 +1145,55 @@ export function mountAgentsImports(container, options = {}) {
   container.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' && event.target?.getAttribute?.('data-field') === 'file-path') { event.preventDefault(); filePreview(); }
   });
+
+  // ---- stage 2 search events (separate listeners; stage 1 handlers unchanged) --
+  container.addEventListener('click', (event) => {
+    const el = event.target.closest?.('[data-act]');
+    if (!el || !container.contains(el)) return;
+    const act = el.getAttribute('data-act');
+    const agentId = el.getAttribute('data-agent') || '';
+    switch (act) {
+      // Closing or switching rows drops the query, results and snippets from memory.
+      case 'open': for (const id of [...searches.keys()]) dropSearch(id); for (const entry of indexes.values()) entry.notice = ''; break;
+      case 'search-clear': {
+        dropSearch(agentId);
+        render();
+        container.querySelector(`[data-search="${CSS.escape(agentId)}"]`)?.focus();
+        break;
+      }
+      case 'search-more': runSearch(agentId, true); break;
+      case 'search-retry': runSearch(agentId, false); break;
+      case 'msg-switch': event.preventDefault(); toggleMessageSearch(agentId); break;
+      case 'index-cancel': cancelIndexBuild(agentId); break;
+      case 'index-resume': toggleMessageSearchOn(agentId); break;
+      case 'index-delete-all': deleteAllIndexes(); break;
+      case 'history': searchTools.loaded = false; searchTools.notice = ''; break;
+      default: break;
+    }
+  }, true);
+  container.addEventListener('input', (event) => {
+    const agentId = event.target?.getAttribute?.('data-search');
+    if (!agentId) return;
+    searchFor(agentId).q = String(event.target.value || '').slice(0, 200);
+    scheduleSearch(agentId);
+  });
+  container.addEventListener('keydown', (event) => {
+    const agentId = event.target?.getAttribute?.('data-search');
+    if (!agentId) return;
+    if (event.key === 'Escape' && event.target.value) { event.preventDefault(); dropSearch(agentId); render(); }
+  });
+
+  async function toggleMessageSearchOn(agentId) {
+    try {
+      const data = await call(`/api/imports/agents/${encodeURIComponent(agentId)}/search-index`, { method: 'POST', body: {}, timeoutMs: 120000 });
+      const entry = indexes.get(agentId);
+      if (entry) entry.status = data.status || entry.status;
+    } catch (error) {
+      const entry = indexes.get(agentId);
+      if (entry) entry.error = error.message;
+    }
+    loadIndexStatus(agentId);
+  }
 
   scan();
   return ctl;
