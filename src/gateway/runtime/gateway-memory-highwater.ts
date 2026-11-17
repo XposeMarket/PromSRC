@@ -98,6 +98,28 @@ export function summarizeRuntimesForHighWater(
 const MB = 1024 * 1024;
 const toMb = (bytes: number) => Math.round((Number(bytes) || 0) / MB);
 
+/**
+ * Compact runtime-worker diagnostics to one total plus name/pid/rss per worker.
+ * The raw diagnostics carry a full resource breakdown per worker and made each
+ * high-water line ~13 KB (Nov 16 2026); the per-worker split was never needed.
+ */
+export function compactRuntimeWorkersForHighWater(raw: unknown): Record<string, unknown> | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const diag = raw as { workers?: unknown; aggregate?: Record<string, unknown> };
+  const workers = Array.isArray(diag.workers) ? diag.workers : [];
+  const agg = diag.aggregate && typeof diag.aggregate === 'object' ? diag.aggregate : {};
+  return {
+    count: workers.length,
+    rssMb: toMb(Number(agg.rssBytes) || 0),
+    heapUsedMb: toMb(Number(agg.heapUsedBytes) || 0),
+    workers: workers.slice(0, 12).map((w: any) => ({
+      name: String(w?.name || '').slice(0, 60),
+      ...(w?.pid ? { pid: Number(w.pid) } : {}),
+      rssMb: toMb(Number(w?.resource?.rssBytes) || 0),
+    })),
+  };
+}
+
 export function buildMemoryHighWaterEvent(input: {
   now: number;
   pid: number;
@@ -110,7 +132,10 @@ export function buildMemoryHighWaterEvent(input: {
   lastMainSessionId: string;
   runtimes: Array<Pick<LiveRuntimeSnapshot, 'id' | 'kind' | 'label' | 'sessionId' | 'agentId' | 'taskId' | 'teamId' | 'startedAt'>>;
   runtimeWorkers?: unknown;
+  /** Open HTTP requests (method + path, no query string), oldest first. */
+  inflightHttp?: { requests: Array<{ method: string; path: string; ageMs: number }>; total: number };
 }): Record<string, unknown> {
+  const workers = compactRuntimeWorkersForHighWater(input.runtimeWorkers);
   const { runtimes, omitted } = summarizeRuntimesForHighWater(input.runtimes, input.now);
   return {
     timestamp: new Date(input.now).toISOString(),
@@ -133,7 +158,11 @@ export function buildMemoryHighWaterEvent(input: {
     runningRuntimeCount: runtimes.length + omitted,
     runtimes,
     ...(omitted > 0 ? { runtimesOmitted: omitted } : {}),
-    ...(input.runtimeWorkers !== undefined ? { runtimeWorkers: input.runtimeWorkers } : {}),
+    ...(workers ? { runtimeWorkers: workers } : {}),
+    ...(input.inflightHttp ? {
+      inflightHttpCount: input.inflightHttp.total,
+      inflightHttp: input.inflightHttp.requests.map((r) => ({ method: r.method, path: r.path, ageSec: Math.round(r.ageMs / 1000) })),
+    } : {}),
   };
 }
 
@@ -143,5 +172,8 @@ export function formatMemoryHighWaterLine(event: Record<string, any>): string {
     ? event.runtimes.map((r: MemoryHighWaterRuntimeSummary) => `${r.kind}:${r.label || r.sessionId || r.id}`).slice(0, 5).join(', ')
     : '';
   const between = event.caughtBetweenSamples ? ' (spike between samples)' : '';
-  return `[GatewayMemory] New high-water ${event.peakMb} MB${between}; rss ${event.memoryMb?.rss} MB, heap ${event.memoryMb?.heapUsed}/${event.memoryMb?.heapLimit} MB; running ${event.runningRuntimeCount}${kinds ? `: ${kinds}` : ''}`;
+  const http = Array.isArray(event.inflightHttp) && event.inflightHttp.length
+    ? `; http: ${event.inflightHttp.slice(0, 3).map((r: any) => `${r.method} ${r.path}`).join(', ')}`
+    : '';
+  return `[GatewayMemory] New high-water ${event.peakMb} MB${between}; rss ${event.memoryMb?.rss} MB, heap ${event.memoryMb?.heapUsed}/${event.memoryMb?.heapLimit} MB; running ${event.runningRuntimeCount}${kinds ? `: ${kinds}` : ''}${http}`;
 }

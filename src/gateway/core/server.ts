@@ -21,6 +21,7 @@ import { getPublicWebUiRoot, hasPublicWebUiBuild, isPublicDistributionBuild, res
 import { setWss, setWsClientStreamFocus } from '../comms/broadcaster';
 import { hookBus } from '../hooks';
 import { isGatewayListenerReopenInProgress, shouldExitOnGatewayListenerError } from '../runtime/handoff-replacement-bind';
+import { trackInflightHttp } from '../runtime/inflight-http';
 import { listPendingStartupNotifications, markStartupNotificationDelivered } from '../lifecycle';
 import {
   browserHandleUserInput,
@@ -558,6 +559,7 @@ export function createServer(
     };
     req.on('error', destroyRequestSocket);
     res.on('finish', destroyRequestSocket);
+    trackInflightHttp(req, res);
     if (tryRawGatewayFastPath(req, res, getGatewayQueues)) return;
     if (!tlsOptions && tryHttpsRedirect(req, res, redirectHttpsPort)) return;
     if (tryRawWebStaticFastPath(req, res)) return;

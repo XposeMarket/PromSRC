@@ -18,6 +18,7 @@ import { getRuntimeWorkerDiagnostics } from '../process/runtime-worker-broker.js
 import { StallProfiler } from '../runtime/stall-profiler';
 import { canAttemptRecoveryGc, decideMemoryRecoveryAfterGc, decideActiveWorkMemoryRecovery, gcConfirmThresholdBytes, isMemoryPressureSample, runMemoryRecoveryRestart, runRecoveryGc, shouldKeepSkippingWithinGcWindow } from '../runtime/gateway-memory-recovery';
 import { countLocalRunningRuntimes, listLocalRunningRuntimes } from '../live-runtime-registry';
+import { listInflightHttp } from '../runtime/inflight-http';
 import { buildMemoryHighWaterEvent, createMemoryHighWaterState, formatMemoryHighWaterLine, MEMORY_HIGHWATER_DEFAULT_FLOOR_BYTES, MEMORY_HIGHWATER_DEFAULT_STEP_BYTES, MEMORY_HIGHWATER_LOG_FILE, nextMemoryHighWater } from '../runtime/gateway-memory-highwater';
 import { getHeapStatistics } from 'node:v8';
 import { freemem } from 'node:os';
@@ -142,6 +143,7 @@ function maybeLogMemoryHighWater(configDir: string, memory: NodeJS.MemoryUsage, 
       lastMainSessionId: _lastMainSessionId,
       runtimes: listLocalRunningRuntimes(),
       runtimeWorkers: getRuntimeWorkerDiagnostics(),
+      inflightHttp: listInflightHttp(now),
     });
     enqueueAsyncAppend(path.join(configDir, 'logs', MEMORY_HIGHWATER_LOG_FILE), JSON.stringify(event) + '\n');
     console.warn(formatMemoryHighWaterLine(event));
