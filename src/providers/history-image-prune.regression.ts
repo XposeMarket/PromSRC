@@ -183,6 +183,17 @@ for (const guard of [
   assert.equal(noAge.prunedImages, 0);
 }
 
+// User-typed bracket prefixes are real user turns; only [SYSTEM: ...] and
+// SNAKE_CASE runtime tags count as injected.
+{
+  const { isRuntimeUserMessage } = require('./history-image-prune');
+  assert.equal(isRuntimeUserMessage({ role: 'user', content: '[URGENT] look at these' }), false);
+  assert.equal(isRuntimeUserMessage({ role: 'user', content: '[TODO] compare' }), false);
+  assert.equal(isRuntimeUserMessage({ role: 'user', content: '[SYSTEM: Tool categories activated]' }), true);
+  assert.equal(isRuntimeUserMessage({ role: 'user', content: [{ type: 'text', text: '[MEDIA_DIRECT_OBSERVATION]\nx' }] }), true);
+  assert.equal(isRuntimeUserMessage({ role: 'user', content: '[ATTACHMENT_VISION_SUMMARY]\nx' }), true);
+}
+
 adapterE2E().then(() => {
   console.log('history-image-prune regression: PASS');
 }).catch((err) => {

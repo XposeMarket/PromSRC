@@ -52,7 +52,10 @@ function isImagePart(part: any): boolean {
  * "[SAVED_REFERENCE_OBSERVATION]" (media-analysis-preview.ts:108),
  * "[REFERENCE_OBSERVATION_UNAVAILABLE]" (handle-chat.ts:2828), "[MEDIA_OBSERVATION_UNAVAILABLE]" (handle-chat.ts:2820ish).
  */
-const RUNTIME_BRACKET_TAG = /^\s*\[(SYSTEM:|[A-Z][A-Z0-9_ ]{2,}\])/;
+// Runtime tags are "[SYSTEM: ...]" or SNAKE_CASE like [MEDIA_DIRECT_OBSERVATION],
+// [SAVED_REFERENCE_OBSERVATION], [ATTACHMENT_VISION_SUMMARY]. Requiring an
+// underscore keeps user-typed "[URGENT] ..." / "[TODO] ..." as real user turns.
+const RUNTIME_BRACKET_TAG = /^\s*\[(SYSTEM:|[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\])/;
 
 /**
  * Unmarked runtime user strings (no bracket tag), pushed as role user by the gateway/adapter.
