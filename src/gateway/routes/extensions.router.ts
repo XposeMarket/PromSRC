@@ -3,6 +3,7 @@ import { buildExtensionsCatalog } from '../../extensions/catalog-service.js';
 import { ensurePrometheusExtensionRuntimeLoaded } from '../../extensions/extension-bootstrap.js';
 import { buildMcpServerConfigFromPreset, listMcpPresets } from '../../extensions/mcp-preset-service.js';
 import { reloadExtensions } from '../../extensions/reload.js';
+import { scanPlugins, defaultPluginSourceRoots, defaultMarketplaceRoots, listImportedPlugins, enableReadyMcpServers } from '../../extensions/plugin-import/import-service.js';
 import {
   installUserPlugin,
   listUserPlugins,
@@ -119,7 +120,6 @@ async function pluginOpsDeps() {
 
 router.get('/api/plugins/import/scan', async (req, res) => {
   try {
-    const { scanPlugins, defaultPluginSourceRoots, defaultMarketplaceRoots, listImportedPlugins } = await import('../../extensions/plugin-import/import-service');
     const includeMarketplaces = String(req.query.marketplaces || '') === '1';
     const roots = [...defaultPluginSourceRoots(), ...(includeMarketplaces ? defaultMarketplaceRoots() : [])];
     res.json({ success: true, roots, plugins: scanPlugins({ roots, filter: String(req.query.q || '') }), imported: listImportedPlugins() });
@@ -132,13 +132,15 @@ router.post('/api/plugins/import/:action', async (req, res, next) => {
   try {
     const action = String(req.params.action || '');
     if (action === 'secret') { next(); return; }
-    if (!['install', 'uninstall', 'approve_hooks', 'revoke_hooks', 'enable_mcp', 'inspect', 'marketplace'].includes(action)) {
+    // Same action set as the plugin_ops tool. The user is acting directly here (authenticated
+    // UI), so activate_mcp / approve_hooks are their explicit consent; agents get an approval card.
+    if (!['install', 'uninstall', 'approve_hooks', 'revoke_hooks', 'enable_mcp', 'activate_mcp', 'deactivate_mcp', 'inspect', 'marketplace', 'catalog', 'skills'].includes(action)) {
       res.status(400).json({ success: false, error: `Unknown action ${action}` });
       return;
     }
     const { runPluginOps } = await import('../../extensions/plugin-import/plugin-ops');
     const out = await runPluginOps({ ...(req.body || {}), action }, await pluginOpsDeps());
-    res.status(out.error ? 400 : 200).json({ success: !out.error, result: out.result });
+    res.status(out.error ? 400 : 200).json({ success: !out.error, result: out.result, data: out.data });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err?.message || 'plugin import failed' });
   }
@@ -159,7 +161,8 @@ router.post('/api/plugins/import/secret', async (req, res) => {
     const { SecretVault } = await import('../../security/vault');
     const { getConfig } = await import('../../config/config');
     new SecretVault(getConfig().getConfigDir()).set(`plugins.${id}.${name}`, value, 'plugins:import-secret');
-    const { enableReadyMcpServers } = await import('../../extensions/plugin-import/import-service');
+    // Saving a secret never turns a pending server on: only servers the user already
+    // activated (or legacy imports) are re-enabled once their secrets are present.
     res.json({ success: true, mcp: enableReadyMcpServers(id, await pluginOpsDeps()) });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err?.message || 'failed to store secret' });

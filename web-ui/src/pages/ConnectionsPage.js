@@ -2131,74 +2131,128 @@ function switchAddTab(tab) {
 }
 
 // ── Import tab: Claude Code / Codex / Hermes / OpenClaw plugins ──────────────
+// Three sources: the live Claude + OpenAI official catalogs, plugins installed in
+// other agents on this computer, and standalone skill folders. Imported MCP servers
+// and hooks start OFF; turning them on is an explicit button press here.
 function renderImportTab() {
   return `
-    <div style="display:flex;flex-direction:column;gap:12px">
-      <div class="pam-hint">Imports skills, slash commands, agents, MCP servers and hooks from plugins installed in Claude Code, Codex, Hermes Agent or OpenClaw. Hosted apps and native Python/TS runtimes are listed as not importable. Hooks stay off until you approve them.</div>
-      <div style="display:grid;grid-template-columns:1fr auto;gap:8px">
-        <input id="pim-source" class="pam-input" placeholder="Folder, git URL, owner/repo, owner/repo#subdir, or GitHub tree URL"/>
-        <button class="pam-btn" data-pim-action="install-source">Import</button>
+    <div class="pim">
+      <input id="pim-query" class="pam-input" placeholder="Search, or paste a GitHub repo or folder" autocomplete="off"/>
+      <div class="pim-seg">
+        <button class="pim-src active" data-pim-action="src" data-pim-src="catalog">Catalogs</button>
+        <button class="pim-src" data-pim-action="src" data-pim-src="local">On this PC</button>
+        <button class="pim-src" data-pim-action="src" data-pim-src="skills">Skills</button>
       </div>
-      <label class="pam-hint"><input type="checkbox" id="pim-marketplaces" data-pim-action="rescan"/> Include local marketplace checkouts</label>
-      <div id="pim-status" class="pam-hint"></div>
+      <div id="pim-status" class="pim-status"></div>
       <div id="pim-imported"></div>
-      <div id="pim-list" class="pam-hint">Scanning installed plugins...</div>
+      <div id="pim-list" class="pim-list"><div class="pim-empty">Loading…</div></div>
     </div>
   `;
 }
 
 function pimEsc(v) { return escapeHtml(String(v ?? '')); }
+window.pimSource = window.pimSource || 'catalog';
+let pimQueryTimer = null;
+
+// A pasted folder path, owner/repo(#subdir) or GitHub URL imports directly instead of searching.
+function pimLooksLikeSource(q) {
+  return /^(https?:\/\/|[A-Za-z]:[\\/]|\\\\|\/|~[\\/]|\.{1,2}[\\/])/.test(q) || /^[\w.-]+\/[\w.-]+(#\S+)?$/.test(q);
+}
+
+// One quiet line per item: name, a single clipped description line, one action.
+function pimRow(name, desc, action) {
+  return `<div class="pim-row"><div class="pim-row-text"><div class="pim-name">${name}</div>${desc ? `<div class="pim-desc">${desc}</div>` : ''}</div>${action || ''}</div>`;
+}
+
+function pimMcpState(m) {
+  if (m.enabled) return 'on';
+  if (m.activation === 'pending') return 'off';
+  return m.missing?.length || m.secretKeys?.length ? 'needs secret' : 'off';
+}
+
+function renderPimImported(imported) {
+  const impEl = document.getElementById('pim-imported');
+  if (!impEl) return;
+  const open = impEl.querySelector('details')?.open ? ' open' : '';
+  impEl.innerHTML = imported.length ? `<details class="pim-added"${open}><summary>Added (${imported.length})</summary>` + imported.map((p) => {
+    const mcp = p.mcpServers || [];
+    const anyOn = mcp.some((m) => m.enabled || m.activation === 'active');
+    const needsKeys = mcp.some((m) => pimMcpState(m) === 'needs secret');
+    const id = pimEsc(p.id);
+    const state = [`${p.skills.length} skills`, mcp.length && `MCP ${anyOn ? 'on' : needsKeys ? 'needs a key' : 'off'}`, p.hooks.length && `hooks ${p.hooksApproved ? 'on' : 'off'}`].filter(Boolean).join(' · ');
+    const btns = [
+      mcp.length && `<button class="pim-btn" data-pim-action="${anyOn ? 'deactivate_mcp' : 'activate_mcp'}" data-pim-id="${id}">${anyOn ? 'Turn off' : 'Turn on'}</button>`,
+      mcp.some((m) => !m.enabled && m.activation !== 'pending') && `<button class="pim-btn" data-pim-action="enable_mcp" data-pim-id="${id}">Check keys</button>`,
+      p.hooks.length && `<button class="pim-btn" data-pim-action="${p.hooksApproved ? 'revoke_hooks' : 'approve_hooks'}" data-pim-id="${id}">${p.hooksApproved ? 'Block hooks' : 'Allow hooks'}</button>`,
+      `<button class="pim-btn" data-pim-action="uninstall" data-pim-id="${id}">Remove</button>`,
+    ].filter(Boolean).join('');
+    return pimRow(pimEsc(p.name), pimEsc(state), `<span class="pim-actions">${btns}</span>`);
+  }).join('') + '</details>' : '';
+}
 
 async function loadPluginImportScan() {
   const listEl = document.getElementById('pim-list');
-  const impEl = document.getElementById('pim-imported');
   if (!listEl) return;
-  const mk = document.getElementById('pim-marketplaces')?.checked ? '1' : '';
+  const src = window.pimSource;
+  const q = String(document.getElementById('pim-query')?.value || '').trim();
+  document.querySelectorAll('.pim-src').forEach((b) => b.classList.toggle('active', b.dataset.pimSrc === src));
+  const importBtn = (attr) => `<button class="pim-btn" data-pim-action="install" ${attr}>Import</button>`;
+  const added = '<span class="pim-done">Added</span>';
+  const cantRun = '<span class="pim-done">Can\'t run here</span>';
   try {
-    const res = await api(`/api/plugins/import/scan${mk ? '?marketplaces=1' : ''}`);
-    const imported = res?.imported || [];
-    if (impEl) impEl.innerHTML = imported.length ? `<div style="font-weight:600;margin-bottom:6px">Imported</div>` + imported.map((p) => `
-      <div style="border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-bottom:6px">
-        <div><b>${pimEsc(p.name)}</b> <span class="pam-hint">[${pimEsc(p.format)}] ${p.skills.length} skills, ${p.mcpServers.length} MCP, ${p.hooks.length} hooks${p.hooks.length ? (p.hooksApproved ? ' (approved)' : ' (off)') : ''}</span></div>
-        <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">
-          ${p.hooks.length ? `<button class="pam-btn" data-pim-action="${p.hooksApproved ? 'revoke_hooks' : 'approve_hooks'}" data-pim-id="${pimEsc(p.id)}">${p.hooksApproved ? 'Turn hooks off' : 'Approve hooks'}</button>` : ''}
-          ${p.mcpServers.some((m) => !m.enabled) ? `<button class="pam-btn" data-pim-action="enable_mcp" data-pim-id="${pimEsc(p.id)}">Re-check MCP secrets</button>` : ''}
-          <button class="pam-btn" data-pim-action="uninstall" data-pim-id="${pimEsc(p.id)}">Uninstall</button>
-        </div>
-      </div>`).join('') : '';
-    const rows = res?.plugins || [];
-    listEl.innerHTML = `<div style="font-weight:600;margin-bottom:6px">Found ${rows.length} plugin(s) in ${(res?.roots || []).map((r) => pimEsc(r.label)).join(', ') || 'no harness folders'}</div>` + rows.map((p) => {
-      const imp = p.importable || {};
-      const parts = [imp.skills?.length && `${imp.skills.length} skills`, imp.commands?.length && `${imp.commands.length} commands`, imp.agents?.length && `${imp.agents.length} agents`, imp.mcpServers?.length && `MCP: ${imp.mcpServers.join(', ')}`, imp.hooks?.length && `${imp.hooks.length} hooks`].filter(Boolean).join(' · ') || 'nothing importable';
-      const canImport = parts !== 'nothing importable';
-      return `<div style="border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-bottom:6px">
-        <div style="display:flex;justify-content:space-between;gap:8px;align-items:center">
-          <div><b>${pimEsc(p.name)}</b> <span class="pam-hint">[${pimEsc(p.format)}] ${pimEsc(p.harness)}</span></div>
-          ${p.installedAs ? '<span class="pam-hint">imported</span>' : (canImport ? `<button class="pam-btn" data-pim-action="install" data-pim-source="${pimEsc(p.root)}">Import</button>` : '')}
-        </div>
-        <div class="pam-hint">${pimEsc(parts)}${p.requiredEnv?.length ? ` · needs ${pimEsc(p.requiredEnv.join(', '))}` : ''}</div>
-        ${p.unsupported?.length ? `<div class="pam-hint" style="opacity:.75">Not importable: ${p.unsupported.map((u) => pimEsc(u.part)).join('; ')}</div>` : ''}
-      </div>`;
-    }).join('');
+    const scan = await api(`/api/plugins/import/scan?${new URLSearchParams({ q })}`);
+    renderPimImported(scan?.imported || []);
+    if (q && pimLooksLikeSource(q)) {
+      listEl.innerHTML = pimRow(pimEsc(q), 'Import from this folder or GitHub repo', importBtn(`data-pim-source="${pimEsc(q)}"`));
+      return;
+    }
+    if (src === 'local') {
+      const rows = scan?.plugins || [];
+      listEl.innerHTML = rows.length ? rows.map((p) => {
+        const imp = p.importable || {};
+        const parts = [imp.skills?.length && `${imp.skills.length} skills`, imp.commands?.length && `${imp.commands.length} commands`, imp.agents?.length && `${imp.agents.length} agents`, imp.mcpServers?.length && `${imp.mcpServers.length} MCP`, imp.hooks?.length && `${imp.hooks.length} hooks`].filter(Boolean).join(' · ');
+        return pimRow(pimEsc(p.name), pimEsc(parts || p.harness), p.installedAs ? added : parts ? importBtn(`data-pim-source="${pimEsc(p.root)}"`) : cantRun);
+      }).join('') : '<div class="pim-empty">No plugins from other agents on this computer.</div>';
+      return;
+    }
+    if (src === 'skills') {
+      const res = await api('/api/plugins/import/skills', { method: 'POST', body: JSON.stringify({ query: q, limit: 200 }) });
+      const rows = res?.data || [];
+      listEl.innerHTML = rows.length
+        ? rows.map((p) => pimRow(pimEsc(p.name || p.id), pimEsc(p.description || p.harness), p.installedAs ? added : importBtn(`data-pim-source="${pimEsc(p.root)}"`))).join('')
+        : '<div class="pim-empty">No skill folders found on this computer.</div>';
+      return;
+    }
+    const res = await api('/api/plugins/import/catalog', { method: 'POST', body: JSON.stringify({ query: q, limit: 120, refresh: window.pimRefreshCatalog === true }) });
+    window.pimRefreshCatalog = false;
+    const data = res?.data || {};
+    const entries = data.entries || [];
+    if (!entries.length) {
+      listEl.innerHTML = `<div class="pim-empty">${(data.catalogs || []).every((c) => c.origin === 'none') ? 'Catalogs are unavailable right now.' : 'No matches.'}</div>`;
+      return;
+    }
+    listEl.innerHTML = entries.map((e) => pimRow(pimEsc(e.name), pimEsc(e.description || e.category || ''), e.imported ? added : e.installable ? importBtn(`data-pim-entry="${pimEsc(e.id)}"`) : cantRun)).join('')
+      + (data.total > entries.length ? `<div class="pim-more">${entries.length} of ${data.total}. Search to find more.</div>` : '');
   } catch (e) {
-    listEl.textContent = 'Scan failed: ' + (e?.message || e);
+    listEl.innerHTML = `<div class="pim-empty">Couldn't load: ${pimEsc(e?.message || e)}</div>`;
   }
 }
 
 async function runPluginImportAction(action, payload) {
   const statusEl = document.getElementById('pim-status');
-  if (action === 'uninstall' && !confirm(`Uninstall imported plugin "${payload.id}"? Its skills and MCP servers are removed.`)) return;
-  if (action === 'approve_hooks' && !confirm('Plugin hooks run shell commands on this PC before/after tool calls. Approve them?')) return;
-  if (statusEl) statusEl.textContent = action === 'install' ? 'Importing...' : 'Working...';
+  if (action === 'uninstall' && !confirm(`Uninstall imported plugin "${payload.id}"? Its skills and MCP servers are removed (its saved data folder is kept).`)) return;
+  if (action === 'approve_hooks' && !confirm('Plugin hooks run shell commands on this computer before/after tool calls. Turn them on?')) return;
+  if (action === 'activate_mcp' && !confirm('Turning on this plugin\'s MCP servers runs third-party code on this computer (or sends requests to its server). Turn them on?')) return;
+  if (statusEl) statusEl.textContent = action === 'install' ? 'Importing…' : action === 'inspect' ? 'Fetching preview…' : 'Working…';
   try {
     const res = await api(`/api/plugins/import/${action}`, { method: 'POST', body: JSON.stringify(payload) });
     if (res?.success === false) throw new Error(res.result || res.error || 'Failed');
     if (statusEl) statusEl.textContent = res?.result || 'Done.';
-    if (action === 'install') showToast('Plugin imported', payload.source || '', 'success');
+    if (action === 'install') showToast('Plugin imported', payload.entry || payload.source || '', 'success');
   } catch (e) {
     if (statusEl) statusEl.textContent = 'Failed: ' + (e?.message || e);
   }
-  await loadPluginImportScan();
+  if (action !== 'inspect') await loadPluginImportScan();
 }
 
 // Delegated so plugin paths/ids never get compiled into inline handler source.
@@ -2206,16 +2260,31 @@ document.addEventListener('click', (event) => {
   const el = event.target?.closest?.('[data-pim-action]');
   if (!el || el.tagName === 'INPUT') return;
   const action = el.dataset.pimAction;
+  if (action === 'src') { window.pimSource = el.dataset.pimSrc; loadPluginImportScan(); return; }
+  if (action === 'refresh') { window.pimRefreshCatalog = true; loadPluginImportScan(); return; }
   if (action === 'install-source') {
     const source = String(document.getElementById('pim-source')?.value || '').trim();
     if (source) runPluginImportAction('install', { source });
     return;
   }
-  if (action === 'install') { runPluginImportAction('install', { source: el.dataset.pimSource }); return; }
+  if (action === 'install' || action === 'inspect') {
+    runPluginImportAction(action, el.dataset.pimEntry ? { entry: el.dataset.pimEntry } : { source: el.dataset.pimSource });
+    return;
+  }
   if (el.dataset.pimId) runPluginImportAction(action, { id: el.dataset.pimId });
 });
 document.addEventListener('change', (event) => {
   if (event.target?.id === 'pim-marketplaces') loadPluginImportScan();
+});
+document.addEventListener('keydown', (event) => {
+  if (event.target?.id !== 'pim-query' || event.key !== 'Enter') return;
+  const q = String(event.target.value || '').trim();
+  if (q && pimLooksLikeSource(q)) runPluginImportAction('install', { source: q });
+});
+document.addEventListener('input', (event) => {
+  if (event.target?.id !== 'pim-query') return;
+  clearTimeout(pimQueryTimer);
+  pimQueryTimer = setTimeout(loadPluginImportScan, 300);
 });
 
 function renderAiTab() {

@@ -66,7 +66,8 @@ assert.equal(findPluginDirs(tmp).length, 4);
 
 // MCP conversion: secret -> vault ref, disabled until present; env-provided -> enabled.
 const conv = convertMcpServer('github', codex.mcpServers[0], codex.root);
-assert.equal(conv.config.headers.Authorization, 'vault:plugins.github.GITHUB_PAT_TOKEN');
+// bearer_token_env_var keeps the "Bearer " scheme via an inline vault template (resolved by the MCP manager).
+assert.equal(conv.config.headers.Authorization, 'Bearer ${vault:plugins.github.GITHUB_PAT_TOKEN}');
 assert.equal(conv.enabled, false);
 assert.equal(convertMcpServer('github', codex.mcpServers[0], codex.root, { has: () => true }).enabled, true);
 const opt = convertMcpServer('c7', { id: 'c7', config: { type: 'http', url: 'https://x/mcp', headers: { Authorization: '${KEY:-}' } } }, tmp);

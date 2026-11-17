@@ -13,6 +13,7 @@ import path from 'path';
 import fs from 'fs';
 import { log } from '../security/log-scrubber';
 import { SecretVault } from '../security/vault';
+import { checkImportedMcpLaunch } from '../extensions/plugin-import/activation-gate.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -30,6 +31,8 @@ export interface MCPServerConfig {
   args?: string[];
   env?: Record<string, string>;
   envPassthrough?: string[];
+  /** Working directory for the stdio child (absolute). Imported plugins set it to their own package/data dir. */
+  cwd?: string;
   // sse/http transport
   url?: string;
   headers?: Record<string, string>;
@@ -187,11 +190,35 @@ export class MCPManager {
           missingRefs.push(`${k}=${v}`);
           log.warn(`[MCP] Failed to resolve vault ref "${v}": ${e.message}`);
         }
+      } else if (typeof v === 'string' && v.includes('${vault:')) {
+        // Inline templates keep literal text around the secret, e.g. "Bearer ${vault:plugins.x.TOKEN}".
+        let missing = false;
+        const resolved = v.replace(/\$\{vault:([A-Za-z0-9_.:-]+)\}/g, (_m, vaultKey: string) => {
+          try {
+            if (!vault) vault = new SecretVault(this.configDir);
+            const secret = vault.get(vaultKey, `mcp:${k}`);
+            if (secret) return secret.expose();
+          } catch (e: any) {
+            log.warn(`[MCP] Failed to resolve vault ref "${vaultKey}": ${e.message}`);
+          }
+          missing = true;
+          missingRefs.push(`${k}=vault:${vaultKey}`);
+          return '';
+        });
+        if (!missing) out[k] = resolved;
       } else {
         out[k] = v;
       }
     }
     return { env: out, missingRefs };
+  }
+
+  /** Resolve ${vault:...} templates inside stdio args (imported plugins). */
+  private resolveArgSecrets(args: string[]): { args: string[]; missingRefs: string[] } {
+    const map: Record<string, string> = {};
+    args.forEach((a, i) => { map[`arg${i}`] = a; });
+    const r = this.resolveEnvSecrets(map);
+    return { args: args.map((a, i) => r.env[`arg${i}`] ?? a), missingRefs: r.missingRefs };
   }
 
   static normalizeTransport(raw: any): MCPTransport {
@@ -232,6 +259,8 @@ export class MCPManager {
       const env = MCPManager.toStringMap((raw as any).env);
       if (Object.keys(env).length > 0) cfg.env = env;
       if (Array.isArray(raw.envPassthrough)) cfg.envPassthrough = raw.envPassthrough.filter((key: unknown): key is string => typeof key === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(key));
+      // Only absolute working directories survive; relative/templated values are resolved by the importer.
+      if (typeof raw.cwd === 'string' && raw.cwd.trim() && path.isAbsolute(raw.cwd.trim())) cfg.cwd = path.resolve(raw.cwd.trim());
     } else {
       if (hasUrl) cfg.url = String((raw as any).url).trim();
       const headers = MCPManager.toStringMap((raw as any).headers);
@@ -493,6 +522,11 @@ export class MCPManager {
     const cfg = this.configs.find(c => c.id === id);
     if (!cfg) return { success: false, error: 'Server config not found' };
     if (!cfg.enabled) return { success: false, error: 'Server is disabled' };
+    // Imported-plugin servers must pass the activation gate on every launch, whichever
+    // path set enabled:true (generic MCP save, agent upsert, startup auto-connect).
+    let gate: string | null;
+    try { gate = checkImportedMcpLaunch(cfg); } catch (e: any) { gate = `Imported plugin check failed: ${e?.message || e}`; }
+    if (gate) return { success: false, error: gate };
 
     await this.disconnect(id);
 
@@ -530,8 +564,24 @@ export class MCPManager {
 
         // CRIT-02: shell: false always — args are passed as a list, not a shell string.
         // This prevents metacharacter injection via cfg.args on all platforms.
-        const proc = spawn(cfg.command!, cfg.args || [], {
+        // A declared working directory that is missing fails the launch; never fall back to the gateway's cwd.
+        if (cfg.cwd && !fs.existsSync(cfg.cwd)) {
+          session.status = 'error';
+          session.error = `Working directory not found: ${cfg.cwd}`;
+          resolve({ success: false, error: session.error });
+          return;
+        }
+        const cwd = cfg.cwd || undefined;
+        const resolvedArgs = this.resolveArgSecrets(cfg.args || []);
+        if (resolvedArgs.missingRefs.length > 0) {
+          session.status = 'error';
+          session.error = `Missing vault secret(s): ${resolvedArgs.missingRefs.join(', ')}`;
+          resolve({ success: false, error: session.error });
+          return;
+        }
+        const proc = spawn(cfg.command!, resolvedArgs.args, {
           env,
+          ...(cwd ? { cwd } : {}),
           stdio: ['pipe', 'pipe', 'pipe'],
           shell: false,  // SECURITY: never true — prevents shell injection via args
         });
