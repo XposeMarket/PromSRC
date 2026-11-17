@@ -1,0 +1,119 @@
+/* Live connected agents (stage 3): settings toggle, desktop agent switcher,
+   mobile new-chat row/sheet, and the agent's own request cards.
+   Theme tokens only: desktop --line/--muted/--text/--brand/--panel, mobile
+   --pm-*; each falls back to the other so every existing theme applies. */
+:root {
+  --ea-line: var(--pm-border, var(--line));
+  --ea-muted: var(--pm-muted, var(--muted));
+  --ea-text: var(--pm-text, var(--text));
+  --ea-accent: var(--pm-orange, var(--brand));
+  --ea-surface: var(--pm-bg-soft, var(--panel-2, var(--panel)));
+  --ea-raised: var(--pm-bg, var(--panel));
+  --ea-warn: var(--warn, var(--pm-orange, var(--brand)));
+  --ea-ok: var(--ok, var(--success, var(--ea-accent)));
+}
+
+/* ---- Settings > Agents & imports: toggle + one status line ---------------- */
+.ea-connect { flex: 0 1 auto; min-width: 0; display: inline-flex; align-items: center; gap: 10px; margin-left: auto; }
+.ea-connect-status { max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--ea-muted); }
+.ea-connect-ok .ea-connect-status { color: var(--ea-ok); }
+.ea-connect-warn .ea-connect-status { color: var(--ea-warn); }
+.ea-connect-retry { white-space: nowrap; }
+.ea-switch {
+  position: relative; flex: none; width: 34px; height: 20px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--ea-line); background: color-mix(in srgb, var(--ea-text) 10%, transparent);
+  transition: background .15s ease, border-color .15s ease;
+}
+.ea-switch::after {
+  content: ''; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%;
+  background: var(--ea-muted); transition: transform .15s ease, background .15s ease;
+}
+.ea-switch.is-on { background: color-mix(in srgb, var(--ea-accent) 28%, transparent); border-color: var(--ea-accent); }
+.ea-switch.is-on::after { transform: translateX(14px); background: var(--ea-accent); }
+.ea-switch.is-busy { opacity: .6; cursor: progress; }
+.ea-switch:focus-visible { outline: 2px solid var(--ea-accent); outline-offset: 2px; }
+.aip-mobile .ea-connect { flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.aip-mobile .ea-connect-status { max-width: 150px; }
+
+/* ---- Agent tile (neutral letters, no vendor logos) ------------------------ */
+.ea-tile {
+  flex: none; width: 18px; height: 18px; border-radius: 5px; display: inline-grid; place-items: center;
+  border: 1px solid var(--ea-line); background: color-mix(in srgb, var(--ea-text) 7%, transparent);
+  font-size: 9px; font-weight: 700; letter-spacing: -0.2px; color: var(--ea-text);
+}
+
+/* ---- Desktop: agent switcher, bottom-left of the composer card ------------- */
+.ea-switcher { position: relative; display: inline-flex; align-items: center; gap: 6px; margin-right: 8px; }
+.ea-switcher-btn {
+  appearance: none; display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px 2px 3px;
+  border: 1px solid var(--ea-line); border-radius: 999px; background: transparent; color: var(--ea-text);
+  font: inherit; font-size: 11px; cursor: pointer;
+}
+.ea-switcher-btn:hover:not([disabled]) { background: color-mix(in srgb, var(--ea-line) 45%, transparent); }
+.ea-switcher-btn[disabled] { cursor: default; opacity: .85; }
+.ea-switcher-btn .ea-caret { color: var(--ea-muted); }
+.ea-switcher-folder { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--ea-muted); }
+.ea-menu {
+  position: absolute; left: 0; bottom: calc(100% + 6px); z-index: 50; min-width: 260px; max-width: 360px;
+  padding: 6px; border: 1px solid var(--ea-line); border-radius: 10px; background: var(--ea-raised); color: var(--ea-text);
+  box-shadow: var(--shadow, 0 8px 24px color-mix(in srgb, #000 22%, transparent));
+}
+.ea-menu-item {
+  appearance: none; width: 100%; display: flex; align-items: center; gap: 8px; padding: 7px 8px; border: 0; border-radius: 7px;
+  background: transparent; color: inherit; font: inherit; font-size: 12px; text-align: left; cursor: pointer;
+}
+.ea-menu-item:hover, .ea-menu-item.is-active { background: color-mix(in srgb, var(--ea-line) 50%, transparent); }
+.ea-menu-item small { display: block; color: var(--ea-muted); font-size: 11px; }
+.ea-menu-sep { height: 1px; margin: 6px 4px; background: var(--ea-line); }
+.ea-menu-label { padding: 4px 8px 2px; color: var(--ea-muted); font-size: 11px; }
+.ea-menu-input {
+  width: calc(100% - 8px); margin: 4px; padding: 6px 8px; border: 1px solid var(--ea-line); border-radius: 7px;
+  background: transparent; color: inherit; font: inherit; font-size: 12px;
+}
+.ea-quiet-line { font-size: 11px; color: var(--ea-muted); }
+body.ea-agent-codex #model-switcher-btn,
+body.ea-agent-codex #chat-context-window-btn { display: none !important; }
+.ea-model-readonly { font-size: 11px; color: var(--ea-muted); }
+
+/* ---- Mobile: one extra new-chat dock row + bottom sheet -------------------- */
+.ea-sheet-scrim { position: fixed; inset: 0; z-index: 10070; border: 0; background: color-mix(in srgb, #000 40%, transparent); }
+.ea-sheet {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 10071; padding: 10px 14px calc(16px + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid var(--ea-line); border-radius: 16px 16px 0 0; background: var(--ea-raised); color: var(--ea-text);
+}
+.ea-sheet-handle { width: 36px; height: 4px; margin: 0 auto 10px; border-radius: 999px; background: var(--ea-line); }
+.ea-sheet-title { margin: 0 0 6px; font-size: 15px; font-weight: 600; }
+.ea-sheet .ea-menu-item { min-height: 44px; font-size: 15px; }
+.ea-sheet .ea-menu-item small { font-size: 12px; }
+.ea-sheet .ea-tile { width: 24px; height: 24px; font-size: 11px; }
+.ea-sheet .ea-menu-input { font-size: 16px; }
+
+/* ---- Request cards (agent's own approvals/questions) ----------------------- */
+.ea-request-dock { position: fixed; z-index: 10080; display: grid; gap: 8px; pointer-events: none; }
+.ea-request-dock.ea-desktop { right: 20px; bottom: 120px; width: min(420px, calc(100vw - 40px)); }
+.ea-request-dock.ea-mobile { left: 10px; right: 10px; bottom: calc(var(--pm-tabbar-h, 0px) + env(safe-area-inset-bottom, 0px) + 140px); }
+.ea-request-dock:empty { display: none; }
+.ea-card {
+  pointer-events: auto; padding: 12px; border: 1px solid var(--ea-line); border-radius: 12px;
+  background: var(--ea-raised); color: var(--ea-text); font-size: 13px;
+  box-shadow: var(--shadow, 0 8px 24px color-mix(in srgb, #000 22%, transparent));
+}
+.ea-card-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.ea-card-cmd { margin: 6px 0; padding: 8px; max-height: 160px; overflow: auto; border-radius: 8px; background: var(--ea-surface); font-family: var(--font-mono, ui-monospace, monospace); font-size: 12px; white-space: pre-wrap; word-break: break-word; }
+.ea-card-meta, .ea-card-reason, .ea-card-note { color: var(--ea-muted); font-size: 12px; }
+.ea-card-note { margin-top: 8px; }
+.ea-card-files { margin: 6px 0; padding-left: 18px; font-size: 12px; }
+.ea-card-q { margin: 8px 0; }
+.ea-card-q-prompt { margin-bottom: 4px; }
+.ea-card-choices { display: grid; gap: 4px; }
+.ea-card-choice { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.ea-card-input { width: 100%; padding: 6px 8px; border: 1px solid var(--ea-line); border-radius: 7px; background: transparent; color: inherit; font: inherit; }
+.ea-card-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.ea-card-btn {
+  appearance: none; padding: 6px 10px; border: 1px solid var(--ea-line); border-radius: 8px;
+  background: transparent; color: var(--ea-text); font: inherit; font-size: 12px; cursor: pointer;
+}
+.ea-card-btn-allow_once, .ea-card-btn-answer { border-color: var(--ea-accent); background: var(--ea-accent); color: var(--text-on-accent, #fff); }
+.ea-card-btn:disabled { opacity: .5; cursor: default; }
+.ea-card-error { margin-top: 6px; color: var(--danger, var(--pm-red, var(--ea-warn))); font-size: 12px; }
+.ea-mobile .ea-card-btn { min-height: 40px; font-size: 14px; }
