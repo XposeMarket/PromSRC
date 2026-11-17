@@ -9,7 +9,12 @@
 import fs from 'fs';
 import path from 'path';
 
-export type PluginFormat = 'claude' | 'codex' | 'hermes' | 'openclaw';
+/**
+ * 'agent-plugins' = the portable Agent Plugins 1.0.0 package (root plugin.json + mcp.json,
+ * agent-plugins.org; OpenAI/AWS/Microsoft/Cursor/Vercel). 'skill' = a standalone SKILL.md
+ * folder (Hermes / OpenClaw / Agent Skills / Claude / Codex personal skills).
+ */
+export type PluginFormat = 'claude' | 'codex' | 'hermes' | 'openclaw' | 'agent-plugins' | 'skill';
 
 export interface PluginCommand { name: string; description: string; argumentHint?: string; body: string; sourcePath: string }
 export interface PluginAgent { name: string; description: string; model?: string; body: string; sourcePath: string }
@@ -43,6 +48,8 @@ export interface PluginBundle {
   hooks: PluginHookSpec[];
   requiredEnv: string[];
   unsupported: UnsupportedPart[];
+  /** Manifest validation failures. A bundle with any entry here is listed but never installed. */
+  invalid?: string[];
 }
 
 const SKIP_DIRS = new Set(['node_modules', '.git', '__pycache__', '.venv', 'venv', 'dist', 'build', '.cache']);
@@ -140,7 +147,7 @@ function readMarkdownDir<T>(dir: string | null, make: (name: string, data: Recor
 export function collectEnvRefs(value: unknown, into = new Set<string>()): Set<string> {
   if (typeof value === 'string') {
     for (const m of value.matchAll(/\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-[^}]*)?\}/g)) {
-      if (!/^(CLAUDE_PLUGIN_ROOT|CLAUDE_PLUGIN_DATA|PLUGIN_ROOT|CODEX_PLUGIN_ROOT|PROMETHEUS_PLUGIN_ROOT)$/.test(m[1])) into.add(m[1]);
+      if (!/^(CLAUDE_PLUGIN_ROOT|CLAUDE_PLUGIN_DATA|PLUGIN_ROOT|PLUGIN_DATA|CODEX_PLUGIN_ROOT|PROMETHEUS_PLUGIN_ROOT)$/.test(m[1])) into.add(m[1]);
     }
   } else if (Array.isArray(value)) value.forEach((v) => collectEnvRefs(v, into));
   else if (value && typeof value === 'object') Object.values(value).forEach((v) => collectEnvRefs(v, into));
@@ -197,9 +204,70 @@ function mcpServersFrom(root: string, spec: unknown): PluginMcpServer[] {
 
 // ── Detection ───────────────────────────────────────────────────────────────
 
+export const AGENT_PLUGINS_SCHEMA = 'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json';
+export const AGENT_PLUGINS_MCP_SCHEMA = 'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json';
+const AGENT_PLUGIN_KEYS = new Set(['$schema', 'name', 'version', 'description', 'author', 'homepage', 'repository', 'license', 'keywords', 'extensions']);
+const AGENT_PLUGIN_NAME = /^(?!.*(?:--|\.\.))[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/;
+
+/** True when dir/plugin.json declares any Agent Plugins schema (supported or not). */
+function agentPluginsManifest(dir: string): { path: string; raw: any } | null {
+  const p = path.join(dir, 'plugin.json');
+  if (!isFile(p)) return null;
+  const raw = readJson(p);
+  return raw && typeof raw.$schema === 'string' && /agent-plugins\.org\/schemas\//i.test(raw.$schema) ? { path: p, raw } : null;
+}
+
+/**
+ * Validate an Agent Plugins 1.0.0 manifest against the canonical schema rules.
+ * Returns problems (empty = valid). Unknown schema versions are one problem.
+ */
+export function validateAgentPluginsManifest(raw: any): string[] {
+  const problems: string[] = [];
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return ['plugin.json is not an object'];
+  if (raw.$schema !== AGENT_PLUGINS_SCHEMA) return [`unsupported Agent Plugins version (${String(raw.$schema).slice(0, 120)}); Prometheus reads 1.0.0`];
+  if (typeof raw.name !== 'string' || raw.name.length > 64 || !AGENT_PLUGIN_NAME.test(raw.name)) problems.push('name must be 1-64 chars of a-z, 0-9, "." and "-" with no "--" or ".."');
+  for (const k of Object.keys(raw)) if (!AGENT_PLUGIN_KEYS.has(k)) problems.push(`unknown top-level field "${k}"`);
+  if (raw.author !== undefined && (typeof raw.author !== 'object' || Array.isArray(raw.author))) problems.push('author must be an object');
+  if (raw.extensions !== undefined) {
+    if (!raw.extensions || typeof raw.extensions !== 'object' || Array.isArray(raw.extensions)) problems.push('extensions must be an object');
+    else for (const [ns, v] of Object.entries(raw.extensions)) if (!v || typeof v !== 'object' || Array.isArray(v)) problems.push(`extensions["${ns}"] must be an object`);
+  }
+  return problems;
+}
+
+/** Validate an Agent Plugins 1.0.0 mcp.json. Returns servers + problems. */
+export function readAgentPluginsMcp(raw: any): { servers: PluginMcpServer[]; problems: string[] } {
+  const problems: string[] = [];
+  if (!raw || typeof raw !== 'object') return { servers: [], problems: ['mcp.json is not an object'] };
+  if (raw.$schema !== AGENT_PLUGINS_MCP_SCHEMA) problems.push('mcp.json $schema must be the Agent Plugins 1.0.0 MCP schema');
+  const servers: PluginMcpServer[] = [];
+  const map = raw.mcpServers;
+  if (!map || typeof map !== 'object' || Array.isArray(map)) return { servers, problems: [...problems, 'mcp.json needs an mcpServers object'] };
+  for (const [id, cfg] of Object.entries<any>(map)) {
+    const where = `mcp server "${id}"`;
+    if (!cfg || typeof cfg !== 'object') { problems.push(`${where} is not an object`); continue; }
+    if (cfg.type === 'stdio') {
+      if (typeof cfg.command !== 'string' || !cfg.command) { problems.push(`${where}: stdio needs command`); continue; }
+      const extra = Object.keys(cfg).filter((k) => !['type', 'command', 'args', 'env', 'cwd'].includes(k));
+      if (extra.length) { problems.push(`${where}: unknown field(s) ${extra.join(', ')}`); continue; }
+      if (cfg.env && Object.keys(cfg.env).some((k) => k === 'PLUGIN_ROOT' || k === 'PLUGIN_DATA')) { problems.push(`${where}: env may not set PLUGIN_ROOT/PLUGIN_DATA`); continue; }
+      if (cfg.cwd !== undefined && (typeof cfg.cwd !== 'string' || !/^(?:\.\/|\$\{PLUGIN_ROOT\}(?:\/|$)|\$\{PLUGIN_DATA\}(?:\/|$))/.test(cfg.cwd))) { problems.push(`${where}: cwd must start with ./, \${PLUGIN_ROOT} or \${PLUGIN_DATA}`); continue; }
+    } else if (cfg.type === 'streamable-http' || cfg.type === 'sse') {
+      if (typeof cfg.url !== 'string' || !cfg.url) { problems.push(`${where}: ${cfg.type} needs url`); continue; }
+      const extra = Object.keys(cfg).filter((k) => !['type', 'url', 'headers'].includes(k));
+      if (extra.length) { problems.push(`${where}: unknown field(s) ${extra.join(', ')}`); continue; }
+    } else { problems.push(`${where}: type must be stdio, streamable-http or sse`); continue; }
+    servers.push({ id: sanitizePluginId(id), config: cfg });
+  }
+  return { servers, problems };
+}
+
 export function detectPluginFormat(dir: string): { format: PluginFormat; manifestPath: string } | null {
+  const portable = agentPluginsManifest(dir);
   const candidates: Array<[PluginFormat, string]> = [
     ['claude', path.join(dir, '.claude-plugin', 'plugin.json')],
+    // Portable Agent Plugins root manifest beats the legacy .codex-plugin fallback.
+    ...(portable ? [['agent-plugins', portable.path] as [PluginFormat, string]] : []),
     ['codex', path.join(dir, '.codex-plugin', 'plugin.json')],
     ['openclaw', path.join(dir, 'openclaw.plugin.json')],
     ['hermes', path.join(dir, 'plugin.yaml')],
@@ -280,6 +348,20 @@ export function readPluginBundle(dir: string): PluginBundle | null {
     }
   }
 
+  if (format === 'agent-plugins') {
+    const problems = validateAgentPluginsManifest(manifest);
+    if (isFile(path.join(root, 'mcp.json'))) {
+      const mcp = readAgentPluginsMcp(readJson(path.join(root, 'mcp.json')));
+      problems.push(...mcp.problems);
+      bundle.mcpServers.push(...mcp.servers);
+    }
+    if (problems.length) bundle.invalid = problems;
+    // Client extensions have no portable semantics: disclose them, never guess executable paths.
+    for (const ns of Object.keys(manifest.extensions || {})) {
+      bundle.unsupported.push({ part: `extension ${ns}`, reason: ns === 'com.openai' ? 'OpenAI client extensions (hosted apps, presentation, OpenAI-specific hooks) only run inside ChatGPT/Codex. Skills and portable MCP servers are imported.' : `Client-specific extension namespace "${ns}" has no Prometheus equivalent.` });
+    }
+  }
+
   if (format === 'hermes') {
     for (const env of asList(manifest.requires_env)) bundle.requiredEnv.push(String(env));
     for (const e of Array.isArray(manifest.requires_env) ? manifest.requires_env : []) if (e && typeof e === 'object' && e.name) bundle.requiredEnv.push(String(e.name));
@@ -315,6 +397,24 @@ export function readPluginBundle(dir: string): PluginBundle | null {
   return bundle;
 }
 
+/**
+ * A standalone SKILL.md folder (Hermes ~/.hermes/skills, OpenClaw skills, ~/.agents/skills, …)
+ * as a skills-only bundle. `id` should already be source-qualified (e.g. hermes-devops-k8s).
+ */
+export function readSkillBundle(dir: string, id: string, harnessLabel = 'skill folder'): PluginBundle | null {
+  const root = path.resolve(dir);
+  const file = [path.join(root, 'SKILL.md'), path.join(root, 'skill.md')].find(isFile);
+  if (!file) return null;
+  const { data } = parseMarkdownDoc(fs.readFileSync(file, 'utf8'));
+  return {
+    id: sanitizePluginId(id), name: String(data.name || path.basename(root)),
+    version: data.version ? String(data.version) : undefined,
+    description: String(data.description || `Skill from ${harnessLabel}`).slice(0, 400),
+    format: 'skill', root, manifestPath: file,
+    skillDirs: [root], commands: [], agents: [], mcpServers: [], hooks: [], requiredEnv: [], unsupported: [],
+  };
+}
+
 /** Plugin dirs under a root (a marketplace checkout, an oss repo, a plugins folder). */
 export function findPluginDirs(root: string, maxDepth = 4): string[] {
   const out: string[] = [];
@@ -343,5 +443,6 @@ export function summarizeBundle(b: PluginBundle): Record<string, unknown> {
     // Only what is actually missing; PATH/HOME-style refs are already set.
     requiredEnv: b.requiredEnv.filter((v) => !process.env[v]),
     unsupported: [...b.unsupported, ...b.hooks.filter((h) => h.type !== 'command').map((h) => ({ part: `hook ${h.sourceEvent}`, reason: h.note || 'unsupported' }))],
+    ...(b.invalid?.length ? { invalid: b.invalid } : {}),
   };
 }

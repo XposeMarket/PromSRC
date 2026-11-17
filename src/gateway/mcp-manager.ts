@@ -30,6 +30,8 @@ export interface MCPServerConfig {
   args?: string[];
   env?: Record<string, string>;
   envPassthrough?: string[];
+  /** Working directory for the stdio child (absolute). Imported plugins set it to their own package/data dir. */
+  cwd?: string;
   // sse/http transport
   url?: string;
   headers?: Record<string, string>;
@@ -187,11 +189,35 @@ export class MCPManager {
           missingRefs.push(`${k}=${v}`);
           log.warn(`[MCP] Failed to resolve vault ref "${v}": ${e.message}`);
         }
+      } else if (typeof v === 'string' && v.includes('${vault:')) {
+        // Inline templates keep literal text around the secret, e.g. "Bearer ${vault:plugins.x.TOKEN}".
+        let missing = false;
+        const resolved = v.replace(/\$\{vault:([A-Za-z0-9_.:-]+)\}/g, (_m, vaultKey: string) => {
+          try {
+            if (!vault) vault = new SecretVault(this.configDir);
+            const secret = vault.get(vaultKey, `mcp:${k}`);
+            if (secret) return secret.expose();
+          } catch (e: any) {
+            log.warn(`[MCP] Failed to resolve vault ref "${vaultKey}": ${e.message}`);
+          }
+          missing = true;
+          missingRefs.push(`${k}=vault:${vaultKey}`);
+          return '';
+        });
+        if (!missing) out[k] = resolved;
       } else {
         out[k] = v;
       }
     }
     return { env: out, missingRefs };
+  }
+
+  /** Resolve ${vault:...} templates inside stdio args (imported plugins). */
+  private resolveArgSecrets(args: string[]): { args: string[]; missingRefs: string[] } {
+    const map: Record<string, string> = {};
+    args.forEach((a, i) => { map[`arg${i}`] = a; });
+    const r = this.resolveEnvSecrets(map);
+    return { args: args.map((a, i) => r.env[`arg${i}`] ?? a), missingRefs: r.missingRefs };
   }
 
   static normalizeTransport(raw: any): MCPTransport {
@@ -232,6 +258,8 @@ export class MCPManager {
       const env = MCPManager.toStringMap((raw as any).env);
       if (Object.keys(env).length > 0) cfg.env = env;
       if (Array.isArray(raw.envPassthrough)) cfg.envPassthrough = raw.envPassthrough.filter((key: unknown): key is string => typeof key === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(key));
+      // Only absolute working directories survive; relative/templated values are resolved by the importer.
+      if (typeof raw.cwd === 'string' && raw.cwd.trim() && path.isAbsolute(raw.cwd.trim())) cfg.cwd = path.resolve(raw.cwd.trim());
     } else {
       if (hasUrl) cfg.url = String((raw as any).url).trim();
       const headers = MCPManager.toStringMap((raw as any).headers);
@@ -530,8 +558,17 @@ export class MCPManager {
 
         // CRIT-02: shell: false always — args are passed as a list, not a shell string.
         // This prevents metacharacter injection via cfg.args on all platforms.
-        const proc = spawn(cfg.command!, cfg.args || [], {
+        const cwd = cfg.cwd && fs.existsSync(cfg.cwd) ? cfg.cwd : undefined;
+        const resolvedArgs = this.resolveArgSecrets(cfg.args || []);
+        if (resolvedArgs.missingRefs.length > 0) {
+          session.status = 'error';
+          session.error = `Missing vault secret(s): ${resolvedArgs.missingRefs.join(', ')}`;
+          resolve({ success: false, error: session.error });
+          return;
+        }
+        const proc = spawn(cfg.command!, resolvedArgs.args, {
           env,
+          ...(cwd ? { cwd } : {}),
           stdio: ['pipe', 'pipe', 'pipe'],
           shell: false,  // SECURITY: never true — prevents shell injection via args
         });
