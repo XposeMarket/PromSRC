@@ -5,6 +5,7 @@ import { buildSystemPrompt, loadSkills } from '../../config/soul-loader.js';
 import { loadVoiceAgentMemory } from '../prompt-context.js';
 import { getCodexRealtimeBridge } from '../realtime/codex-app-server-bridge.js';
 import { classifyCodexRealtimeStartError } from '../realtime/codex-realtime-errors.js';
+import { budgetRealtimeInstructions, REALTIME_AGENT_INSTRUCTIONS_MAX } from './chat/voice/realtime.js';
 
 export const router = express.Router();
 
@@ -194,8 +195,12 @@ function clampText(text: string, maxChars: number): string {
   return `${value.slice(0, Math.max(0, limit - 18)).trimEnd()}\n...[truncated]`;
 }
 
+// Client-supplied instructions come from the voice bootstrap, which already
+// budgets them to REALTIME_AGENT_INSTRUCTIONS_MAX. Use the same section-aware
+// budget here: a smaller head-only clamp cut the prompt in half and dropped
+// tool routing, conversation continuity and the current time.
 function sanitizeRealtimeInstructions(value: unknown): string {
-  return clampText(String(value || ''), Math.max(2000, REALTIME_INSTRUCTIONS_MAX_CHARS));
+  return budgetRealtimeInstructions(String(value || ''), REALTIME_AGENT_INSTRUCTIONS_MAX);
 }
 
 function buildSkillCatalogDigest(maxChars = 4500): string {

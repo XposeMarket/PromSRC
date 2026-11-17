@@ -70,7 +70,13 @@ type BridgeSessionState = {
   ownerSessionId: string;
   events: CodexRealtimeBridgeEvent[];
   eventWaiters: Set<RealtimeEventWaiter>;
+  // Last upstream event or client poll. A session nobody polls and that emits
+  // nothing is an abandoned tab/app; it is stopped so it cannot keep an
+  // upstream realtime session (and its usage) open forever.
+  lastActivityAt: number;
 };
+
+const REALTIME_SESSION_IDLE_MS = Math.max(60_000, Number(process.env.PROMETHEUS_CODEX_REALTIME_IDLE_MS || 600_000) || 600_000);
 
 type PendingDynamicToolRequest = {
   requestId: JsonRpcId;
@@ -236,6 +242,24 @@ export class CodexAppServerBridge {
   private pendingRealtimeEvents = new Map<string, CodexRealtimeBridgeEvent[]>();
   private pendingDynamicToolRequests = new Map<string, PendingDynamicToolRequest>();
   private nextRealtimeEventId = 1;
+  private idleSweepTimer: ReturnType<typeof setInterval> | null = null;
+
+  private ensureIdleSweep(): void {
+    if (this.idleSweepTimer) return;
+    this.idleSweepTimer = setInterval(() => {
+      const cutoff = Date.now() - REALTIME_SESSION_IDLE_MS;
+      for (const [sessionId, session] of [...this.sessions]) {
+        if (session.lastActivityAt > cutoff) continue;
+        console.warn('[codex-realtime-bridge] Stopping abandoned realtime session (no client poll or upstream event):', sessionId);
+        void this.stopRealtimeSession(sessionId);
+      }
+      if (!this.sessions.size && this.idleSweepTimer) {
+        clearInterval(this.idleSweepTimer);
+        this.idleSweepTimer = null;
+      }
+    }, 60_000);
+    this.idleSweepTimer.unref?.();
+  }
   private cachedStatus: { value: CodexRealtimeBridgeStatus; at: number } | null = null;
   // model -> time it was last rejected upstream; skipped until REALTIME_MODEL_RETRY_MS passes.
   private rejectedRealtimeModels = new Map<string, number>();
@@ -407,6 +431,7 @@ export class CodexAppServerBridge {
       params,
     };
     const session = [...this.sessions.values()].find((candidate) => candidate.threadId === threadId);
+    if (session) session.lastActivityAt = Date.now();
     const target = session?.events || this.pendingRealtimeEvents.get(threadId) || [];
     target.push(event);
     // A completed voice turn is tiny, so retaining a short bounded tail makes
@@ -703,7 +728,9 @@ export class CodexAppServerBridge {
         ownerSessionId: String(input.ownerSessionId || '').trim(),
         events,
         eventWaiters: new Set(),
+        lastActivityAt: Date.now(),
       });
+      this.ensureIdleSweep();
       return {
         sessionId,
         threadId,
@@ -863,6 +890,7 @@ export class CodexAppServerBridge {
   getRealtimeEvents(sessionId: string, afterId = 0): CodexRealtimeBridgeEvent[] {
     const session = this.sessions.get(String(sessionId || '').trim());
     if (!session) return [];
+    session.lastActivityAt = Date.now();
     const cursor = Number.isFinite(Number(afterId)) ? Number(afterId) : 0;
     return session.events.filter((event) => event.id > cursor);
   }
@@ -870,6 +898,7 @@ export class CodexAppServerBridge {
   waitForRealtimeEvents(sessionId: string, afterId = 0, timeoutMs = 20_000): Promise<CodexRealtimeBridgeEvent[]> {
     const session = this.sessions.get(String(sessionId || '').trim());
     if (!session) return Promise.resolve([]);
+    session.lastActivityAt = Date.now();
     const cursor = Number.isFinite(Number(afterId)) ? Number(afterId) : 0;
     const available = session.events.filter((event) => event.id > cursor);
     if (available.length) return Promise.resolve(available);

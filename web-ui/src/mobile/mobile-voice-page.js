@@ -1544,12 +1544,6 @@ void main() {
       voicePreviewWheel = null;
       return;
     }
-    context._voiceDebug('realtime-agent-tool-result', {
-      name,
-      ok: true,
-      clientElapsedMs: Math.max(0, Date.now() - requestStartedAt),
-      elapsedMs: Number(result?.timing?.elapsedMs || 0) || undefined,
-    });
     previewHost.classList.add('has-preview');
     let wheel = previewHost.querySelector('.pm-voice-preview-wheel');
     if (!wheel) {
