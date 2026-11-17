@@ -120,6 +120,8 @@ function handle(message) {
       return reply({ userAgent: 'fake-codex/0.163.0', codexHome: '/fake/home', platformFamily: 'unix', platformOs: 'linux' });
     case 'initialized':
       return undefined;
+    case 'model/list': return send({ id, result: { data: [{ model: 'gpt-6-astra', displayName: 'Astra', supportedReasoningEfforts: [] }, { model: 'gpt-6-luna', displayName: 'Luna', supportedReasoningEfforts: [] }], nextCursor: null } });
+    case 'config/read': return send({ id, result: { config: { model: 'gpt-6-astra' } } });
     case 'account/read':
       if (mode === 'signed_out') return reply({ account: null, requiresOpenaiAuth: true });
       if (mode === 'api_key') return reply({ account: { type: 'apiKey' }, requiresOpenaiAuth: true });

@@ -24,6 +24,7 @@ export class AcpAdapter implements ExternalAgentAdapter {
   readonly tile: string;
   readonly capabilities = { ...CAPS };
   private clients = new Set<JsonRpcStdioClient>();
+  private catalogs = new Map<string, { models: Array<{ id: string; label: string }>; currentModel?: string }>();
   constructor(readonly id: AcpAgentId, private options: Options = {}) { this.name = NAMES[id]; this.tile = this.name.slice(0, 2); }
   private resolve() { return (this.options.resolve || (() => resolveAgent(this.id)))(); }
   async detect() { const command = this.resolve(); return { found: !!command, ...(command ? { executable: command.source } : {}) }; }
@@ -50,6 +51,11 @@ export class AcpAdapter implements ExternalAgentAdapter {
       return { status: 'ready', statusText: `${this.name} ACP connected. Account readiness is checked by the agent on first send.`, ...(info.agentInfo?.version ? { version: String(info.agentInfo.version) } : {}), capabilities: { ...this.capabilities } };
     } catch { return { status: 'error', statusText: `Cannot connect to ${this.name} ACP. Check its own installation, sign-in${this.id === 'openclaw' ? ' and Gateway pairing' : ''}.`, capabilities: this.capabilities }; }
     finally { await client.stop(); this.clients.delete(client); }
+  }
+  async listModels(context: { cwd: string; upstreamSessionId?: string }) {
+    // ACP supplies models with session creation/load, not a global discovery call.
+    // Never create abandoned sessions or reload a working session just to paint a badge.
+    return this.catalogs.get(context.upstreamSessionId || '') || { models: [], unavailableReason: 'This agent reports model choices after its session starts. Its own configured model is used for the first message.' };
   }
   async runTurn(input: ExternalTurnInput): Promise<ExternalTurnResult> {
     let upstream = input.upstreamSessionId || '';
@@ -118,24 +124,34 @@ export class AcpAdapter implements ExternalAgentAdapter {
       if (this.id === 'cursor' && !/cursor/i.test(String(info.agentInfo?.name || ''))) throw new Error('Not the Cursor agent.');
       if (input.signal.aborted) return { upstreamSessionId: upstream, status: 'interrupted', finalText: '' };
       input.emit({ type: 'state', phase: upstream ? 'resuming' : 'starting' });
+      let modelState;
       if (upstream) {
         if (!info.agentCapabilities?.loadSession) return { upstreamSessionId: upstream, status: 'failed', finalText: '', error: `${this.name} does not support resuming this session. Start a new chat explicitly.` };
         // History emitted during load is already in Prometheus; suppress its replay.
-        await client.request('session/load', { sessionId: upstream, cwd: input.cwd, mcpServers: [] }, 15000);
+        modelState = await client.request('session/load', { sessionId: upstream, cwd: input.cwd, mcpServers: [] }, 15000);
       } else {
         const created = await client.request('session/new', { cwd: input.cwd, mcpServers: [] }, 15000);
         if (typeof created?.sessionId !== 'string' || !created.sessionId || created.sessionId.length > 300) throw new Error('Invalid upstream session identity.');
         upstream = created.sessionId;
+        modelState = created;
       }
+      const models = (modelState?.models?.availableModels || []).map((m: { modelId: string; name: string }) => ({ id: m.modelId, label: m.name || m.modelId }));
+      this.catalogs.set(upstream, { models, currentModel: modelState?.models?.currentModelId });
+      if (this.catalogs.size > 200) this.catalogs.delete(this.catalogs.keys().next().value!);
+      this.capabilities.modelList = models.length > 0;
       input.onSessionBound?.(upstream);
       if (input.signal.aborted) return { upstreamSessionId: upstream, status: 'interrupted', finalText: '' };
+      if (input.model) {
+        if (!models.some((m: { id: string }) => m.id === input.model)) throw new Error('Model is not available in this agent session.');
+        await client.request('session/set_model', { sessionId: upstream, modelId: input.model }, 15000);
+      }
       acceptingUpdates = true;
       input.emit({ type: 'state', phase: 'running' });
       const result = await client.request('session/prompt', { sessionId: upstream, prompt: [{ type: 'text', text: input.text }] });
       lifetime.abort();
       const interrupted = input.signal.aborted || result?.stopReason === 'cancelled';
       const complete = result?.stopReason === 'end_turn';
-      return { upstreamSessionId: upstream, status: interrupted ? 'interrupted' : complete ? 'completed' : 'failed', finalText: text, ...(!interrupted && !complete ? { error: `${this.name} stopped (${String(result?.stopReason || 'unknown')}).` } : {}) };
+      return { upstreamSessionId: upstream, status: interrupted ? 'interrupted' : complete ? 'completed' : 'failed', finalText: text, ...(input.model ? { model: input.model } : {}), ...(!interrupted && !complete ? { error: `${this.name} stopped (${String(result?.stopReason || 'unknown')}).` } : {}) };
     } catch (error: any) {
       const missing = !!input.upstreamSessionId && /(?:session.*(?:not found|does not exist)|unknown session)/i.test(String(error?.message));
       return { upstreamSessionId: upstream, status: input.signal.aborted ? 'interrupted' : 'failed', finalText: text,

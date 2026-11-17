@@ -10,15 +10,19 @@ import {
   setAgentChoice, setExternalAgentRequest, syncExternalAgentRequests,
 } from './external-agent-ui.js';
 
-const ui = { row: null, sheet: null, scrim: null, off: null };
+import { syncAgentEmptyState, watchAgentEmptyState } from './external-agent-empty-state.js';
+import { setAgentModelContext, agentModelForSend } from './external-agent-models.js';
+
+
+const ui = { row: null, sheet: null, scrim: null, off: null, generation: 0, sessionId: null };
 
 function rowHtml() {
   const choice = getAgentChoice();
   const chosen = choice.id !== 'prometheus' ? agentStatusFor(choice.id) : null;
   const sub = chosen ? (choice.cwd ? choice.cwd.split(/[\\/]/).filter(Boolean).slice(-2).join('/') : 'Default folder') : 'Agent';
-  return `<span class="pm-new-chat-context-icon" aria-hidden="true"><span class="ea-tile">${esc(chosen?.tile || 'P')}</span></span>
+  return `<span class="pm-new-chat-context-icon" aria-hidden="true"><span class="ea-tile${chosen ? '' : ' ea-tile-prometheus'}">${esc(chosen?.tile || 'Pr')}</span></span>
     <span class="pm-new-chat-context-value"><strong>${esc(chosen ? chosen.name : 'Prometheus')}</strong><small>${esc(sub)}</small></span>
-    <span class="pm-new-chat-context-chevron" aria-hidden="true">›</span>`;
+    <span class="pm-new-chat-context-chevron" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></span>`;
 }
 
 function renderRow() {
@@ -26,6 +30,15 @@ function renderRow() {
   const show = selectableAgents().length > 0;
   ui.row.hidden = !show;
   if (show) ui.row.innerHTML = rowHtml();
+  const choice = getAgentChoice();
+  setAgentModelContext(show && choice.id !== 'prometheus' ? choice : null);
+  const dock = document.getElementById('pm-new-chat-context-dock');
+  dock?.classList.toggle('ea-new-chat-context', show);
+  const computerValue = dock?.querySelector('#pm-chat-target-chip .pm-new-chat-context-value');
+  if (show && computerValue && !computerValue.querySelector('small')) {
+    const label = document.createElement('small'); label.className = 'ea-computer-label'; label.textContent = 'Computer'; computerValue.appendChild(label);
+  } else if (!show) computerValue?.querySelector('.ea-computer-label')?.remove();
+  watchAgentEmptyState(); syncAgentEmptyState();
 }
 
 function closeSheet() {
@@ -91,6 +104,7 @@ async function openSheet() {
 export function mountMobileAgentRow(dock, { request } = {}) {
   setExternalAgentRequest(request);
   if (!dock) return;
+  ui.generation++; ui.sessionId = null;
   let row = dock.querySelector('#pm-new-chat-agent');
   if (!row) {
     row = document.createElement('button');
@@ -112,19 +126,30 @@ export function mountMobileAgentRow(dock, { request } = {}) {
 /** Field for the first message, or undefined. Clears the choice once used. */
 export function mobileAgentFieldForSend(sessionId) {
   const field = agentFieldForNewChat();
+  ui.sessionId = sessionId;
   closeSheet();
-  return field;
+  return field ? { ...field, ...(agentModelForSend() ? { model: agentModelForSend() } : {}) } : field;
 }
 
 export function mobileAgentStreamEvent(event, sessionId, request) {
   setExternalAgentRequest(request);
-  return handleExternalAgentStreamEvent(event, sessionId);
+  const handled = handleExternalAgentStreamEvent(event, sessionId);
+  if (event?.type === 'external_agent_state' && ui.sessionId === sessionId) {
+    const generation = ui.generation;
+    loadSessionBinding(sessionId, true).then(binding => {
+      if (generation === ui.generation && binding) setAgentModelContext({ ...binding, id: binding.agentId, sessionId });
+    }).catch(() => {});
+  }
+  return handled;
 }
 
 /** Opening an existing chat: redraw any request still waiting on the user. */
 export async function syncMobileAgentRequests(sessionId, request) {
   setExternalAgentRequest(request);
+  const generation = ++ui.generation; ui.sessionId = sessionId;
   const binding = await loadSessionBinding(sessionId);
+  if (generation !== ui.generation) return binding;
+  setAgentModelContext(binding ? { ...binding, id: binding.agentId, sessionId } : null);
   if (binding) await syncExternalAgentRequests(sessionId);
   return binding;
 }

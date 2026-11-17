@@ -2154,13 +2154,13 @@ router.post('/api/chat', async (req, res) => {
   {
     const rawAgent = req.body?.agent;
     const requestedAgent = rawAgent && typeof rawAgent === 'object'
-      ? { id: String(rawAgent.id || '').trim().toLowerCase(), cwd: typeof rawAgent.cwd === 'string' ? rawAgent.cwd : undefined }
+      ? { id: String(rawAgent.id || '').trim().toLowerCase(), cwd: typeof rawAgent.cwd === 'string' ? rawAgent.cwd : undefined, model: typeof rawAgent.model === 'string' ? rawAgent.model : undefined }
       : (typeof rawAgent === 'string' && rawAgent.trim() ? { id: rawAgent.trim().toLowerCase() } : null);
     if (requestedAgent && requestedAgent.id !== 'prometheus' && !isExternalAgentId(requestedAgent.id)) {
       res.status(400).json({ success: false, code: 'unknown_agent', error: 'Unknown agent.' });
       return;
     }
-    const bound = bindExternalAgentForRequest(resolvedSessionId, requestedAgent as any);
+    const bound = bindExternalAgentForRequest(resolvedSessionId, requestedAgent && (requestedAgent.id === 'prometheus' || isExternalAgentId(requestedAgent.id)) ? { ...requestedAgent, id: requestedAgent.id } : null);
     if (!bound.ok) {
       res.status(bound.status).json({ success: false, code: bound.code, error: bound.error, sessionId: resolvedSessionId });
       return;

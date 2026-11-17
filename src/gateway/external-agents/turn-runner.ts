@@ -31,6 +31,7 @@ const activeExternalSessions = new Set<string>();
 export interface ExternalAgentRequestInput {
   id: ExternalAgentId | 'prometheus';
   cwd?: string;
+  model?: string;
 }
 
 export interface ExternalTurnRunParams {
@@ -101,6 +102,10 @@ export function bindExternalAgentForRequest(sessionId: string, requested: Extern
     if (wantedId && wantedId !== existing.agentId) {
       return { ok: false, status: 409, code: 'agent_locked', error: `This chat runs on ${externalAgentName(existing.agentId)}. The agent can't be changed after the first message; start a new chat instead.` };
     }
+    if (requested?.model) {
+      if (activeExternalSessions.has(sessionId)) return { ok: false, status: 409, code: 'agent_locked', error: 'Wait for this turn to finish before changing models.' };
+      return { ok: true, binding: setSessionExternalAgent(sessionId, { ...existing, selectedModel: requested.model.slice(0, 200) }) || existing, created: false };
+    }
     return { ok: true, binding: existing, created: false };
   }
   if (!wantedId || wantedId === 'prometheus') return { ok: true, binding: null, created: false };
@@ -124,6 +129,7 @@ export function bindExternalAgentForRequest(sessionId: string, requested: Extern
     agentId: adapter.id,
     cwd: cwd.cwd,
     boundAt: new Date().toISOString(),
+    ...(requested?.model ? { selectedModel: requested.model.slice(0, 200) } : {}),
   });
   return { ok: true, binding: binding || null, created: true };
 }
@@ -169,6 +175,15 @@ export async function runExternalAgentTurn(params: ExternalTurnRunParams, bindin
     return refuse(params, binding, `${agentName} chats in Prometheus can't take attachments yet. Send the text on its own.`);
   }
 
+  if (binding.selectedModel && (binding.agentId === 'codex' || binding.agentId === 'claude-code')) {
+    try {
+      const catalog = await adapter.listModels?.({ cwd: binding.cwd, upstreamSessionId: binding.upstreamSessionId });
+      if (!catalog?.models.some(model => model.id === binding.selectedModel)) return refuse(params, binding, 'That model is not available in this agent. Choose a model from its own list.');
+    } catch { return refuse(params, binding, 'Could not verify this agent model. Check its connection and choose again.'); }
+  }
+  if (activeExternalSessions.has(sessionId)) return refuse(params, binding, 'This agent is still working on the previous message.');
+  if (params.abortSignal?.aborted || params.abortSignal?.signal?.aborted) return refuse(params, binding, 'Stopped before sending to the agent.');
+  if (!isExternalAgentUsable(binding.agentId).ok) return refuse(params, binding, 'This agent was disconnected.');
   const startedAt = Date.now();
   const origin = params.turnOrigin;
   addMessage(sessionId, {
@@ -257,6 +272,7 @@ export async function runExternalAgentTurn(params: ExternalTurnRunParams, bindin
       ...(binding.upstreamSessionId ? { upstreamSessionId: binding.upstreamSessionId } : {}),
       cwd: binding.cwd,
       text: params.message,
+      ...(binding.selectedModel ? { model: binding.selectedModel } : {}),
       signal: controller.signal,
       emit,
       requestUser,
@@ -277,6 +293,7 @@ export async function runExternalAgentTurn(params: ExternalTurnRunParams, bindin
   const latest = getSessionExternalAgent(sessionId) || binding;
   setSessionExternalAgent(sessionId, {
     ...latest,
+    ...(result.model ? { currentModel: result.model } : {}),
     // A missing upstream session is kept so the user can explicitly start a new one.
     ...(result.upstreamSessionId ? { upstreamSessionId: result.upstreamSessionId } : {}),
     lastTurn: {

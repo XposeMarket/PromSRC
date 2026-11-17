@@ -40,7 +40,11 @@ export function mountMinimalAgentComposer(enabled) {
   more.append(toggle, menu); footer.insertBefore(more, footer.firstChild);
   remember(send); footer.appendChild(send);
   const dock = document.getElementById('chat-new-context-dock');
-  if (dock && area.parentElement) { remember(dock); area.after(dock); dock.classList.add('ea-composer-caption'); }
+  const captionComputer = document.createElement('span');
+  captionComputer.className = 'ea-caption-computer';
+  captionComputer.title = 'Agents run on this gateway computer';
+  captionComputer.innerHTML = '<span aria-hidden="true">·</span><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg><span>This PC</span>';
+  if (dock && area.parentElement) { remember(dock); area.after(dock); dock.classList.add('ea-composer-caption'); dock.appendChild(captionComputer); }
   const dismiss = (event) => { if (!more.contains(event.target)) close(); };
   document.addEventListener('pointerdown', dismiss);
   restore = () => {
@@ -50,7 +54,7 @@ export function mountMinimalAgentComposer(enabled) {
       element.removeEventListener('click', close);
       marker.replaceWith(element);
     }
-    more.remove(); dock?.classList.remove('ea-composer-caption'); area.classList.remove('ea-minimal-composer');
+    captionComputer.remove(); more.remove(); dock?.classList.remove('ea-composer-caption'); area.classList.remove('ea-minimal-composer');
   };
   more.addEventListener('keydown', (event) => { if (event.key === 'Escape') { close(); toggle.focus(); } });
 }

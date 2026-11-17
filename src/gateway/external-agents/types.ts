@@ -86,7 +86,15 @@ export interface ExternalUserResponse {
   text?: string;
 }
 
+export interface ExternalModelCatalog {
+  models: Array<{ id: string; label: string; efforts?: string[] }>;
+  currentModel?: string;
+  unavailableReason?: string;
+}
+
 export interface ExternalTurnInput {
+  /** Explicit user choice only; omitted preserves the harness's configuration. */
+  model?: string;
   sessionId: string;
   upstreamSessionId?: string;
   cwd: string;
@@ -125,6 +133,7 @@ export interface ExternalAgentAdapter {
   detect(): Promise<{ found: boolean; executable?: string }>;
   /** The agent's own status path (version + its own account check). Never reads tokens, never starts a login. */
   verify(): Promise<ExternalAgentVerifyResult>;
+  listModels?(context: { cwd: string; upstreamSessionId?: string }): Promise<ExternalModelCatalog>;
   runTurn(input: ExternalTurnInput): Promise<ExternalTurnResult>;
   /** Stop every child process this adapter owns. */
   shutdown(): Promise<void>;
@@ -135,6 +144,8 @@ export interface ExternalAgentAdapter {
 /** Persisted on the Prometheus session record (session.ts `externalAgent`). */
 export interface ExternalAgentBinding {
   version: 1;
+  selectedModel?: string;
+  currentModel?: string;
   agentId: ExternalAgentId;
   cwd: string;
   upstreamSessionId?: string;
@@ -163,6 +174,8 @@ export function normalizeExternalAgentBinding(input: any): ExternalAgentBinding 
     agentId: input.agentId,
     cwd,
     ...(upstream ? { upstreamSessionId: upstream } : {}),
+    ...(typeof input.selectedModel === 'string' && input.selectedModel.trim() ? { selectedModel: input.selectedModel.trim().slice(0, 200) } : {}),
+    ...(typeof input.currentModel === 'string' && input.currentModel.trim() ? { currentModel: input.currentModel.trim().slice(0, 200) } : {}),
     boundAt: String(input.boundAt || '').trim().slice(0, 40) || new Date().toISOString(),
     ...(lastStatus ? {
       lastTurn: {

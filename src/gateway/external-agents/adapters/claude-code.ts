@@ -7,7 +7,7 @@ import type { ExternalAgentAdapter, ExternalAgentCapabilities, ExternalTurnInput
 
 // Use native import at runtime: the SDK is ESM, while the gateway is CommonJS.
 const importDriver = new Function('return import("@prometheus/claude-driver")') as () => Promise<{ createQuery: (input: any) => any }>;
-const CAPS: ExternalAgentCapabilities = { resume: true, interrupt: true, approvals: true, images: false, modelList: false };
+const CAPS: ExternalAgentCapabilities = { resume: true, interrupt: true, approvals: true, images: false, modelList: true };
 interface Options {
   resolve?: () => ResolvedCommand | null;
   status?: (command: ResolvedCommand) => Promise<boolean>;
@@ -55,6 +55,22 @@ export class ClaudeCodeAdapter implements ExternalAgentAdapter {
   }
   isRunning() { return this.active.size > 0; }
   async shutdown() { for (const turn of this.active.values()) turn.close(); this.active.clear(); }
+  async listModels(context: { cwd: string }) {
+    const command = this.resolve();
+    if (!command) throw new Error('Claude Code is not installed.');
+    const query = this.options.query || (await importDriver()).createQuery;
+    const lifetime = new AbortController();
+    async function* idle(): AsyncGenerator<never> { if (!lifetime.signal.aborted) await new Promise<void>(resolve => lifetime.signal.addEventListener('abort', () => resolve(), { once: true })); }
+    const runtime = query({ prompt: idle(), options: { cwd: context.cwd, pathToClaudeCodeExecutable: executable(command), systemPrompt: { type: 'preset', preset: 'claude_code' }, canUseTool: async () => ({ behavior: 'deny', message: 'Model discovery only.' }) } });
+    const key = `models-${crypto.randomUUID()}`;
+    const close = () => { lifetime.abort(); runtime.close(); };
+    this.active.set(key, { close });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const models = await Promise.race([runtime.supportedModels(), new Promise<never>((_resolve, reject) => { timer = setTimeout(() => { close(); reject(new Error('Claude model discovery timed out.')); }, 15000); })]);
+      return { models: models.map((m: { value: string; displayName: string; supportedEffortLevels?: string[] }) => ({ id: m.value, label: m.displayName, efforts: m.supportedEffortLevels })) };
+    } finally { clearTimeout(timer); close(); this.active.delete(key); }
+  }
   async runTurn(input: ExternalTurnInput): Promise<ExternalTurnResult> {
     let sessionId = input.upstreamSessionId || crypto.randomUUID();
     const lifetime = new AbortController();
@@ -115,10 +131,11 @@ export class ClaudeCodeAdapter implements ExternalAgentAdapter {
         pathToClaudeCodeExecutable: executable(command), cwd: input.cwd,
         ...(input.upstreamSessionId ? { resume: sessionId } : { sessionId }),
         includePartialMessages: true, canUseTool,
+        ...(input.model ? { model: input.model } : {}),
         systemPrompt: { type: 'preset', preset: 'claude_code' },
         // Select the CLI's own prompt, never Prometheus instructions or an SDK-empty prompt.
         // SDK 0.3.326 loads all filesystem settings when omitted, exactly like the CLI.
-        // No model, tools, MCP, permission mode or settings override.
+        // Only an explicit user model selection overrides the CLI model. No tools, MCP, permission mode or settings override.
       } });
       this.active.set(input.sessionId, { close });
       input.signal.addEventListener('abort', stop, { once: true });

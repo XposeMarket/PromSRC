@@ -7,10 +7,12 @@ function finish() { update('Hello ACP'); result(promptId, { stopReason: 'end_tur
 readline.createInterface({ input: process.stdin }).on('line', (line) => {
  const m = JSON.parse(line);
  if (m.method === 'initialize') return result(m.id, { protocolVersion: 1, agentInfo: { name: 'cursor', version: 'fixture' }, agentCapabilities: { loadSession: true } });
- if (m.method === 'session/new') return result(m.id, { sessionId });
+ const models = { currentModelId: 'fixture-a', availableModels: [{ modelId: 'fixture-a', name: 'Fixture A' }, { modelId: 'fixture-b', name: 'Fixture B' }] };
+ if (m.method === 'session/new') return result(m.id, { sessionId, models });
+ if (m.method === 'session/set_model') return result(m.id, {});
  if (m.method === 'session/load') {
    if (m.params.sessionId === 'missing') return send({ id: m.id, error: { code: -32000, message: 'Session not found' } });
-   sessionId = m.params.sessionId; update('OLD REPLAY'); return result(m.id, {});
+   sessionId = m.params.sessionId; update('OLD REPLAY'); return result(m.id, { models });
  }
  if (m.method === 'session/prompt') {
    promptId = m.id; mode = m.params.prompt[0].text; update('WRONG SESSION', 'other-session');

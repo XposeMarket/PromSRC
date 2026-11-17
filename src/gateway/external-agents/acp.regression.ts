@@ -13,7 +13,10 @@ async function main() {
  } };
  const first = await adapter.runTurn(base); assert.equal(first.status, 'completed'); assert.equal(first.finalText, 'Hello ACP');
  assert.deepEqual(outgoing.find((m) => m.method === 'session/new').params, { cwd: process.cwd(), mcpServers: [] });
- const resumed = await adapter.runTurn({ ...base, upstreamSessionId: first.upstreamSessionId }); assert.equal(resumed.finalText, 'Hello ACP', 'no historical or foreign-session replay');
+ const catalog = await adapter.listModels({ cwd: process.cwd(), upstreamSessionId: first.upstreamSessionId });
+ assert.deepEqual(catalog.models.map(m => m.id), ['fixture-a', 'fixture-b']);
+ const resumed = await adapter.runTurn({ ...base, model: 'fixture-b', upstreamSessionId: first.upstreamSessionId }); assert.equal(resumed.finalText, 'Hello ACP', 'no historical or foreign-session replay');
+ assert.equal(outgoing.find(m => m.method === 'session/set_model').params.modelId, 'fixture-b');
  for (const mode of ['PERMISSION', 'QUESTION', 'PLAN']) {
   const turn = await adapter.runTurn({ ...base, text: mode }); assert.equal(turn.status, 'completed');
   assert.match(turn.finalText, mode === 'PERMISSION' ? /selected/ : mode === 'QUESTION' ? /answered/ : /accepted/);

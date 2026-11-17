@@ -179,7 +179,7 @@ export async function handleChat(...args: Parameters<typeof handleChatUntraced>)
   const boundAgent = getSessionExternalAgent(String(sessionId || ''));
   if (boundAgent) {
     console.warn(`[ExternalAgent] Refused a native handleChat turn for session ${sessionId} (bound to ${boundAgent.agentId}).`);
-    return { type: 'chat', text: `This chat is run by ${boundAgent.agentId === 'codex' ? 'Codex' : boundAgent.agentId}; Prometheus does not run its own turns here.` } as any;
+    return { type: 'chat', text: `This chat is run by ${boundAgent.agentId === 'codex' ? 'Codex' : boundAgent.agentId}; Prometheus does not run its own turns here.` };
   }
   return runInTrace({ sessionId: String(sessionId || 'default'), executionMode: String(executionMode || 'interactive'), personalReferenceAccess: runtimeOptions?.personalReferenceAccess }, async () => {
     const startedAt = Date.now();

@@ -7,6 +7,8 @@ import { Router } from 'express';
 
 import { listAgentGroups } from '../imports/import-agents';
 import {
+  getExternalAgentAdapter,
+  isExternalAgentUsable,
   disableExternalAgent,
   enableExternalAgent,
   getExternalAgentSnapshot,
@@ -15,10 +17,40 @@ import {
   verifyExternalAgent,
 } from '../external-agents/registry';
 import { listPendingRequests, respondToPendingRequest } from '../external-agents/pending-requests';
-import { startFreshUpstreamSession } from '../external-agents/turn-runner';
+import { resolveExternalAgentCwd, bindExternalAgentForRequest, startFreshUpstreamSession } from '../external-agents/turn-runner';
 import { getSessionExternalAgent } from '../session';
 
 export const router = Router();
+
+router.get('/api/external-agents/:id/models', async (req, res) => {
+  const id = parseExternalAgentId(req.params.id);
+  const adapter = id && getExternalAgentAdapter(id);
+  if (!id || !adapter || !isExternalAgentUsable(id).ok) { res.status(409).json({ success: false, error: 'Agent is not connected.' }); return; }
+  const sessionId = String(req.query.sessionId || '');
+  const binding = sessionId ? getSessionExternalAgent(sessionId) : null;
+  if (binding && binding.agentId !== id) { res.status(409).json({ success: false, error: 'This chat belongs to another agent.' }); return; }
+  const cwd = resolveExternalAgentCwd(sessionId, binding?.cwd || String(req.query.cwd || ''));
+  if (!cwd.ok) { res.status(400).json({ success: false, error: cwd.error }); return; }
+  try {
+    const catalog = await adapter.listModels?.({ cwd: cwd.cwd, upstreamSessionId: binding?.upstreamSessionId });
+    res.json({ success: true, ...(catalog || { models: [], unavailableReason: 'This agent does not expose model choices.' }), ...(binding?.selectedModel || binding?.currentModel ? { currentModel: binding.selectedModel || binding.currentModel } : {}) });
+  } catch { res.status(502).json({ success: false, error: 'Could not read the agent model choices. Check its connection.' }); }
+});
+
+router.put('/api/external-agents/sessions/:sessionId/model', async (req, res) => {
+  const sessionId = String(req.params.sessionId);
+  const binding = getSessionExternalAgent(sessionId);
+  if (!binding || !isExternalAgentUsable(binding.agentId).ok) { res.status(409).json({ success: false, error: 'No connected agent owns this chat.' }); return; }
+  const model = typeof req.body?.model === 'string' ? req.body.model.trim() : '';
+  try {
+    const catalog = await getExternalAgentAdapter(binding.agentId)?.listModels?.({ cwd: binding.cwd, upstreamSessionId: binding.upstreamSessionId });
+    if (!model || !catalog?.models.some(item => item.id === model)) { res.status(400).json({ success: false, error: 'Choose a model reported by this agent.' }); return; }
+    if (!isExternalAgentUsable(binding.agentId).ok) { res.status(409).json({ success: false, error: 'Agent was disconnected.' }); return; }
+    const result = bindExternalAgentForRequest(sessionId, { id: binding.agentId, model });
+    if (!result.ok) { res.status(result.status).json({ success: false, error: result.error }); return; }
+    res.json({ success: true, model });
+  } catch { res.status(502).json({ success: false, error: 'Could not validate the agent model.' }); }
+});
 
 function errorMessage(error: unknown): string {
   return String((error as any)?.message || error || 'Unknown error').slice(0, 300);
@@ -81,6 +113,8 @@ router.get('/api/external-agents/sessions/:sessionId', (req, res) => {
           agentId: binding.agentId,
           cwd: binding.cwd,
           hasUpstream: !!binding.upstreamSessionId,
+          currentModel: binding.currentModel,
+          selectedModel: binding.selectedModel,
           ...(binding.lastTurn?.status ? { lastTurnStatus: binding.lastTurn.status } : {}),
           upstreamMissing: binding.lastTurn?.upstreamMissing === true || (binding.lastTurn?.status === 'failed' && /can't find this session/i.test(String(binding.lastTurn?.error || ''))),
         }

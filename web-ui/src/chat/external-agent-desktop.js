@@ -6,8 +6,7 @@
 //   turn an agent on see no change.
 // - Editable on a new (empty) chat; locked (shown, not clickable) once the chat
 //   is bound; hidden on native chats that already have messages.
-// - With an agent chosen, the Prometheus model control is replaced by a quiet
-//   read-only "<Agent> default" label (agent, model and computer stay separate).
+// - The original model button is scoped to the selected harness's reported models.
 import {
   agentFieldForNewChat, agentName, agentStatusFor, cachedSessionBinding, esc, getAgentChoice,
   handleExternalAgentStreamEvent, loadAgentFolders, loadExternalAgents, loadSessionBinding,
@@ -15,6 +14,7 @@ import {
 } from './external-agent-ui.js';
 
 import { mountMinimalAgentComposer } from './external-agent-composer.js';
+import { setDesktopAgentModel, agentModelForSend } from './external-agent-desktop-models.js';
 
 const ui = { host: null, menuOpen: false, lastSession: '', lastEmpty: null, folders: [], typed: '' };
 
@@ -49,18 +49,10 @@ function shortPath(p) {
   return parts.length > 2 ? `…/${parts.slice(-2).join('/')}` : s;
 }
 
-function setModelReadOnly(agentId) {
+function setHarnessModel(agentId) {
   document.body.classList.toggle('ea-agent-codex', !!agentId);
-  const wrap = document.getElementById('model-switcher-btn')?.parentElement;
-  if (!wrap) return;
-  let label = wrap.querySelector('.ea-model-readonly');
-  if (agentId) {
-    if (!label) { label = document.createElement('span'); label.className = 'ea-model-readonly'; wrap.appendChild(label); }
-    label.textContent = `${agentName(agentId)} default`;
-    label.title = `${agentName(agentId)} uses its own model setting. Change it in ${agentName(agentId)}.`;
-  } else if (label) {
-    label.remove();
-  }
+  const binding = cachedSessionBinding(activeSession());
+  setDesktopAgentModel(agentId ? (binding ? { ...binding, id: agentId, sessionId: activeSession() } : { ...getAgentChoice(), id: agentId }) : null);
 }
 
 function render() {
@@ -78,23 +70,23 @@ function render() {
     host.innerHTML = `<button type="button" class="ea-switcher-btn" disabled aria-label="This chat runs on ${esc(agentName(binding.agentId))}">
         <span class="ea-tile" aria-hidden="true">${esc(snap?.tile || 'Cx')}</span><span>${esc(agentName(binding.agentId))}</span></button>
       <span class="ea-quiet-line">${off ? `${esc(agentName(binding.agentId))} is turned off. Turn it on in Settings &gt; Agents &amp; imports to continue.` : `${esc(agentName(binding.agentId))} runs this chat${binding.cwd ? ` in ${esc(shortPath(binding.cwd))}` : ''}`}</span>`;
-    setModelReadOnly(binding.agentId);
+    setHarnessModel(binding.agentId);
     return;
   }
   if (!empty || !agents.length) {
     host.hidden = true;
     host.innerHTML = '';
-    setModelReadOnly(null);
+    setHarnessModel(null);
     return;
   }
   const choice = getAgentChoice();
   const chosen = choice.id !== 'prometheus' ? agentStatusFor(choice.id) : null;
   host.hidden = false;
   host.innerHTML = `<button type="button" class="ea-switcher-btn" data-ea="toggle" aria-haspopup="menu" aria-expanded="${ui.menuOpen}" title="Who runs this chat">
-      <span class="ea-tile" aria-hidden="true">${esc(chosen?.tile || 'P')}</span><span>${esc(chosen ? chosen.name : 'Prometheus')}</span><span class="ea-caret" aria-hidden="true">▾</span></button>
+      <span class="ea-tile${chosen ? '' : ' ea-tile-prometheus'}" aria-hidden="true">${esc(chosen?.tile || 'Pr')}</span><span>${esc(chosen ? chosen.name : 'Prometheus')}</span><span class="ea-caret" aria-hidden="true">▾</span></button>
     ${chosen ? `<span class="ea-switcher-folder" title="${esc(choice.cwd || 'Default folder')}">${esc(choice.cwd ? shortPath(choice.cwd) : 'Default folder')}</span>` : ''}
     ${ui.menuOpen ? menuHtml(agents, choice) : ''}`;
-  setModelReadOnly(chosen ? chosen.id : null);
+  setHarnessModel(chosen ? chosen.id : null);
 }
 
 function menuHtml(agents, choice) {
@@ -112,6 +104,7 @@ function menuHtml(agents, choice) {
 }
 
 async function onClick(event) {
+  event.stopPropagation(); // Rendering replaces the clicked node; do not treat it as an outside click.
   const el = event.target.closest('[data-ea]');
   if (!el) return;
   const act = el.getAttribute('data-ea');
@@ -158,7 +151,7 @@ window.__promExternalAgent = {
     if (cachedSessionBinding(sessionId)) return undefined; // already bound: the server knows
     const field = agentFieldForNewChat();
     if (!field) return undefined;
-    return field;
+    return { ...field, ...(agentModelForSend() ? { model: agentModelForSend() } : {}) };
   },
   onStreamEvent(event, sessionId) {
     const handled = handleExternalAgentStreamEvent(event, sessionId);
