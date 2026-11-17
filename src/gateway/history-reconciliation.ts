@@ -335,7 +335,82 @@ function mergeVisibleHistoryWithExistingMessageMetadata(
     const userPosition = result.indexOf(user);
     result.splice(userPosition + 1, 0, reply);
   }
-  return pruneCrossTurnTraceCopies(repairReappendedAssistantRows(result));
+  return pruneCrossTurnTraceCopies(repairReappendedAssistantRows(dropIdentitylessUserEchoes(result)))
+    .map((msg: any) => (msg && typeof msg === 'object' ? dedupeMessageMediaLists(msg) : msg));
+}
+
+const MESSAGE_MEDIA_LIST_KEYS = ['generatedImages', 'generatedVideos', 'canvasFiles', 'files', 'artifacts', 'attachmentPreviews'];
+
+function mediaDescriptorIdentity(item: any): string {
+  if (!item || typeof item !== 'object') return typeof item === 'string' ? item : '';
+  const base = String(item.path || item.rel_path || item.relPath || item.url || item.src
+    || item.file_name || item.fileName || item.name
+    // Non-file artifacts (connection cards) have no path; their attempt/artifact
+    // id is the identity. One chat held 1,116 copies of one X connection card
+    // per message (11 MB of a 12.7 MB session).
+    || (item.attempt && typeof item.attempt === 'object' ? item.attempt.id : '')
+    || item.artifactId || item.id || '').trim();
+  if (!base) return '';
+  return `${base}|${String(item.type || item.kind || '')}|${String(item.title || '')}`;
+}
+
+/**
+ * Collapse repeated media descriptors on one message. A client merge bug
+ * re-appended identity-less media on every sync, growing one assistant row to
+ * 1,422 copies of 3 images (4.3 MB), which froze mobile chat opens. Mutates and
+ * returns the message; descriptors with no identity are left untouched.
+ */
+export function dedupeMessageMediaLists(msg: any): any {
+  if (!msg || typeof msg !== 'object') return msg;
+  const dedupe = (list: any[]): any[] | null => {
+    // Keep the first position but the LATEST value, so a connection card whose
+    // status advanced (awaiting_approval -> connected) shows its newest state.
+    const seen = new Map<string, number>();
+    const out: any[] = [];
+    for (const item of list) {
+      const id = mediaDescriptorIdentity(item);
+      if (!id) { out.push(item); continue; }
+      const at = seen.get(id);
+      if (at === undefined) { seen.set(id, out.length); out.push(item); }
+      else out[at] = item;
+    }
+    return out.length === list.length ? null : out;
+  };
+  for (const key of MESSAGE_MEDIA_LIST_KEYS) {
+    if (!Array.isArray(msg[key]) || msg[key].length < 2) continue;
+    const next = dedupe(msg[key]);
+    if (next) msg[key] = next;
+  }
+  if (msg.body && typeof msg.body === 'object' && Array.isArray(msg.body.files) && msg.body.files.length > 1) {
+    const next = dedupe(msg.body.files);
+    if (next) msg.body = { ...msg.body, files: next };
+  }
+  return msg;
+}
+
+/**
+ * A desktop snapshot can carry the same user prompt twice: the server row (with
+ * clientRequestId) plus an identity-less local copy re-added after a steer.
+ * Their merge keys differ, so the echo was persisted as a second bubble at the
+ * end of the turn. Same exact timestamp + same text is the same message; keep
+ * the identified row and drop the bare copy.
+ */
+export function dropIdentitylessUserEchoes(history: any[]): any[] {
+  if (!Array.isArray(history) || history.length < 2) return history;
+  const norm = (m: any) => String(m?.content || '').replace(/\s+/g, ' ').trim();
+  const hasIdentity = (m: any) => !!String(m?.messageId || m?.id || m?.clientRequestId || m?._clientRequestId || '').trim();
+  const seen = new Set<string>();
+  for (const m of history) {
+    const at = Number(m?.timestamp || 0) || 0;
+    if (m?.role === 'user' && at && hasIdentity(m)) seen.add(`${at}|${norm(m)}`);
+  }
+  if (!seen.size) return history;
+  const out = history.filter((m) => {
+    if (m?.role !== 'user' || hasIdentity(m)) return true;
+    const at = Number(m?.timestamp || 0) || 0;
+    return !(at && seen.has(`${at}|${norm(m)}`));
+  });
+  return out.length === history.length ? history : out;
 }
 
 /**

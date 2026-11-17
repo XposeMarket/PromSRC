@@ -432,3 +432,53 @@ body.pm-mobile-active .pm-lr-avatar .pm-lr-logo { width: 19px; height: 19px; dis
 body.pm-mobile-active .pm-lr-avatar.has-logo[data-provider="openai"], body.pm-mobile-active .pm-lr-avatar.has-logo[data-provider="xai"] { padding: 2px; border-radius: 4px; background: #fff; }
 body.pm-mobile-active .pm-lr-avatar.has-logo[data-provider="openai"] .pm-lr-logo, body.pm-mobile-active .pm-lr-avatar.has-logo[data-provider="xai"] .pm-lr-logo { width: 17px; height: 17px; color: #111; }
 
+
+/* Approval sheet final authority. mobile.css (legacy .pm-chat-approval* rules: padding 0,
+   flex action row with its own padding/border, rotated chevron) can load after this file,
+   which collapsed the slide track to a 0-width bar and pushed content to the card edge.
+   Chat, Tasks (Needs You), subagent and team surfaces all render the same sheet. */
+body.pm-mobile-active .pm-chat-approval.pm-approval-sheet {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  min-width: 0;
+}
+body.pm-mobile-active .pm-chat-approval.pm-approval-sheet.compact { padding: 12px; gap: 8px; }
+body.pm-mobile-active .pm-chat-approval.pm-approval-sheet > * { min-width: 0; margin-left: 0; margin-right: 0; }
+body.pm-mobile-active .pm-chat-approval.pm-approval-sheet .pm-approval-meta { flex-wrap: wrap; row-gap: 2px; line-height: 1.35; }
+body.pm-mobile-active .pm-chat-approval.pm-approval-sheet .pm-approval-sub { margin-top: -6px; overflow-wrap: anywhere; }
+body.pm-mobile-active .pm-chat-approval.pm-approval-sheet .pm-approval-quote { margin: 0; }
+body.pm-mobile-active .pm-chat-approval.pm-approval-sheet .pm-chat-approval-actions.pm-approval-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
+  margin: 2px 0 0;
+  padding: 0;
+  border-top: 0;
+}
+body.pm-mobile-active .pm-chat-approval.pm-approval-sheet .pm-approval-slide { width: 100%; box-sizing: border-box; }
+body.pm-mobile-active .pm-chat-approval.pm-approval-sheet .pm-approval-primary {
+  width: 100%; min-height: 48px; border-radius: 14px; font-size: 16px; font-weight: 650;
+}
+body.pm-mobile-active .pm-chat-approval.pm-approval-sheet .pm-approval-deny {
+  justify-self: center; width: auto; min-height: 40px; padding: 8px 18px;
+  background: none; border: 0; color: var(--pm-approval-danger); font-size: 14px;
+}
+body.pm-mobile-active .pm-chat-approval.pm-approval-sheet .pm-chat-approval-done { margin: 0; padding: 4px 0 0; border-top: 0; }
+body.pm-mobile-active .pm-chat-approval.pm-approval-sheet .pm-chat-approval-details { margin: 0; padding: 0; border-top: 0; }
+body.pm-mobile-active .pm-chat-approval.pm-approval-sheet .pm-chat-approval-details summary span,
+body.pm-mobile-active .pm-chat-approval.pm-approval-sheet .pm-chat-approval-details:not([open]) summary span { transform: none; }
+body.pm-mobile-active .pm-chat-approval.pm-approval-sheet .pm-chat-approval-details[open] summary span { transform: rotate(90deg); }
+body.pm-mobile-active .pm-chat-approval.pm-approval-sheet .pm-chat-approval-parameter { grid-template-columns: minmax(4.5rem, 6rem) minmax(0, 1fr); }
+
+/* Needs You: the task card is the frame. The embedded sheet drops its own border/shadow so
+   approvals read as one card (no card-in-card), matching the question cards. */
+body.pm-mobile-active .pm-ny-entry .pm-chat-approval.pm-approval-sheet {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  border-radius: 0;
+  padding: 2px 2px 0;
+  overflow: visible;
+}
+body.pm-mobile-active .pm-ny-entry .pm-ny-footer { margin-top: 6px; }

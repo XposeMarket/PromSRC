@@ -223,3 +223,30 @@ body.pm-mobile-active .pm-task-card.pm-lr-card .pm-lr-sub {
 /* Marked emits align attributes; legacy table CSS otherwise forces left. */
 :is(#prom-rmd, html) :is(#prom-rmd, body) :is(.msg:not(.user) .msg-content.markdown-body, .live-turn-prose > .live-turn-md, .pm-msg.from-ai .pm-bubble > .markdown-body, .pm-msg.from-ai .pm-bubble > .pm-live-md) :is(th, td)[align="right"]:not(:where(.pcx *, .pc-inline-card *, .prom-vp-card *, .prom-gp-card *)) { text-align: right; }
 :is(#prom-rmd, html) :is(#prom-rmd, body) :is(.msg:not(.user) .msg-content.markdown-body, .live-turn-prose > .live-turn-md, .pm-msg.from-ai .pm-bubble > .markdown-body, .pm-msg.from-ai .pm-bubble > .pm-live-md) :is(th, td)[align="center"]:not(:where(.pcx *, .pc-inline-card *, .prom-vp-card *, .prom-gp-card *)) { text-align: center; }
+
+/* Table cells: never break inside words. Bubble prose inherits
+   overflow-wrap:anywhere, which lets auto table layout crush columns to one
+   character wide (vertical "N o v 7" columns on mobile). Cells wrap at spaces only. */
+:is(#prom-rmd, html) :is(#prom-rmd, body) :is(.msg:not(.user) .msg-content.markdown-body, .live-turn-prose > .live-turn-md, .pm-msg.from-ai .pm-bubble > .markdown-body, .pm-msg.from-ai .pm-bubble > .pm-live-md) :is(th, td):not(:where(.pcx *, .pc-inline-card *, .prom-vp-card *, .prom-gp-card *)) {
+  overflow-wrap: normal;
+  word-break: normal;
+  hyphens: manual;
+}
+/* Mobile: the .pm-md-table-scroll wrapper owns horizontal scrolling, so the
+   table is a real table again. Width auto + min 100% fills the bubble, wraps long
+   text columns at word boundaries, and only scrolls when even single words don't fit. */
+:is(#prom-rmd, html) :is(#prom-rmd, body) .pm-msg.from-ai .pm-bubble > :is(.markdown-body, .pm-live-md) .pm-md-table-scroll > table {
+  display: table;
+  width: auto;
+  min-width: 100%;
+  max-width: none;
+  overflow: visible;
+  margin: 0;
+  font-size: 14px;
+}
+:is(#prom-rmd, html) :is(#prom-rmd, body) .pm-msg.from-ai .pm-bubble > :is(.markdown-body, .pm-live-md) .pm-md-table-scroll > table :is(th, td) {
+  padding: 7px 9px;
+}
+:is(#prom-rmd, html) :is(#prom-rmd, body) .pm-msg.from-ai .pm-bubble > :is(.markdown-body, .pm-live-md) .pm-md-table-scroll > table th {
+  white-space: nowrap;
+}

@@ -717,6 +717,14 @@ body:not(.pm-mobile-active) .chat-session-item.is-menu-open .chat-session-top-ti
 
   .chat-session-item:not(.project-chat-row) .chat-settle-btn { right: 34px; }
   .chat-session-item:not(.project-chat-row) .chat-pin-btn { right: 8px; }
+
+  /* Time/branch/working meta shares the action buttons' center line, so the
+     idle meta and the hover star/check never sit at different heights. */
+  body:not(.pm-mobile-active) .chat-session-item:not(.project-chat-row) .chat-session-top-meta {
+    top: 50%;
+    height: 20px;
+    transform: translateY(-50%);
+  }
 }
 
 .imported-source-logo-fallback {

@@ -4321,9 +4321,9 @@
 /* Needs You entries: same shell as a task card (desktop Tasks column). */
 .bgt-ny-entry {
   display: grid;
-  gap: 8px;
+  gap: 7px;
   min-width: 0;
-  padding: 12px 14px;
+  padding: 10px 12px;
   border: 1.5px solid var(--line);
   border-radius: 12px;
   background: var(--panel);
@@ -4340,7 +4340,49 @@
   color: #6d2d9e;
 }
 .bgt-ny-summary { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
-.bgt-ny-entry .chat-approval-card { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.bgt-ny-entry .chat-approval-card { margin: 0; min-width: 0; max-width: none; padding: 10px 12px; overflow-wrap: anywhere; box-shadow: none; }
+
+/* Desktop Tasks columns share the board width and shrink with the window instead of a fixed 240-280px. */
+.bgt-col { flex: 1 1 0; min-width: 210px; max-width: 360px; display: flex; flex-direction: column; gap: 0; }
+
+/* Team escalation text: readable body copy, clamped until clicked (long PICK updates were filling the column). */
+.bgt-ny-message {
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.45;
+  color: var(--text);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  line-clamp: 4;
+  overflow: hidden;
+  cursor: pointer;
+  border-radius: 6px;
+}
+.bgt-ny-message.is-expanded { display: block; -webkit-line-clamp: unset; line-clamp: unset; max-height: 320px; overflow-y: auto; cursor: auto; }
+.bgt-ny-message:focus-visible { outline: 2px solid color-mix(in srgb, var(--brand) 50%, transparent); outline-offset: 2px; }
+
+/* Team reply form: rounded field with breathing room above the actions. */
+.bgt-team-reply { display: grid; gap: 8px; margin-top: 10px; }
+.bgt-team-reply input[name="reply"] {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 34px;
+  padding: 7px 11px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel-2) 70%, transparent);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  outline: none;
+  transition: border-color .15s, box-shadow .15s;
+}
+.bgt-team-reply input[name="reply"]::placeholder { color: var(--muted); }
+.bgt-team-reply input[name="reply"]:focus { border-color: var(--brand); box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 16%, transparent); }
+.bgt-team-reply .chat-approval-actions { margin-top: 0; }
+.bgt-team-reply .chat-approval-btn:not(.chat-approval-approve) { background: transparent; border: 1px solid var(--line); color: var(--text); }
+.bgt-team-reply .chat-approval-btn:not(.chat-approval-approve):hover { background: var(--panel-2); }
 
 
 /* Tasks: Option B live run cards + tabbed detail panel (shared view-model task-card-view-model.js). */
@@ -4351,7 +4393,7 @@
   --lr-bad: var(--danger, #dc2626);
   --lr-muted: var(--muted);
 }
-.bgt-lr-card { background: var(--panel); border: 1.5px solid var(--line); border-radius: 12px; padding: 11px 13px; cursor: pointer; display: flex; flex-direction: column; gap: 6px; overflow-wrap: anywhere; transition: border-color .15s, box-shadow .15s; }
+.bgt-lr-card { background: var(--panel); border: 1.5px solid var(--line); border-radius: 12px; padding: 9px 11px; cursor: pointer; display: flex; flex-direction: column; gap: 5px; overflow-wrap: anywhere; transition: border-color .15s, box-shadow .15s; }
 .bgt-lr-card:hover, .bgt-lr-card.is-open { border-color: var(--brand); }
 .bgt-lr-card.is-open { box-shadow: 0 0 0 2px color-mix(in srgb, var(--brand) 18%, transparent); }
 .bgt-lr-card.is-compact { padding: 8px 12px; gap: 3px; }
