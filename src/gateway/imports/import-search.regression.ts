@@ -68,30 +68,39 @@ async function main(): Promise<void> {
   const realPromisesOpen = fs.promises.open;
   (fs as any).openSync = (file: any, ...rest: any[]) => { opened.push(path.resolve(String(file))); return (realOpen as any)(file, ...rest); };
   (fs.promises as any).open = (file: any, ...rest: any[]) => { opened.push(path.resolve(String(file))); return (realPromisesOpen as any)(file, ...rest); };
-  const s = (q: string, scope: 'title' | 'all' = 'title', offset = 0, limit = 50) => search.searchAgentChats('codex', { ...opts, q, scope, offset, limit });
+  const s = async (q: string, scope: 'title' | 'all' = 'title', offset = 0, limit = 50) => await search.searchAgentChats('codex', { ...opts, q, scope, offset, limit });
 
   try {
     // --- 1. Title search across unloaded pages; exact count; paging. -------
     const firstPage = agents.listAgentChats('codex', { ...opts, limit: 50 });
     assert.ok(!firstPage.chats.some((c) => c.title?.includes('Zebracorn')), 'needle is not on the first loaded page');
-    const needle = s('zebraCORN');
+    const needle = await s('zebraCORN');
     assert.equal(needle.total, 1, 'case-insensitive title hit across all chats');
     assert.equal(needle.results[0].match, 'title');
     assert.ok(needle.results[0].groupLabel, 'result keeps its group label');
-    const filler = s('filler', 'title', 0, 50);
+    const filler = await s('filler', 'title', 0, 50);
     assert.equal(filler.total, 60, 'exact result count');
     assert.equal(filler.results.length, 50);
     assert.equal(filler.hasMore, true);
-    const filler2 = s('filler', 'title', 50, 50);
+    const filler2 = await s('filler', 'title', 50, 50);
     assert.equal(filler2.results.length, 10, 'second page');
     assert.equal(filler2.hasMore, false);
+
+    // --- 1b. Cold title cache: the search must yield between uncached chats. ---
+    search.clearTitleCache();
+    const pending = search.searchAgentChats('codex', { ...opts, q: 'filler', scope: 'title', offset: 0, limit: 50 });
+    let ticked = false;
+    setImmediate(() => { ticked = true; });
+    await pending;
+    assert.equal(ticked, true, 'title search yields to the event loop on a cold cache');
+
 
     // --- 2. Switch off by default: zero body reads, body term unfindable, nothing stored.
     assert.equal(search.indexReadCounter.files, 0);
     const offStatus = search.searchIndexStatus('codex', opts);
     assert.equal(offStatus.enabled, false, 'off by default');
     assert.equal(offStatus.messageSearch, 'off');
-    const bodyOff = s('quasarwidget', 'all');
+    const bodyOff = await s('quasarwidget', 'all');
     assert.equal(bodyOff.total, 0, 'body-only term not findable while the switch is off');
     assert.equal(bodyOff.messageSearch.state, 'off');
     assert.equal(search.indexReadCounter.files, 0, 'no transcript body reads while off');
@@ -112,10 +121,10 @@ async function main(): Promise<void> {
     assert.ok(search.importSearchDbPath().startsWith(path.resolve(data)), 'index lives under the redirected data dir');
     assert.equal(path.basename(search.importSearchDbPath()), 'import-search.sqlite');
     assert.ok(!opened.includes(path.resolve(authFile)), 'credential-like file never opened by the index builder');
-    assert.equal(s('authsecretterm', 'all').total, 0);
+    assert.equal((await s('authsecretterm', 'all')).total, 0);
 
     // Message hit and snippet.
-    const hit = s('quasarwid', 'all');
+    const hit = await s('quasarwid', 'all');
     assert.equal(hit.total, 1, 'prefix match on the last term');
     assert.equal(hit.results[0].match, 'message');
     const snippet = hit.results[0].snippetHtml || '';
@@ -123,39 +132,39 @@ async function main(): Promise<void> {
     assert.ok(snippet.includes('&lt;script&gt;'), 'snippet HTML-escaped');
     assert.ok(!/<(?!\/?b>)/.test(snippet), 'only <b> tags in snippet');
     assert.ok(snippet.replace(/<\/?b>/g, '').replace(/&(lt|gt|amp|quot|#39);/g, '_').length <= 160, 'snippet max 160 chars');
-    assert.equal(s('quasarwidget', 'title').total, 0, 'title scope never uses message text');
+    assert.equal((await s('quasarwidget', 'title')).total, 0, 'title scope never uses message text');
     // Two-word query: both terms required.
-    assert.equal(s('pelicanroute mixed', 'all').total, 1);
-    assert.equal(s('pelicanroute zebracorn', 'all').total, 0);
+    assert.equal((await s('pelicanroute mixed', 'all')).total, 1);
+    assert.equal((await s('pelicanroute zebracorn', 'all')).total, 0);
 
     // --- 4. Tool output, system text, reasoning not indexed. -------------------
     for (const marker of ['SYSMARKERONE', 'DEVMARKERTWO', 'TOOLMARKERTHREE', 'CMDMARKERFOUR', 'REASONMARKERFIVE']) {
-      assert.equal(s(marker, 'all').total, 0, `${marker} must not be indexed`);
+      assert.equal((await s(marker, 'all')).total, 0, `${marker} must not be indexed`);
     }
 
     // --- 5. Per-chat cap. ------------------------------------------------------
-    assert.equal(s('CAPTAILMARKER', 'all').total, 0, 'text beyond the per-chat cap is not indexed');
+    assert.equal((await s('CAPTAILMARKER', 'all')).total, 0, 'text beyond the per-chat cap is not indexed');
     assert.ok(ready.truncatedChats >= 1, 'truncated chat noted');
 
     // --- 6. Hostile queries return safely. ---------------------------------------
     for (const q of ['"', '*', 'NEAR(', '; DROP TABLE messages; --', "' OR 1=1 --", 'quasar"widget', 'a AND OR NOT', ')(', '\u0000', 'x'.repeat(5000)]) {
-      const result = s(q, 'all');
+      const result = await s(q, 'all');
       assert.ok(Array.isArray(result.results), `hostile query ${JSON.stringify(q.slice(0, 20))} returned results array`);
     }
     assert.equal(search.buildFtsQuery('NEAR( foo" bar'), '"NEAR" "foo" "bar"*');
     assert.equal(search.buildFtsQuery('";*'), '');
-    assert.equal(s('quasarwidget', 'all').total, 1, 'index intact after hostile queries');
+    assert.equal((await s('quasarwidget', 'all')).total, 1, 'index intact after hostile queries');
 
     // --- 7. Incremental: changed file re-read, deleted file dropped, others skipped.
     const readsBefore = search.indexReadCounter.files;
     fs.appendFileSync(bodyFile, assistant('newly added giraffeword') + '\n');
     fs.utimesSync(bodyFile, new Date(base + 9000), new Date(base + 9000));
     fs.rmSync(doomed);
-    assert.equal(s('ostrichvanish', 'all').total, 0, 'vanished chat never returned, even before re-index');
+    assert.equal((await s('ostrichvanish', 'all')).total, 0, 'vanished chat never returned, even before re-index');
     search.startSearchIndex('codex', opts);
     await search.waitForSearchIndex('codex');
     assert.equal(search.indexReadCounter.files - readsBefore, 1, 'only the changed file was re-read');
-    assert.equal(s('giraffeword', 'all').total, 1, 'changed file picked up');
+    assert.equal((await s('giraffeword', 'all')).total, 1, 'changed file picked up');
     const after = search.searchIndexStatus('codex', opts);
     assert.equal(after.indexedChats, after.totalChats, 'deleted file removed from the index');
 
@@ -178,7 +187,7 @@ async function main(): Promise<void> {
     const gone = search.searchIndexStatus('codex', opts);
     assert.equal(gone.indexedChats, 0);
     assert.equal(gone.enabled, false);
-    assert.equal(s('quasarwidget', 'all').total, 0, 'no message hits after delete');
+    assert.equal((await s('quasarwidget', 'all')).total, 0, 'no message hits after delete');
     assert.equal(fs.existsSync(search.importSearchDbPath()), false, 'last agent deleted removes the database file');
 
     // Delete-all and an agent that vanished from detection stay reachable.
@@ -194,7 +203,7 @@ async function main(): Promise<void> {
     // --- 10. FTS5 unavailable: title search still works. ------------------------
     search.closeImportSearchDb();
     search.setFtsProbeForTest(() => ({ ok: false, reason: 'simulated: no FTS5' }));
-    const fallback = s('zebracorn', 'all');
+    const fallback = await s('zebracorn', 'all');
     assert.equal(fallback.total, 1, 'title search works without FTS5');
     assert.equal(fallback.messageSearch.state, 'unavailable');
     assert.equal(fallback.messageSearch.reason, 'simulated: no FTS5');

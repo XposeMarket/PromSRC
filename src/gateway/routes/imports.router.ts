@@ -126,18 +126,18 @@ router.get('/api/imports/agents/:agentId/chats', (req, res) => {
  * nothing. Message search uses the opt-in local index (import-search.sqlite).
  * Query text and snippets are never logged; responses are never cached.
  */
-router.get('/api/imports/agents/:agentId/search', (req, res) => {
+router.get('/api/imports/agents/:agentId/search', async (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   try {
     const q = typeof req.query.q === 'string' ? req.query.q : '';
     res.json({
       success: true,
-      ...searchAgentChats(String(req.params.agentId || ''), {
+      ...(await searchAgentChats(String(req.params.agentId || ''), {
         q,
         scope: String(req.query.scope || '') === 'all' ? 'all' : 'title',
         offset: Number(req.query.offset || 0),
         limit: Number(req.query.limit || 50),
-      }),
+      })),
     });
   } catch (error) {
     res.status(400).json({ success: false, error: errorMessage(error) });

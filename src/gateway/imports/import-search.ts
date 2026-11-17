@@ -249,7 +249,7 @@ export interface AgentSearchOptions extends ImportDiscoveryOptions {
   limit?: number;
 }
 
-export function searchAgentChats(agentId: string, options: AgentSearchOptions = {}): AgentSearchResult {
+export async function searchAgentChats(agentId: string, options: AgentSearchOptions = {}): Promise<AgentSearchResult> {
   const listing = listAgentIndexedFiles(agentId, options);
   const query = String(options.q || '').slice(0, MAX_QUERY_CHARS);
   const scope = options.scope === 'all' ? 'all' : 'title';
@@ -259,8 +259,13 @@ export function searchAgentChats(agentId: string, options: AgentSearchOptions = 
   const titles = new Map<string, string>();
   const titleHits = new Set<string>();
   if (terms.length) {
+    let uncached = 0;
     for (const file of listing.files) {
+      const cached = titleCache.get(file.absolutePath);
+      const fromCache = !!cached && cached.size === file.bytes && cached.mtime === file.updatedAt;
       const title = titleFor(file, listing.adapter);
+      // Cold titles read and parse up to 96 KB each: yield every 24 so the event loop keeps running.
+      if (!fromCache && ++uncached % 24 === 0) await yieldTick();
       titles.set(file.id, title);
       const lower = title.toLowerCase();
       if (terms.every((term) => lower.includes(term))) titleHits.add(file.id);
