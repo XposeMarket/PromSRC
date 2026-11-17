@@ -1303,13 +1303,13 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
       type: 'function',
       function: {
         name: 'process_wait',
-        description: 'Wait up to 10 seconds by default for a supervised process. If still running, return its current status and recent output so work can continue. Maximum wait per call is 30 seconds.',
+        description: 'Wait for a supervised process to finish; returns immediately on completion. Default 10 seconds, explicit maximum 5 minutes. Prefer one longer wait when no other work is ready instead of repeated polling. Timeout or cancellation ends observation, not the process; use process_kill to terminate it.',
         parameters: {
           type: 'object',
           required: ['runId'],
           properties: {
             runId: { type: 'string', description: 'Process run id.' },
-            timeoutMs: { type: 'number', description: 'Maximum wait in milliseconds, 1000–30000. Default 10000.' },
+            timeoutMs: { type: 'number', description: 'Maximum observation wait in milliseconds, 1000–300000. Default 10000. Does not kill on timeout.' },
           },
         },
       },

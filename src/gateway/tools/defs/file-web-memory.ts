@@ -130,7 +130,7 @@ export function getFileWebMemoryTools(): any[] {
             shell: { type: 'string', enum: ['auto', 'powershell', 'cmd', 'bash'] },
             elevated: { type: 'boolean', description: 'Windows only. Run this bounded command through the administrator broker. Always requires a fresh one-shot user approval; Lite mode, goals, and saved permissions cannot bypass it. Broker installation may require UAC once; later commands do not. Not supported with action=start.' },
             pty: { type: 'boolean' },
-            timeout_ms: { type: 'number', description: 'Timeout in milliseconds for run/check actions.' },
+            timeout_ms: { type: 'number', description: 'Timeout in milliseconds for run/check; for wait: default 10000, range 1000–300000, returns early on completion. Prefer one longer wait over repeated polling. Wait timeout/cancellation ends observation, not the process; use kill to terminate it.' },
             timeoutMs: { type: 'number', description: 'Legacy camelCase timeout alias.' },
             noOutputTimeoutMs: { type: 'number' },
             title: { type: 'string' },
