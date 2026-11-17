@@ -17,6 +17,7 @@ import fs from 'fs';
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'path';
 import type { LLMProvider, ChatMessage, ContentPart, ChatOptions, ChatResult, GenerateOptions, GenerateResult, ModelInfo, ModelUsage } from './LLMProvider';
+import { pruneHistoryImages } from './history-image-prune';
 import { loadTokens, getValidToken, refreshTokens, buildCodexCloudflareHeaders } from '../auth/openai-oauth';
 import { isRetryableAccountFailure } from '../auth/provider-account-pool';
 import { contentToString, stripCacheMarker, splitOnCacheMarker } from './content-utils';
@@ -478,7 +479,7 @@ export class OpenAICodexAdapter implements LLMProvider {
     const _cfgRootCodex = getConfig().getConfig() as any;
     const _codexToolChoiceCfg = String(_cfgRootCodex?.llm?.providers?.openai_codex?.tool_choice || '').trim();
     const toolChoice = hasTools ? (_codexToolChoiceCfg === 'required' ? 'required' : 'auto') : 'auto';
-    const input = this.buildInput(messages);
+    const input = this.buildInput(pruneHistoryImages(messages).messages);
     const latestUser = input.map(item => item.role).lastIndexOf('user');
     if (stable.trim() && volatile.trim() && latestUser >= 0) {
       instructions = stripCacheMarker(stable).trim();

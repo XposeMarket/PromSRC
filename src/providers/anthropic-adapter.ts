@@ -282,6 +282,7 @@ import { getConfig } from '../config/config';
 import { getReasoningCapability, normalizeReasoningEffort, normalizeSpeed, supportsFastSpeed } from './reasoning-capabilities';
 import { recordAnthropicRateLimitHeaders } from './usage-awareness';
 import { normalizeAnthropicContent } from './anthropic-image';
+import { pruneHistoryImages } from './history-image-prune';
 
 // Anthropic ignores cache breakpoints on segments below the minimum cacheable
 // size, but to avoid emitting pointless cache writes we only mark the system
@@ -952,7 +953,7 @@ export class AnthropicAdapter implements LLMProvider {
       ? loadTokens(this.configDir, this.accountId)
       : null;
     const headers = this.buildHeaders(model, extendedThinkingEnabled, fastSpeed, vaultTokens);
-    const { system, messages: anthropicMessages, turnUserIndex } = await this.buildMessages(messages, options?.omitIntradayNotes);
+    const { system, messages: anthropicMessages, turnUserIndex } = await this.buildMessages(pruneHistoryImages(messages).messages, options?.omitIntradayNotes);
 
     const body: any = {
       model,
@@ -1070,6 +1071,9 @@ export class AnthropicAdapter implements LLMProvider {
       return out;
     };
 
+    // The serialized body of the most recent attempt. Reused for requestBytes so
+    // a multi-MB body (images) is not stringified again just to log its size.
+    let lastSerializedBody = '';
     const requestShape = () => ({
       speed: body.speed || 'standard',
       effort: body.output_config?.effort || null,
@@ -1085,7 +1089,7 @@ export class AnthropicAdapter implements LLMProvider {
       // and logging the pre-slim list hid that (2026-09-25 logged 130, sent ~20).
       toolCount: Array.isArray(body.tools) ? body.tools.length : 0,
       builtToolCount: tools?.length || 0,
-      requestBytes: Buffer.byteLength(JSON.stringify(body)),
+      requestBytes: Buffer.byteLength(lastSerializedBody || JSON.stringify(body)),
     });
 
     // Successful setup-token requests are logged too (headers + request shape),
@@ -1204,10 +1208,11 @@ export class AnthropicAdapter implements LLMProvider {
         );
         let response: Response;
         try {
+          lastSerializedBody = JSON.stringify(body);
           response = await fetch(this.getMessagesEndpoint(), {
             method: 'POST',
             headers,
-            body: JSON.stringify(body),
+            body: lastSerializedBody,
             signal: options?.abortSignal
               ? AbortSignal.any([options.abortSignal, headerDeadline.signal])
               : headerDeadline.signal,
