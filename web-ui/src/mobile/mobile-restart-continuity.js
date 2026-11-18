@@ -9,6 +9,7 @@
 // reviewable on its own and the page runtime stays under its module ceiling.
 
 import { foldMobileQuestionOnlyRows, isMobileQuestionOnlyRow } from './mobile-question-rows.js';
+import { isMobileDeliveryRow } from './mobile-thread-order.js';
 
 export const RESTART_CONTINUITY_FLAG = '_pmRestartContinuity';
 export const RESTART_CONTINUITY_LABEL = 'Gateway restarting — turn will continue';
@@ -25,6 +26,8 @@ export function canReviveRecoveryTurn(thread, turn, clientRequestId = '') {
   // A question-only placeholder is hidden (the composer owns the card); it
   // must never become the live row that recovery replays the stream into.
   if (isMobileQuestionOnlyRow(turn)) return false;
+  // A delivery_send row is a side message, never the run's live row.
+  if (isMobileDeliveryRow(turn)) return false;
   if (turn.streaming === true) return true;
   if (turn._pmFinalReceived === true || turn._pmServerAuthoredFinal === true || turn._pmAbortAcknowledged === true) return false;
   if (String(turn.workflowPart || '') === 'before_interruption') return false;
@@ -45,6 +48,9 @@ export function canReviveRecoveryTurn(thread, turn, clientRequestId = '') {
     // The run's own question-only row sits after its live row; it is folded
     // onto the revived row, so it does not end the request.
     if (list[i]?.role === 'ai' && isMobileQuestionOnlyRow(list[i])) continue;
+    // delivery_send rows land after the live row while the turn runs (e.g. a
+    // login link before a question card); they do not end the request.
+    if (isMobileDeliveryRow(list[i])) continue;
     // A stray empty placeholder of this request (left by an earlier reconnect)
     // is collapsed onto the revived row; reviving it instead hid the trace.
     if (isEmptyLiveRow(list[i]) && (!String(list[i]._clientRequestId || '').trim()

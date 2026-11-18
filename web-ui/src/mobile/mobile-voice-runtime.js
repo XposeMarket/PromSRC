@@ -4584,6 +4584,8 @@ export function createMobileVoiceRuntime(context = {}) {
     const cid = String(clientRequestId || '').trim();
     if (!cid || !Array.isArray(thread)) return null;
     const matches = thread.filter((turn) => turn?.role === 'ai'
+      && String(turn.messageKind || '').trim() !== 'delivery'
+      && String(turn.channelLabel || '').trim() !== 'delivery'
       && String(turn._clientRequestId || '').trim() === cid);
     if (!matches.length) return null;
     const continuation = [...matches].reverse().find((turn) => (
