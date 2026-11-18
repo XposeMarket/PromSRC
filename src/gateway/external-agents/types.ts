@@ -134,6 +134,8 @@ export interface ExternalTurnResult {
   model?: string;
   /** The stored upstream session could not be found on resume. */
   upstreamMissing?: boolean;
+  /** Called once the chat has saved this turn's reply to disk. Adapters that mirror an outside conversation mark their messages handled here. */
+  afterPersist?: () => void;
 }
 
 export type ExternalAgentVerifyResult = Pick<ExternalAgentSnapshot, 'status' | 'statusText' | 'fixHint' | 'version' | 'account' | 'capabilities'>;

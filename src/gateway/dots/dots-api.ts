@@ -37,7 +37,18 @@ export interface DotMessage {
 }
 
 export class DotsApiError extends Error {
-  constructor(message: string, public status = 0) { super(message); }
+  constructor(message: string, public status = 0, public retryAfterMs = 0) { super(message); }
+}
+
+/** Wait for `work`, but give up as soon as the request is cancelled or its deadline passes. */
+function raceAbort<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+  const stopped = () => new DotsApiError('Timed out talking to ChatGPT.');
+  if (signal.aborted) { work.catch(() => undefined); return Promise.reject(stopped()); }
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(stopped());
+    signal.addEventListener('abort', onAbort, { once: true });
+    work.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
+  });
 }
 
 const ROOM_ID = /^[A-Za-z0-9_-]{8,80}$/;
@@ -68,16 +79,19 @@ async function call(pathname: string, init: { method?: string; body?: unknown; s
   const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
   const signal = init.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
   const hasBody = init.body !== undefined;
+  // Refreshing the sign-in runs under the same deadline and cancel signal as the request itself.
+  const headers = await raceAbort(authHeaders(hasBody), signal);
   const res = await fetch(CHATGPT_WEB_ORIGIN + pathname, {
     method: init.method || 'GET',
-    headers: await authHeaders(hasBody),
+    headers,
     ...(hasBody ? { body: JSON.stringify(init.body) } : {}),
     signal,
   });
   const text = await res.text();
   if (!res.ok) {
     if (res.status === 401 || res.status === 403) throw new DotsApiError('ChatGPT rejected the OpenAI sign-in. Sign in again in Settings > Models.', res.status);
-    throw new DotsApiError(`ChatGPT returned ${res.status}.`, res.status);
+    const retryAfter = Number((res as any).headers?.get?.('retry-after') || 0);
+    throw new DotsApiError(`ChatGPT returned ${res.status}.`, res.status, retryAfter > 0 ? Math.min(retryAfter, 3600) * 1000 : 0);
   }
   try { return text ? JSON.parse(text) : {}; } catch { throw new DotsApiError('ChatGPT returned an unexpected response.', res.status); }
 }
@@ -138,12 +152,16 @@ export async function listRoomMessages(roomId: string, limit = 30, signal?: Abor
     .sort((a: DotMessage, b: DotMessage) => a.at - b.at);
 }
 
-/** Sends as the signed-in user. Only ever called for a message the user sent from Prometheus. */
-export async function sendRoomMessage(roomId: string, text: string, signal?: AbortSignal): Promise<{ requestId: string; message: DotMessage | null }> {
+/**
+ * Sends as the signed-in user. Only ever called for a message the user sent from Prometheus.
+ * `token` is the idempotency token: passing the same one again after an unanswered send
+ * lets ChatGPT recognise the retry instead of posting the message twice.
+ */
+export async function sendRoomMessage(roomId: string, text: string, signal?: AbortSignal, token = ''): Promise<{ requestId: string; message: DotMessage | null }> {
   if (!ROOM_ID.test(roomId)) throw new DotsApiError('Not a dot conversation.');
   const body = String(text || '').trim();
   if (!body) throw new DotsApiError('Nothing to send.');
-  const requestId = crypto.randomUUID();
+  const requestId = token || crypto.randomUUID();
   const data = await call(`/backend-api/messaging/rooms/${roomId}/messages`, {
     method: 'POST',
     body: {

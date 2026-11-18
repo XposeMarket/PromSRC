@@ -20,6 +20,7 @@ import {
   getSessionExternalAgent,
   setSessionExternalAgent,
   type TurnOrigin,
+  flushSession,
 } from '../session';
 import { expandHome } from './executable';
 import { fileSessionIntoFolderProject } from '../projects/project-store';
@@ -366,6 +367,11 @@ export async function runExternalAgentTurn(params: ExternalTurnRunParams, bindin
       ...(result.upstreamMissing ? { upstreamMissing: true } : {}),
     },
   } as any, { disableCompactionCheck: true, disableMemoryFlushCheck: true });
+
+  // The reply is saved before the adapter is told so (OpenAI Dots marks its messages mirrored only now).
+  if (result.afterPersist) {
+    try { flushSession(sessionId); result.afterPersist(); } catch { /* bookkeeping never fails the turn */ }
+  }
 
   return { type: 'chat', text, externalAgent: { agentId: binding.agentId, status: result.status } };
 }

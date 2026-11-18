@@ -6,14 +6,21 @@
  * the background sync. No model choice (OpenAI fixes it for a dot), no
  * approvals (the dot acts with its own access inside ChatGPT).
  */
+import crypto from 'crypto';
 import { DotsApiError, hasOpenAISignIn, listRoomMessages, sendRoomMessage, type DotMessage } from '../../dots/dots-api';
-import { getDots, rememberSeen, setDotRoomBusy } from '../../dots/dots-sync';
+import { cancelDotsSync, getDots, getUncertainSend, rememberSeen, rememberSent, setDotRoomBusy, setUncertainSend } from '../../dots/dots-sync';
 import type { ExternalAgentAdapter, ExternalAgentVerifyResult, ExternalTurnInput, ExternalTurnResult } from '../types';
 
 const POLL_MS = 2_500;
 const REPLY_WAIT_MS = 180_000;
 /** Dots often answer in several messages; stop once they have been quiet this long. */
 const QUIET_MS = 6_000;
+/** How long an unanswered send is remembered, so the same message sent again reuses its token. */
+const UNCERTAIN_SEND_MS = 10 * 60_000;
+/** Consecutive failed checks for a reply before the wait ends and says so. */
+const MAX_POLL_FAILURES = 5;
+/** If the chat never confirms it saved the reply, the room is freed anyway after this long. */
+const RELEASE_SAFETY_MS = 15_000;
 
 export const DOT_PENDING_TEXT = "_Sent. Your dot hasn't replied yet. Its reply will show up here when it does._";
 
@@ -71,20 +78,67 @@ export class OpenAIDotsAdapter implements ExternalAgentAdapter {
     setDotRoomBusy(roomId, true);
     const seenIds: string[] = [];
     const replies: DotMessage[] = [];
+    // Replies are marked seen only once the chat has saved them, and the room stays busy until
+    // then, so the background sync can neither lose them nor mirror them a second time.
+    let released = false;
+    let safety: NodeJS.Timeout | null = null;
+    const release = (acknowledge: boolean): void => {
+      if (released) return;
+      released = true;
+      if (safety) clearTimeout(safety);
+      if (acknowledge) {
+        try { rememberSeen(roomId, [...seenIds, ...replies.map((r) => r.id)]); } catch { /* the sync may show a reply twice, never loses one */ }
+      }
+      setDotRoomBusy(roomId, false);
+    };
+    const afterPersist = (): void => release(true);
+    const armSafety = (): void => { safety = setTimeout(() => release(false), RELEASE_SAFETY_MS); safety.unref?.(); };
+    const textHash = crypto.createHash('sha256').update(String(input.text || '')).digest('hex');
+    const pending = getUncertainSend(roomId);
+    const reuse = pending && pending.textHash === textHash && Date.now() - pending.at < UNCERTAIN_SEND_MS ? pending.token : '';
+    const token = reuse || crypto.randomUUID();
+    let stopReason = '';
     try {
       input.emit({ type: 'state', phase: 'running' });
       const sentAt = Date.now();
-      const { requestId, message } = await sendRoomMessage(roomId, input.text, input.signal);
-      if (message?.id) seenIds.push(message.id);
+      // An earlier send of this same message got no answer. If it did reach the dot, it is not posted again.
+      let landed: DotMessage | null = null;
+      if (reuse) {
+        try { landed = (await listRoomMessages(roomId, 30, input.signal)).find((msg) => msg.requestId === reuse) || null; } catch { landed = null; }
+      }
+      if (landed) {
+        seenIds.push(landed.id);
+      } else {
+        // Saved before the request goes out, so the token survives a timeout or a restart.
+        rememberSent(roomId, token);
+        setUncertainSend(roomId, { token, textHash, at: Date.now() });
+        const { message } = await sendRoomMessage(roomId, input.text, input.signal, token);
+        if (message?.id) seenIds.push(message.id);
+      }
+      setUncertainSend(roomId, null);
       let lastNewAt = 0;
+      let failures = 0;
       while (Date.now() < deadline && !input.signal.aborted) {
         await sleep(pollMs, input.signal);
         if (input.signal.aborted) break;
         let messages: DotMessage[];
-        try { messages = await listRoomMessages(roomId, 30, input.signal); } catch { continue; }
-        const mine = messages.find((msg) => msg.requestId === requestId);
+        try {
+          messages = await listRoomMessages(roomId, 30, input.signal);
+          failures = 0;
+        } catch (error) {
+          if (input.signal.aborted) break;
+          // A rejected sign-in or a run of failures ends the wait; it is reported, not hidden.
+          const status = error instanceof DotsApiError ? error.status : 0;
+          if (status === 401 || status === 403) { stopReason = 'ChatGPT rejected the OpenAI sign-in'; break; }
+          failures += 1;
+          if (failures >= MAX_POLL_FAILURES) { stopReason = 'ChatGPT could not be reached'; break; }
+          const wait = Math.max(error instanceof DotsApiError ? error.retryAfterMs : 0, Math.min(30_000, pollMs * 2 ** failures));
+          await sleep(Math.max(0, Math.min(wait, deadline - Date.now())), input.signal);
+          continue;
+        }
+        const mine = messages.find((msg) => msg.requestId === token);
         if (mine && !seenIds.includes(mine.id)) seenIds.push(mine.id);
-        const cutoff = mine?.at || sentAt - 2_000;
+        const cutoff = mine?.at || landed?.at || sentAt - 2_000;
         let gotNew = false;
         for (const msg of messages) {
           if (!msg.fromDot || msg.at < cutoff || replies.some((r) => r.id === msg.id)) continue;
@@ -97,17 +151,25 @@ export class OpenAIDotsAdapter implements ExternalAgentAdapter {
         else if (replies.length && Date.now() - lastNewAt >= quietMs) break;
       }
     } catch (error: any) {
-      if (input.signal.aborted) return { upstreamSessionId: roomId, status: 'interrupted', finalText: '' };
-      return { upstreamSessionId: roomId, status: 'failed', finalText: '', error: String(error?.message || error).slice(0, 200) };
-    } finally {
-      try { rememberSeen(roomId, [...seenIds, ...replies.map((r) => r.id)], { lastAt: Math.max(0, ...replies.map((r) => r.at)) }); } catch { /* sync may re-import, never loses */ }
-      setDotRoomBusy(roomId, false);
+      // A clear refusal means nothing was posted. Anything else (timeout, dropped connection)
+      // leaves the send marked uncertain, so the next try reuses its token.
+      if (error instanceof DotsApiError && error.status >= 400 && error.status < 500) {
+        try { setUncertainSend(roomId, null); } catch { /* state file unavailable */ }
+      }
+      armSafety();
+      if (input.signal.aborted) return { upstreamSessionId: roomId, status: 'interrupted', finalText: '', afterPersist };
+      return { upstreamSessionId: roomId, status: 'failed', finalText: '', error: String(error?.message || error).slice(0, 200), afterPersist };
     }
+    armSafety();
     const finalText = replies.map((r) => r.text).join('\n\n');
-    if (input.signal.aborted) return { upstreamSessionId: roomId, status: 'interrupted', finalText };
-    return { upstreamSessionId: roomId, status: 'completed', finalText: finalText || DOT_PENDING_TEXT };
+    if (input.signal.aborted) return { upstreamSessionId: roomId, status: 'interrupted', finalText, afterPersist };
+    const unreachable = stopReason
+      ? `_Sent, but Prometheus could not check for a reply (${stopReason}). The reply will show up here once ChatGPT can be reached again._`
+      : '';
+    return { upstreamSessionId: roomId, status: 'completed', finalText: [finalText, unreachable].filter(Boolean).join('\n\n') || DOT_PENDING_TEXT, afterPersist };
   }
 
-  async shutdown(): Promise<void> { /* no child process */ }
+  /** Turned off, or the gateway is stopping: no child process, but a sync that is mid-request is cancelled. */
+  async shutdown(): Promise<void> { cancelDotsSync(); }
   isRunning(): boolean { return false; }
 }

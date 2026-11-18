@@ -18,6 +18,8 @@ const DOT_AUTHOR = 'calpico-member-35613763';
 let seq = 0;
 const room: any[] = [];
 const sends: any[] = [];
+/** Fault switches for the fake backend. */
+const flags = { dropPostAnswer: false, getStatus: 0 };
 function msg(author: string, text: string, extra: any = {}) {
   seq += 1;
   return { id: `${ROOM}~CalpicoMessage~Sentinel_${String(seq).padStart(4, '0')}`, created_at: new Date(Date.UTC(2026, 10, 18, 12, 0, seq)).toISOString(), role: 'user', account_user_id: author, content: { text, attachments: [] }, deleted_at: null, ...extra };
@@ -30,6 +32,7 @@ room.push(msg('user-raul', 'thanks'));
   assert.equal(u.origin, 'https://chatgpt.com');
   assert.match(String(init.headers?.authorization || init.headers?.Authorization || ''), /Bearer fixture-token/);
   const json = (body: any, status = 200) => ({ ok: status < 400, status, text: async () => JSON.stringify(body) });
+  if (flags.getStatus && (init.method || 'GET') === 'GET') return json({ detail: 'fault' }, flags.getStatus);
   if (u.pathname === '/backend-api/tbo') {
     return json({ items: [{ id: 'dot-1', display_name: 'tbo', messaging_room_id: ROOM, is_primary: true, status: 'active' }, { id: 'gone', display_name: 'old', messaging_room_id: 'abcdefgh1234', status: 'deleted' }] });
   }
@@ -47,6 +50,8 @@ room.push(msg('user-raul', 'thanks'));
     // The dot answers in two messages a moment later.
     setTimeout(() => { room.push(msg(DOT_AUTHOR, 'On it.', { message_metadata: { turn_trigger: 'chatgpt_messaging' } })); }, 30);
     setTimeout(() => { room.push(msg(DOT_AUTHOR, 'Done: PR #899 rebased.', { message_metadata: { turn_trigger: 'chatgpt_messaging' } })); }, 60);
+    // The message was accepted, but the answer never reaches Prometheus.
+    if (flags.dropPostAnswer) { flags.dropPostAnswer = false; throw new Error('socket hang up'); }
     return json({ message: mine });
   }
   return json({ detail: 'not found' }, 404);
@@ -132,6 +137,39 @@ room.push(msg('user-raul', 'thanks'));
   assert.equal(late.text, DOT_PENDING_TEXT);
   await new Promise((r) => setTimeout(r, 120));
   assert.equal((await sync.syncAllDots(true)).added, 2);
+
+  // A dot post that arrived before a turn is still mirrored afterwards (matched by id, not by time).
+  registry.setExternalAgentAdapterForTests(adapter, 'openai-dots');
+  room.push(msg(DOT_AUTHOR, 'FYI: build finished.', { message_metadata: { turn_trigger: 'parent_notification' } }));
+  await runner.runExternalAgentTurn({ sessionId: sid, message: 'ok thanks', sendSSE: () => undefined }, session.getSessionExternalAgent(sid)!);
+  assert.equal((await sync.syncAllDots(true)).added, 1, 'the earlier dot post is not skipped');
+  assert.ok(session.getSession(sid).history.some((m: any) => m.content === 'FYI: build finished.'));
+
+  // A send whose answer was lost is not posted twice when the same message is sent again.
+  flags.dropPostAnswer = true;
+  const dropped = await runner.runExternalAgentTurn({ sessionId: sid, message: 'dup check', sendSSE: () => undefined }, session.getSessionExternalAgent(sid)!);
+  assert.equal(dropped.externalAgent.status, 'failed');
+  const retried = await runner.runExternalAgentTurn({ sessionId: sid, message: 'dup check', sendSSE: () => undefined }, session.getSessionExternalAgent(sid)!);
+  assert.equal(retried.externalAgent.status, 'completed');
+  assert.equal(sends.filter((body) => body.content.text === 'dup check').length, 1, 'the retry reuses the first send');
+  assert.equal(room.filter((m) => m.content.text === 'dup check').length, 1);
+  assert.match(retried.text, /Done: PR #899 rebased\./);
+  // The user's own message never comes back as a ChatGPT message.
+  assert.equal((await sync.syncAllDots(true)).added, 0);
+  assert.equal(session.getSession(sid).history.filter((m: any) => m.content === 'dup check' && m.channelLabel === 'ChatGPT').length, 0);
+
+  // A whole page of new messages means older ones may be missing: the chat says so.
+  for (let i = 0; i < 40; i += 1) room.push(msg(DOT_AUTHOR, `burst ${i}`, { message_metadata: { turn_trigger: 'parent_notification' } }));
+  assert.equal((await sync.syncAllDots(true)).added, 32);
+  assert.ok(session.getSession(sid).history.some((m: any) => m.content === sync.DOT_GAP_TEXT));
+
+  // A rejected sign-in stops the background sync until the user signs in and checks again.
+  flags.getStatus = 401;
+  const rejected = await sync.syncAllDots(true).catch((error: any) => ({ failed: String(error?.message || error) }));
+  assert.ok((rejected as any).failed || (rejected as any).errors?.length, 'the failure is reported');
+  assert.equal(store.getExternalAgentEntry('openai-dots').lastStatus, 'signed_out');
+  assert.equal(sync.dotsEnabled(), false);
+  flags.getStatus = 0;
 
   // Off: sync stops; the chat stays.
   await registry.disableExternalAgent('openai-dots');

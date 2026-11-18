@@ -172,6 +172,8 @@ const measurements = {
 // #903 Projects v2: the mobile project settings sheet (instructions plus the shared
 // folder field with its Allow/Remove access notice) and folder-linked project groups in the
 // drawer: measured 306022 gzip (+2879 over #899's 303143). Retain ~0.1% allowance.
-assert(measurements.gzipBytes <= 306330, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
+// #907 OpenAI Dots: dot chats in the drawer, the contact placeholder and logo on the mobile
+// chat page: measured 306575 gzip (+553 over #903's 306022). Retain ~0.1% allowance.
+assert(measurements.gzipBytes <= 306880, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
 console.log(JSON.stringify({ buildId: manifest.buildId, measurements, rendererOutput }, null, 2));
 console.log('Mobile Chat renderer ownership contract passed.');
