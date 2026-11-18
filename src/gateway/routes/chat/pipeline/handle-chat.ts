@@ -97,7 +97,6 @@ import { attachWorkspaceCheckpoint, createWorkspaceTurnCheckpoint } from '../../
 import { getCodingContextPacketTelemetry, observeCodingContext, recordCodingContextPacketDecisionDiagnostic, selectCodingContextPacket } from '../../../coding-context-packet';
 import { OllamaProcessManager } from '../../../ollama-process-manager';
 import { raceWithWatchdog, PreemptState } from '../../../scheduling/preempt-watchdog';
-import { elideStaleToolResults, TOOL_RESULT_ELISION_BATCH_MIN_CHARS } from '../.././tool-result-elision';
 import { normalizeReasoningSummary } from '../../../context/turn-context-packet';
 import { recordEditLogEntry, recordShellEditLogEntry, formatEditLogForPrompt } from '../../../context/edit-log';
 import { formatUsageAwarenessForPrompt, listCredentialedModelProviderIds, isUsageLimitError, recordProviderUsageExhausted } from '../../../../providers/usage-awareness';
@@ -1578,7 +1577,10 @@ export async function handleChatUntraced(
   const isSubstantiveFileMutationToolName = (name: unknown): boolean => SUBSTANTIVE_FILE_MUTATION_TOOLS.has(String(name || '').trim());
   const userRequestedDurableBuildWork = (): boolean => {
     const text = String(message || '').toLowerCase();
-    return /\b(build|create|make|implement|generate|design|code|site|website|page|app|tool|component|fix|edit|update|clone|from screenshot|screenshot|continue|resume|proceed|keep going)\b/i.test(text);
+    // Naming the thing being inspected ("this tool", "the website", "the code")
+    // is common in read-only requests. A setup-only result needs an action cue.
+    return /\b(build|create|make|implement|generate|design|fix|edit|update|clone|continue|resume|proceed|keep going)\b/i.test(text)
+      || /\bcode\s+(?:me\s+)?(?:a|an|the|this|that)\b/i.test(text);
   };
 
   const PLAN_STEP_WRITE_EVIDENCE_TOOLS = new Set([
@@ -1761,11 +1763,6 @@ export async function handleChatUntraced(
   const toolUsageTelemetryEnabled = process.env.PROMETHEUS_TOOL_USAGE_TELEMETRY !== '0'
     && rawCfgForPreempt?.observability?.tool_usage !== false
     && rawCfgForPreempt?.usage_tracking?.tool_usage !== false;
-  // Stale tool-result elision keeps long tool loops from re-sending every
-  // earlier result verbatim on every round. Opt out with
-  // PROMETHEUS_TOOL_RESULT_ELISION=0 or context.tool_result_elision=false.
-  const toolResultElisionEnabled = process.env.PROMETHEUS_TOOL_RESULT_ELISION !== '0'
-    && rawCfgForPreempt?.context?.tool_result_elision !== false;
   // The per-result telemetry banner is useful for cost debugging but is
   // re-sent to the provider on every later round. Keep the full banner for
   // humans/logs and give the model the compact timing line unless the
@@ -2189,7 +2186,7 @@ export async function handleChatUntraced(
       }
       const instrumentedResult = await envelopeOversizedToolResult(
         attachUniversalToolTelemetry(toolResult, toolName, effectiveToolArgs, startedAt),
-        { sessionId, toolName, maxChars: 12_000 },
+        { sessionId, toolName, maxChars: 3 * (activeGenerationRouteSnapshot?.contextBudget || activeContextBudget).toolContextBudgetTokens },
       );
       toolPerformance.complete(performanceRecord, instrumentedResult.result, instrumentedResult.error);
       const performanceTelemetry = toolPerformance.snapshot(performanceRecord);
@@ -3671,7 +3668,6 @@ Do not produce prose. Use the canonical thread tool now.` });
               ? buildDesktopAck(toolName, toolResult) + goalReminder
               : toolResult.result + goalReminder;
         if (isBrowserTool) toolMessageContent = wrapUntrustedBrowserToolContent(toolName, toolMessageContent);
-        toolMessageContent = boundToolMessageContentForModelContext(toolMessageContent, toolName, toolResult.extra?.toolResultEnvelope?.rawRef);
         messages.push({
           role: 'tool',
           tool_name: toolName,
@@ -4026,7 +4022,7 @@ Do not produce prose. Use the canonical thread tool now.` });
       });
       // The first provider call gets the same token-budget guard as later
       // rounds. A single huge first turn can therefore compact immediately.
-      if (!brainRunBudget && round === 0 && (!sessionId.startsWith('subagent_') || isDirectSubagentChatTurn) && midWorkflowCompactionsThisTurn < 3) {
+      if (!brainRunBudget && round === 0 && midWorkflowCompactionsThisTurn < 3) {
         const preflightCompact = await maybeRunMidWorkflowCompaction({
           sessionId,
           messages,
@@ -6131,8 +6127,7 @@ Do not produce prose. Use the canonical thread tool now.` });
             : toolResult.result + goalReminder;
       if (isBrowserTool) toolMessageContent = wrapUntrustedBrowserToolContent(toolName, toolMessageContent);
       const stopwatchLine = formatToolStopwatchLineForModel(toolResult);
-      if (stopwatchLine) toolMessageContent = `${stopwatchLine}\n${toolMessageContent}`;
-      toolMessageContent = boundToolMessageContentForModelContext(toolMessageContent, toolName, toolResult.extra?.toolResultEnvelope?.rawRef);
+      if (stopwatchLine && typeof toolMessageContent === 'string') toolMessageContent = `${stopwatchLine}\n${toolMessageContent}`;
 	      messages.push({
 	        role: 'tool',
 	        tool_name: toolName,
@@ -6281,21 +6276,8 @@ Do not produce prose. Use the canonical thread tool now.` });
       };
     }
 
-    // Every tool result from this turn is re-sent on the next provider round.
-    // Shorten the ones older rounds already consumed so input tokens stop
-    // growing quadratically with tool count. Runs before mid-workflow
-    // compaction so compaction sees the already-slimmed context.
-    if (toolResultElisionEnabled) {
-      const elision = elideStaleToolResults(messages, { batchMinChars: TOOL_RESULT_ELISION_BATCH_MIN_CHARS });
-      if (elision.elidedCount > 0) {
-        console.log(
-          `[tool-result-elision] round=${round} elided=${elision.elidedCount} saved_chars=${elision.savedChars}`,
-        );
-      }
-    }
-
-
-    if ((!sessionId.startsWith('subagent_') || isDirectSubagentChatTurn) && midWorkflowCompactionsThisTurn < 3) {
+    // Once sent, tool results stay intact until the route's token-budget compaction.
+    if (midWorkflowCompactionsThisTurn < 3) {
       const midCompact = !brainRunBudget ? await maybeRunMidWorkflowCompaction({
         sessionId,
         messages,

@@ -337,6 +337,11 @@ export class ProcessSupervisor {
     return this.active.get(runId)?.record || this.store.loadRecord(runId);
   }
 
+  logPage(runId: string, offset = 0, limit = 64000): string {
+    const page = this.store.readCombinedPage(runId, offset, limit);
+    return page.text + (page.next == null ? '' : `\n[More process output: workspace_run(action:"log", runId:"${runId}", offset_bytes:${page.next}); ${page.total} bytes total]`);
+  }
+
   log(runId: string, maxChars = 200_000): ProcessLogResult {
     const stdout = this.store.readLogFile(this.store.stdoutPath(runId), maxChars);
     const stderr = this.store.readLogFile(this.store.stderrPath(runId), maxChars);

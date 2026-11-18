@@ -16,12 +16,15 @@ export function resolveCommandOutputLimit(raw: unknown): number {
 function truncationMarker(total: number, omitted: number, runId?: string | null): string {
   const next = runId
     ? `full output: workspace_run(action:"log", runId:"${runId}", maxChars:${Math.min(MAX_COMMAND_OUTPUT_CHARS, total)})`
-    : 'no run id, so the rest cannot be fetched; rerun a narrower command or write its output to a file';
+    : 'full output available through the gateway result continuation';
   return `\n...[output truncated: ${total} chars total, ${omitted} chars omitted; ${next}]\n`;
 }
 
 export function capCommandOutput(output: unknown, options: { maxChars?: unknown; runId?: string | null } = {}): string {
   const text = String(output ?? '');
+  // Only honor an explicit preview when one log read can return the whole result.
+  // Otherwise pass it intact to the session-protected gateway envelope.
+  if (!options.runId || !(Number(options.maxChars) > 0) || text.length > MAX_COMMAND_OUTPUT_CHARS) return text;
   const limit = resolveCommandOutputLimit(options.maxChars);
   if (text.length <= limit) return text;
   const total = text.length;
