@@ -12,6 +12,10 @@ const PROM_BOT_SECTION_ID = 'prom-bot-sidebar-section';
 const PROM_BOT_LIST_ID = 'prom-bot-subagents-list';
 const PROM_BOT_SURFACE_ID = 'prom-bot-main-surface';
 const PROM_BOT_TEAMS_LIST_ID = 'prom-bot-teams-list';
+const PROM_BOT_BOTS_LIST_ID = 'prom-bot-bots-list';
+const PROM_BOT_BOTS_SECTION_ID = 'prom-bot-bots-section';
+const DOT_SESSION_RE = /^dot_[A-Za-z0-9]+$/;
+let promBotBotsSignature = '';
 const TEAM_ICON = `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="5.5" cy="5.5" r="2"/><circle cx="11" cy="6" r="1.7"/><path d="M1.8 13c.4-2.2 1.9-3.4 3.7-3.4s3.3 1.2 3.7 3.4"/><path d="M9.6 9.9c.4-.2.9-.3 1.4-.3 1.5 0 2.7 1 3 2.9"/></svg>`;
 
 let promBotMode = false;
@@ -85,6 +89,7 @@ function installPromBotStyles() {
     #${PROM_BOT_SECTION_ID}.is-collapsed > :not(.sidebar-section-toggle) { display: none !important; }
     #${PROM_BOT_TEAMS_LIST_ID} { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; }
     #${PROM_BOT_TEAMS_LIST_ID}:empty { display: none; }
+    #${PROM_BOT_BOTS_SECTION_ID}[hidden] { display: none !important; }
     .prom-bot-teams-label { padding:3px 8px 4px; font-size:9px; font-weight:800; letter-spacing:.11em; text-transform:uppercase; color:var(--sidebar-muted,var(--muted)); }
     .prom-bot-team-avatar { font-size: 15px; line-height: 1; }
     .prom-bot-agent-state.paused { opacity: .45; }
@@ -235,7 +240,32 @@ function ensurePromBotSection() {
 
   section.append(header, list, teamsList);
   pinnedSection.parentElement.insertBefore(section, pinnedSection);
+
+  // Connected bots (OpenAI dots) get their own plain sidebar section, styled like
+  // Pinned/Projects/Sessions, right above Subagents. Shown only in Prom Bot mode.
+  const botsSection = document.createElement('div');
+  botsSection.className = 'sidebar-section prom-bot-bots-section';
+  botsSection.id = PROM_BOT_BOTS_SECTION_ID;
+  botsSection.hidden = true;
+  botsSection.innerHTML = '<button class="section-title sidebar-section-toggle" type="button" tabindex="-1" aria-expanded="true"><span>Bots</span><span class="sidebar-section-decoration" aria-hidden="true"><span class="sidebar-section-icon">✦</span></span></button>'
+    + `<div class="session-list" id="${PROM_BOT_BOTS_LIST_ID}"></div>`;
+  section.parentElement.insertBefore(botsSection, section);
   return section;
+}
+
+// Bot chats are ordinary Prometheus sessions (dot_<room>): same row as any chat
+// (OpenAI mark + "Dot"), opened in the normal chat view.
+function renderPromBotBots() {
+  const botsSection = document.getElementById(PROM_BOT_BOTS_SECTION_ID);
+  const host = document.getElementById(PROM_BOT_BOTS_LIST_ID);
+  if (!botsSection || !host) return;
+  const bots = (window.chatSessions || []).filter((s) => DOT_SESSION_RE.test(String(s?.id || '')));
+  const show = promBotMode && bots.length > 0 && typeof window.renderChatSessionCard === 'function';
+  const signature = JSON.stringify([show, String(window.activeChatSessionId || ''), bots.map((s) => [s.id, s.title, s.unread === true, s.activeRun === true])]);
+  if (signature === promBotBotsSignature) return;
+  promBotBotsSignature = signature;
+  botsSection.hidden = !show;
+  host.innerHTML = show ? bots.map((session) => window.renderChatSessionCard(session)).join('') : '';
 }
 
 function teamSearchQuery() {
@@ -631,6 +661,7 @@ function syncPromBotControls() {
     button.title = promBotMode ? 'Prom Bot · On' : 'Prom Bot';
   }
   if (section) section.hidden = !promBotMode;
+  renderPromBotBots();
 }
 
 function setPromBotMode(enabled, { persist = true } = {}) {
@@ -677,6 +708,7 @@ function initPromBot() {
 }
 
 window.setPromBotMode = setPromBotMode;
+window.renderPromBotBots = renderPromBotBots;
 window.togglePromBotMode = () => setPromBotMode(!promBotMode);
 window.refreshPromBotAgents = refreshPromBotAgents;
 window.openPromBotAgent = openPromBotAgent;

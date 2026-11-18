@@ -2726,7 +2726,8 @@ function _mobileSessionModelLogo(session) {
   const source = explicit.providerId && explicit.model ? explicit : (session?.lastModel || {});
   const provider = String(source.providerId || source.provider || '').toLowerCase();
   const model = String(source.model || '').toLowerCase();
-  const brand = provider === 'anthropic' || model.includes('claude') ? MOBILE_IMPORTED_SOURCE_BRANDS.claude
+  const brand = /(?:^|[^A-Za-z0-9])dot_[A-Za-z0-9]{8,}$/.test(String(session?.id || '')) ? MOBILE_IMPORTED_SOURCE_BRANDS.openai
+    : provider === 'anthropic' || model.includes('claude') ? MOBILE_IMPORTED_SOURCE_BRANDS.claude
     : provider === 'openai_codex' || model.includes('codex') ? MOBILE_IMPORTED_SOURCE_BRANDS.openai
     : provider === 'openai' || model.startsWith('gpt-') ? MOBILE_IMPORTED_SOURCE_BRANDS.chatgpt
     : provider === 'xai' || model.includes('grok') ? { label: 'xAI', asset: '/static/assets/import-sources/xai.svg', key: 'xai' }

@@ -97,12 +97,20 @@ export async function getDots(fresh = false): Promise<DotInfo[]> {
   return dots;
 }
 
+/** Chat title for a dot: its own name, capitalized ("dot" -> "Dot"); "Dot" when unnamed. */
+export function dotTitle(name: string): string {
+  const clean = String(name || '').trim();
+  if (!clean || /^your dot$/i.test(clean)) return 'Dot';
+  return clean.charAt(0).toUpperCase() + clean.slice(1);
+}
+
 /** The one Prometheus chat for this dot, bound to the openai-dots agent. */
 export function ensureDotSession(dot: DotInfo): string {
   const sessionId = dotSessionId(dot.roomId);
   const session = getSession(sessionId);
-  if (session.title !== dot.name) {
-    try { renameSession(sessionId, dot.name); } catch { /* cosmetic */ }
+  const title = dotTitle(dot.name);
+  if (session.title !== title) {
+    try { renameSession(sessionId, title); } catch { /* cosmetic */ }
   }
   const binding = getSessionExternalAgent(sessionId);
   if (!binding || binding.agentId !== DOTS_AGENT_ID || binding.upstreamSessionId !== dot.roomId) {

@@ -294,6 +294,7 @@ function _priorityAttentionSessions() {
 }
 
 function syncPriorityBell() {
+  window.renderPromBotBots?.();
   const button = document.getElementById('sidebarPriorityToggle');
   const dot = document.getElementById('sidebarUnreadDot');
   const priorityCount = _priorityAttentionSessions().length;
@@ -642,7 +643,7 @@ function _renderChannelDrill(channelKey) {
   <div class="job-item-head job-item-head--pinned">
     <div class="job-item-title-wrap">
       ${unreadDot}
-      ${renderImportedSourceLogo(s)}
+      ${renderImportedSourceLogo(s) || renderContactAgentLogo(s)}
       <div class="job-item-title">${escHtml(s.title || 'Untitled')}</div>
     </div>
   </div>
@@ -672,7 +673,7 @@ function _renderChannelDrill(channelKey) {
   <div class="job-item-head job-item-head--pinned">
     <div class="job-item-title-wrap">
       ${unreadDot}
-      ${renderImportedSourceLogo(s)}
+      ${renderImportedSourceLogo(s) || renderContactAgentLogo(s)}
       <div class="job-item-title">${title}</div>
       ${roster ? `<div class="job-item-subtitle">${escHtml(roster)}</div>` : ''}
     </div>
@@ -1481,6 +1482,15 @@ function _isImportedSession(session) {
   return !!(session?.externalImport && typeof session.externalImport === 'object');
 }
 
+function _isAgentContactSession(s) {
+  return /^dot_[A-Za-z0-9]+$/.test(String(s?.id || ''));
+}
+
+// OpenAI dot chats show the OpenAI mark in front of their title ("Dot").
+function renderContactAgentLogo(s) {
+  return _isAgentContactSession(s) ? '<img class="imported-source-logo imported-source-logo--openai" src="/static/assets/import-sources/openai.svg" alt="OpenAI" width="26" height="26" decoding="async">' : '';
+}
+
 function renderImportedSourceLogo(session) {
   const imported = session?.externalImport;
   if (!imported || typeof imported !== 'object') return '';
@@ -1877,7 +1887,7 @@ function renderPriorityChatSessionCard(s, options = {}) {
     <div class="priority-chat-card${nestedClass} ${s.id === window.activeChatSessionId ? 'active' : ''}${isWorking ? ' is-working' : ''}${s.unread && !isWorking ? ' unread' : ''}${isPinned ? ' pinned-chat' : ''}${isSettled ? ' settled-chat' : ''}${_isImportedSession(s) ? ' imported-session-card' : ''}" data-session-hover-preview data-session-id="${escHtml(s.id)}" data-session-channel="${escHtml(String(s.channel || 'web'))}" data-session-title="${escHtml(title)}" onclick="if (consumeSidebarClick(event)) return; ${openHandler}">
       <div class="priority-chat-topline">
         <div class="priority-chat-title-wrap">
-          ${renderImportedSourceLogo(s)}
+          ${renderImportedSourceLogo(s) || renderContactAgentLogo(s)}
           <span class="priority-chat-title">${escHtml(title)}</span>
         </div>
         <span class="priority-chat-time" title="Last activity">${timeAgo(sessionTimestamp)}</span>
@@ -1944,7 +1954,7 @@ function renderChatSessionCard(s, options = {}) {
       <div class="job-item-head job-item-head--pinned">
         <div class="job-item-title-wrap">
           ${unreadDot}
-          ${renderImportedSourceLogo(s)}
+          ${renderImportedSourceLogo(s) || renderContactAgentLogo(s)}
           <div class="job-item-title">${escHtml(s.title || 'New chat')}</div>
         </div>
       </div>
@@ -2051,11 +2061,9 @@ function _renderPriorityPanel(el) {
   if (projectsSection) projectsSection.style.display = 'none';
   if (sessionsSection) sessionsSection.style.display = 'none';
 
-  // Connected agents (OpenAI dots) sit at the top of Priority mode next to Prometheus chats.
-  const isAgentContact = (s) => /^dot_[A-Za-z0-9]+$/.test(String(s?.id || ''));
-  const agentContactSessions = (window.chatSessions || []).filter(isAgentContact);
+  // Connected bots (OpenAI dots) are listed by Prom Bot mode (robot button), not here.
   const activeSessions = (window.chatSessions || [])
-    .filter((s) => _isPrioritySession(s) && !isAgentContact(s))
+    .filter((s) => _isPrioritySession(s) && !_isAgentContactSession(s))
     .sort((a, b) => _prioritySessionActivityTime(b) - _prioritySessionActivityTime(a));
   ensureSidebarBranchMetadata(activeSessions.slice(0, 80));
   // Priority attention is not paginated behind newer ordinary chats. Every
@@ -2098,8 +2106,7 @@ function _renderPriorityPanel(el) {
   const priorityControls = `
     ${hasMorePrioritySessions ? `<button class="sessions-show-more-btn" onclick="showMoreSessions()" style="width:100%;margin-top:8px;padding:8px 12px;background:rgba(249,115,22,0.12);border:1px solid rgba(249,115,22,0.30);color:var(--text);border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;font-family:'Manrope',sans-serif;transition:all 0.15s ease" onmouseover="this.style.background='rgba(249,115,22,0.20)'" onmouseout="this.style.background='rgba(249,115,22,0.12)'">+ Show more (${chronologicalCandidates.length - _sessionShowCount} more)</button>` : ''}
     <button class="sessions-show-more-btn settled-entry-btn" onclick="toggleSettledSessionsView()" style="width:100%;margin-top:8px;padding:8px 12px;background:transparent;border:1px solid var(--line);color:var(--sidebar-muted, var(--muted));border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;font-family:'Manrope',sans-serif;transition:all 0.15s ease" onmouseover="this.style.background='color-mix(in srgb, var(--pm-gold, var(--brand)) 10%, transparent)'" onmouseout="this.style.background='transparent'">Settled</button>`;
-  const agentsSection = agentContactSessions.length ? _prioritySection('Agents', agentContactSessions.map((session) => renderChatSessionCard(session, { priority: true })).join('')) : '';
-  priorityContent.innerHTML = agentsSection + prioritySection + chronologicalSection + priorityControls;
+  priorityContent.innerHTML = prioritySection + chronologicalSection + priorityControls;
   syncPriorityBell();
   void el;
 }

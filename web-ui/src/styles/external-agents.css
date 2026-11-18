@@ -196,7 +196,7 @@ body.pm-mobile-active .pm-mobile-empty-chat.ea-empty-state { display: flex; flex
 body.pm-mobile-active:has(#pm-new-chat-context-dock.ea-new-chat-context) .pm-mobile-empty-chat.ea-empty-state { min-height: 38dvh; }
 /* Agent brand logos (replace the old two-letter tiles). */
 .ea-logo { width: 18px; height: 18px; flex: none; object-fit: contain; border-radius: 4px; display: inline-block; vertical-align: middle; }
-.ea-logo-codex, .ea-logo-cursor { background: #fff; padding: 2px; box-sizing: border-box; }
+.ea-logo-codex, .ea-logo-cursor, .ea-logo-openai-dots { background: #fff; padding: 2px; box-sizing: border-box; }
 .ea-logo-openclaw { object-fit: cover; object-position: left center; }
 .ea-logo-prometheus { border-radius: 50%; }
 body.pm-mobile-active #pm-chat-target-chip[hidden] { display: none !important; }
@@ -347,3 +347,8 @@ textarea.pm-project-folder-input { resize: vertical; min-height: 96px; line-heig
 .pm-project-folder-access-btn { flex: 0 0 auto; border: 0; border-radius: 7px; padding: 5px 10px; font: inherit; font-weight: 600; cursor: pointer; background: var(--text-primary, #fff); color: var(--bg-primary, #000); }
 .pm-project-folder-access-btn.is-quiet { background: transparent; color: var(--ea-muted); text-decoration: underline; padding: 5px 2px; font-weight: 500; }
 .pm-project-folder-access-btn:disabled { opacity: .55; cursor: default; }
+
+/* OpenAI dot chats: OpenAI mark in front of the title ("Dot") in every desktop list. */
+body:not(.pm-mobile-active) .chat-session-item[data-session-id^="dot_"] .imported-source-logo--openai { display: inline-block; width: 16px; height: 16px; flex: 0 0 16px; margin-right: 6px; vertical-align: -3px; }
+body:not(.pm-mobile-active) .chat-session-item[data-session-id^="dot_"] .job-item-title-wrap { display: flex; align-items: center; }
+#prom-bot-bots-section .sidebar-section-toggle { cursor: default; }
