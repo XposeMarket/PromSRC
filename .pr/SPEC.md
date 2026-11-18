@@ -1,19 +1,46 @@
-# Native browser upload repair
-Surface: backend
-Parity: Shared desktop/mobile/channel/agent tool. Electron native session routing repaired; Playwright unchanged.
-Test: node scripts/test-inhouse-upload.cjs
+# Desktop active-chat repair
+Tier: Tier 1 + scoped quick review (protected-entry hookup and renderer recovery boundary)
+Surface: sibling-check
+Parity: not affected: web-ui/src/mobile/mobile-reasoning-summary-fold.js:22 unchanged; scripts/test-main-chat-reasoning-summary.regression.mjs:63 executes mobile replay and passes; scripts/test-mobile-recovery-stream-shape.mjs:1 passes. Desktop Electron and web share the changed renderer.
+Test: node scripts/test-desktop-thinking-bubbles.mjs
+Size justification: User-requested multi-area desktop repair, tests and generated mirrors.
+
 ## Problem
-Active native browser upload incorrectly reports no session.
+Desktop retains an old Add secret composer button; reasoning fails to recover/stream like mobile; active threads lag; background cards are oversized with a visible scrollbar and initials; effort menu has an unwanted backing and stays open after selection.
+
 ## Chosen approach
-Tier 1 restore: native-first routing, authenticated Electron session-owned CDP file selection. Extra WIP approved card31f5e507. No publishing or permission changes.
+Repair owning desktop renderer and cascade. Reuse provider helpers. Measure active-thread rendering before optimizing. Preserve paste guards, stream ownership and private/summary visibility. No live edits or stored format changes.
+
 ## Acceptance
-Real Chromium hidden input and ref upload, bad path/target failures and debugger cleanup pass. Typecheck and hard gates. Live TikTok test after merge and Electron relaunch.
+- No standing secret button; protected entry and guard remain.
+- Compact agent strip, no visible scrollbar, wheel/keyboard access and provider marks.
+- Floating panels without outer backing; successful effort selection closes picker.
+- Reopened active threads recover and continue reasoning without duplicates/terminal revival.
+- Measured improvement and reproducible regressions; desktop proof and mobile sibling checks.
+- Hard gates pass. Explicit merge approval required.
+
 ## Files
-- src/gateway/browser-tools.ts
-- electron/main.js
-- electron/browser-upload.cjs
-- scripts/test-inhouse-upload.cjs
-- workspace/self/13-browser-desktop.md
 - .pr/SPEC.md
+- docs/DESKTOP-CHAT-REPAIR.md
+- web-ui/src/pages/ChatPage.js
+- web-ui/src/styles/desktop-entry.css
+- scripts/test-desktop-thinking-bubbles.mjs
+- web-ui/src/styles/components.css
+- web-ui/src/styles/surfaces-polish.css
+- web-ui/src/legacy-desktop-bootstrap.js
+- web-ui/src/features/chat/*
+- web-ui/src/features/secure-access/secure-access-desktop-dock.js
+- scripts/test-desktop-chat-polish-recovery.mjs
+- scripts/test-main-chat-reasoning-summary.regression.mjs
+- scripts/test-background-agent-stream-ui.mjs
+- scripts/test-desktop-stream-snapshot.mjs
+- scripts/test-desktop-live-multithread-perf.mjs
+- generated/public-web-ui/*
+
 ## Risks
-Electron must relaunch or new route unavailable; errors fail closed. File selection is not successful remote processing. Revert commit to roll back. No permission or saved-state changes.
+Do not detach local SSE state, replay over terminal turns, expose private thinking or alter approvals. Revert PR for rollback. Self docs 04/08/17 read; update17 with findings and verification.
+
+## Additional test updates
+- scripts/test-main-chat-reasoning-summary.regression.mjs: inject scheduled-render dependency into real SSE switch fixture.
+- scripts/test-background-agent-stream-ui.mjs: current exact summary channel metadata, not obsolete agent_progress tag.
+- scripts/test-desktop-live-multithread-perf.mjs: theme registry stub and closed-current lazy render contract.
