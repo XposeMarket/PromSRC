@@ -9,7 +9,7 @@ import { executeAnalyzeVideo } from './../../../tools/media-analysis';
 import { listWorkspaceHistory, restoreWorkspaceCheckpoint, restoreWorkspaceSnapshot } from './../../../workspace-history';
 import { DEFAULT_FILE_TOOL_EXCLUDES, buildFileIntelligence, buildNoMatchHints, collectGrepMatchesInText, compareGrepMatches, createSearchMatcher, formatGrepToolResult, matchesGlobList, parseGlobList, readSimpleGitignore, resolveResultCharBudget, shouldSkipSearchPath, summarizeFileForTool, type SearchMatcher } from './../../../tools/file-intelligence';
 import { getProcessSupervisor } from './../../process/supervisor';
-import { boundedProcessWait, processWaitBudget } from './../../process/bounded-wait';
+import { boundedProcessWait, formatWaitClock, processWaitBudget } from './../../process/bounded-wait';
 import type { ProcessRunExit } from './../../process/types';
 import { capCommandOutput, resolveCommandOutputLimit } from './../command-output-cap';
 import { normalizeDevSourcePatchsetArgs, splitLinesEolSafe } from './../../dev-source-patchset';
@@ -1634,8 +1634,10 @@ export async function handleMiscTool(ctx: handleMiscToolContext): Promise<Awaite
           subscribe: (complete, fail) => supervisor.observeExit(runId, complete, fail),
           onProgress: (elapsedMs) => deps.sendSSE?.('tool_progress', {
             toolCallId: deps.toolCallId, action: name, name, phase: 'waiting',
-            message: `Waiting for ${runId}: ${Math.floor(elapsedMs / 1000)}s elapsed (up to ${waitMs / 1000}s).`,
-            show_pill: true,
+            // User-facing: no internal run id. The tool row already shows a live
+            // countdown, so this must not also raise the floating progress pill.
+            message: `Command still running · ${formatWaitClock(elapsedMs)} of ${formatWaitClock(waitMs)}`,
+            runId,
           }),
         });
         if (observation.kind === 'cancelled') return {
