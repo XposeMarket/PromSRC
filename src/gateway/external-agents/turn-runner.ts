@@ -25,6 +25,9 @@ import { expandHome } from './executable';
 import { createPendingRequest } from './pending-requests';
 import { getExternalAgentAdapter, isExternalAgentUsable, registerLiveExternalTurn } from './registry';
 import type { ExternalAgentBinding, ExternalAgentEvent, ExternalAgentId, ExternalUserRequest } from './types';
+import type { TurnFileChanges } from '../file-change-summary';
+import { buildHarnessFileChanges, closingAnswer } from './file-touches';
+import type { ExternalFileTouch } from './types';
 
 const activeExternalSessions = new Set<string>();
 
@@ -55,6 +58,8 @@ export interface ExternalTurnRunResult {
   type: 'chat';
   text: string;
   externalAgent: { agentId: ExternalAgentId; status: 'completed' | 'interrupted' | 'failed' | 'refused' };
+  /** Files the agent changed this turn, for the same end-of-turn file card a Prometheus turn shows. */
+  fileChanges?: TurnFileChanges;
 }
 
 export type BindOutcome =
@@ -231,19 +236,29 @@ export async function runExternalAgentTurn(params: ExternalTurnRunParams, bindin
   else outer?.addEventListener('abort', onOuterAbort, { once: true });
   const unregister = registerLiveExternalTurn(binding.agentId, () => controller.abort('agent_disabled'));
   activeExternalSessions.add(sessionId);
+  // Same shape as a Prometheus turn: what the agent says before a tool call is commentary in the
+  // work stream, only what it says after its last tool call is the reply, and its file edits
+  // become the end-of-turn file card.
+  const commentary: string[] = [];
+  const fileTouches: ExternalFileTouch[] = [];
+  let segment = '';
 
   let streamed = '';
   const emit = (event: ExternalAgentEvent) => {
+    if (event.type === 'item_started' && segment.trim()) { commentary.push(segment); segment = ''; }
     switch (event.type) {
       case 'state':
         sendSSE('external_agent_state', { agentId: binding.agentId, phase: event.phase });
         return;
       case 'text_delta':
         streamed += event.text;
+        segment += event.text;
         sendSSE('token', { text: event.text });
         return;
       case 'reasoning_delta':
-        sendSSE('thinking_delta', { thinking: event.text, text: event.text, source: 'external', visibility: 'user', agentId: binding.agentId });
+        // The same event a Prometheus model's visible reasoning uses, so it streams, is saved with
+        // the turn and is shown afterwards the same way.
+        sendSSE('reasoning_summary_delta', { text: event.text, source: 'external', agentId: binding.agentId });
         return;
       case 'item_started':
         sendSSE('tool_call', {
@@ -260,6 +275,9 @@ export async function runExternalAgentTurn(params: ExternalTurnRunParams, bindin
         return;
       case 'usage':
         sendSSE('info', { source: 'external_agent_usage', agentId: binding.agentId, usedTokens: event.usedTokens, maxTokens: event.maxTokens });
+        return;
+      case 'file_change':
+        for (const file of event.files) if (fileTouches.length < 400) fileTouches.push(file);
         return;
       case 'notice':
         sendInfo(sendSSE, event.text);
@@ -324,7 +342,9 @@ export async function runExternalAgentTurn(params: ExternalTurnRunParams, bindin
     },
   });
 
-  const body = String(result.finalText || streamed || '').trim();
+  const body = closingAnswer(result.finalText || streamed, commentary);
+  let fileChanges: TurnFileChanges | undefined;
+  try { fileChanges = buildHarnessFileChanges(fileTouches, binding.cwd || ''); } catch { /* the card is best effort */ }
   let text = body;
   if (result.upstreamMissing) {
     text = `${agentName} can't find this session any more.`;
@@ -342,6 +362,7 @@ export async function runExternalAgentTurn(params: ExternalTurnRunParams, bindin
     workStartedAt: startedAt,
     workEndedAt: endedAt,
     workDurationMs: Math.max(0, endedAt - startedAt),
+    ...(fileChanges ? { fileChanges } : {}),
     ...(params.clientRequestId ? { clientRequestId: params.clientRequestId } : {}),
     ...(origin ? { channel: origin.channel, channelLabel: origin.label || origin.channel } : {}),
     externalAgent: {
@@ -352,7 +373,7 @@ export async function runExternalAgentTurn(params: ExternalTurnRunParams, bindin
     },
   } as any, { disableCompactionCheck: true, disableMemoryFlushCheck: true });
 
-  return { type: 'chat', text, externalAgent: { agentId: binding.agentId, status: result.status } };
+  return { type: 'chat', text, externalAgent: { agentId: binding.agentId, status: result.status }, ...(fileChanges ? { fileChanges } : {}) };
 }
 
 /** Explicit user action after "can't find this session": the next message starts a fresh upstream session. */

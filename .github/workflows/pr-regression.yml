@@ -139,6 +139,7 @@ jobs:
           npx tsx src/gateway/external-agents/external-agents.regression.ts
           npx tsx src/gateway/external-agents/acp.regression.ts
           npx tsx src/gateway/external-agents/claude-code.regression.ts
+          npx tsx src/gateway/external-agents/file-touches.regression.ts
           npx tsx src/gateway/external-agents/models.regression.ts
           npx tsx src/gateway/external-agents/scratch-folders.regression.ts
       - name: Verify public web source sync

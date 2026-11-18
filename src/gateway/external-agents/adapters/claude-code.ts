@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import os from 'os';
 import path from 'path';
 import { findOnPath, resolveFromCandidates, type ResolvedCommand } from '../executable';
+import { claudeFileTouch } from '../file-touches';
 import type { ExternalAgentAdapter, ExternalAgentCapabilities, ExternalTurnInput, ExternalTurnResult, ExternalAgentVerifyResult } from '../types';
 
 // Use native import at runtime: the SDK is ESM, while the gateway is CommonJS.
@@ -83,6 +84,8 @@ export class ClaudeCodeAdapter implements ExternalAgentAdapter {
     let upstreamMissing = false;
     let errorText = '';
     const tools = new Set<string>();
+    // File edits by tool call, reported for the end-of-turn file card once the tool succeeds.
+    const edits = new Map<string, NonNullable<ReturnType<typeof claudeFileTouch>>>();
     const close = () => { lifetime.abort(); try { runtime?.close(); } catch { /* already closed */ } };
     const stop = () => { lifetime.abort(); void runtime?.interrupt?.().catch(() => {}); close(); };
     if (this.active.has(input.sessionId)) return { upstreamSessionId: sessionId, status: 'failed', finalText: '', error: 'Claude Code is already working in this chat.' };
@@ -156,9 +159,14 @@ export class ClaudeCodeAdapter implements ExternalAgentAdapter {
         }
         if (message.type === 'assistant') {
           for (const block of message.message?.content || []) {
+            if (block.type === 'tool_use') { const touch = claudeFileTouch(block.name, block.input); if (touch) edits.set(block.id, touch); }
             if (block.type === 'text') resultText += block.text;
             if (block.type === 'tool_use' && !tools.has(block.id)) { tools.add(block.id); input.emit({ type: 'item_started', itemId: block.id, kind: 'other', title: block.name }); }
           }
+        }
+        if (message.type === 'user') for (const block of message.message?.content || []) {
+          const touch = block.type === 'tool_result' && !block.is_error ? edits.get(block.tool_use_id) : undefined;
+          if (touch) { edits.delete(block.tool_use_id); input.emit({ type: 'file_change', files: [touch] }); }
         }
         if (message.type === 'user') for (const block of message.message?.content || []) {
           if (block.type === 'tool_result') input.emit({ type: 'item_completed', itemId: block.tool_use_id, kind: 'other', ok: !block.is_error, summary: block.is_error ? 'Tool failed' : 'Completed in Claude Code' });

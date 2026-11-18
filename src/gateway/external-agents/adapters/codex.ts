@@ -14,6 +14,7 @@ import path from 'path';
 
 import { JsonRpcStdioClient, type JsonRpcServerRequest } from '../jsonrpc-stdio';
 import { compareVersions, readProgramVersion, resolveCodexCommand, type ResolvedCommand } from '../executable';
+import { codexFileTouches } from '../file-touches';
 import {
   sanitizeAgentText,
   type ExternalAgentAdapter,
@@ -361,6 +362,10 @@ export class CodexAdapter implements ExternalAgentAdapter {
         if (delta) ctx.emit({ type: 'reasoning_delta', text: delta });
         return;
       }
+      case 'item/reasoning/summaryPartAdded':
+        // A new section of the reasoning summary: keep the sections apart in the stream.
+        if (Number(params?.summaryIndex) > 0) ctx.emit({ type: 'reasoning_delta', text: '\n\n' });
+        return;
       case 'item/commandExecution/outputDelta': {
         const itemId = short(params?.itemId, 300);
         if (itemId) ctx.outputTail.set(itemId, `${ctx.outputTail.get(itemId) || ''}${String(params?.delta ?? '')}`.slice(-2000));
@@ -457,6 +462,8 @@ export class CodexAdapter implements ExternalAgentAdapter {
       detail = files.slice(0, 20).join('\n');
       ok = !['failed', 'declined'].includes(String(item.status));
       summary = ok ? (files.slice(0, 5).join(', ') || 'Done') : `Status: ${short(item.status, 40)}`;
+      // What Codex reports it applied builds the end-of-turn file card.
+      if (completed && ok) ctx.emit({ type: 'file_change', files: codexFileTouches(item) });
     } else if (type === 'mcpToolCall' || type === 'dynamicToolCall') {
       kind = 'mcp_tool';
       title = `Used ${short([item.server || item.namespace, item.tool].filter(Boolean).join(' / '), 120) || 'a tool'}`;
