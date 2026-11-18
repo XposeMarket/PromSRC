@@ -189,18 +189,38 @@ export class JsonRpcStdioClient {
     try { this.write({ jsonrpc: '2.0', id, error: { code, message } }); } catch { /* process gone */ }
   }
 
-  /** Kill the child and wait for it to exit (bounded). */
-  async stop(timeoutMs = 3000): Promise<void> {
+  /**
+   * Kill the child and wait for it to exit (bounded). Resolves true only once the exit was observed.
+   * `tree` also ends the commands the child started (Windows: taskkill /T; a plain kill leaves them running).
+   */
+  async stop(timeoutMs = 3000, opts: { tree?: boolean } = {}): Promise<boolean> {
     const child = this.child;
-    if (!child || this.exited) return;
-    await new Promise<void>((resolve) => {
+    if (!child || this.exited) return true;
+    return new Promise<boolean>((resolve) => {
+      let settled = false;
+      let last: NodeJS.Timeout | undefined;
+      const done = (gone: boolean) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (last) clearTimeout(last);
+        resolve(gone);
+      };
       const timer = setTimeout(() => {
         try { child.kill('SIGKILL'); } catch { /* ignore */ }
-        resolve();
+        // The forced kill needs a moment to land; only an observed exit counts as stopped.
+        last = setTimeout(() => done(this.exited), 2000);
       }, timeoutMs);
-      child.once('exit', () => { clearTimeout(timer); resolve(); });
+      child.once('exit', () => done(true));
       try { child.stdin.end(); } catch { /* ignore */ }
-      try { child.kill(); } catch { /* ignore */ }
+      const plainKill = () => { try { child.kill(); } catch { /* ignore */ } };
+      if (opts.tree && process.platform === 'win32' && child.pid) {
+        try {
+          spawn('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }).on('error', plainKill);
+        } catch { plainKill(); }
+      } else {
+        plainKill();
+      }
     });
   }
 

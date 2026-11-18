@@ -104,6 +104,7 @@ body.ea-agent-codex #chat-context-window-btn { display: none !important; }
 .ea-card-meta, .ea-card-reason, .ea-card-note { color: var(--ea-muted); font-size: 12px; }
 .ea-card-note { margin-top: 8px; }
 .ea-card-files { margin: 6px 0; padding-left: 18px; font-size: 12px; }
+.ea-card-grants li { white-space: pre-wrap; overflow-wrap: anywhere; }
 .ea-card-q { margin: 8px 0; }
 .ea-card-q-prompt { margin-bottom: 4px; }
 .ea-card-choices { display: grid; gap: 4px; }
