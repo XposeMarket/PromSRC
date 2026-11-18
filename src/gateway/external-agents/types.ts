@@ -132,6 +132,7 @@ export interface ExternalTurnResult {
   finalText: string;
   error?: string;
   model?: string;
+  fallbackModel?: string;
   /** The stored upstream session could not be found on resume. */
   upstreamMissing?: boolean;
 }

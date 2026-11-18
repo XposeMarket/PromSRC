@@ -246,6 +246,44 @@ async function main(): Promise<void> {
       await slow.shutdown();
     }
 
+    // ── Codex refuses its own configured model and no model was picked: one retry with a listed model, in the same thread ──
+    {
+      fs.writeFileSync(logFile, '');
+      const retried = makeAdapter('ready');
+      const events: any[] = [];
+      const result = await retried.runTurn({
+        sessionId: 's2m', cwd: workspace, text: 'BADMODEL please', signal: new AbortController().signal,
+        emit: (event) => events.push(event), requestUser: async () => ({ optionId: 'cancel' }),
+      });
+      assert.strictEqual(result.status, 'completed');
+      assert.strictEqual(result.fallbackModel, 'gpt-6-astra');
+      assert.strictEqual(result.model, 'gpt-6-astra');
+      const notices = events.filter((e) => e.type === 'notice' && String(e.text).includes("isn't available in this Codex version"));
+      assert.strictEqual(notices.length, 1, 'the user is told which model the chat switched to');
+      const turns = readLog().filter((m) => m.method === 'turn/start');
+      assert.strictEqual(turns.length, 2, 'exactly one retry');
+      assert.strictEqual(turns[0].params.model, undefined, 'the first attempt uses the model Codex is configured with');
+      assert.strictEqual(turns[1].params.model, 'gpt-6-astra');
+      assert.strictEqual(turns[1].params.threadId, result.upstreamSessionId, 'the retry stays in the same thread');
+      await retried.shutdown();
+    }
+
+    // ── A model the user picked is never swapped out: the refusal is shown with what to do ──
+    {
+      fs.writeFileSync(logFile, '');
+      const refused = makeAdapter('ready');
+      const result = await refused.runTurn({
+        sessionId: 's2n', cwd: workspace, text: 'BADMODEL please', model: 'refused-model', signal: new AbortController().signal,
+        emit: () => undefined, requestUser: async () => ({ optionId: 'cancel' }),
+      });
+      assert.strictEqual(result.status, 'failed');
+      assert.strictEqual(result.fallbackModel, undefined);
+      assert.match(String(result.error), /Choose another model for this chat, or update Codex\.$/);
+      assert.strictEqual(readLog().filter((m) => m.method === 'turn/start').length, 1, 'no retry');
+      await refused.shutdown();
+    }
+
+
     // ── Stop while a command runs: Codex confirms the stop but leaves the command going, so its process tree is ended ──
     {
       const runner = makeAdapter('ready');
