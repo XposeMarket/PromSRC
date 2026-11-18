@@ -1,29 +1,37 @@
-# OAuth pending action and phone completion repair
-Tier: 1; explicit live-fix authorization and separate review waiver in this incident.
+# Content-aware approvals
 Surface: both
-Parity: shared module: web-ui/src/features/connectors/connect-flow.js:92 shared controller and backend; mobile uses existing secure browser viewer, desktop retains external-browser flow. Real Chromium tests at desktop1440/mobile390.
-Size justification: one bounded end-to-end authorization repair requires shared controller, existing viewer, route helper, two regression tests and docs.
+Parity: Shared preview component in desktop chat/Teams/Tasks/Proposals and phone chat/Tasks/Proposals. Existing decisions and channel text fallback retained.
+Test: node --import tsx src/gateway/content-review.regression.ts
+Size justification: One shared preview contract spans existing approval, proposal, generation, and desktop/mobile hosts; generated UI churn is required by sync.
 ## Problem
-Saved credentials lost pending action after poll. After that fix, mobile still suppresses loopback authorization and sends user to PC.
+Approvals hide media and full captions/prompts. Raul approved the phone design and explicitly requested immediate solo build without tier/planning/review-agent ceremony. No merge authorization.
 ## Chosen approach
-Retain/recover pending action; wire mobile loopback connector OAuth to the existing in-house login handoff with paired/native-owner checks and server-derived browser identity/URL. Recheck exact attempt on viewer return, keep secrets DOM-only. No public callback or redirect config changes.
-## Files
-- src/connections/runtime.ts
-- scripts/test-connection-runtime-identity.cjs
-- .pr/SPEC.md
-- src/connections/adapters/connector-oauth.ts
-- src/connections/oauth-phone-handoff.ts
-- src/gateway/routes/connections-v2.router.ts
-- web-ui/src/features/connectors/connect-flow.js
-- web-ui/src/mobile/mobile-login-handoff.js
-- scripts/test-plugin-quick-connect.cjs
-- scripts/test-oauth-phone-handoff.cjs
-- workspace/self/12-connectors-mcp-integrations.md
+Extend existing cards with bounded content metadata and authenticated workspace media, full text and destination/settings. Inline edits request a new prepared approval, never mutate an authorized click. Proposal revision snapshots include previews. Gated generation tools derive previews from actual args, paid video quotes capture shot prompts/references. Preserve old cards. No new global generation gate or posting automation.
 ## Acceptance
-Test: node --import tsx scripts/test-connection-runtime-identity.cjs && node scripts/test-oauth-phone-handoff.cjs && node scripts/test-plugin-quick-connect.cjs
-Actual shared form -> save -> pending polls -> phone viewer -> provider callback -> connected; close/reopen without key reentry; desktop unchanged. Reject unpaired/spoofed/expired/terminal/wrong-adapter handoffs; no caller URL/session override. Build/UI checks plus live browser readiness. Synthetic test provider is not real X consent.
+Image/video/carousel/full text previews on both surfaces. Unsafe paths/text rejected or escaped. Long captions retained. Changes reject original grant and return feedback. Session/tool/one-shot tests retained. Proposal revision persistence tested. Video quote content changes require new review. Build/sync/typecheck/regression and actual renderer screenshots.
+## Files
+- .pr/SPEC.md
+- src/gateway/content-review.ts
+- src/gateway/content-review.regression.ts
+- src/gateway/video-content-review.ts
+- src/gateway/video-pending-approvals.ts
+- src/gateway/final-action-approvals.ts
+- src/gateway/verification-flow.ts
+- src/gateway/approval-actions.ts
+- src/gateway/agents-runtime/handlers/default-tools.ts
+- src/gateway/tools/defs/cis-system.ts
+- src/gateway/routes/settings.router.ts
+- src/gateway/routes/video-project.routes.ts
+- src/gateway/proposals/proposal-store.ts
+- web-ui/src/components/ContentReview.js
+- web-ui/src/pages/ChatPage.js
+- web-ui/src/pages/TeamsPage.js
+- web-ui/src/pages/TasksPage.js
+- web-ui/src/pages/ProposalsPage.js
+- web-ui/src/mobile/mobile-pages.js
+- web-ui/src/mobile/mobile-tasks-pages.js
+- web-ui/src/mobile/mobile-proposals-pages.js
+- scripts/test-content-review-ui.mjs
+- workspace/self/21-security-approvals-permissions.md
 ## Risks
-OAuth user consent still required by X; do not claim account connection until live status says connected. In-house Electron bridge required, fail clearly if unavailable. Preserve existing user approval and callback state/PKCE validation. Rollback only this branch's changed files, preserving other live hotfixes.
-
-## Scope notes
-Folded PR860 runtime identity hotfix already on live into this branch to eliminate docs/spec collision. Runtime code unchanged from deployed version. Both previous repairs remain available as standalone PRs; no merge performed.
+Preview metadata does not attest browser composer state or freeze file bytes. Require new prepared request after edit, retain visual recheck. No new claim of verified publication; existing approved state is not posted. Generation autopolicies remain unchanged. Actual live publication/payment not tested or authorized. Rollback revert feature commit. Self docs read/updated: self/21-security-approvals-permissions.md.
