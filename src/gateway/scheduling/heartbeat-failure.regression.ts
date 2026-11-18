@@ -1,4 +1,4 @@
-﻿import assert from 'node:assert/strict';
+import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -39,7 +39,7 @@ async function run() {
     assert.equal(status(id), 'ok');
     assert.equal(fs.existsSync(file(id)), false);
   }
-  assert.deepEqual(events, []); assert.deepEqual(messages, []); assert.equal(reviews, 0);
+  assert.equal(events.length, 0); assert.equal(messages.length, 0); assert.equal(reviews, 0);
   // Same wording without a diagnostic flag: never censor a model-authored result by text.
   result = { type: 'chat', text: retry };
   await manager.tick('scanner');
