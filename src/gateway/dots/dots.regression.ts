@@ -20,10 +20,12 @@ let seq = 0;
 const room: any[] = [];
 const sends: any[] = [];
 /** Fault switches for the fake backend. */
-const flags = { dropPostAnswer: false, getStatus: 0 };
+const flags = { dropPostAnswer: false, getStatus: 0, postStatus: 0 };
+/** Fake message times sit in the recent past of the real clock, as real ones do. */
+const T0 = Date.now() - 6 * 60 * 60_000;
 function msg(author: string, text: string, extra: any = {}) {
   seq += 1;
-  return { id: `${ROOM}~CalpicoMessage~Sentinel_${String(seq).padStart(4, '0')}`, created_at: new Date(Date.UTC(2026, 10, 18, 12, 0, seq)).toISOString(), role: 'user', account_user_id: author, content: { text, attachments: [] }, deleted_at: null, ...extra };
+  return { id: `${ROOM}~CalpicoMessage~Sentinel_${String(seq).padStart(4, '0')}`, created_at: new Date(T0 + seq * 1000).toISOString(), role: 'user', account_user_id: author, content: { text, attachments: [] }, deleted_at: null, ...extra };
 }
 room.push(msg(DOT_AUTHOR, 'Update: #894 is green.', { message_metadata: { turn_trigger: 'parent_notification' } }));
 room.push(msg('user-raul', 'thanks'));
@@ -43,6 +45,7 @@ room.push(msg('user-raul', 'thanks'));
     return json({ items: room.slice(-limit), next_cursor: null });
   }
   if (u.pathname === `/backend-api/messaging/rooms/${ROOM}/messages` && init.method === 'POST') {
+    if (flags.postStatus) return json({ detail: 'refused' }, flags.postStatus);
     const body = JSON.parse(init.body);
     sends.push(body);
     assert.equal(body.request_id, body.idempotency_token);
@@ -221,12 +224,42 @@ room.push(msg('user-raul', 'thanks'));
   await settle();
 
   // An unanswered send that never arrived is forgotten once the history shows it is not there; the retry posts once.
-  sync.addUncertainSend(ROOM, { token: 'never-arrived-token', textHash: crypto.createHash('sha256').update('ghost words').digest('hex'), at: Date.now() - 10 * 60_000 });
+  const hash = (text: string) => crypto.createHash('sha256').update(text).digest('hex');
+  sync.addUncertainSend(ROOM, { token: 'never-arrived-token', textHash: hash('ghost words'), at: Date.now() - 30 * 60_000 });
+  // One sent five minutes ago could still be on its way: absence from the history is not enough yet.
+  sync.addUncertainSend(ROOM, { token: 'too-young-token', textHash: hash('young words'), at: Date.now() - 5 * 60_000 });
+  // One sent before the history begins cannot be judged from it at all.
+  sync.addUncertainSend(ROOM, { token: 'before-history-token', textHash: hash('old words'), at: T0 - 24 * 60 * 60_000 });
   await sync.syncAllDots(true);
-  assert.equal(sync.getUncertainSends(ROOM).length, 0);
+  assert.deepEqual(sync.getUncertainSends(ROOM).map((entry) => entry.token), ['too-young-token', 'before-history-token']);
   await run('ghost words');
   assert.equal(posted('ghost words'), 1);
   await settle();
+
+  // A retry that ChatGPT refuses says nothing about the first attempt: it stays remembered, with its token.
+  flags.postStatus = 429;
+  assert.equal((await run('young words')).externalAgent.status, 'failed');
+  flags.postStatus = 0;
+  assert.ok(sync.getUncertainSends(ROOM).some((entry) => entry.token === 'too-young-token'), 'a refused retry keeps the first attempt');
+  assert.equal((await run('young words')).externalAgent.status, 'completed');
+  assert.equal(sends[sends.length - 1].idempotency_token, 'too-young-token', 'the retry goes out with the first attempt\'s token');
+  // A first attempt that is clearly refused leaves nothing behind.
+  flags.postStatus = 400;
+  assert.equal((await run('refused words')).externalAgent.status, 'failed');
+  flags.postStatus = 0;
+  assert.ok(!sync.getUncertainSends(ROOM).some((entry) => entry.textHash === hash('refused words')));
+  await settle();
+
+  // Unanswered sends are never pushed out by newer ones: past the limit a new send is refused instead.
+  for (let i = 0; i < 49; i += 1) sync.addUncertainSend(ROOM, { token: `filler-${i}`, textHash: hash(`filler ${i}`), at: Date.now() });
+  const full = await run('one too many');
+  assert.equal(full.externalAgent.status, 'failed');
+  assert.ok(full.text.includes(sync.DOT_TOO_MANY_TEXT));
+  assert.equal(posted('one too many'), 0);
+  assert.ok(sync.getUncertainSends(ROOM).some((entry) => entry.token === 'before-history-token'), 'the oldest unanswered send is still there');
+  for (let i = 0; i < 49; i += 1) sync.clearUncertainSend(ROOM, `filler-${i}`);
+  sync.clearUncertainSend(ROOM, 'before-history-token');
+  assert.equal(sync.getUncertainSends(ROOM).length, 0);
 
   // ChatGPT can't be read to check an unanswered send: the message is not sent blind.
   flags.dropPostAnswer = true;

@@ -8,7 +8,7 @@
  */
 import crypto from 'crypto';
 import { DotsApiError, hasOpenAISignIn, listRoomMessages, sendRoomMessage, type DotMessage } from '../../dots/dots-api';
-import { addUncertainSend, cancelDotsSync, clearUncertainSend, getDots, getSeenIds, getUncertainSends, rememberSeen, rememberSent, setDotRoomBusy } from '../../dots/dots-sync';
+import { addUncertainSend, cancelDotsSync, clearUncertainSend, getDots, getSeenIds, getUncertainSends, markUncertainLanded, rememberSeen, rememberSent, setDotRoomBusy } from '../../dots/dots-sync';
 import type { ExternalAgentAdapter, ExternalAgentVerifyResult, ExternalTurnInput, ExternalTurnResult } from '../types';
 
 const POLL_MS = 2_500;
@@ -83,6 +83,7 @@ export class OpenAIDotsAdapter implements ExternalAgentAdapter {
     // Replies are marked seen only once the chat has saved them, and the room stays busy until
     // then, so the background sync can neither lose them nor mirror them a second time.
     let released = false;
+    let consumeOnPersist = false;
     let safety: NodeJS.Timeout | null = null;
     const release = (acknowledge: boolean): void => {
       if (released) return;
@@ -90,6 +91,8 @@ export class OpenAIDotsAdapter implements ExternalAgentAdapter {
       if (safety) clearTimeout(safety);
       if (acknowledge) {
         try { rememberSeen(roomId, [...seenIds, ...replies.map((r) => r.id)]); } catch { /* the sync may show a reply twice, never loses one */ }
+        // The chat has saved that the earlier send arrived: only now do the same words count as a new message.
+        if (consumeOnPersist) { try { clearUncertainSend(roomId, token); } catch { /* kept: the next send is answered "already arrived" again */ } }
       }
       setDotRoomBusy(roomId, false);
     };
@@ -123,7 +126,7 @@ export class OpenAIDotsAdapter implements ExternalAgentAdapter {
       }
       // Replies the background sync already put in the chat while the first try was unanswered are not shown again.
       const already = landed ? getSeenIds(roomId) : new Set<string>();
-      if (landed) seenIds.push(landed.id);
+      if (landed) { seenIds.push(landed.id); markUncertainLanded(roomId, token); }
       if (!landed && !alreadySent) {
         // Saved before the request goes out, so the token survives a timeout or a restart.
         rememberSent(roomId, token);
@@ -131,8 +134,9 @@ export class OpenAIDotsAdapter implements ExternalAgentAdapter {
         const { message } = await sendRoomMessage(roomId, input.text, input.signal, token);
         if (message?.id) seenIds.push(message.id);
       }
-      // Answered, or told once that it had arrived: the same words sent again are then a new message.
-      clearUncertainSend(roomId, token);
+      // A send that was answered is settled now. One found to have arrived earlier keeps its protection
+      // until the chat has saved that outcome, so a crash or a stop in between cannot lead to a second post.
+      if (landed || alreadySent) consumeOnPersist = true; else clearUncertainSend(roomId, token);
       let lastNewAt = 0;
       let failures = 0;
       let lastPollFailed = false;
@@ -176,8 +180,9 @@ export class OpenAIDotsAdapter implements ExternalAgentAdapter {
       if (!stopReason && lastPollFailed && !replies.length) stopReason = 'ChatGPT could not be reached';
     } catch (error: any) {
       // A clear refusal means nothing was posted. Anything else (timeout, dropped connection)
-      // leaves the send marked uncertain, so the next try checks for it and reuses its token.
-      if (error instanceof DotsApiError && error.status >= 400 && error.status < 500) {
+      // leaves the send marked uncertain, so the next try checks for it and reuses its token. A refused
+      // RETRY says nothing about the first attempt, which may have arrived: that one stays remembered.
+      if (!prior && error instanceof DotsApiError && error.status >= 400 && error.status < 500) {
         try { clearUncertainSend(roomId, token); } catch { /* state file unavailable */ }
       }
       armSafety();
