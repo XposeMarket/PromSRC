@@ -184,6 +184,7 @@ export function showExternalAgentRequest(req, sessionId) {
     el.className = card.cardClass();
     el.innerHTML = card.cardHtml(req);
     card.cardHost().appendChild(el);
+    el.scrollIntoView?.({ block: 'nearest' });
   }).catch(() => {
     // Not shown: forget it so the next sync (reconnect, chat switch) tries again.
     if (st.cards.get(req.requestId)?.el === el) st.cards.delete(req.requestId);

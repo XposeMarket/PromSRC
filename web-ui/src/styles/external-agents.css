@@ -91,10 +91,12 @@ body.ea-agent-codex #chat-context-window-btn { display: none !important; }
 
 /* ---- Harness request cards ------------------------------------------------ */
 /* The card itself uses the native approval classes (.pm-chat-approval / .chat-approval-card).
-   Only harness-specific pieces live here. The host sits inside the composer (or just before the
-   mobile launcher) so it inherits the surface font and never floats. */
+   Only harness-specific pieces live here. The host sits at the end of the phone chat or at the top
+   of the desktop composer, so it inherits the surface font and never floats. */
 .ea-request-host { display: grid; gap: 8px; margin: 0 0 8px; font-family: var(--pm-font, inherit); }
 .ea-request-host:empty { display: none; }
+/* Phone: same spacing as Prometheus's own inline approval cards in the chat. */
+body.pm-mobile-active .ea-request-host { margin: 10px 0 2px; }
 .ea-request-host.ea-request-fallback { position: fixed; z-index: 10080; right: 20px; bottom: 120px; width: min(420px, calc(100vw - 40px)); }
 body.pm-mobile-active .ea-request-host.ea-request-fallback { left: 10px; right: 10px; width: auto; bottom: calc(var(--pm-tabbar-h, 0px) + env(safe-area-inset-bottom, 0px) + 140px); }
 .ea-request-host .ea-harness-card { margin: 0; }
@@ -103,6 +105,8 @@ body.pm-mobile-active .ea-request-host.ea-request-fallback { left: 10px; right: 
 .ea-card-text, .ea-card-grants, .ea-card-preview, .ea-card-sub {
   display: block; margin: 4px 0 0; font: 11px/1.45 ui-monospace, SFMono-Regular, Consolas, monospace;
   white-space: pre-wrap; overflow-wrap: anywhere;
+  /* Paths and content are shown exactly as given, whatever the native row style does to its label. */
+  text-transform: none; letter-spacing: normal; font-weight: 400;
 }
 .ea-card-preview { max-height: 180px; overflow: auto; padding: 8px; border-radius: 8px; background: var(--pm-bg-soft, transparent); }
 .ea-card-note { margin: 10px 0 0; font-size: 12px; color: var(--pm-muted, var(--muted, inherit)); }
