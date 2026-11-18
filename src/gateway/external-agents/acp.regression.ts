@@ -3,7 +3,7 @@ import path from 'path';
 import fs from 'fs';
 import os from 'os';
 import { AcpAdapter } from './adapters/acp';
-import { resolveWindowsShim } from './executable';
+import { resolveFromCandidates, resolveWindowsShim } from './executable';
 import type { ExternalTurnInput } from './types';
 async function main() {
  const outgoing: any[] = []; const events: any[] = []; let bound = '';
@@ -49,6 +49,13 @@ async function main() {
  assert.ok(shim, 'npm shim resolves');
  assert.equal(path.basename(shim!.command).toLowerCase(), 'node.exe', 'bundled interpreter runs the program');
  assert.deepEqual(shim!.args.map((a) => path.basename(a)), ['openclaw.mjs'], 'program is the entry script, not node.exe');
+ // The extensionless POSIX shim beside it is found first on PATH; on Windows it must resolve to the same program.
+ fs.writeFileSync(path.join(shimDir, 'openclaw'), '#!/bin/sh\nbasedir=$(dirname "$0")\nif [ -x "$basedir/node" ]; then\n  exec "$basedir/node"  "$basedir/node_modules/openclaw/openclaw.mjs" "$@"\nelse\n  exec node  "$basedir/node_modules/openclaw/openclaw.mjs" "$@"\nfi\n');
+ if (process.platform === 'win32') {
+   const posix = resolveFromCandidates([path.join(shimDir, 'openclaw')]);
+   assert.ok(posix && path.basename(posix.command).toLowerCase() === 'node.exe', 'extensionless shim is never spawned directly on Windows');
+   assert.deepEqual(posix!.args.map((a) => path.basename(a)), ['openclaw.mjs']);
+ }
  fs.rmSync(shimDir, { recursive: true, force: true });
  console.log('ACP regression: ok (fixture processes only)');
 }

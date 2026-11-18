@@ -82,7 +82,10 @@ export function resolveFromCandidates(candidates: string[]): ResolvedCommand | n
     if (!candidate) continue;
     const resolved = path.isAbsolute(candidate) ? candidate : '';
     if (resolved && isFile(resolved)) {
-      if (process.platform === 'win32' && /\.(cmd|bat|ps1)$/i.test(resolved)) {
+      // npm also writes an extensionless POSIX shell shim next to the .cmd one; PATH lookup
+      // (PATHEXT '' first) finds it before openclaw.cmd. Windows can't spawn it, so resolve
+      // it like the other shims (its $basedir/... entry names the same program).
+      if (process.platform === 'win32' && (/\.(cmd|bat|ps1)$/i.test(resolved) || !path.extname(resolved))) {
         const shim = resolveWindowsShim(resolved);
         if (shim) return shim;
         continue;
