@@ -1,7 +1,12 @@
 {
   "schemaVersion": 1,
+<<<<<<< HEAD
   "buildId": "33888e80de3d0441",
   "sourceDigest": "33888e80de3d044129cbbcd671473cfbede41a992d4bb382e2b289a295c4934b",
+=======
+  "buildId": "9f22661f25d53b2f",
+  "sourceDigest": "9f22661f25d53b2fd4cc0c3b067bb592c5d6b6bb59e46445720e08f64c38a6a8",
+>>>>>>> 295042b22 (fix(web): render priority provider icons instantly)
   "builder": {
     "name": "esbuild",
     "version": "0.27.3",
@@ -10,8 +15,13 @@
   "entries": {
     "desktop": {
       "html": "/index.html",
+<<<<<<< HEAD
       "js": "/build/entries/desktop-6HM2X5XK.js",
       "css": "/build/styles/desktop-TOSFFJBT.css",
+=======
+      "js": "/build/entries/desktop-4WJ7OTRW.js",
+      "css": "/build/styles/desktop-CREHVPM7.css",
+>>>>>>> 295042b22 (fix(web): render priority provider icons instantly)
       "modulePreloads": [
         "/build/chunks/chunk-36KIJFV6.js",
         "/build/chunks/chunk-M5JONE3D.js"
@@ -105,6 +115,7 @@
         "/build/inline/index-inline-05-0b108e28f4b7.js",
         "/build/inline/index-inline-06-716f958618af.js",
         "/build/inline/index-inline-07-ecc8cfa8ff4d.js",
+<<<<<<< HEAD
         "/build/inline/index-inline-08-4550e6a395a8.js",
         "/build/inline/index-inline-09-d99079ff0017.js",
         "/build/styles/desktop-TOSFFJBT.css"
@@ -116,6 +127,20 @@
       "jsGzipBytes": 33682,
       "cssBytes": 649915,
       "cssGzipBytes": 99764
+=======
+        "/build/inline/index-inline-08-881f76605cb0.js",
+        "/build/inline/index-inline-09-4550e6a395a8.js",
+        "/build/inline/index-inline-10-d99079ff0017.js",
+        "/build/styles/desktop-CREHVPM7.css"
+      ],
+      "files": 14,
+      "bytes": 857857,
+      "gzipBytes": 153563,
+      "jsBytes": 207181,
+      "jsGzipBytes": 53667,
+      "cssBytes": 650676,
+      "cssGzipBytes": 99896
+>>>>>>> 295042b22 (fix(web): render priority provider icons instantly)
     },
     "mobile": {
       "paths": [
@@ -3103,7 +3128,19 @@
       "imports": []
     },
     {
+<<<<<<< HEAD
       "path": "/build/inline/index-inline-08-4550e6a395a8.js",
+=======
+      "path": "/build/inline/index-inline-08-881f76605cb0.js",
+      "bytes": 172531,
+      "gzipBytes": 40830,
+      "sha256": "881f76605cb091bf8bc6d4c58da1889236a8b23a92bded8c1a72217df958ef0c",
+      "entryPoint": null,
+      "imports": []
+    },
+    {
+      "path": "/build/inline/index-inline-09-4550e6a395a8.js",
+>>>>>>> 295042b22 (fix(web): render priority provider icons instantly)
       "bytes": 1688,
       "gzipBytes": 792,
       "sha256": "4550e6a395a8fb12ddc358e2cef971062df2e219c5429bcf539ca15907560173",
@@ -3151,10 +3188,10 @@
       "imports": []
     },
     {
-      "path": "/build/styles/desktop-TOSFFJBT.css",
-      "bytes": 649915,
-      "gzipBytes": 99764,
-      "sha256": "55c5573947bd54ed9ff7c391367cc028880a62a9e7a33a266c25e5e9c776dfbe",
+      "path": "/build/styles/desktop-CREHVPM7.css",
+      "bytes": 650676,
+      "gzipBytes": 99896,
+      "sha256": "6282b295074bd415cb743ba6da7f6ac46b89793e7933a83242d83c4eb5ef1f09",
       "entryPoint": "web-ui/src/styles/desktop-entry.css",
       "imports": [
         {

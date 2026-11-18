@@ -23,6 +23,9 @@ assert.match(indexHtml, /function renderSidebarBranchIndicator\(session, placeme
 assert.match(indexHtml, /function showSidebarBranchPopover\(source\)/);
 assert.match(indexHtml, /renderSidebarBranchIndicator\(session, 'default'\)/);
 assert.match(indexHtml, /const branch = renderSidebarBranchIndicator\(s, 'priority'\)/);
+assert.match(indexHtml, /function renderPriorityProviderLogo\(session\)/);
+assert.match(indexHtml, /\$\{renderPriorityProviderLogo\(s\)\}/);
+assert.doesNotMatch(indexHtml, /<span class="priority-chat-model">/);
 assert.match(indexHtml, /ensureSidebarBranchMetadata\(\[\.\.\.pinned, \.\.\.displayedUnpinned\]\)/);
 assert.match(indexHtml, /ensureSidebarBranchMetadata\(activeSessions\.slice\(0, 80\)\)/);
 
