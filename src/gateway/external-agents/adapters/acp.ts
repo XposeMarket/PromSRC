@@ -1,4 +1,5 @@
 import os from 'os';
+import { acpToolToNative, toolResultText } from '../native-tool-map';
 import path from 'path';
 import { findOnPath, resolveFromCandidates, type ResolvedCommand } from '../executable';
 import { JsonRpcStdioClient } from '../jsonrpc-stdio';
@@ -86,9 +87,9 @@ export class AcpAdapter implements ExternalAgentAdapter {
         } else if (update.sessionUpdate === 'agent_thought_chunk' && update.content?.type === 'text') {
           input.emit({ type: 'reasoning_delta', text: update.content.text });
         } else if (update.sessionUpdate === 'tool_call') {
-          input.emit({ type: 'item_started', itemId: String(update.toolCallId), kind: 'other', title: String(update.title || 'Agent tool') });
+          input.emit({ type: 'item_started', itemId: String(update.toolCallId), kind: update.kind === 'execute' ? 'command' : 'other', title: String(update.title || 'Agent tool'), native: acpToolToNative(update) });
         } else if (update.sessionUpdate === 'tool_call_update' && ['completed', 'failed'].includes(update.status)) {
-          input.emit({ type: 'item_completed', itemId: String(update.toolCallId), kind: 'other', ok: update.status === 'completed', summary: String(update.title || update.status) });
+          input.emit({ type: 'item_completed', itemId: String(update.toolCallId), kind: 'other', ok: update.status === 'completed', summary: String(update.title || update.status), output: toolResultText(update.content) || toolResultText(update.rawOutput?.output ?? update.rawOutput?.stdout) });
         } else if (update.sessionUpdate === 'plan') {
           input.emit({ type: 'notice', text: (update.entries || []).map((entry: any) => `${entry.status}: ${entry.content}`).join('\n') });
         }

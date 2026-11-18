@@ -63,8 +63,10 @@ export type ExternalAgentEvent =
   | { type: 'state'; phase: 'starting' | 'resuming' | 'running' }
   | { type: 'text_delta'; text: string }
   | { type: 'reasoning_delta'; text: string }
-  | { type: 'item_started'; itemId: string; kind: ExternalItemKind; title: string; detail?: string }
-  | { type: 'item_completed'; itemId: string; kind: ExternalItemKind; ok: boolean; summary: string; exitCode?: number; title?: string }
+  /** native = the same tool name/args a Prometheus tool would show (display only). */
+  | { type: 'item_started'; itemId: string; kind: ExternalItemKind; title: string; detail?: string; native?: { name: string; args: Record<string, unknown> } }
+  /** output = the tool's own result text, shown where native tool output shows. */
+  | { type: 'item_completed'; itemId: string; kind: ExternalItemKind; ok: boolean; summary: string; exitCode?: number; title?: string; output?: string }
   | { type: 'usage'; usedTokens?: number; maxTokens?: number }
   | { type: 'notice'; text: string };
 

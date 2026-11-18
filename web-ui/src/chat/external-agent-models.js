@@ -2,6 +2,7 @@
 // Code, ...). The ORIGINAL desktop switcher and mobile reasoning sheet render
 // it; this module only supplies the harness's own models and effort levels.
 import { agentName } from './external-agent-ui.js';
+import { setAgentPlaceholder } from './external-agent-placeholder.js';
 let context = null;
 let revision = 0;
 let catalog = null;
@@ -10,6 +11,7 @@ let selected = '';
 let selectedEffort = '';
 const PROVIDER_FOR_AGENT = { codex: 'openai_codex', 'claude-code': 'anthropic' };
 export function setAgentModelContext(value) {
+  setAgentPlaceholder(value?.id || '');
   const key = value ? `${value.id}|${value.sessionId || ''}|${value.cwd || ''}` : '';
   if (key === (context?.key || '')) { if (value?.currentModel && catalog && !selected) catalog.currentModel = value.currentModel; return; }
   revision++; context = value ? { ...value, key } : null; catalog = null; loading = null;

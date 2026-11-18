@@ -1,6 +1,7 @@
 // Desktop: the ORIGINAL model switcher (quick reasoning slider + Advanced)
 // stays in charge. When a connected agent owns the chat it reads this hook
 // instead of Prometheus providers, so only the harness's models/efforts show.
+import { setAgentPlaceholder } from './external-agent-placeholder.js';
 import {
   setAgentModelContext, hasAgentModelContext, agentModelBadge, agentModelState, agentModelStateCached,
   saveAgentModel, saveAgentEffort, agentModelForSend, agentEffortForSend, agentEffortLabel,
@@ -29,6 +30,7 @@ function repaint() {
   return agentModelBadge(request).then((text) => { if (stamp === generation && current && text) paintLabel(text); }).catch(() => {});
 }
 export function setDesktopAgentModel(context) {
+  setAgentPlaceholder(context?.id || '');
   const label = document.getElementById('chat-model-name');
   const key = context ? `${context.id}|${context.sessionId || ''}|${context.cwd || ''}` : '';
   if (key === (current?.key || '')) return;

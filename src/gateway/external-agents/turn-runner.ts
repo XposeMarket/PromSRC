@@ -231,6 +231,9 @@ export async function runExternalAgentTurn(params: ExternalTurnRunParams, bindin
   activeExternalSessions.add(sessionId);
 
   let streamed = '';
+  // Native tool name per upstream item, so the call and its result pair up like a
+  // Prometheus tool in the stream (same labels, same rows, same "Worked for").
+  const nativeTools = new Map<string, { name: string; args: Record<string, unknown> }>();
   const emit = (event: ExternalAgentEvent) => {
     switch (event.type) {
       case 'state':
@@ -243,19 +246,24 @@ export async function runExternalAgentTurn(params: ExternalTurnRunParams, bindin
       case 'reasoning_delta':
         sendSSE('thinking_delta', { thinking: event.text, text: event.text, source: 'external', visibility: 'user', agentId: binding.agentId });
         return;
-      case 'item_started':
+      case 'item_started': {
+        const native = event.native || { name: '', args: event.title ? { title: event.title } : {} };
+        nativeTools.set(event.itemId, native);
         sendSSE('tool_call', {
-          action: event.title, name: event.title, args: event.detail ? { detail: event.detail } : {},
+          action: native.name, name: native.name, args: native.args,
           external: true, observed: true, agentId: binding.agentId, itemId: event.itemId, kind: event.kind,
         });
         return;
-      case 'item_completed':
+      }
+      case 'item_completed': {
+        const native = nativeTools.get(event.itemId) || { name: '', args: {} };
         sendSSE('tool_result', {
-          action: event.title || event.kind, result: event.summary, error: !event.ok,
+          action: native.name, name: native.name, args: native.args, result: event.output || event.summary, error: !event.ok,
           external: true, observed: true, agentId: binding.agentId, itemId: event.itemId, kind: event.kind,
           ...(event.exitCode !== undefined ? { exitCode: event.exitCode } : {}),
         });
         return;
+      }
       case 'usage':
         sendSSE('info', { source: 'external_agent_usage', agentId: binding.agentId, usedTokens: event.usedTokens, maxTokens: event.maxTokens });
         return;
