@@ -6,6 +6,8 @@
 import { Router } from 'express';
 
 import { listAgentGroups } from '../imports/import-agents';
+import { isPickableAgentFolder } from '../external-agents/scratch-folders';
+import { getConfig } from '../../config/config';
 import {
   getExternalAgentAdapter,
   isExternalAgentUsable,
@@ -210,8 +212,10 @@ router.get('/api/external-agents/:id/folders', (req, res) => {
   const id = requireAgentId(req, res);
   if (!id) return;
   try {
+    let workspacePath = '';
+    try { workspacePath = getConfig().getWorkspacePath(); } catch { /* picker still filters OS temp */ }
     const groups = listAgentGroups(id === 'claude-code' ? 'claude' : id).groups
-      .filter((group) => group.path)
+      .filter((group) => group.path && isPickableAgentFolder(group.path, { workspacePath }))
       .sort((a, b) => b.updatedAt - a.updatedAt)
       .slice(0, 20)
       .map((group) => ({ path: group.path, label: group.label, chatCount: group.chatCount, updatedAt: group.updatedAt }));
