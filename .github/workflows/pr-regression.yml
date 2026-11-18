@@ -141,6 +141,8 @@ jobs:
           npx tsx src/gateway/external-agents/claude-code.regression.ts
           npx tsx src/gateway/external-agents/models.regression.ts
           npx tsx src/gateway/external-agents/scratch-folders.regression.ts
+          npx tsx src/gateway/external-agents/native-tool-map.regression.ts
+          npx tsx src/gateway/dots/dots.regression.ts
       - name: Verify projects (instructions, notes, linked folders)
         run: |
           npx tsx src/gateway/projects/project-notes.regression.ts

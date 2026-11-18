@@ -145,6 +145,17 @@ room.push(msg('user-raul', 'thanks'));
   assert.equal((await sync.syncAllDots(true)).added, 1, 'the earlier dot post is not skipped');
   assert.ok(session.getSession(sid).history.some((m: any) => m.content === 'FYI: build finished.'));
 
+  // A dot is someone else's agent: a dot chat filed in a project still sends only the user's words.
+  const projects = require('../projects/project-store') as typeof import('../projects/project-store');
+  const dotProject = projects.createProject('Dot project');
+  projects.updateProject(dotProject.id, { instructions: 'Always use pnpm.' } as any);
+  projects.attachSessionToProject(dotProject.id, sid);
+  assert.ok(projects.buildHarnessProjectContext(sid), 'the project has context a harness chat would get');
+  await runner.runExternalAgentTurn({ sessionId: sid, message: 'plain words', sendSSE: () => undefined }, session.getSessionExternalAgent(sid)!);
+  assert.match(JSON.stringify(sends[sends.length - 1]), /plain words/);
+  assert.doesNotMatch(JSON.stringify(sends[sends.length - 1]), /Project context from Prometheus|pnpm/);
+  await sync.syncAllDots(true);
+
   // A send whose answer was lost is not posted twice when the same message is sent again.
   flags.dropPostAnswer = true;
   const dropped = await runner.runExternalAgentTurn({ sessionId: sid, message: 'dup check', sendSSE: () => undefined }, session.getSessionExternalAgent(sid)!);

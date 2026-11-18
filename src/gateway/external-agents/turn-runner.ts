@@ -306,7 +306,8 @@ export async function runExternalAgentTurn(params: ExternalTurnRunParams, bindin
   let upstreamText = params.message;
   let contextHash = '';
   try {
-    const block = /^\s*\//.test(params.message) ? null : buildHarnessProjectContext(sessionId);
+    // A contact (an OpenAI dot) is a conversation with someone else's agent: it gets the user's words only.
+    const block = adapter.kind === 'contact' || /^\s*\//.test(params.message) ? null : buildHarnessProjectContext(sessionId);
     if (block) {
       const hash = crypto.createHash('sha256').update(block).digest('hex').slice(0, 32);
       if (!binding.upstreamSessionId || binding.projectContextHash !== hash) {
