@@ -336,3 +336,12 @@ textarea.pm-project-folder-input { resize: vertical; min-height: 96px; line-heig
 .pm-msheet .pm-move-btn { min-height: 40px; }
 .pm-msheet .pm-move-new-row .pm-msheet-row-label { font-weight: 600; }
 .pm-new-project-popover .pm-project-folder, .chat-new-project-form .pm-project-folder { margin: 6px 0 4px; }
+
+/* Project folder field: explicit access for folders outside the workspace. */
+.pm-project-folder-access { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 7px 9px; border: 1px solid var(--ea-line, rgba(127,127,127,.25)); border-radius: 9px; font-size: 11.5px; line-height: 1.35; color: var(--ea-muted); }
+.pm-project-folder-access[hidden] { display: none; }
+.pm-project-folder-access > span { flex: 1 1 160px; min-width: 0; }
+.pm-project-folder-access .is-warn { color: var(--danger, #e5484d); }
+.pm-project-folder-access-btn { flex: 0 0 auto; border: 0; border-radius: 7px; padding: 5px 10px; font: inherit; font-weight: 600; cursor: pointer; background: var(--text-primary, #fff); color: var(--bg-primary, #000); }
+.pm-project-folder-access-btn.is-quiet { background: transparent; color: var(--ea-muted); text-decoration: underline; padding: 5px 2px; font-weight: 500; }
+.pm-project-folder-access-btn:disabled { opacity: .55; cursor: default; }

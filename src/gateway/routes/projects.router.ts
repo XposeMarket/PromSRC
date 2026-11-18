@@ -39,6 +39,9 @@ import {
   detachSessionFromProject,
   deleteSessionFromProject,
   resolveAllowedProjectDirectory,
+  describeProjectFolderAccess,
+  grantProjectFolderAccess,
+  revokeProjectFolderAccess,
   addKnowledgeFile,
   removeKnowledgeFile,
   listKnowledgeFiles,
@@ -56,7 +59,7 @@ const router = Router();
 
 function sendProjectError(res: Response, err: any, fallback: string): void {
   // A folder outside the allowed paths is a user choice to fix, not a server fault.
-  const userError = isStorageBoundaryError(err) || err?.code === 'PROJECT_DIR_NOT_ALLOWED';
+  const userError = isStorageBoundaryError(err) || err?.code === 'PROJECT_DIR_NOT_ALLOWED' || err?.code === 'PROJECT_DIR_NOT_GRANTABLE';
   res.status(userError ? 400 : 500).json({ error: err?.message || fallback });
 }
 
@@ -85,6 +88,23 @@ router.post('/api/projects', (req: Request, res: Response) => {
     if (!name) return res.status(400).json({ error: 'name is required' });
     res.status(201).json(createProject(name, resolveAllowedProjectDirectory(req.body?.workspacePath)));
   } catch (err: any) { sendProjectError(res, err, 'Failed to create project'); }
+});
+
+// Folder access for project links. Declared before /api/projects/:id so the path isn't
+// read as a project id. Granting adds the folder to the file-tool allowed paths.
+router.get('/api/projects/folder-access', (req: Request, res: Response) => {
+  try { res.json(describeProjectFolderAccess(req.query.path)); }
+  catch (err: any) { sendProjectError(res, err, 'Failed to check folder access'); }
+});
+
+router.post('/api/projects/folder-access', (req: Request, res: Response) => {
+  try { res.json({ ok: true, ...describeProjectFolderAccess(grantProjectFolderAccess(req.body?.path)) }); }
+  catch (err: any) { sendProjectError(res, err, 'Failed to allow folder access'); }
+});
+
+router.delete('/api/projects/folder-access', (req: Request, res: Response) => {
+  try { res.json({ ok: true, ...revokeProjectFolderAccess(req.body?.path ?? req.query.path) }); }
+  catch (err: any) { sendProjectError(res, err, 'Failed to remove folder access'); }
 });
 
 router.get('/api/projects/:id', (req: Request, res: Response) => {

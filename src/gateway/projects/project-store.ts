@@ -743,19 +743,102 @@ export function resolveAllowedProjectDirectory(value: unknown): string {
   const raw = String(value || '').trim();
   if (!raw) return '';
   const selected = path.resolve(raw);
-  const cfg = getConfig().getConfig() as any;
-  const allowedRoots = [cfg?.workspace?.path, ...(Array.isArray(cfg?.tools?.permissions?.files?.allowed_paths)
-    ? cfg.tools.permissions.files.allowed_paths
-    : [])]
-    .map((entry) => String(entry || '').trim())
-    .filter(Boolean)
-    .map((entry) => path.resolve(entry));
-  if (!allowedRoots.some((root) => isPathInside(root, selected))) {
-    const error: any = new Error('Project directory is outside the configured workspace paths. Add it to Settings before linking it.');
+  if (!folderAccessRoots().allowed.some((root) => isPathInside(root, selected))) {
+    const error: any = new Error('That folder is outside the folders Prometheus can access. Choose "Allow access" under the folder field first.');
     error.code = 'PROJECT_DIR_NOT_ALLOWED';
     throw error;
   }
   return selected;
+}
+
+// ─── Folder access for project links ─────────────────────────────────────────
+// Linking a project to a folder outside the workspace means Prometheus's file tools
+// can reach it, so the user grants that explicitly (REST only, from the folder field).
+// Agents keep using resolveAllowedProjectDirectory, which never widens access.
+
+function folderAccessRoots(): { workspace: string; allowed: string[]; blocked: string[] } {
+  const cfg = getConfig().getConfig() as any;
+  const clean = (list: unknown) => (Array.isArray(list) ? list : [])
+    .map((entry) => String(entry || '').trim()).filter(Boolean).map((entry) => path.resolve(entry));
+  const workspace = String(cfg?.workspace?.path || '').trim();
+  const files = cfg?.tools?.permissions?.files || {};
+  return {
+    workspace: workspace ? path.resolve(workspace) : '',
+    allowed: [...(workspace ? [path.resolve(workspace)] : []), ...clean(files.allowed_paths)],
+    blocked: clean(files.blocked_paths),
+  };
+}
+
+/** Why a folder can't be granted, or '' when it can. */
+function folderGrantRefusal(selected: string, blocked: string[]): string {
+  if (path.parse(selected).root === selected || samePath(path.parse(selected).root, selected)) {
+    return 'A whole drive can\'t be linked. Pick a folder inside it.';
+  }
+  const system = [process.env.SystemRoot, process.env.ProgramFiles, process.env['ProgramFiles(x86)'], process.env.ProgramData,
+    ...(process.platform === 'win32' ? [] : ['/bin', '/boot', '/dev', '/etc', '/lib', '/proc', '/sbin', '/sys', '/usr', '/var', '/System', '/Library'])]
+    .filter((entry): entry is string => !!entry);
+  if (system.some((root) => isPathInside(root, selected))) return 'System folders can\'t be linked.';
+  if (blocked.some((root) => isPathInside(root, selected))) return 'That folder is blocked in Settings.';
+  return '';
+}
+
+export interface ProjectFolderAccess {
+  path: string;
+  exists: boolean;
+  allowed: boolean;
+  /** The folder itself was granted (an exact allowed_paths entry), so it can be revoked here. */
+  revocable: boolean;
+  grantable: boolean;
+  reason?: string;
+}
+
+export function describeProjectFolderAccess(value: unknown): ProjectFolderAccess {
+  const raw = String(value || '').trim();
+  if (!raw || !path.isAbsolute(raw)) {
+    return { path: raw, exists: false, allowed: false, revocable: false, grantable: false, reason: raw ? 'Use a full folder path.' : '' };
+  }
+  const selected = path.resolve(raw);
+  let exists = false;
+  try { exists = fs.statSync(selected).isDirectory(); } catch { exists = false; }
+  const roots = folderAccessRoots();
+  const allowed = roots.allowed.some((root) => isPathInside(root, selected));
+  const revocable = !(roots.workspace && samePath(roots.workspace, selected))
+    && roots.allowed.some((root) => samePath(root, selected));
+  const refusal = exists ? folderGrantRefusal(selected, roots.blocked) : 'Folder not found on this computer.';
+  return { path: selected, exists, allowed, revocable, grantable: !allowed && !refusal, ...(refusal && !allowed ? { reason: refusal } : {}) };
+}
+
+function grantError(message: string): Error {
+  const error: any = new Error(message);
+  error.code = 'PROJECT_DIR_NOT_GRANTABLE';
+  return error;
+}
+
+/** Add a folder to the file-tool allowed paths so a project can link to it. */
+export function grantProjectFolderAccess(value: unknown): string {
+  const access = describeProjectFolderAccess(value);
+  if (access.allowed) return access.path;
+  if (!access.grantable) throw grantError(access.reason || 'That folder can\'t be linked.');
+  const cfg = getConfig().getConfig() as any;
+  const files = cfg?.tools?.permissions?.files || {};
+  const current = Array.isArray(files.allowed_paths) ? files.allowed_paths.map((p: unknown) => String(p || '')) : [];
+  getConfig().updateConfig({
+    tools: { ...(cfg.tools || {}), permissions: { ...(cfg.tools?.permissions || {}), files: { ...files, allowed_paths: [...current, access.path] } } },
+  } as any);
+  return access.path;
+}
+
+/** Undo a grant: remove the folder's own allowed_paths entry (never the workspace). */
+export function revokeProjectFolderAccess(value: unknown): ProjectFolderAccess {
+  const access = describeProjectFolderAccess(value);
+  if (!access.revocable) throw grantError('Only a folder that was allowed on its own can be removed here.');
+  const cfg = getConfig().getConfig() as any;
+  const files = cfg?.tools?.permissions?.files || {};
+  const current = Array.isArray(files.allowed_paths) ? files.allowed_paths.map((p: unknown) => String(p || '')) : [];
+  getConfig().updateConfig({
+    tools: { ...(cfg.tools || {}), permissions: { ...(cfg.tools?.permissions || {}), files: { ...files, allowed_paths: current.filter((p: string) => !samePath(p, access.path)) } } },
+  } as any);
+  return describeProjectFolderAccess(access.path);
 }
 
 export function findProjectBySessionId(sessionId: string): Project | null {

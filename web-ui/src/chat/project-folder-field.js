@@ -6,7 +6,7 @@
 //
 // Exposed as window.__pmProjectFolder so the large legacy page files only need
 // a one-line hook instead of importing this module.
-import { esc, loadAgentFolders, loadExternalAgents, selectableAgents } from './external-agent-ui.js';
+import { esc, externalAgentRequest, loadAgentFolders, loadExternalAgents, selectableAgents } from './external-agent-ui.js';
 
 let seq = 0;
 
@@ -23,6 +23,7 @@ export function projectFolderFieldHtml(prefix = 'pm', value = '') {
     <input id="${id}" class="pm-project-folder-input" data-project-folder type="text" autocomplete="off" spellcheck="false" value="${esc(value)}" placeholder="Paste a folder path to link" list="${id}-list" />
     <datalist id="${id}-list"></datalist>
     <div class="pm-project-folder-chips" data-project-folder-chips></div>
+    <div class="pm-project-folder-access" data-project-folder-access hidden></div>
     <div class="pm-project-folder-hint">Chats from any agent working in this folder show up in the project.</div>
   </div>`;
 }
@@ -58,7 +59,55 @@ export function wireProjectFolderField(root) {
     event.stopPropagation();
     input.value = chip.getAttribute('data-folder-path') || '';
     for (const c of chips.querySelectorAll('[data-folder-path]')) c.classList.toggle('is-active', c === chip);
+    void checkAccess();
   });
+  // Folders outside what Prometheus can access need an explicit "Allow access" first,
+  // because linking one also opens it to Prometheus's file tools.
+  const notice = field.querySelector('[data-project-folder-access]');
+  let checkSeq = 0;
+  let timer = 0;
+  const show = (html) => { if (!notice) return; notice.innerHTML = html; notice.hidden = !html; };
+  const render = (access) => {
+    if (!access?.path) return show('');
+    if (access.allowed && access.revocable) {
+      return show(`<span>Prometheus can access this folder.</span><button type="button" class="pm-project-folder-access-btn is-quiet" data-folder-access="revoke">Remove access</button>`);
+    }
+    if (access.allowed) return show('');
+    if (access.grantable) {
+      return show(`<span>Outside the folders Prometheus can access. Linking it lets Prometheus read and edit files there.</span><button type="button" class="pm-project-folder-access-btn" data-folder-access="grant">Allow access</button>`);
+    }
+    return show(`<span class="is-warn">${esc(access.reason || 'This folder can\'t be linked.')}</span>`);
+  };
+  async function checkAccess() {
+    const value = String(input?.value || '').trim();
+    const mine = ++checkSeq;
+    if (!value) return show('');
+    try {
+      const access = await externalAgentRequest(`/api/projects/folder-access?path=${encodeURIComponent(value)}`);
+      if (mine === checkSeq && field.isConnected) render(access);
+    } catch { if (mine === checkSeq) show(''); }
+  }
+  input?.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(() => void checkAccess(), 450); });
+  input?.addEventListener('change', () => { clearTimeout(timer); void checkAccess(); });
+  notice?.addEventListener('click', async (event) => {
+    const btn = event.target.closest('[data-folder-access]');
+    if (!btn) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const revoke = btn.getAttribute('data-folder-access') === 'revoke';
+    btn.disabled = true;
+    try {
+      const value = String(input?.value || '').trim();
+      const result = revoke
+        ? await externalAgentRequest(`/api/projects/folder-access?path=${encodeURIComponent(value)}`, { method: 'DELETE' })
+        : await externalAgentRequest('/api/projects/folder-access', { method: 'POST', body: { path: value } });
+      if (result?.error) throw new Error(result.error);
+      render(result);
+    } catch (error) {
+      show(`<span class="is-warn">${esc(error?.message || 'Could not change folder access.')}</span>`);
+    }
+  });
+  if (input?.value) void checkAccess();
   void suggestedProjectFolders().then((paths) => {
     if (!field.isConnected) return;
     if (list) list.innerHTML = paths.map((p) => `<option value="${esc(p)}"></option>`).join('');
