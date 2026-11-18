@@ -8,22 +8,22 @@
  */
 import crypto from 'crypto';
 import { DotsApiError, hasOpenAISignIn, listRoomMessages, sendRoomMessage, type DotMessage } from '../../dots/dots-api';
-import { cancelDotsSync, getDots, getSeenIds, getUncertainSend, rememberSeen, rememberSent, setDotRoomBusy, setUncertainSend } from '../../dots/dots-sync';
+import { addUncertainSend, cancelDotsSync, clearUncertainSend, getDots, getSeenIds, getUncertainSends, rememberSeen, rememberSent, setDotRoomBusy } from '../../dots/dots-sync';
 import type { ExternalAgentAdapter, ExternalAgentVerifyResult, ExternalTurnInput, ExternalTurnResult } from '../types';
 
 const POLL_MS = 2_500;
 const REPLY_WAIT_MS = 180_000;
 /** Dots often answer in several messages; stop once they have been quiet this long. */
 const QUIET_MS = 6_000;
-/** How long an unanswered send is remembered, so the same message sent again reuses its token. */
-const UNCERTAIN_SEND_MS = 10 * 60_000;
 /** Consecutive failed checks for a reply before the wait ends and says so. */
 const MAX_POLL_FAILURES = 5;
 /** If the chat never confirms it saved the reply, the room is freed anyway after this long. */
 const RELEASE_SAFETY_MS = 15_000;
 
-/** A retried send had already reached the dot, and the background sync already put the reply in the chat. */
-export const DOT_ALREADY_TEXT = '_That message had already reached your dot. Its reply is above._';
+/** The same words were sent again after a send that looked failed but had reached the dot. Said once; the next send posts. */
+export const DOT_ALREADY_TEXT = '_That message had already reached your dot, so it was not sent again. Send it once more if you meant to repeat it._';
+/** An earlier send of the same words is unanswered and ChatGPT's history could not be read to see if it arrived. */
+export const DOT_UNCHECKED_TEXT = "Not sent: an earlier try of this message got no answer, and ChatGPT couldn't be reached to see whether it arrived. Try again in a moment.";
 export const DOT_PENDING_TEXT = "_Sent. Your dot hasn't replied yet. Its reply will show up here when it does._";
 
 function sleep(ms: number, signal: AbortSignal): Promise<void> {
@@ -96,9 +96,12 @@ export class OpenAIDotsAdapter implements ExternalAgentAdapter {
     const afterPersist = (): void => release(true);
     const armSafety = (): void => { safety = setTimeout(() => release(false), RELEASE_SAFETY_MS); safety.unref?.(); };
     const textHash = crypto.createHash('sha256').update(String(input.text || '')).digest('hex');
-    const pending = getUncertainSend(roomId);
-    const reuse = pending && pending.textHash === textHash && Date.now() - pending.at < UNCERTAIN_SEND_MS ? pending.token : '';
-    const token = reuse || crypto.randomUUID();
+    // An earlier send of these same words that never got an answer. It is kept until ChatGPT's own history
+    // settles it, with no time limit and whatever else was sent since, so a retry cannot post twice.
+    const prior = getUncertainSends(roomId).find((entry) => entry.textHash === textHash) || null;
+    const token = prior?.token || crypto.randomUUID();
+    // Already known to have arrived: these words are answered once without posting again.
+    const alreadySent = !!prior?.landedAt;
     let stopReason = '';
     let alreadyShown = false;
     // The wait for a reply ends at the deadline even mid-request, and at once when the user stops the turn.
@@ -110,27 +113,30 @@ export class OpenAIDotsAdapter implements ExternalAgentAdapter {
     try {
       input.emit({ type: 'state', phase: 'running' });
       const sentAt = Date.now();
-      // An earlier send of this same message got no answer. If it did reach the dot, it is not posted again.
+      // The earlier send got no answer. Whether it reached the dot is checked first, and if that
+      // cannot be checked the message is not sent: posting blind is how a message goes out twice.
       let landed: DotMessage | null = null;
-      if (reuse) {
-        try { landed = (await listRoomMessages(roomId, 30, input.signal)).find((msg) => msg.requestId === reuse) || null; } catch { landed = null; }
+      if (prior && !alreadySent) {
+        let history: DotMessage[];
+        try { history = await listRoomMessages(roomId, 30, input.signal); } catch { throw new Error(DOT_UNCHECKED_TEXT); }
+        landed = history.find((msg) => msg.requestId === token) || null;
       }
       // Replies the background sync already put in the chat while the first try was unanswered are not shown again.
       const already = landed ? getSeenIds(roomId) : new Set<string>();
-      if (landed) {
-        seenIds.push(landed.id);
-      } else {
+      if (landed) seenIds.push(landed.id);
+      if (!landed && !alreadySent) {
         // Saved before the request goes out, so the token survives a timeout or a restart.
         rememberSent(roomId, token);
-        setUncertainSend(roomId, { token, textHash, at: Date.now() });
+        addUncertainSend(roomId, { token, textHash, at: Date.now() });
         const { message } = await sendRoomMessage(roomId, input.text, input.signal, token);
         if (message?.id) seenIds.push(message.id);
       }
-      setUncertainSend(roomId, null);
+      // Answered, or told once that it had arrived: the same words sent again are then a new message.
+      clearUncertainSend(roomId, token);
       let lastNewAt = 0;
       let failures = 0;
       let lastPollFailed = false;
-      while (Date.now() < deadline && !wait.signal.aborted) {
+      while (!alreadySent && Date.now() < deadline && !wait.signal.aborted) {
         await sleep(pollMs, wait.signal);
         if (wait.signal.aborted) break;
         let messages: DotMessage[];
@@ -170,9 +176,9 @@ export class OpenAIDotsAdapter implements ExternalAgentAdapter {
       if (!stopReason && lastPollFailed && !replies.length) stopReason = 'ChatGPT could not be reached';
     } catch (error: any) {
       // A clear refusal means nothing was posted. Anything else (timeout, dropped connection)
-      // leaves the send marked uncertain, so the next try reuses its token.
+      // leaves the send marked uncertain, so the next try checks for it and reuses its token.
       if (error instanceof DotsApiError && error.status >= 400 && error.status < 500) {
-        try { setUncertainSend(roomId, null); } catch { /* state file unavailable */ }
+        try { clearUncertainSend(roomId, token); } catch { /* state file unavailable */ }
       }
       armSafety();
       if (input.signal.aborted) return { upstreamSessionId: roomId, status: 'interrupted', finalText: '', afterPersist };
@@ -187,7 +193,7 @@ export class OpenAIDotsAdapter implements ExternalAgentAdapter {
     const unreachable = stopReason
       ? `_Sent, but Prometheus could not check for a reply (${stopReason}). The reply will show up here once ChatGPT can be reached again._`
       : '';
-    return { upstreamSessionId: roomId, status: 'completed', finalText: [finalText, unreachable].filter(Boolean).join('\n\n') || (alreadyShown ? DOT_ALREADY_TEXT : DOT_PENDING_TEXT), afterPersist };
+    return { upstreamSessionId: roomId, status: 'completed', finalText: [finalText, unreachable].filter(Boolean).join('\n\n') || (alreadyShown || alreadySent ? DOT_ALREADY_TEXT : DOT_PENDING_TEXT), afterPersist };
   }
 
   /** Turned off, or the gateway is stopping: no child process, but a sync that is mid-request is cancelled. */

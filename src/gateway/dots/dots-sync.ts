@@ -33,15 +33,24 @@ const SYNC_LIMIT = 32; // ChatGPT's maximum page size
 const DOTS_CACHE_MS = 5 * 60_000;
 const POLL_MS = 45_000;
 
-/** A send whose answer never came back. The same token is used again so a retry can't post twice. */
-export interface UncertainSend { token: string; textHash: string; at: number }
+/**
+ * A send whose answer never came back. It is kept until ChatGPT's own history settles it, with no time
+ * limit and whatever else is sent meanwhile, so a retry of the same words can't post twice.
+ * landedAt = it did reach the dot: the next send of the same words is answered once without posting again.
+ */
+export interface UncertainSend { token: string; textHash: string; at: number; landedAt?: number }
+const MAX_UNCERTAIN = 20;
+/** How long a send known to have arrived is remembered for that one "already sent" answer. */
+const LANDED_KEEP_MS = 24 * 60 * 60_000;
+/** A send missing from a history that reaches back past it, this long after it went out, never arrived. */
+const NEVER_ARRIVED_MS = 2 * 60_000;
 /**
  * floorAt = time of the oldest message imported on the first sync. History older than that is
  * never appended; everything newer is matched by id, so nothing in between can be skipped.
  * lastAt is the older, moving boundary and is only read to upgrade rooms saved before floorAt.
  * sent = idempotency tokens of messages sent from Prometheus (never mirrored back as ChatGPT messages).
  */
-interface RoomState { sessionId: string; seen: string[]; syncedAt?: number; lastAt?: number; floorAt?: number; sent?: string[]; uncertain?: UncertainSend }
+interface RoomState { sessionId: string; seen: string[]; syncedAt?: number; lastAt?: number; floorAt?: number; sent?: string[]; uncertain?: UncertainSend | UncertainSend[] }
 interface DotsState { version: 1; rooms: Record<string, RoomState> }
 
 function statePath(): string {
@@ -105,16 +114,64 @@ export function rememberSent(roomId: string, token: string): void {
   writeState(state);
 }
 
-export function getUncertainSend(roomId: string): UncertainSend | null {
-  return readState().rooms[roomId]?.uncertain || null;
+/** Rooms saved before there could be several hold a single entry. */
+function uncertainOf(room: RoomState | undefined): UncertainSend[] {
+  const raw = room?.uncertain;
+  return (Array.isArray(raw) ? raw : raw ? [raw] : []).filter((entry) => entry && typeof entry.token === 'string');
 }
 
-export function setUncertainSend(roomId: string, value: UncertainSend | null): void {
+function saveUncertain(roomId: string, change: (list: UncertainSend[]) => UncertainSend[]): void {
   const state = readState();
   const room = state.rooms[roomId] || { sessionId: dotSessionId(roomId), seen: [] };
-  if (value) room.uncertain = value; else delete room.uncertain;
+  const next = change(uncertainOf(room)).slice(-MAX_UNCERTAIN);
+  if (next.length) room.uncertain = next; else delete room.uncertain;
   state.rooms[roomId] = room;
   writeState(state);
+}
+
+export function getUncertainSends(roomId: string): UncertainSend[] {
+  return uncertainOf(readState().rooms[roomId]);
+}
+
+/** Remember a send before it goes out. Other unanswered sends in the room are kept. */
+export function addUncertainSend(roomId: string, value: UncertainSend): void {
+  saveUncertain(roomId, (list) => [...list.filter((entry) => entry.token !== value.token), value]);
+}
+
+/** The send was answered, clearly refused, or its "already sent" answer was given. */
+export function clearUncertainSend(roomId: string, token: string): void {
+  if (getUncertainSends(roomId).some((entry) => entry.token === token)) saveUncertain(roomId, (list) => list.filter((entry) => entry.token !== token));
+}
+
+/**
+ * Settle unanswered sends against the room's own history and return the ones found there for the first time.
+ * `full` = the page came back full, so older messages may exist beyond it.
+ */
+export function settleUncertainSends(roomId: string, messages: DotMessage[], full: boolean): UncertainSend[] {
+  if (!getUncertainSends(roomId).length) return [];
+  const now = Date.now();
+  const tokens = new Set(messages.map((msg) => msg.requestId).filter(Boolean));
+  const oldest = messages.length ? Math.min(...messages.map((msg) => msg.at)) : 0;
+  const landed: UncertainSend[] = [];
+  saveUncertain(roomId, (list) => list.flatMap((entry) => {
+    if (entry.landedAt) return now - entry.landedAt < LANDED_KEEP_MS ? [entry] : [];
+    if (tokens.has(entry.token)) {
+      const arrived = { ...entry, landedAt: now };
+      landed.push(arrived);
+      return [arrived];
+    }
+    // The history reaches back past the send (a minute of clock difference allowed) and does not have it.
+    const reachesBack = !full || (oldest > 0 && oldest < entry.at - 60_000);
+    return reachesBack && now - entry.at > NEVER_ARRIVED_MS ? [] : [entry];
+  }));
+  return landed;
+}
+
+/** Shown once when a send that looked failed turns out to have reached the dot. */
+export function dotLandedText(text: string): string {
+  const preview = String(text || '').replace(/\s+/g, ' ').trim();
+  const quoted = preview ? ` "${preview.length > 80 ? `${preview.slice(0, 77)}...` : preview}"` : '';
+  return `_Your message${quoted} did reach your dot, even though the send looked like it failed. No need to send it again._`;
 }
 
 const busyRooms = new Set<string>();
@@ -173,6 +230,12 @@ function mirror(sessionId: string, msg: DotMessage): void {
   { disableCompactionCheck: true, disableMemoryFlushCheck: true });
 }
 
+/** A line from Prometheus in the dot's chat, not a message from the dot. */
+function addNote(sessionId: string, content: string, timestamp: number): void {
+  addMessage(sessionId, { role: 'assistant', content, timestamp, suppressWorkTimer: true, externalAgent: { agentId: DOTS_AGENT_ID, status: 'completed' } } as any,
+    { disableCompactionCheck: true, disableMemoryFlushCheck: true });
+}
+
 /** Shown once when a catch-up page is entirely new, because older messages may sit beyond it. */
 export const DOT_GAP_TEXT = '_Some earlier messages from this dot are not shown here. Open ChatGPT to read them._';
 
@@ -187,6 +250,13 @@ export async function syncDotRoom(dot: DotInfo, signal?: AbortSignal): Promise<{
     const messages = await listRoomMessages(dot.roomId, first ? FIRST_SYNC_LIMIT : SYNC_LIMIT, signal);
     // A turn may have started while the request was out (it owns the room now), or Dots was turned off.
     if (busyRooms.has(dot.roomId) || signal?.aborted || !dotsEnabled()) return { sessionId, added: 0 };
+    // Unanswered sends are settled against this history. One that did arrive is said so in the chat, once,
+    // right after where it sits in the conversation, so it is not sent again by hand.
+    const landed = settleUncertainSends(dot.roomId, messages, messages.length >= (first ? FIRST_SYNC_LIMIT : SYNC_LIMIT));
+    for (const entry of landed) {
+      const mine = messages.find((msg) => msg.requestId === entry.token);
+      addNote(sessionId, dotLandedText(mine?.text || ''), (mine?.at || Date.now()) + 1);
+    }
     const current = readState().rooms[dot.roomId];
     const seen = new Set(current?.seen || []);
     const sent = new Set(current?.sent || []);
@@ -199,8 +269,7 @@ export async function syncDotRoom(dot: DotInfo, signal?: AbortSignal): Promise<{
     // ChatGPT's page size is the limit of what can be caught up. A full page with nothing
     // already mirrored means older messages may be missing, so the chat says so.
     if (!first && messages.length >= SYNC_LIMIT && fresh.length === messages.length) {
-      addMessage(sessionId, { role: 'assistant', content: DOT_GAP_TEXT, timestamp: (fresh[0].at || Date.now()) - 1, suppressWorkTimer: true, externalAgent: { agentId: DOTS_AGENT_ID, status: 'completed' } } as any,
-        { disableCompactionCheck: true, disableMemoryFlushCheck: true });
+      addNote(sessionId, DOT_GAP_TEXT, (fresh[0].at || Date.now()) - 1);
     }
     for (const msg of fresh) { mirror(sessionId, msg); waiting.add(msg.id); }
     // Saved to disk before the ids are marked seen: a crash can repeat a message, never lose one.
@@ -212,7 +281,8 @@ export async function syncDotRoom(dot: DotInfo, signal?: AbortSignal): Promise<{
       const oldest = messages.length ? Math.min(...messages.map((msg) => msg.at)) : 0;
       rememberSeen(dot.roomId, [...messages.map((msg) => msg.id), ...waiting], { synced: true, floorAt: first ? oldest : floor });
     }
-    if (fresh.length) {
+    if (landed.length && !fresh.length) flushSession(sessionId);
+    if (fresh.length || landed.length) {
       if (first) markSessionReadForMobile(sessionId);
       broadcastWS({ type: 'session_history_changed', sessionId, timestamp: Date.now(), source: 'openai_dots' });
     }

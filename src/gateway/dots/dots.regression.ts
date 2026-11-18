@@ -1,6 +1,7 @@
 // Regression: OpenAI Dots (one ongoing chat per dot). Fake chatgpt.com backend,
 // fixture sign-in, isolated data dir. Never contacts OpenAI or reads a real token.
 import assert from 'node:assert/strict';
+import crypto from 'crypto';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -64,7 +65,7 @@ room.push(msg('user-raul', 'thanks'));
   const registry = require('../external-agents/registry') as typeof import('../external-agents/registry');
   const runner = require('../external-agents/turn-runner') as typeof import('../external-agents/turn-runner');
   const session = require('../session') as typeof import('../session');
-  const { OpenAIDotsAdapter, DOT_PENDING_TEXT, DOT_ALREADY_TEXT } = require('../external-agents/adapters/openai-dots') as typeof import('../external-agents/adapters/openai-dots');
+  const { OpenAIDotsAdapter, DOT_PENDING_TEXT, DOT_ALREADY_TEXT, DOT_UNCHECKED_TEXT } = require('../external-agents/adapters/openai-dots') as typeof import('../external-agents/adapters/openai-dots');
 
   // Parsing.
   assert.equal(api.parseDot({ id: 'x', messaging_room_id: 'bad room!' }), null);
@@ -179,6 +180,78 @@ room.push(msg('user-raul', 'thanks'));
   assert.equal(sends.filter((body) => body.content.text === 'dup check two').length, 1);
   assert.equal(retried2.text, DOT_ALREADY_TEXT);
   assert.equal((await sync.syncAllDots(true)).added, 0);
+
+  const run = (message: string) => runner.runExternalAgentTurn({ sessionId: sid, message, sendSSE: () => undefined }, session.getSessionExternalAgent(sid)!);
+  const posted = (text: string) => sends.filter((body) => body.content.text === text).length;
+  const settle = async () => { await new Promise((r) => setTimeout(r, 150)); await sync.syncAllDots(true); };
+
+  // A retry long after the lost answer is still not posted twice: an unanswered send has no time limit.
+  flags.dropPostAnswer = true;
+  assert.equal((await run('late retry')).externalAgent.status, 'failed');
+  const stale = sync.getUncertainSends(ROOM).find((entry) => !entry.landedAt)!;
+  sync.addUncertainSend(ROOM, { ...stale, at: Date.now() - 3 * 60 * 60_000 });
+  assert.equal((await run('late retry')).externalAgent.status, 'completed');
+  assert.equal(posted('late retry'), 1, 'a retry hours later reuses the first send');
+  assert.equal(sync.getUncertainSends(ROOM).length, 0);
+  await settle();
+
+  // Something else sent in between does not forget the unanswered send.
+  flags.dropPostAnswer = true;
+  assert.equal((await run('first words')).externalAgent.status, 'failed');
+  assert.equal((await run('other words')).externalAgent.status, 'completed');
+  assert.equal(sync.getUncertainSends(ROOM).length, 1, 'the unanswered send is still remembered');
+  assert.equal((await run('first words')).externalAgent.status, 'completed');
+  assert.equal(posted('first words'), 1, 'sending something else in between does not make the retry post again');
+  assert.equal(posted('other words'), 1);
+  await settle();
+
+  // The sync finds that an unanswered send did arrive and says so once. The same words sent again are
+  // answered without posting; sent once more they are a deliberate repeat and go out.
+  flags.dropPostAnswer = true;
+  assert.equal((await run('noted words')).externalAgent.status, 'failed');
+  await settle();
+  assert.ok(session.getSession(sid).history.some((m: any) => m.content === sync.dotLandedText('noted words')), 'the chat says the message did arrive');
+  assert.equal((await sync.syncAllDots(true)).added, 0, 'said once');
+  assert.equal(session.getSession(sid).history.filter((m: any) => m.content === sync.dotLandedText('noted words')).length, 1);
+  const noted = await run('noted words');
+  assert.equal(noted.text, DOT_ALREADY_TEXT);
+  assert.equal(posted('noted words'), 1);
+  await run('noted words');
+  assert.equal(posted('noted words'), 2, 'the same words sent once more are a new message');
+  await settle();
+
+  // An unanswered send that never arrived is forgotten once the history shows it is not there; the retry posts once.
+  sync.addUncertainSend(ROOM, { token: 'never-arrived-token', textHash: crypto.createHash('sha256').update('ghost words').digest('hex'), at: Date.now() - 10 * 60_000 });
+  await sync.syncAllDots(true);
+  assert.equal(sync.getUncertainSends(ROOM).length, 0);
+  await run('ghost words');
+  assert.equal(posted('ghost words'), 1);
+  await settle();
+
+  // ChatGPT can't be read to check an unanswered send: the message is not sent blind.
+  flags.dropPostAnswer = true;
+  assert.equal((await run('blind words')).externalAgent.status, 'failed');
+  flags.getStatus = 503;
+  const blind = await run('blind words');
+  assert.equal(blind.externalAgent.status, 'failed');
+  assert.ok(blind.text.includes(DOT_UNCHECKED_TEXT), 'the chat says why it was not sent');
+  assert.equal(posted('blind words'), 1, 'nothing is posted while the earlier send cannot be checked');
+  flags.getStatus = 0;
+  assert.equal((await run('blind words')).externalAgent.status, 'completed');
+  assert.equal(posted('blind words'), 1);
+  await settle();
+
+  // A room saved before several unanswered sends could be kept still reads its single entry.
+  {
+    const { getConfig } = require('../../config/config') as typeof import('../../config/config');
+    const stateFile = path.join(getConfig().getConfigDir(), 'dots', 'state.json');
+    const saved = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+    saved.rooms[ROOM].uncertain = { token: 'legacy-token', textHash: 'x', at: Date.now() };
+    fs.writeFileSync(stateFile, JSON.stringify(saved));
+    assert.deepEqual(sync.getUncertainSends(ROOM).map((entry) => entry.token), ['legacy-token']);
+    sync.clearUncertainSend(ROOM, 'legacy-token');
+    assert.equal(sync.getUncertainSends(ROOM).length, 0);
+  }
 
   // A whole page of new messages means older ones may be missing: the chat says so.
   for (let i = 0; i < 40; i += 1) room.push(msg(DOT_AUTHOR, `burst ${i}`, { message_metadata: { turn_trigger: 'parent_notification' } }));
