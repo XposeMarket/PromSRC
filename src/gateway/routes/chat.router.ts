@@ -21,7 +21,7 @@ import { execFile } from 'child_process';
 import { createTurnTimingRecorder, type TurnTimingRecorder } from '../chat/turn-timing';
 import { shouldRecordWorkerBatchTiming } from '../chat/worker-batch-timing';
 import { goalReminderForTool } from '../chat/goal-reminder';
-import { classifyMainChatStreamEvent } from '../chat/main-chat-stream';
+import { createMainChatStreamStore, type MainChatStreamFrame, type MainChatStreamState } from '../chat/main-chat-stream-store';
 import { ModelResponseRecovery } from '../chat/model-response-recovery';
 import { presentProviderCallFailure } from '../chat/provider-error-presentation';
 import { attemptModelDigest, buildDeterministicTurnDigest, describeTurnCutoffCause } from '../chat/degraded-turn-finish';
@@ -86,6 +86,7 @@ import {
   buildDurableCommentaryContext,
 } from '../context/commentary-context';
 import { getSubagentChatHistory } from '../agents-runtime/subagent-chat-store';
+import { BrainRunBudget, type BrainRunBudgetOptions } from '../agents-runtime/brain-run-budget';
 import {
   collectRichArtifacts,
   extractVisualArtifactsFromMarkdown,
@@ -149,7 +150,6 @@ import {
   isMainChatExecutionAgeExceeded,
   isLiveBackgroundJoin,
   resolveMainChatAbortSettlement,
-  isMainChatSemanticProgressEvent,
   isMainChatSemanticProgressStalled,
   isMainChatStreamOwnerOrphaned,
 } from '../chat/main-chat-execution-owner';
@@ -913,224 +913,16 @@ async function collectTurnFileChanges(toolResults: any[] | undefined, workspaceP
   };
 }
 
-type MainChatStreamFrame = {
-  seq: number;
-  type: string;
-  at: number;
-  data: Record<string, any>;
-};
-
-type MainChatStreamState = {
-  sessionId: string;
-  streamId: string;
-  startedAt: number;
-  updatedAt: number;
-  lastSemanticProgressAt: number;
-  lastSemanticEvent?: string;
-  runtimeId?: string;
-  admissionLeaseId?: string;
-  active: boolean;
-  nextSeq: number;
-  events: MainChatStreamFrame[];
-  completedAt?: number;
-  terminalReason?: string;
-  abortExecution?: (reason: string) => void;
-  /** Latest declared plan; replay cursors can skip its frames. */
-  progressState?: any;
-};
-
-const mainChatStreams = new Map<string, MainChatStreamState>();
-const MAIN_CHAT_STREAM_MAX_EVENTS = 12000;
-const MAIN_CHAT_STREAM_TTL_MS = 45 * 60 * 1000;
-// A stream/lease without a running runtime can exist briefly while a caller is
-// wiring up SSE.  It must never become a permanent admission lock, though.
 const MAIN_CHAT_OWNER_WATCHDOG_INTERVAL_MS = 15_000;
-const MAIN_CHAT_WS_UPDATE_THROTTLE_MS = 900;
-const MAIN_CHAT_WS_DIRECT_EVENTS = new Set([
-  'user_message',
-  'session_title',
-  'agent_mode',
-  'ui_preflight',
-  'info',
-  'tool_call',
-  'tool_result',
-  'tool_progress',
-  'progress_state',
-  'thinking',
-  'agent_thought',
-  'vision_injected',
-  'final',
-  'done',
-  'error',
-  'warn',
-  'runtime_registered',
-]);
-const mainChatStreamUpdateTimers = new Map<string, NodeJS.Timeout>();
-
-function getMainChatStream(sessionId: string): MainChatStreamState | null {
-  const sid = String(sessionId || '').trim();
-  if (!sid) return null;
-  return mainChatStreams.get(sid) || null;
-}
-
-function pruneMainChatStreams(): void {
-  const cutoff = Date.now() - MAIN_CHAT_STREAM_TTL_MS;
-  for (const [sessionId, stream] of mainChatStreams.entries()) {
-    if (!stream.active && Number(stream.completedAt || stream.updatedAt || 0) < cutoff) {
-      mainChatStreams.delete(sessionId);
-    }
-  }
-}
-
-function beginMainChatStream(sessionId: string, runtimeId?: string, admissionLeaseId?: string): MainChatStreamState {
-  pruneMainChatStreams();
-  const sid = String(sessionId || 'default').trim() || 'default';
-  const stream: MainChatStreamState = {
-    sessionId: sid,
-    streamId: crypto.randomUUID(),
-    startedAt: Date.now(),
-    updatedAt: Date.now(),
-    lastSemanticProgressAt: Date.now(),
-    runtimeId: runtimeId || undefined,
-    admissionLeaseId: admissionLeaseId || undefined,
-    active: true,
-    nextSeq: 1,
-    events: [],
-  };
-  mainChatStreams.set(sid, stream);
-  return stream;
-}
-
-function broadcastMainChatStreamUpdate(stream: MainChatStreamState, frame: MainChatStreamFrame): void {
-  try {
-    broadcastWS({
-      type: 'main_chat_stream_update',
-      sessionId: stream.sessionId,
-      streamId: stream.streamId,
-      lastSeq: frame.seq,
-      event: frame.type,
-      at: frame.at,
-      active: stream.active,
-    });
-  } catch {}
-}
-
-function scheduleMainChatStreamUpdate(stream: MainChatStreamState, frame: MainChatStreamFrame): void {
-  const key = `${stream.sessionId}:${stream.streamId}`;
-  if (mainChatStreamUpdateTimers.has(key)) return;
-  const timer = setTimeout(() => {
-    mainChatStreamUpdateTimers.delete(key);
-    const latest = stream.events[stream.events.length - 1] || frame;
-    broadcastMainChatStreamUpdate(stream, latest);
-  }, MAIN_CHAT_WS_UPDATE_THROTTLE_MS);
-  if (typeof (timer as any).unref === 'function') (timer as any).unref();
-  mainChatStreamUpdateTimers.set(key, timer);
-}
-
-function finishMainChatStream(sessionId: string, streamId: string): void {
-  const stream = getMainChatStream(sessionId);
-  if (!stream || stream.streamId !== streamId) return;
-  stream.active = false;
-  stream.completedAt = Date.now();
-  stream.updatedAt = stream.completedAt;
-  const key = `${stream.sessionId}:${stream.streamId}`;
-  const timer = mainChatStreamUpdateTimers.get(key);
-  if (timer) {
-    clearTimeout(timer);
-    mainChatStreamUpdateTimers.delete(key);
-  }
-  const latest = stream.events[stream.events.length - 1];
-  if (latest) broadcastMainChatStreamUpdate(stream, latest);
-}
-
-function findSessionMainChatRuntime(sessionId: string): { id: string } | null {
-  const sid = String(sessionId || '').trim();
-  if (!sid) return null;
-  const match = listLiveRuntimes().find((runtime: any) =>
-    (runtime.kind === 'main_chat' || runtime.kind === 'main_chat_goal')
-    && String(runtime.sessionId || '') === sid
-    && String(runtime.status || 'running') === 'running'
-    && !runtime.abortRequestedAt
-    // A runtime mirrored from a draining previous gateway belongs to a turn
-    // running in that other process. Adopting it made a new timer turn look
-    // owned until the old gateway exited, then the owner watchdog killed it
-    // as runtime_missing.
-    && !(Number(runtime.remoteHostPid || 0) > 0));
-  return match ? { id: match.id } : null;
-}
-
-function finishMainChatStreamAsOrphaned(sessionId: string, stream: MainChatStreamState, reason: string): void {
-  if (!stream.active) return;
-  try {
-    // The durable runtime is already gone, so there is no registry abort hook
-    // left to call. Abort the request-owned controller directly before
-    // releasing the stream/coordinator; otherwise the provider promise could
-    // continue consuming memory behind a stream that the gateway considers
-    // finished.
-    stream.abortExecution?.(reason);
-  } catch (error: any) {
-    console.warn(`[main-chat-owner] failed to abort orphaned stream=${stream.streamId}:`, error?.message || error);
-  }
-  appendMainChatStreamEvent(sessionId, stream.streamId, 'error', {
-    code: 'MAIN_CHAT_RUNTIME_OWNER_LOST',
-    message: 'The active Chat execution owner was lost. This turn was interrupted and must be retried.',
-    reason: String(reason || 'runtime_owner_lost').slice(0, 160),
-    runtimeId: stream.runtimeId,
-  });
-  stream.terminalReason = String(reason || 'runtime_owner_lost').slice(0, 160);
-  finishMainChatStream(sessionId, stream.streamId);
-}
-
-function appendMainChatStreamEvent(sessionId: string, streamId: string, type: string, data: any): MainChatStreamFrame | null {
-  const stream = getMainChatStream(sessionId);
-  if (!stream || stream.streamId !== streamId) return null;
-  const cleanData = data && typeof data === 'object' ? { ...data } : {};
-  const frame: MainChatStreamFrame = {
-    seq: stream.nextSeq++,
-    type: String(type || 'event'),
-    at: Date.now(),
-    data: cleanData,
-  };
-  if (frame.type === 'progress_state') stream.progressState = frame.data;
-  const delivery = classifyMainChatStreamEvent(frame.type, frame.data);
-  const retain = delivery.retain;
-  if (retain) {
-    stream.events.push(frame);
-    if (stream.events.length > MAIN_CHAT_STREAM_MAX_EVENTS) {
-      stream.events.splice(0, stream.events.length - MAIN_CHAT_STREAM_MAX_EVENTS);
-    }
-  }
-  stream.updatedAt = frame.at;
-  if (isMainChatSemanticProgressEvent(frame.type)) {
-    stream.lastSemanticProgressAt = frame.at;
-    stream.lastSemanticEvent = frame.type;
-  }
-  if (delivery.live) {
-    try {
-      broadcastWS({
-        type: 'main_chat_stream_event',
-        sessionId: stream.sessionId,
-        streamId: stream.streamId,
-        seq: frame.seq,
-        event: frame.type,
-        at: frame.at,
-        data: frame.data,
-      });
-    } catch {}
-  } else if (retain) {
-    scheduleMainChatStreamUpdate(stream, frame);
-  }
-  return frame;
-}
-
-function buildDurableToolStreamTrace(sessionId: string): Record<string, any>[] | undefined {
-  const stream = getMainChatStream(sessionId);
-  if (!stream) return undefined;
-  // A tool trace is useful even when a turn contains no screenshot. The old
-  // vision-only gate silently discarded every recovered tool/result/thought
-  // entry for ordinary mobile turns.
-  return buildDurableChatTraceFromFrames(stream.events, `trace_${stream.streamId}`);
-}
+const mainChatStreamStore = createMainChatStreamStore({
+  broadcastWS: (event) => broadcastWS(event),
+  listLiveRuntimes: () => listLiveRuntimes(),
+});
+const {
+  mainChatStreams, getMainChatStream, pruneMainChatStreams, beginMainChatStream, finishMainChatStream,
+  findSessionMainChatRuntime, finishMainChatStreamAsOrphaned,
+  appendMainChatStreamEvent, buildDurableToolStreamTrace,
+} = mainChatStreamStore;
 
 function truncateRuntimeProcessText(value: unknown, max = 4000): string {
   const text = String(value ?? '').trim();
@@ -2702,7 +2494,7 @@ async function handleChatUntraced(
    * sized bubble splitting. Errors thrown by this callback are swallowed.
    */
   callerOnToken?: (token: string) => void,
-  runtimeOptions?: { directSubagentChat?: boolean; syntheticThreadSupervisionReview?: boolean; supervisionLoop?: boolean; silentSupervisionLoop?: boolean; supervisionOwnerSessionId?: string; supervisionId?: string; excludedSkillIds?: string[]; forcedSkillIds?: string[]; instructionCallerRequirements?: string[]; timingRecorder?: TurnTimingRecorder; turnRouteSnapshot?: TurnRouteSnapshot; promptMemoryMode?: 'full' | 'compact'; brainThoughtRuntime?: boolean; allowNativeWorkspaceTools?: boolean; runtimeId?: string; admissionLease?: RuntimeAdmissionLease; skipAutomaticToolCategoryActivation?: boolean; toolCategoryDetectionText?: string; speedOverride?: 'standard' | 'fast'; internalWatchContext?: { watchId: string; actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed'; targetTaskId?: string; delivery: 'follow_up' | 'live_steer' } },
+  runtimeOptions?: { directSubagentChat?: boolean; syntheticThreadSupervisionReview?: boolean; supervisionLoop?: boolean; silentSupervisionLoop?: boolean; supervisionOwnerSessionId?: string; supervisionId?: string; excludedSkillIds?: string[]; forcedSkillIds?: string[]; instructionCallerRequirements?: string[]; timingRecorder?: TurnTimingRecorder; turnRouteSnapshot?: TurnRouteSnapshot; promptMemoryMode?: 'full' | 'compact'; brainThoughtRuntime?: boolean; allowNativeWorkspaceTools?: boolean; runtimeId?: string; admissionLease?: RuntimeAdmissionLease; skipAutomaticToolCategoryActivation?: boolean; toolCategoryDetectionText?: string; speedOverride?: 'standard' | 'fast'; brainRunBudget?: BrainRunBudgetOptions; internalWatchContext?: { watchId: string; actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed'; targetTaskId?: string; delivery: 'follow_up' | 'live_steer' } },
 ): Promise<HandleChatResult> {
   const latencyStartAt = Date.now();
   // Stable key for this turn's cross-turn edit-log entries. Restart-resumed
@@ -3499,6 +3291,10 @@ async function handleChatUntraced(
     sendSSE('tool_category_provisioning', payload);
   };
   let tools: any[] = [];
+  // Only Brain Dream/cleanup opts into this guard. It lives at the provider
+  // boundary so retries and the helper-model fallback cannot bypass it.
+  const brainRunBudget = runtimeOptions?.brainRunBudget ? new BrainRunBudget(runtimeOptions.brainRunBudget) : null;
+  let brainRunBudgetHit: 'model_calls' | 'input_tokens' | undefined;
   let currentProviderCallIteration: number | null = null;
   const allToolResults: ToolResult[] = [];
   // ── Dispatch-time tool policy (src/gateway/chat/tool-dispatch-policy.ts) ──
@@ -6199,6 +5995,9 @@ Do not produce prose. Use the canonical thread tool now.` });
     // for primary to do. Build the reply from what we already know in-memory.
 
     let response: any;
+    // Per-round cursor is captured immediately before the admitted provider call
+    // and consumed after its response, so stale session events cannot reconcile.
+    let brainProviderUsageCursor: ReturnType<typeof captureModelUsageLogCursor> | null = null;
     let responseStopReason: string | undefined;
     let responseIncompleteCause: string | undefined;
     let isGrokGeneration = false;
@@ -6208,7 +6007,9 @@ Do not produce prose. Use the canonical thread tool now.` });
     const finishDegradedTurn = async (reason: string, cause?: string, partialText?: string, skipModel = false): Promise<string> => {
       const opts = { reason, cause, partialText, userRequest: message };
       const deterministic = buildDeterministicTurnDigest(allToolResults, opts);
-      if (abortSignal?.aborted || skipModel) return deterministic;
+      // The run budget is hard: finalization must preserve completed tool output
+      // without spending one more model call for a prose digest.
+      if (abortSignal?.aborted || skipModel || brainRunBudget) return deterministic;
       const causeLabel = describeTurnCutoffCause(reason, cause);
       sendSSE('info', { message: `Turn was cut off (${causeLabel}); writing a status summary from saved tool results.` });
       let route: ReturnType<typeof resolveProviderModelOverride> | TurnRouteSnapshot;
@@ -6502,7 +6303,7 @@ Do not produce prose. Use the canonical thread tool now.` });
       });
       // The first provider call gets the same token-budget guard as later
       // rounds. A single huge first turn can therefore compact immediately.
-      if (round === 0 && (!sessionId.startsWith('subagent_') || isDirectSubagentChatTurn) && midWorkflowCompactionsThisTurn < 3) {
+      if (!brainRunBudget && round === 0 && (!sessionId.startsWith('subagent_') || isDirectSubagentChatTurn) && midWorkflowCompactionsThisTurn < 3) {
         const preflightCompact = await maybeRunMidWorkflowCompaction({
           sessionId,
           messages,
@@ -6639,6 +6440,22 @@ Do not produce prose. Use the canonical thread tool now.` });
             },
           })
         : null;
+      brainProviderUsageCursor = brainRunBudget ? captureModelUsageLogCursor() : null;
+      const brainBudgetDecision = brainRunBudget?.tryReserve(messages, generationOptions.tools);
+      if (brainBudgetDecision && !brainBudgetDecision.allowed) {
+        brainRunBudgetHit = brainBudgetDecision.hit;
+        const snapshot = brainBudgetDecision.snapshot;
+        const budgetCause = `model calls ${snapshot.modelCalls}/${snapshot.maxModelCalls}; input tokens ${snapshot.inputTokens}/${snapshot.maxInputTokens}`;
+        sendSSE('info', { message: `Brain run budget reached (${budgetCause}). Finishing with saved output.` });
+        return {
+          type: 'chat',
+          text: await finishDegradedTurn('brain_run_budget', budgetCause, lastPartialText, true),
+          thinking: allThinking || undefined,
+          reasoningSummary: normalizeReasoningSummary(allReasoningSummary),
+          toolResults: allToolResults.length > 0 ? allToolResults : undefined,
+          brainRunBudget: { ...snapshot, hit: brainBudgetDecision.hit },
+        } as any;
+      }
       const generationPromise = (async () => {
         try {
           return await withSpan(
@@ -6651,7 +6468,9 @@ Do not produce prose. Use the canonical thread tool now.` });
           if (isUsageLimitError(helperErr)) {
             try { recordProviderUsageExhausted(String(generationOverride.providerId || '')); } catch {}
           }
-          if (!helperRoundActive || abortSignal?.aborted || !admittedRouteSnapshot) throw helperErr;
+          // A helper fallback is another provider request. Budgeted Brain runs
+          // must never make it implicitly after their reserved request fails.
+          if (brainRunBudget || !helperRoundActive || abortSignal?.aborted || !admittedRouteSnapshot) throw helperErr;
           const helperLabel = `${generationOverride.providerId}/${generationOverride.model}`;
           const mainLabel = `${admittedRouteSnapshot.providerId}/${admittedRouteSnapshot.model}`;
           console.warn(`[switch_model] helper ${helperLabel} failed (${String(helperErr?.message || helperErr).slice(0, 200)}); falling back to main ${mainLabel}`);
@@ -6822,6 +6641,29 @@ Do not produce prose. Use the canonical thread tool now.` });
         toolResults: preservedToolResults,
       };
     }
+
+    // Provider usage is reconciled after every admitted request. The current
+    // response completes normally; an actual overage blocks every next round.
+    if (brainRunBudget) {
+      const actualEvent = brainProviderUsageCursor ? readModelUsageEventsSince(brainProviderUsageCursor, sessionId, turnTiming.turnId).at(-1) : undefined;
+      const actualInput = actualEvent ? resolveProviderPromptTokens(actualEvent) : Number(response?.usage?.inputTokens || 0);
+      const actualBudget = brainRunBudget.reconcileActualInput(actualInput);
+      if (actualBudget.hit) brainRunBudgetHit = actualBudget.hit;
+    }
+    if (brainRunBudgetHit && brainRunBudget) {
+      const snapshot = brainRunBudget.snapshot();
+      const budgetCause = `model calls ${snapshot.modelCalls}/${snapshot.maxModelCalls}; input tokens ${snapshot.inputTokens}/${snapshot.maxInputTokens}`;
+      sendSSE('info', { message: `Brain run budget reached (${budgetCause}). Preserving this response and ending the run.` });
+      return {
+        type: 'chat',
+        text: String(response?.content || await finishDegradedTurn('brain_run_budget', budgetCause, lastPartialText, true)),
+        thinking: allThinking || undefined,
+        reasoningSummary: normalizeReasoningSummary(allReasoningSummary),
+        toolResults: allToolResults.length > 0 ? allToolResults : undefined,
+        brainRunBudget: snapshot,
+      } as any;
+    }
+
 
     let toolCalls = response.tool_calls;
 
@@ -8698,7 +8540,7 @@ Do not produce prose. Use the canonical thread tool now.` });
 
 
     if ((!sessionId.startsWith('subagent_') || isDirectSubagentChatTurn) && midWorkflowCompactionsThisTurn < 3) {
-      const midCompact = await maybeRunMidWorkflowCompaction({
+      const midCompact = !brainRunBudget ? await maybeRunMidWorkflowCompaction({
         sessionId,
         messages,
         toolResults: allToolResults.slice(compactedToolResultCount),
@@ -8708,7 +8550,7 @@ Do not produce prose. Use the canonical thread tool now.` });
         sendSSE,
         abortSignal,
         routeSnapshot: activeGenerationRouteSnapshot,
-      });
+      }) : { compacted: false };
       if (midCompact.compacted) {
         midWorkflowCompactionsThisTurn++;
         compactedToolResultCount = allToolResults.length;
@@ -9301,7 +9143,7 @@ async function runInteractiveTurn(
 	  attachments?: Array<{ base64: string; mimeType: string; name: string }>,
     attachmentPreviews?: any[],
     modelOverride?: string,
-    flags?: { syntheticGoalContinuation?: boolean; syntheticSubagentCompletion?: boolean; syntheticThreadSupervisionReview?: boolean; supervisionLoop?: boolean; silentSupervisionLoop?: boolean; supervisionOwnerSessionId?: string; supervisionId?: string; syntheticInternalWatch?: boolean; syntheticRestartRecovery?: boolean; internalWatchContextInstalled?: boolean; internalWatchContext?: { watchId: string; actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed'; targetTaskId?: string; delivery: 'follow_up' | 'live_steer' }; directSubagentChat?: boolean; excludedSkillIds?: string[]; forcedSkillIds?: string[]; toolFilter?: string[]; timingRecorder?: TurnTimingRecorder; preAcquiredTurnLease?: SessionTurnLease; runtimeId?: string; turnContextId?: string; promptMemoryMode?: 'full' | 'compact' },
+    flags?: { syntheticGoalContinuation?: boolean; syntheticSubagentCompletion?: boolean; syntheticThreadSupervisionReview?: boolean; supervisionLoop?: boolean; silentSupervisionLoop?: boolean; supervisionOwnerSessionId?: string; supervisionId?: string; syntheticInternalWatch?: boolean; syntheticRestartRecovery?: boolean; internalWatchContextInstalled?: boolean; internalWatchContext?: { watchId: string; actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed'; targetTaskId?: string; delivery: 'follow_up' | 'live_steer' }; directSubagentChat?: boolean; excludedSkillIds?: string[]; forcedSkillIds?: string[]; toolFilter?: string[]; timingRecorder?: TurnTimingRecorder; preAcquiredTurnLease?: SessionTurnLease; runtimeId?: string; turnContextId?: string; promptMemoryMode?: 'full' | 'compact'; brainRunBudget?: BrainRunBudgetOptions },
     turnOriginInput?: TurnOrigin,
     requestMeta?: { clientRequestId?: string },
     /** Optional token-stream sink forwarded to handleChat (see callerOnToken there). */
@@ -9861,6 +9703,7 @@ async function runInteractiveTurn(
         timingRecorder: turnTiming,
         turnRouteSnapshot,
         promptMemoryMode: flags?.promptMemoryMode,
+        brainRunBudget: flags?.brainRunBudget,
         runtimeId: flags?.runtimeId,
         // Restart-resumed turns keep the root turn id so the cross-turn edit
         // log files pre- and post-restart edits under one turn.

@@ -42,6 +42,7 @@ import {
   markGatewayStarted,
   getLocalDateStr,
   getWindowLabel,
+  getThoughtArtifactKey,
   fmtUtc,
   fmtLocal,
   resolveThoughtCoverageCursor,
@@ -409,6 +410,8 @@ type BrainChatRuntimeOptions = {
   brainThoughtRuntime?: boolean;
   allowNativeWorkspaceTools?: boolean;
   runtimeId?: string;
+  /** Hard provider-call/input admission guard for Dream and cleanup only. */
+  brainRunBudget?: { maxModelCalls?: number; maxInputTokens?: number };
 };
 
 export type BrainScheduledChatKind = 'thought' | 'dream' | 'dream_cleanup';
@@ -419,6 +422,9 @@ export function brainScheduledChatRuntimeOptions(
 ): BrainChatRuntimeOptions {
   return {
     ...(kind === 'thought' ? { brainThoughtRuntime: true } : {}),
+    // Defaults are resolved in the shared budget module; env overrides avoid a
+    // UI/state migration while still applying independently to Dream/cleanup.
+    ...(kind === 'dream' || kind === 'dream_cleanup' ? { brainRunBudget: {} } : {}),
     allowNativeWorkspaceTools: true,
     runtimeId,
   };
@@ -443,6 +449,7 @@ type HandleChatFn = (
   text: string;
   thinking?: string;
   toolResults?: Array<{ name: string; args: any; result: string; error: boolean }>;
+  brainRunBudget?: { maxModelCalls: number; maxInputTokens: number; modelCalls: number; inputTokens: number; hit?: 'model_calls' | 'input_tokens' };
 }>;
 
 type ChatRouterHandleChatFn = typeof import('../routes/chat.router').handleChat;
@@ -1158,7 +1165,11 @@ export class BrainRunner {
     this.thoughtRunning = true;
     const runStartedAt = Date.now();
 
-    const windowLabel = getWindowLabel(windowStart);
+    // The artifact folder and HH-mm label describe the same local window start,
+    // including catch-up runs whose supplied target day differs from that window.
+    const thoughtArtifact = getThoughtArtifactKey(windowStart);
+    dateStr = thoughtArtifact.date;
+    const windowLabel = thoughtArtifact.label;
     const runId       = crypto.randomUUID();
     const sessionId   = `brain_thought_${dateStr}_${windowLabel}`;
     const taskMirror = createBrainTask({
@@ -1230,7 +1241,7 @@ export class BrainRunner {
 	      { disableCompactionCheck: true, disableMemoryFlushCheck: true },
 	    );
 
-    const outFile = `thoughts/${dateStr}/${windowLabel}-thought.md`;
+    const outFile = thoughtArtifact.file;
     const absOutFile = path.join(getBrainDir(), outFile);
     const workspaceOutFile = path.join('Brain', outFile).replace(/\\/g, '/');
       const capsuleFile = path.posix.join('Brain', 'context-capsules', dateStr, `${windowLabel}-capsules.json`);
@@ -1659,6 +1670,7 @@ export class BrainRunner {
 	    let toolResults: Array<{ name: string; args: any; result: string; error: boolean }> = [];
 	    try {
 	      activateToolCategory(sessionId, 'file_ops');
+        activateToolCategory(sessionId, 'skills'); // curator status/reject must exist in cron tool surface
 	      activateToolCategory(sessionId, 'browser'); // deep competitor/OSS research on JS-heavy pages
 	      if (!isPublicBrainProfile()) {
 	        activateToolCategory(sessionId, 'source_read');
@@ -1731,6 +1743,7 @@ export class BrainRunner {
           'skill_resource_read',
           'skill_audit_all',
           'skill_candidate_submit',
+          'skill_curator',
           'write_proposal',
         ]),
         undefined,
@@ -1738,11 +1751,20 @@ export class BrainRunner {
         undefined,
         brainScheduledChatRuntimeOptions('dream', runtimeId),
       );
+      const budget = result?.brainRunBudget;
+      const budgetHit = budget?.hit;
+      const budgetNote = budgetHit && budget
+        ? `[Brain run budget reached: ${budgetHit}; calls ${budget.modelCalls}/${budget.maxModelCalls}; input tokens ${budget.inputTokens}/${budget.maxInputTokens}. Saved tool output and artifact recovery were preserved.]`
+        : '';
       resultText = abortSignal.aborted
         ? `ABORTED: Brain dream run aborted${abortSignal.reason ? ` (${abortSignal.reason})` : ' by operator'}.`
-        : (result?.text || '');
+        : `${result?.text || ''}${budgetNote ? `\n\n${budgetNote}` : ''}`;
+      // A model may already have written a fresh artifact. Record the cutoff in
+      // that file too, not only in the returned text/recovery path.
+      const freshBudgetArtifact = budgetNote && (() => { try { const st = fs.statSync(absOutFile); return st.size > 0 && st.mtimeMs >= runStartedAt - 5000; } catch { return false; } })();
+      if (freshBudgetArtifact) fs.appendFileSync(absOutFile, `\n\n## Run Budget\n${budgetNote}\n`, 'utf-8');
       toolResults = Array.isArray(result?.toolResults) ? result.toolResults : [];
-      checkpointBrainRuntime(runtimeId, 'model_turn_completed', { phase: 'finalizing' });
+      checkpointBrainRuntime(runtimeId, 'model_turn_completed', { phase: 'finalizing', budgetHit: budgetHit || false });
 	    } catch (err: any) {
 	      resultText = `Error: ${err?.message || String(err)}`;
 	      console.error(`[BrainRunner] Dream for ${dateStr} failed:`, err?.message);
@@ -2069,6 +2091,7 @@ export class BrainRunner {
     let toolResults: Array<{ name: string; args: any; result: string; error: boolean }> = [];
     try {
       activateToolCategory(sessionId, 'file_ops');
+      activateToolCategory(sessionId, 'skills'); // do not rely on persisted session categories
       setSessionMutationScope(sessionId, {
         allowedFiles: [workspaceOutFile, 'USER.md', 'SOUL.md', 'MEMORY.md'],
         allowedDirs: [
@@ -2118,11 +2141,18 @@ export class BrainRunner {
         undefined,
         brainScheduledChatRuntimeOptions('dream_cleanup', runtimeId),
       );
+      const budget = result?.brainRunBudget;
+      const budgetHit = budget?.hit;
+      const budgetNote = budgetHit && budget
+        ? `[Brain run budget reached: ${budgetHit}; calls ${budget.modelCalls}/${budget.maxModelCalls}; input tokens ${budget.inputTokens}/${budget.maxInputTokens}. Saved tool output and artifact recovery were preserved.]`
+        : '';
       resultText = abortSignal.aborted
         ? `ABORTED: Brain dream cleanup run aborted${abortSignal.reason ? ` (${abortSignal.reason})` : ' by operator'}.`
-        : (result?.text || '');
+        : `${result?.text || ''}${budgetNote ? `\n\n${budgetNote}` : ''}`;
+      const freshBudgetArtifact = budgetNote && (() => { try { const st = fs.statSync(absOutFile); return st.size > 0 && st.mtimeMs >= runStartedAt - 5000; } catch { return false; } })();
+      if (freshBudgetArtifact) fs.appendFileSync(absOutFile, `\n\n## Run Budget\n${budgetNote}\n`, 'utf-8');
       toolResults = Array.isArray(result?.toolResults) ? result.toolResults : [];
-      checkpointBrainRuntime(runtimeId, 'model_turn_completed', { phase: 'finalizing' });
+      checkpointBrainRuntime(runtimeId, 'model_turn_completed', { phase: 'finalizing', budgetHit: budgetHit || false });
     } catch (err: any) {
       resultText = `Error: ${err?.message || String(err)}`;
       console.error(`[BrainRunner] Dream cleanup for ${dateStr} failed:`, err?.message);
@@ -2446,7 +2476,7 @@ PHASE 1 — LOAD TODAY'S THOUGHTS
 ════════════════════════════════════════════════════════════
 
 List directory: ${thoughtsDirRel}
-Read ALL *-thought.md files found there.
+Read the *-thought.md summaries as PRIMARY evidence. Never bulk-read raw activity packages or transcripts. Select at most three unresolved questions first, then inspect only bounded raw evidence needed to answer them.
 
 Also load for context:
   - ${userMdFileRel}     — current USER.md (needed for memory dedup)
@@ -2715,7 +2745,8 @@ Do not perform broad rewrites. Do not polish prose for style alone. Do not compr
 
 STEP 3 - SKILL CURATOR CRITIC REVIEW
 Run:
-- skill_curator action=status
+- skill_curator action=status statusFilter=pending
+- Rejected items are durably suppressed for 90 days. Do not re-review raw skill-gardener candidates as a second curator queue. Use statusFilter=rejected only for an explicit audit; action=restore id=<id> is the deliberate override.
 
 Review the current skill curator queue, daily skill-change audit, and recent applied suggestions. Focus on suggestions created/applied by the Brain Skill Curator plus review-only audit items for normal Prometheus/Thought/Dream skill changes, especially:
 - lessonType=recovery, style_pattern, component_recipe, workflow_recipe, trigger_patch, instruction_patch
@@ -2741,7 +2772,7 @@ Quality gate for curator lessons:
 
 Allowed skill critic actions:
 - To inspect: skill_read, skill_inspect, skill_resource_list, skill_resource_read, skill_audit_all
-- To reject a bad pending item: skill_curator action=reject id=<suggestion id>
+- To reject a bad pending item: CALL skill_curator action=reject id=<suggestion id> and verify its successful result. A written recommendation is not a rejection. Record the id and returned action in this cleanup report.
 - To propose a revert or refinement: skill_candidate_submit with the exact skill id, resource path, rationale, and evidence
 
 Do not apply pending high-risk suggestions. Do not create a new skill. Do not delete anything except an auto-applied curator resource that clearly fails the quality gate. Do not apply bulk metadata repair previews from cleanup; record them for the next Dream.
@@ -2846,7 +2877,7 @@ The dream should contain a little wonder. Use a few grounded "I wonder if..." ob
 PHASE 1 - LOAD THE TARGET DATE'S THOUGHTS
 
 List directory: ${thoughtsDirRel}
-Read all *-thought.md files found there.
+Read the window's *-thought.md summaries as PRIMARY evidence. Do not bulk-read activity packages, transcripts, or raw event logs. First select at most three concrete unresolved questions from these summaries; drill into bounded raw evidence only for those questions. Missing summaries must be reported, not replaced by wholesale raw-package replay.
 Also list Brain/context-capsules/${dateStr} and read every *-capsules.json sidecar. Capsule count is evidence-driven and has no fixed limit; do not discard valid threads just to make a short list.
 
 Also load for context:

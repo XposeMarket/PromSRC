@@ -303,6 +303,14 @@ export function getWindowLabel(d: Date): string {
   return `${h}-${m}`;
 }
 
+/** Stable local-window artifact key; readers retain YYYY-MM-DD/HH-mm globs. */
+export function getThoughtArtifactKey(windowStart: Date): { date: string; label: string; file: string } {
+  const date = getLocalDateStr(windowStart);
+  const label = getWindowLabel(windowStart);
+  return { date, label, file: `thoughts/${date}/${label}-thought.md` };
+}
+
+
 /** Format a Date as "YYYY-MM-DD HH:MM UTC" */
 export function fmtUtc(d: Date): string {
   return d.toISOString().replace('T', ' ').slice(0, 16) + ' UTC';

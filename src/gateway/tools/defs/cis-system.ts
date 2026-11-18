@@ -1488,9 +1488,9 @@ export function getCisSystemTools(): any[] {
         parameters: {
           type: 'object',
           properties: {
-            action: { type: 'string', enum: ['status', 'run', 'apply', 'reject'] },
+            action: { type: 'string', enum: ['status', 'run', 'apply', 'reject', 'restore'] },
             mode: { type: 'string', enum: ['dry-run', 'pending', 'auto-safe'], description: 'For action=run. Defaults to dry-run; auto-safe is currently mutation-frozen.' },
-            id: { type: 'string', description: 'Suggestion id for apply/reject.' },
+            id: { type: 'string', description: 'Suggestion id for apply/reject/restore. Rejections persist for 90 days; restore explicitly overrides suppression.' },
             limit: { type: 'number', description: 'For status. Compact rows to return; defaults to 5, maximum 100.' },
             cursor: { type: 'number', description: 'For status pagination. Zero-based offset.' },
             statusFilter: { type: 'string', description: 'For status. Restrict to one suggestion status.' },
