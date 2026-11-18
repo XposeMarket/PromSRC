@@ -78,7 +78,8 @@ router.get('/api/connection-attempts/:id', (req, res) => {
 
 // A trusted surface may open an empty form. Only the existing protected save/connect routes authorize changes.
 router.post('/api/connection-attempts/:id/prepare-input', async (req, res) => {
-  if (!secureInputTransportAllowed(req) || !pluginSetupSurfaceState(req).canConfigure) { res.status(403).json({ error: 'OWNER_SURFACE_REQUIRED' }); return; }
+  if (!secureInputTransportAllowed(req)) { res.status(403).json({ error: 'PLUGIN_SETUP_ORIGIN_REQUIRED' }); return; }
+  if (!pluginSetupSurfaceState(req).canConfigure) { res.status(403).json({ error: 'OWNER_SURFACE_REQUIRED' }); return; }
   try { res.json({ success: true, attempt: await getConnectionRuntime().orchestrator.prepareInput(req.params.id) }); }
   catch { res.status(400).json({ error: 'PROTECTED_REQUEST_UNAVAILABLE' }); }
 });

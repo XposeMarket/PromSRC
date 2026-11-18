@@ -78,7 +78,7 @@ app.get('/', (req, res) => res.type('html').send(`<!doctype html><meta name="vie
     const attempt = orchestrator.listAttempts(1)[0], prefix = '/api/connection-attempts/' + attempt.id;
     assert.equal((await post(prefix + '/prepare-input')).status,403);
     assert.equal((await post(prefix + '/connect', { approved: true })).status,403);
-    const forged = await post(prefix + '/prepare-input', {}, {cookie:`prom_sa_owner=${OWNER}`,origin:'https://evil.example'}); assert.equal(forged.status,403);
+    const forged = await post(prefix + '/prepare-input', {}, {cookie:`prom_sa_owner=${OWNER}`,origin:'https://evil.example'}); assert.equal(forged.status,403); assert.equal((await forged.json()).error,'PLUGIN_SETUP_ORIGIN_REQUIRED');
     await post(prefix + '/continue', { approved: true }); assert.equal(launches,before);
     await page.locator('input[type=text]').fill('synthetic-client-id'); await page.locator('input[type=password]').fill(CANARY);
     await page.getByRole('button',{name:'Save and continue to sign-in',exact:true}).click();

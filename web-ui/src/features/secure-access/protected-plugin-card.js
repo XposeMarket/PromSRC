@@ -14,6 +14,7 @@ function safeKeyPage(value) {
 }
 
 export const PROTECTED_ERROR_TEXT = Object.freeze({
+  PLUGIN_SETUP_ORIGIN_REQUIRED: 'Open Plugins on the computer you want to connect, or in its own paired mobile page. This page cannot open protected entry for that computer. No key was collected.',
   OWNER_SURFACE_REQUIRED: OWNER_SURFACE_MESSAGE,
   PROTECTED_STORAGE_REQUIRED: 'Protected storage is unavailable on this computer. Nothing was collected.',
   UNSUPPORTED_PLUGIN: 'This plugin does not support protected key entry yet. Nothing was collected.',

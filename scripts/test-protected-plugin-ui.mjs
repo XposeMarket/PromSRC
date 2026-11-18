@@ -72,6 +72,7 @@ const { scrubComposerValue } = await import(`../${SA}protected-plugin-entry.js`)
 t('errors never echo values', () => {
   const msg = protectedErrorText(new Error(`HTTP 400: bad key ${FAKE}`));
   assert.ok(!msg.includes(FAKE) && !msg.includes('HTTP'));
+  assert.match(protectedErrorText(new Error('PLUGIN_SETUP_ORIGIN_REQUIRED')), /its own paired mobile page/);
   assert.match(protectedErrorText(new Error('OWNER_SURFACE_REQUIRED')), /desktop app/);
 });
 t('X auth URL allowlist', () => {
