@@ -17,6 +17,19 @@ async function main(){
     for(const [fields,code,ok] of [[{text:'(.',glob:'build*.ts'},0,true],[{text:'unmatched',glob:'*.ts'},1,true],[{text:'foo',directory:'missing'},2,false],[{text:'(',regex:true},2,false]] as const){ const r=await run(command({search:fields}));assert.equal(r.e.exitCode,code);assert.equal(r.out.ok,ok); }
     for(const extra of [{elevated:true},{pty:true},{shell:'cmd'},{command:'echo other'}])assert.ok(args({search:{text:'hi'},...extra}).error);
     assert.ok(args({search:{text:'x',directory:'build*.ts'}}).error);
+    // Strict-schema models fill every unused optional field with an empty placeholder (seen live from gpt-6-astra, 2026-11-18).
+    const ph={text:'',directory:'',glob:'',regex:false};
+    assert.match(command({command:'',program:'git',argv:['diff','--stat','a...b'],search:ph}),/^git diff --stat a\.\.\.b/);
+    assert.equal(command({command:'git status --short',program:'git',argv:[],search:ph}),'git status --short');
+    assert.equal(command({command:'git status --short',argv:[],program:''}),'git status --short');
+    assert.match(command({command:'',program:'rg',argv:[],search:{text:'needle',directory:'',glob:'',regex:false}}),/^rg -n -F -e needle -- \./);
+    for(const action of ['status','wait','log'])assert.ifError(normalize('workspace_run',{action,runId:'run_x',command:'',program:'git',argv:[],search:ph})!.error);
+    assert.ok(normalize('workspace_run',{action:'status',runId:'run_x',program:'git',argv:['status']})!.error);
+    // Two real forms in one call still fail closed.
+    assert.ok(args({command:'echo hi',program:'git',argv:['status']}).error);
+    assert.ok(args({command:'',program:'git',argv:['status'],search:{text:'x'}}).error);
+    assert.ok(args({command:'echo hi',search:{text:'x'},program:'',argv:[]}).error);
+
     const miss=await run("Write-Output earlier; rg absent 'build file.ts'");assert.equal(miss.e.exitCode,0);assert.match(miss.e.stdout,/earlier/);assert.match(miss.e.stdout,/step 2\/2: no matches; exit 1/);
     const masked=await run('cmd /c exit 7; Write-Output after');assert.equal(masked.e.exitCode,7);assert.match(masked.e.stdout,/step 1\/2: failed; exit 7/);assert.match(masked.e.stdout,/step 2\/2: ok; exit 0/);
     assert.equal(observedWindowsBatch('cmd /c exit 7; if ($LASTEXITCODE) { exit 0 }'),null);
