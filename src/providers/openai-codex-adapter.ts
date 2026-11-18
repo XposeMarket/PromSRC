@@ -60,6 +60,19 @@ export class CodexIncompleteStreamError extends Error {
   }
 }
 
+// Never include provider-controlled messages, identifiers, or arbitrary values in errors.
+const knownTerminalReasons = new Set(['server_error', 'internal_server_error', 'service_unavailable', 'rate_limit_exceeded', 'insufficient_quota', 'invalid_request_error', 'context_length_exceeded', 'max_output_tokens', 'content_filter', 'model_not_found', 'invalid_prompt']);
+class CodexTerminalEventError extends Error {
+  readonly code = 'CODEX_TERMINAL_EVENT';
+  readonly retryable: boolean;
+  constructor(type: string, value: unknown) {
+    const reason = typeof value === 'string' && knownTerminalReasons.has(value) ? value : 'unspecified';
+    super(`openai_codex reported ${type}: ${reason}.`);
+    this.name = 'CodexTerminalEventError';
+    this.retryable = type !== 'response.incomplete' && ['server_error', 'internal_server_error', 'service_unavailable'].includes(reason);
+  }
+}
+
 // Transport-level failures from the response body reader (socket closed mid-stream).
 // Matches only recognized socket/terminated signatures; generic errors are not transient.
 export function isTransientCodexReadError(err: unknown): boolean {
@@ -673,6 +686,9 @@ export class OpenAICodexAdapter implements LLMProvider {
         if (controller.signal.aborted || err?.name === 'AbortError') {
           throw new Error(abortReason || 'openai_codex request aborted');
         }
+        if (err instanceof CodexTerminalEventError && err.retryable && allowIncompleteStreamRetry) {
+          return runRequest(requestedModel, allowFallback, fallbackFrom, fallbackReason, false, accountIndex);
+        }
         if (err instanceof CodexIncompleteStreamError && allowIncompleteStreamRetry) {
           options?.onModelEvent?.({
             type: 'provider_event',
@@ -798,14 +814,18 @@ export class OpenAICodexAdapter implements LLMProvider {
         buffer = lines.pop() || '';
 
         for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          const data = line.slice(6).trim();
+          if (!line.startsWith('data:')) continue;
+          const data = line.slice(5).trim();
           if (data === '[DONE]') continue;
 
           try {
             const event = JSON.parse(data);
             const type = event.type as string;
             if (type && eventTypes.length < 40 && !eventTypes.includes(type)) eventTypes.push(type);
+            if (!sawCompleted && (type === 'error' || type === 'response.failed' || type === 'response.incomplete')) {
+              const reason = type === 'response.incomplete' ? event.response?.incomplete_details?.reason : event.response?.error?.code ?? event.error?.code ?? event.code;
+              throw new CodexTerminalEventError(type, reason);
+            }
 
             if (type === 'response.output_item.added' && event.item?.type === 'message') {
               assistantPhase = event.item.phase === 'commentary' || event.item.phase === 'final_answer'
@@ -983,7 +1003,8 @@ export class OpenAICodexAdapter implements LLMProvider {
                 },
               });
             }
-          } catch {
+          } catch (err) {
+            if (err instanceof CodexTerminalEventError) throw err;
             // Skip malformed SSE lines
           }
         }
