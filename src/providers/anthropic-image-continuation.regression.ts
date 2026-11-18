@@ -18,6 +18,11 @@ const count = (value: unknown, needle: string) => JSON.stringify(value).split(ne
 const withoutMarkers = (value: any) => JSON.parse(JSON.stringify(value, (key, val) => key === 'cache_control' ? undefined : val));
 
 async function main() {
+  // The adapter reads its image policy from the environment; pin the defaults for this fixture.
+  Object.assign(process.env, {
+    PROMETHEUS_HISTORY_IMAGE_KEEP: '2', PROMETHEUS_HISTORY_IMAGE_MAX_AGE: '4',
+    PROMETHEUS_CONTINUATION_IMAGE_SLACK: '8', PROMETHEUS_CONTINUATION_IMAGE_SLACK_BYTES: '4000000',
+  });
   const adapter = new AnthropicAdapter({ providerId: 'anthropic', apiKey: 'test-not-a-secret' } as any);
   const originalFetch = globalThis.fetch;
   let request: any;
@@ -29,9 +34,10 @@ async function main() {
 
   try {
     const ROUNDS = 24;
-    // The person attached one mock-up; every tool round then adds one screenshot.
+    // The person attached one mock-up; every tool round then adds one screenshot. Their
+    // caption looks like a runtime tag on purpose: it must not make the attachment prunable.
     const messages: ChatMessage[] = [
-      { role: 'user', content: [{ type: 'text', text: 'Match the site to this mock-up.' }, image] as any },
+      { role: 'user', content: [{ type: 'text', text: '[BUG_REPORT] Match the site to this mock-up.' }, image] as any },
     ];
     const sent: number[] = [];
     let previous: any[] = [];

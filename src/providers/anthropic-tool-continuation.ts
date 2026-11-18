@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { ChatMessage, ProviderReplay } from './LLMProvider';
-import { historyImageKeepFromEnv, isRuntimeUserMessage, PRUNED_IMAGE_TEXT } from './history-image-prune';
+import { historyImageKeepFromEnv, PRUNED_IMAGE_TEXT } from './history-image-prune';
 
 /** Stale screenshots (count, base64 chars) tolerated in the stored prefix before it is rewritten. */
 export const CONTINUATION_STALE_IMAGE_SLACK = 8;
@@ -41,12 +41,20 @@ function toolDefinitions(tools: any[] = []): Map<string, any> {
 
 type StoredImage = { block: any; bytes: number };
 
+/** Only the gateway's own "[SYSTEM: ...]" vision messages count as runtime screenshots here.
+ * The broader runtime-tag match would also catch a person's caption such as
+ * "[BUG_REPORT] compare this" and swap out the attachment they asked about. */
+function isRuntimeScreenshotMessage(message: any): boolean {
+  const first = message.content.find((block: any) => block?.type === 'text' && typeof block.text === 'string');
+  return /^\s*\[SYSTEM:/.test(first?.text || '');
+}
+
 /** Tool and runtime screenshots in one stored wire message, oldest first. A
  * person's own attachments are never listed, so they stay for the whole turn. */
 function prunableImages(message: any): StoredImage[] {
   const found: StoredImage[] = [];
   if (message?.role !== 'user' || !Array.isArray(message.content)) return found;
-  const runtime = isRuntimeUserMessage(message);
+  const runtime = isRuntimeScreenshotMessage(message);
   const visit = (block: any) => {
     if (block?.type === 'image') found.push({ block, bytes: String(block.source?.data || '').length });
   };

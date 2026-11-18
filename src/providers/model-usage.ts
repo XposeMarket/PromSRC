@@ -584,7 +584,9 @@ export interface UsageWindowTotal {
 }
 
 const WINDOW_TOTALS_TTL_MS = 15_000;
-let _windowTotals: { key: string; at: number; value: Promise<UsageWindowTotal[]> } | null = null;
+let _windowTotals: { key: string; settledAt: number; value: Promise<UsageWindowTotal[]> } | null = null;
+/** A row can be appended with an earlier timestamp, so the scan looks back this far and filters inside. */
+const WINDOW_SCAN_HORIZON_MS = 35 * 86400000;
 
 /**
  * Token totals per provider/account for rows at or after `cutoff`.
@@ -599,10 +601,12 @@ export function readModelUsageTotalsSince(cutoff: number): Promise<UsageWindowTo
   const file = usageLogPath();
   const key = `${file}\u0000${cutoff}`;
   const cached = _windowTotals;
-  if (cached && cached.key === key && Date.now() - cached.at < WINDOW_TOTALS_TTL_MS) return cached.value;
+  // A scan that is still running is always shared; the 15 seconds count from when it finished.
+  if (cached && cached.key === key && (!cached.settledAt || Date.now() - cached.settledAt < WINDOW_TOTALS_TTL_MS)) return cached.value;
   const value = readUsageOrEmpty(async () => {
     const totals = new Map<string, UsageWindowTotal>();
-    await scanRecentUsage(file, cutoff, (event) => {
+    await scanRecentUsage(file, Math.min(cutoff, Date.now() - WINDOW_SCAN_HORIZON_MS), (event) => {
+      if (!(Date.parse(event.timestamp) >= cutoff)) return;
       const provider = String(event.provider || '');
       const accountId = String(event.accountId || '');
       const totalKey = `${provider}\u0000${accountId}`;
@@ -616,10 +620,10 @@ export function readModelUsageTotalsSince(cutoff: number): Promise<UsageWindowTo
     });
     return Array.from(totals.values());
   }, [] as UsageWindowTotal[]);
-  const entry = { key, at: Date.now(), value };
+  const entry = { key, settledAt: 0, value };
   _windowTotals = entry;
   // A failed scan must not be served from cache for the next 15 seconds.
-  value.catch(() => { if (_windowTotals === entry) _windowTotals = null; });
+  value.then(() => { entry.settledAt = Date.now(); }, () => { if (_windowTotals === entry) _windowTotals = null; });
   return value;
 }
 
