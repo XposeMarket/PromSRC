@@ -1,6 +1,6 @@
 import { publicConnectionValue } from '../../../connections/serialize-public';
 import { getMCPManager } from '../../mcp-manager';
-import { buildConnectorStatus } from '../../tool-builder';
+import { buildSessionConnectorStatus } from '../../tool-builder';
 import { ensurePrometheusExtensionRuntimeLoaded } from '../../../extensions/extension-bootstrap';
 import { getExtensionRuntimeRegistry, resolveConnectorWrapperCall } from '../../../extensions/runtime-registry';
 import type { CapabilityExecutionContext, CapabilityExecutor } from './types';
@@ -507,7 +507,7 @@ export const platformCapabilityExecutor: CapabilityExecutor = {
     }
 
     if (name === 'connector_list') {
-      return { name, args, result: buildConnectorStatus(), error: false };
+      return { name, args, result: await buildSessionConnectorStatus(sessionId), error: false };
     }
 
     if ((name.startsWith('connector_') || name.startsWith('x_api_')) && name !== 'connector_list') {

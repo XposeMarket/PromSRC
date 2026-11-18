@@ -33,8 +33,8 @@ export async function openConnectFlow(fetchJson, target, options = {}) {
     return node;
   };
   const showError = error => { if (!closed) text('p', protectedErrorText(error, 'Setup could not finish. Nothing was sent to chat. Close and retry, or check the plugin settings.'), 'sa-err'); };
-  const act = async operation => {
-    const result = await postJson(fetchJson, `/api/connection-attempts/${encodeURIComponent(attempt.id)}/${operation}`, {}, `Connect ${title()}`);
+  const act = async (operation, input = {}) => {
+    const result = await postJson(fetchJson, `/api/connection-attempts/${encodeURIComponent(attempt.id)}/${operation}`, input, `Connect ${title()}`);
     attempt = result.attempt; await render(); options.onChanged?.();
   };
   const refresh = async () => { attempt = (await fetchJson(`/api/connection-attempts/${encodeURIComponent(attempt.id)}`)).attempt; await render(); };
@@ -82,6 +82,9 @@ export async function openConnectFlow(fetchJson, target, options = {}) {
       if (!(action.desktopRequired && phone)) button(`Sign in with ${title()}`, () => openOAuth(action), true);
       button('Check sign-in', () => act('continue'));
       timer = setTimeout(() => { if (!busy && !closed) act('continue').catch(showError); }, 2500);
+    } else if (action?.type === 'package-install-review') {
+      text('p', `This connection runs a local process: ${action.packageName || 'MCP server'}. Saving connection details does not approve launching it.`, 'sa-muted');
+      button('Approve and start connection', () => act('connect'), true);
     } else if (attempt.state === 'connected' || stored || (attempt.connectionId && ['degraded', 'registering', 'verifying'].includes(attempt.state))) {
       text('p', attempt.state === 'connected' ? 'Connected. You’re ready to use this plugin.' : 'Saved. Setup is complete, but access has not been fully verified.', 'sa-muted');
       if (typeof options.onVerify === 'function') button('Ask Prom to verify', () => {
@@ -92,6 +95,16 @@ export async function openConnectFlow(fetchJson, target, options = {}) {
       text('p', 'This plugin needs additional setup. No credentials were sent to chat.', 'sa-muted');
       if (attempt.error?.code === 'DISCOVERY_FAILED') text('p', 'Its installed definition does not provide a supported connection method. Check this plugin’s setup instructions.', 'sa-muted');
       else if (attempt.error) showError(attempt.error);
+    } else if (action?.type === 'local-resource') {
+      text('p', 'Enter the absolute folder path on the computer running Prometheus. Connecting does not scan or index its contents.', 'sa-muted');
+      const label = el('label', { text: 'Vault folder' });
+      const input = el('input', { type: 'text', 'aria-label': 'Vault folder', autocomplete: 'off' });
+      label.append(input); panel.append(label);
+      button('Connect this vault', async () => {
+        const path = input.value.trim();
+        if (!path) { input.focus(); return; }
+        await act('connect', { path });
+      }, true);
     } else if (action) {
       text('p', action.instructions || action.completionHint || action.label || 'Complete the plugin’s setup.', 'sa-muted');
       button('Check setup', () => act('continue'), true);
@@ -103,7 +116,11 @@ export async function openConnectFlow(fetchJson, target, options = {}) {
     if (closed) return; panel.replaceChildren(); text('p', 'Opening setup…', 'sa-muted');
     try {
       if (!await ownerReady() || closed) return;
-      attempt = (await fetchJson('/api/connection-attempts/start', { method: 'POST', body: JSON.stringify(target) })).attempt;
+      const startUrl = target.connectionId
+        ? `/api/plugin-accounts/${encodeURIComponent(target.connectionId)}/reauth`
+        : '/api/connection-attempts/start';
+      const startBody = target.connectionId ? (target.attemptId ? { attemptId: target.attemptId } : {}) : target;
+      attempt = (await fetchJson(startUrl, { method: 'POST', body: JSON.stringify(startBody) })).attempt;
       if (attempt.state === 'awaiting_approval') {
         attempt = (await postJson(fetchJson, `/api/connection-attempts/${encodeURIComponent(attempt.id)}/prepare-input`, {})).attempt;
         if (attempt.state === 'awaiting_approval') {

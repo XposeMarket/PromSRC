@@ -10,6 +10,14 @@ import {
 import type { PrometheusExtensionApi, PrometheusExtensionDefinition } from '../../../runtime-api.js';
 import { notConnected, toolError, toolOk } from '../_runtime/connector-helpers.js';
 
+import { selectedAccountResource, requireSelectedResource } from '../../../../connections/account-resource-binding.js';
+import { getConnectionRuntime } from '../../../../connections/runtime.js';
+import { currentAccountExecution } from '../../../../connections/account-execution-context.js';
+
+function selectedVault(): string | undefined {
+  return selectedAccountResource('obsidian', id => getConnectionRuntime().connections.get(id));
+}
+
 const ID = 'obsidian';
 const NAME = 'Obsidian';
 const tools = ['connector_obsidian_status', 'connector_obsidian_connect_vault', 'connector_obsidian_sync', 'connector_obsidian_writeback'];
@@ -50,7 +58,11 @@ const ext: PrometheusExtensionDefinition = {
       parameters: { type: 'object', required: [], properties: {} },
       connectorId: ID,
       capability: 'memory-source',
-      execute: async () => toolOk(loadObsidianBridgeState()),
+      execute: async () => {
+        const vaultId = selectedVault();
+        const state = loadObsidianBridgeState();
+        return toolOk(vaultId ? { vaults: state.vaults.filter(vault => vault.id === vaultId) } : state);
+      },
     });
 
     api.registerTool({
@@ -72,6 +84,7 @@ const ext: PrometheusExtensionDefinition = {
       connectorId: ID,
       capability: 'memory-source',
       execute: async (args: any) => {
+        if (currentAccountExecution(ID)) throw new Error('ACCOUNT_RESOURCE_SETUP_REQUIRED');
         const vaultPath = String(args.path || '').trim();
         if (!vaultPath) return toolError('connector_obsidian_connect_vault: path is required');
         const vault = upsertObsidianVault({
@@ -102,9 +115,10 @@ const ext: PrometheusExtensionDefinition = {
       connectorId: ID,
       capability: 'memory-source',
       execute: async (args: any) => {
+        const vaultId = requireSelectedResource(selectedVault(), args.vault_id);
         const state = loadObsidianBridgeState();
-        if (!state.vaults.length) return notConnected(NAME);
-        return toolOk(syncObsidianVaults({ vaultId: args.vault_id ? String(args.vault_id).trim() : undefined, force: args.force !== false }));
+        if (!state.vaults.some(vault => (!vaultId || vault.id === vaultId) && vault.enabled !== false)) return notConnected(NAME);
+        return toolOk(syncObsidianVaults({ vaultId, force: args.force !== false }));
       },
     });
 
@@ -126,7 +140,7 @@ const ext: PrometheusExtensionDefinition = {
       connectorId: ID,
       capability: 'memory-source',
       execute: async (args: any) => {
-        const vaultId = String(args.vault_id || '').trim();
+        const vaultId = requireSelectedResource(selectedVault(), args.vault_id);
         const title = String(args.title || '').trim();
         const content = String(args.content || '').trim();
         if (!vaultId) return toolError('connector_obsidian_writeback: vault_id is required');

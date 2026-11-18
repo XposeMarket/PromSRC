@@ -1,3 +1,4 @@
+import { currentAccountExecution } from '../connections/account-execution-context.js';
 import { getConfig } from '../config/config.js';
 import { getVault } from '../security/vault.js';
 import { resolveBoundPluginCredential } from '../connections/plugin-credential-binding';
@@ -25,7 +26,8 @@ export function resolveConnectorCredential(
   if (!id || !key) return undefined;
 
   const configDir = getConfig().getConfigDir();
-  const bound = resolveBoundPluginCredential(configDir, id, key);
+  const execution = currentAccountExecution(id);
+  const bound = resolveBoundPluginCredential(configDir, id, key, execution?.binding.connectionId);
   if (bound.handled) return bound.value;
 
   for (const vaultKey of [

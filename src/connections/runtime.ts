@@ -1,3 +1,8 @@
+import { AccountLifecycle } from './account-lifecycle';
+import { LocalResourceConnectionAdapter } from './adapters/local-resource';
+import { obsidianResourceHost } from './obsidian-resource-host';
+import { AccountSetupService } from './account-setup';
+import { connectionInstanceIdentity } from './instance-identity';
 import { getConfig } from '../config/config';
 import { ConnectionStartService } from './start-service';
 import { getMCPManager } from '../gateway/mcp-manager';
@@ -16,7 +21,8 @@ import { ApiKeyConnectionAdapter } from './adapters/api-key';
 import { OpenAiCompatibleModelConnectionAdapter } from './adapters/openai-compatible-model';
 import { CustomHttpConnectionAdapter } from './adapters/custom-http';
 import { ConnectorOAuthConnectionAdapter } from './adapters/connector-oauth';
-import { buildConnectorOAuthBridges } from './connector-oauth-bridges';
+import { getConnectorInstances } from '../integrations/connector-instances';
+import { buildAccountOAuthBridge, buildConnectorOAuthBridges } from './connector-oauth-bridges';
 import type { ConnectionAdapterContext } from './types';
 import { buildMcpServerConfigFromPreset } from '../extensions/mcp-preset-service';
 import { ensurePrometheusExtensionRuntimeLoaded } from '../extensions/extension-bootstrap';
@@ -52,10 +58,10 @@ export function registerOpenAiCompatibleProvider(context: ConnectionAdapterConte
   return { providerId, models };
 }
 
-let singleton: { orchestrator: ConnectionOrchestrator; start: ConnectionStartService; secureInput: SecureInputService; adapters: ConnectionAdapterRegistry } | null = null;
+let singleton: { orchestrator: ConnectionOrchestrator; start: ConnectionStartService; secureInput: SecureInputService; adapters: ConnectionAdapterRegistry; connections: ConnectionStore; accountLifecycle: AccountLifecycle; accountSetup: AccountSetupService } | null = null;
 
 function mcpServerId(context: ConnectionAdapterContext): string {
-  return String(context.attempt.plan?.strategy.configuration?.mcpServerId || context.attempt.serviceId);
+  return connectionInstanceIdentity(context).instanceId;
 }
 
 export function getConnectionRuntime() {
@@ -74,6 +80,7 @@ export function getConnectionRuntime() {
   const activity = new ConnectionActivityStore(configDir);
   const secureInput = new SecureInputService(configDir);
   const adapters = new ConnectionAdapterRegistry();
+  adapters.register(new LocalResourceConnectionAdapter(obsidianResourceHost));
   const mcp = getMCPManager();
 
   adapters.register(new McpOAuthConnectionAdapter({
@@ -82,7 +89,7 @@ export function getConnectionRuntime() {
       let cfg = mcp.getConfigs().find((item) => item.id === id);
       if (!cfg) {
         ensurePrometheusExtensionRuntimeLoaded();
-        const built = buildMcpServerConfigFromPreset(id);
+        const built = buildMcpServerConfigFromPreset(connectionInstanceIdentity(context).templateId);
         mcp.upsertConfig({ ...built, id, name: context.attempt.serviceName || id, enabled: true } as any);
         cfg = mcp.getConfigs().find((item) => item.id === id);
       }
@@ -112,8 +119,25 @@ export function getConnectionRuntime() {
   }));
 
   adapters.register(new McpStdioConnectionAdapter({
+    prepareFields: async (context) => {
+      const configured = context.attempt.plan?.strategy.configuration?.credentialFields;
+      if (!context.attempt.metadata?.connectionId || !Array.isArray(configured) || !configured.length) return undefined;
+      const fields = configured.map(field => ({ key: String(field.key), label: String(field.label || field.key), required: field.required === true, secret: true as const }));
+      const session = await secureInput.create({ serviceId: context.attempt.serviceId, attemptId: context.attempt.id,
+        connectionId: String(context.attempt.metadata.connectionId), fields });
+      return { state: 'awaiting_secure_input', userAction: { type: 'secure-input', label: 'Enter MCP connection details', credentialSessionId: session.id, fields, expiresAt: session.expiresAt } };
+    },
     connect: async (context) => {
       const id = mcpServerId(context);
+      if (!mcp.getConfigs().some(item => item.id === id)) {
+        ensurePrometheusExtensionRuntimeLoaded();
+        const identity = connectionInstanceIdentity(context);
+        const built = identity.accountScoped
+          ? { transport: 'stdio', command: String(context.attempt.plan?.strategy.configuration?.command || '') }
+          : buildMcpServerConfigFromPreset(identity.templateId);
+        if (built.transport !== 'stdio' || !built.command) throw new Error('MCP_TRANSPORT_MISMATCH');
+        mcp.upsertConfig({ ...built, id, name: context.attempt.serviceName || id, enabled: true } as any);
+      }
       const result = await mcp.connect(id);
       return { ok: result.success, tools: (result.tools || []).map((tool: any) => tool.name), error: result.error, configuration: { mcpServerId: id } };
     },
@@ -121,20 +145,25 @@ export function getConnectionRuntime() {
   }));
 
   adapters.register(new ApiKeyConnectionAdapter({
-    createCredentialSession: async (context, fields) => secureInput.create({ serviceId: context.attempt.serviceId, attemptId: context.attempt.id, fields }),
-    verifyCredential: async () => ({ ok: false, message: 'Stored, not verified: this adapter has no safe authentication verifier.' }),
+    createCredentialSession: async (context, fields) => secureInput.create({ serviceId: context.attempt.serviceId, attemptId: context.attempt.id, connectionId: typeof context.attempt.metadata?.connectionId === 'string' ? context.attempt.metadata.connectionId : undefined, fields }),
+    verifyCredential: async (reference, context) => {
+      const { verifyApiKeyAccount } = await import('./api-key-account-verification.js');
+      const connectionId = typeof context.attempt.metadata?.connectionId === 'string' ? context.attempt.metadata.connectionId : undefined;
+      return verifyApiKeyAccount(context, secureInput.readForConsumer(reference, context.attempt.serviceId, context.attempt.id, connectionId));
+    },
     clearCredential: async (reference, context) => {
-      setPluginCredentialState(configDir, context.attempt.serviceId, true, 'disconnected');
-      secureInput.clearReference(reference, context.attempt.serviceId, context.attempt.id, { persistedLegacy: true });
+      const connectionId = typeof context.attempt.metadata?.connectionId === 'string' ? context.attempt.metadata.connectionId : undefined;
+      setPluginCredentialState(configDir, connectionId ? `${context.attempt.serviceId}:account:${connectionId}` : context.attempt.serviceId, true, 'disconnected');
+      secureInput.clearReference(reference, context.attempt.serviceId, context.attempt.id, { persistedLegacy: !connectionId, connectionId });
     },
   }));
 
   adapters.register(new OpenAiCompatibleModelConnectionAdapter({
-    createCredentialSession: async (context, fields) => secureInput.create({ serviceId: context.attempt.serviceId, attemptId: context.attempt.id, fields }),
+    createCredentialSession: async (context, fields) => secureInput.create({ serviceId: context.attempt.serviceId, attemptId: context.attempt.id, connectionId: typeof context.attempt.metadata?.connectionId === 'string' ? context.attempt.metadata.connectionId : undefined, fields }),
     probe: async (context, configuration) => {
       const baseUrl = String(configuration.baseUrl || configuration.endpoint || '').replace(/\/$/, '');
       if (!baseUrl) return { ok: false, error: 'Base URL is required.' };
-      const envelope = context.credentialRef ? secureInput.readForConsumer(context.credentialRef, context.attempt.serviceId, context.attempt.id) : undefined;
+      const envelope = context.credentialRef ? secureInput.readForConsumer(context.credentialRef, context.attempt.serviceId, context.attempt.id, typeof context.attempt.metadata?.connectionId === 'string' ? context.attempt.metadata.connectionId : undefined) : undefined;
       let key: string | undefined;
       try { const value = envelope ? JSON.parse(envelope).api_key : undefined; key = typeof value === 'string' ? value : undefined; } catch { return { ok: false, error: 'Credential is unavailable.' }; }
       const headers: Record<string, string> = { Accept: 'application/json' };
@@ -162,7 +191,8 @@ export function getConnectionRuntime() {
     },
     register: async (context, configuration) => {
       if (context.attempt.plan?.strategy.adapter === 'mcp-http') {
-        const id = String(configuration.mcpServerId || context.attempt.serviceId);
+        const id = context.attempt.metadata?.connectionId
+          ? mcpServerId(context) : String(configuration.mcpServerId || context.attempt.serviceId);
         mcp.upsertConfig({ id, name: context.attempt.serviceName || id, enabled: true, transport: 'http', url: String(configuration.endpoint || configuration.url) });
         const result = await mcp.connect(id);
         if (!result.success) throw new Error(result.error || 'MCP HTTP connection failed.');
@@ -175,7 +205,13 @@ export function getConnectionRuntime() {
   // Native OAuth connector bridges delegate OAuth, vault storage, refresh, and
   // provider verification to the existing connector classes. The shared host
   // adapter owns canonical records, capability grants, and lifecycle state.
-  adapters.register(new ConnectorOAuthConnectionAdapter(buildConnectorOAuthBridges()));
+  const accountInstances = getConnectorInstances(configDir);
+  adapters.register(new ConnectorOAuthConnectionAdapter(buildConnectorOAuthBridges(), context => {
+    const id = String(context.attempt.metadata?.connectionId || '');
+    const record = connections.get(id);
+    if (!record?.accountAccess || record.serviceId !== context.attempt.serviceId || record.pluginId !== context.attempt.pluginId) throw new Error('ACCOUNT_UNAVAILABLE');
+    return buildAccountOAuthBridge(accountInstances, record.serviceId, id, context.attempt.id);
+  }));
 
   // Touch the runtime registry so plugin-contributed connection metadata and
   // operational tools share one lifecycle boundary.
@@ -183,8 +219,11 @@ export function getConnectionRuntime() {
     if (!adapters.get(adapter.id)) adapters.register(adapter);
   }
   const plans = new PluginConnectionPlanResolver(() => mcp.getConfigs());
-  const orchestrator = new ConnectionOrchestrator({ attempts, connections, adapters, activity, plans, validateCredentialReference: (reference, serviceId, attemptId) => secureInput.ownsReference(reference, serviceId, attemptId), broadcast: broadcastWS });
-  singleton = { orchestrator, start: new ConnectionStartService(orchestrator), secureInput, adapters };
+  const orchestrator = new ConnectionOrchestrator({ attempts, connections, adapters, activity, plans, validateCredentialReference: (reference, serviceId, attemptId, connectionId) => secureInput.ownsReference(reference, serviceId, attemptId, connectionId), broadcast: broadcastWS });
+  const start = new ConnectionStartService(orchestrator);
+  const accountLifecycle = new AccountLifecycle(connections);
+  singleton = { orchestrator, start, secureInput, adapters, connections, accountLifecycle,
+    accountSetup: new AccountSetupService(connections, accountLifecycle, start) };
   return singleton;
 }
 

@@ -4,18 +4,22 @@ import type { ConnectionAdapter, ConnectionAdapterContext, ConnectionAdapterResu
 export interface McpStdioHost {
   connect(context: ConnectionAdapterContext, configuration: Record<string, unknown>): Promise<{ ok: boolean; tools?: string[]; error?: string; configuration?: Record<string, unknown> }>;
   disconnect?(context: ConnectionAdapterContext, connection: ConnectionRecord): Promise<void>;
+  prepareFields?(context: ConnectionAdapterContext): Promise<ConnectionAdapterResult | undefined>;
 }
 export class McpStdioConnectionAdapter implements ConnectionAdapter {
   readonly id = 'mcp-stdio'; readonly kind = 'mcp-stdio'; readonly displayName = 'Local MCP process'; readonly priority = 85;
   constructor(private readonly host: McpStdioHost) {}
   supports(strategy: ConnectionStrategy): boolean { return strategy.adapter === 'mcp-stdio'; }
   async prepare(context: ConnectionAdapterContext): Promise<ConnectionAdapterResult> {
+    const fields = await this.host.prepareFields?.(context);
+    if (fields) return fields;
     const config = { ...(context.attempt.plan?.strategy.configuration || {}), ...(context.configuration || {}) };
     const command = typeof config.command === 'string' ? config.command : '';
     if (!command) return { state: 'failed', error: { code: 'MCP_COMMAND_REQUIRED', message: 'A local MCP command is required.', phase: 'planning' } };
     return { state: 'awaiting_approval', configuration: config, userAction: { type: 'package-install-review', label: `Approve local MCP process for ${context.attempt.serviceName || context.attempt.serviceId}`, packageName: command, version: typeof config.version === 'string' ? config.version : undefined, source: typeof config.source === 'string' ? config.source : undefined, permissions: Array.isArray(config.permissions) ? config.permissions.map(String) : ['process'] } };
   }
   async connect(context: ConnectionAdapterContext): Promise<ConnectionAdapterResult> {
+    if (context.attempt.metadata?.connectionId && context.configuration?.approved !== true) throw new Error('MCP_PROCESS_APPROVAL_REQUIRED');
     const config = { ...(context.attempt.plan?.strategy.configuration || {}), ...(context.configuration || {}) };
     if (typeof config.command !== 'string' || !config.command.trim()) return { state: 'failed', error: { code: 'MCP_COMMAND_REQUIRED', message: 'A local MCP command is required.', phase: 'planning' } };
     const result = await this.host.connect(context, config);
@@ -25,6 +29,7 @@ export class McpStdioConnectionAdapter implements ConnectionAdapter {
     return { state: 'verifying', configuration: result.configuration || config, connection: { contractVersion: CONNECTOR_CONNECTION_CONTRACT_VERSION, configured: true, authenticated: true, authState: 'healthy', registered: true, registeredTools: tools, availableTools: tools, exposed: readOnly.length > 0, exposedTools: readOnly, tools: tools.map((name) => ({ name, risk: readOnly.includes(name) ? 'read-only' : 'unknown', approved: readOnly.includes(name), classificationReason: readOnly.includes(name) ? 'Conservative read-only name classification.' : 'Available only after the normal tool approval prompt.' })) } };
   }
   async continue(context: ConnectionAdapterContext, input: Record<string, unknown> = {}): Promise<ConnectionAdapterResult> {
+    if (context.credentialRef) return { state: 'registering', connection: { credentialRef: context.credentialRef, configured: true, authenticated: false, authState: 'pending' }, userAction: { type: 'package-install-review', label: 'Approve local MCP process', packageName: String(context.attempt.plan?.strategy.configuration?.command || ''), permissions: ['process'] } };
     if (input.approved !== true) return { state: 'cancelled', error: { code: 'INSTALL_NOT_APPROVED', message: 'Local MCP process approval was not granted.', phase: 'awaiting_approval' } };
     return this.connect(context);
   }

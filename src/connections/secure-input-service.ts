@@ -6,11 +6,11 @@ import type { SecureSecretField } from './types';
 import { protectedPluginStorageAvailable } from '../security/plugin-credential-state';
 
 interface SecureInputSession {
-  id: string; serviceId: string; attemptId: string; fields: SecureSecretField[];
+  id: string; serviceId: string; attemptId: string; connectionId?: string; fields: SecureSecretField[];
   expiresAt: number; consumed: boolean;
 }
 
-type CredentialOwner = { serviceId: string; attemptId: string };
+type CredentialOwner = { serviceId: string; attemptId: string; connectionId?: string };
 
 export class SecureInputService {
   private readonly sessions = new Map<string, SecureInputSession>();
@@ -24,7 +24,7 @@ export class SecureInputService {
       for (const [reference, owner] of Object.entries(data)) {
         const candidate = owner as Partial<CredentialOwner> | null;
         if (typeof candidate?.serviceId === 'string' && typeof candidate?.attemptId === 'string') {
-          this.references.set(reference, { serviceId: candidate.serviceId, attemptId: candidate.attemptId });
+          this.references.set(reference, { serviceId: candidate.serviceId, attemptId: candidate.attemptId, connectionId: candidate.connectionId });
         }
       }
     } catch (error: any) {
@@ -41,11 +41,12 @@ export class SecureInputService {
     fs.writeFileSync(temp, JSON.stringify(Object.fromEntries(this.references)), { mode: 0o600 }); fs.renameSync(temp, file);
   }
 
-  create(input: { serviceId: string; attemptId: string; fields: SecureSecretField[] }): { id: string; expiresAt: string } {
+  create(input: { serviceId: string; attemptId: string; connectionId?: string; fields: SecureSecretField[] }): { id: string; expiresAt: string } {
     this.prune();
+    if (input.connectionId !== undefined && !/^[a-zA-Z0-9_-]{1,128}$/.test(input.connectionId)) throw new Error('INVALID_CONNECTION_ID');
     const id = `credential_session_${randomUUID()}`;
     const expiresAt = Date.now() + this.ttlMs;
-    this.sessions.set(id, { id, serviceId: input.serviceId, attemptId: input.attemptId, fields: input.fields, expiresAt, consumed: false });
+    this.sessions.set(id, { id, serviceId: input.serviceId, attemptId: input.attemptId, connectionId: input.connectionId, fields: input.fields, expiresAt, consumed: false });
     return { id, expiresAt: new Date(expiresAt).toISOString() };
   }
 
@@ -62,16 +63,16 @@ export class SecureInputService {
     }
     const credentialRef = `connection.credentials.${session.serviceId}.${randomUUID()}`;
     getVault(this.configDir).set(credentialRef, JSON.stringify(accepted), `connection-secure-input:${session.attemptId}`);
-    this.references.set(`vault:${credentialRef}`, { serviceId: session.serviceId, attemptId: session.attemptId });
+    this.references.set(`vault:${credentialRef}`, { serviceId: session.serviceId, attemptId: session.attemptId, connectionId: session.connectionId });
     this.saveOwners();
     session.consumed = true;
     this.sessions.delete(id);
     return { credentialRef: `vault:${credentialRef}`, fieldsReceived: Object.keys(accepted) };
   }
 
-  ownsReference(reference: string, serviceId: string, attemptId: string): boolean {
+  ownsReference(reference: string, serviceId: string, attemptId: string, connectionId?: string): boolean {
     const owner = this.references.get(reference);
-    return Boolean(owner && owner.serviceId === serviceId && owner.attemptId === attemptId);
+    return Boolean(owner && owner.serviceId === serviceId && owner.attemptId === attemptId && owner.connectionId === connectionId);
   }
 
   /**
@@ -81,11 +82,11 @@ export class SecureInputService {
    * `persistedLegacy: true`, i.e. the reference is the trusted persisted
    * connection.credentialRef, never raw model input.
    */
-  clearReference(reference: string, serviceId?: string, attemptId?: string, options: { persistedLegacy?: boolean } = {}): void {
+  clearReference(reference: string, serviceId?: string, attemptId?: string, options: { persistedLegacy?: boolean; connectionId?: string } = {}): void {
     const key = String(reference || '').replace(/^vault:/, '');
     if (!key.startsWith('connection.credentials.')) throw new Error('Invalid connection credential reference.');
-    const owned = Boolean(serviceId && attemptId && this.ownsReference(reference, serviceId, attemptId));
-    if (!owned && options.persistedLegacy !== true) throw new Error('Credential reference does not belong to this connection attempt.');
+    const owned = Boolean(serviceId && attemptId && this.ownsReference(reference, serviceId, attemptId, options.connectionId));
+    if (!owned && (options.persistedLegacy !== true || this.references.has(reference))) throw new Error('Credential reference does not belong to this connection attempt.');
     getVault(this.configDir).delete(key, 'connection-secure-input:clear');
     if (this.references.delete(reference)) this.saveOwners();
   }
@@ -94,8 +95,8 @@ export class SecureInputService {
    * Bounded consumer read for a connection-owned reference. Requires ownership for the
    * exact service/attempt and an explicit consumer caller; never a generic config read.
    */
-  readForConsumer(reference: string, serviceId: string, attemptId: string): string | undefined {
-    if (!this.ownsReference(reference, serviceId, attemptId)) return undefined;
+  readForConsumer(reference: string, serviceId: string, attemptId: string, connectionId?: string): string | undefined {
+    if (!this.ownsReference(reference, serviceId, attemptId, connectionId)) return undefined;
     const key = String(reference || '').replace(/^vault:/, '');
     if (!key.startsWith('connection.credentials.')) return undefined;
     return getVault(this.configDir).get(key, 'connection-secure-input:consumer')?.expose();

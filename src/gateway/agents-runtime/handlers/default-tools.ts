@@ -16,7 +16,7 @@ import { scheduleTeamMemberAutoWake } from '../../teams/team-member-room';
 import { routeTeamEvent } from '../../teams/team-event-router';
 import { getSessionChannelHint } from '../../comms/broadcaster';
 import { addMessage, flushSession, getChatModelRoute, setChatModelRoute } from '../../session';
-import { buildConnectorStatus } from '../../tool-builder';
+import { buildSessionConnectorStatus } from '../../tool-builder';
 import { readRawToolResultRange } from '../../tool-result-envelope';
 import { ensurePrometheusExtensionRuntimeLoaded } from '../../../extensions/extension-bootstrap';
 import { getExtensionRuntimeRegistry } from '../../../extensions/runtime-registry';
@@ -50,7 +50,8 @@ export async function handleDefaultTool(ctx: DefaultToolContext): Promise<Awaite
             const serverId = parts[1];
             const toolName = parts.slice(2).join('__');
             try {
-              const mcpResult = await getMCPManager().callTool(serverId, toolName, args ?? {});
+              const providerArgs = { ...(args ?? {}) }; delete providerArgs.connection_id;
+              const mcpResult = await getMCPManager().callTool(serverId, toolName, providerArgs);
               const text = mcpResult.content
                 .map((c: any) => c.text || c.data || '')
                 .join('\n')
@@ -2613,7 +2614,7 @@ export async function handleDefaultTool(ctx: DefaultToolContext): Promise<Awaite
 
         // ── connector_list: always-available connector discovery ──────────────
         if (name === 'connector_list') {
-          return { name, args, result: buildConnectorStatus(), error: false };
+          return { name, args, result: await buildSessionConnectorStatus(sessionId), error: false };
         }
 
         if (name === 'tool_result_read') {

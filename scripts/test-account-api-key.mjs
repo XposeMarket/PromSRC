@@ -1,0 +1,20 @@
+import assert from 'node:assert/strict';
+const {verifyApiKeyAccount}=await import('../dist/connections/api-key-account-verification.js');
+const context={attempt:{id:'fixture',serviceId:'vercel',metadata:{connectionId:'work'},plan:{strategy:{adapter:'api-key',configuration:{registeredTools:['connector_vercel_list_projects']}}}},credentialRef:'fixture-ref'};
+let requested;
+const check=await verifyApiKeyAccount(context,JSON.stringify({apiKey:'fixture-token'}),async(url,options)=>{
+ requested={url,options};return new Response(JSON.stringify({user:{id:'work-user',email:'fixture@example.invalid'}}),{status:200});
+});
+assert.equal(check.ok,true);assert.equal(check.details.account.providerAccountId,'work-user');
+assert.equal(requested.url,'https://api.vercel.com/v2/user');
+assert.equal(requested.options.headers.Authorization,'Bearer fixture-token');
+assert.equal(requested.options.redirect,'error');
+assert.equal((await verifyApiKeyAccount({...context,attempt:{serviceId:'unknown'}},'{}',()=>assert.fail('unknown provider fetched'))).ok,false);
+const {ApiKeyConnectionAdapter}=await import('../dist/connections/adapters/api-key.js');
+const adapter=new ApiKeyConnectionAdapter({createCredentialSession:async()=>({id:'fixture-input'}),verifyCredential:async()=>check});
+const result=await adapter.connect(context);
+assert.equal(result.connection.authenticated,true);assert.equal(result.connection.account.providerAccountId,'work-user');
+assert.deepEqual(result.connection.availableTools,['connector_vercel_list_projects']);
+const denied=new ApiKeyConnectionAdapter({createCredentialSession:async()=>({id:'fixture-input'}),verifyCredential:async()=>({ok:false})});
+assert.equal((await denied.connect(context)).state,'reauth_required');
+console.log('PASS scoped Vercel key verification uses fixed provider endpoint and publishes identity only after authentication');

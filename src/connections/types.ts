@@ -344,6 +344,16 @@ export interface ConnectionVerificationResult {
 
 export interface ConnectionRecord {
   id: string;
+  /** Present only after explicit account migration. Missing metadata grants no team access. */
+  accountAccess?: {
+    ownerId: string;
+    label: string;
+    family: 'connector' | 'mcp' | 'provider' | 'browser' | 'resource';
+    instanceId: string;
+    generation: number;
+    policyRevision: number;
+    grants?: Array<{ connectionId: string; principalId: string; capabilities: string[]; resourceIds?: string[]; expiresAt?: number }>;
+  };
   schemaVersion: typeof CONNECTION_SCHEMA_VERSION;
   serviceId: string;
   serviceName?: string;

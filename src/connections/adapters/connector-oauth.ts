@@ -100,9 +100,14 @@ export class ConnectorOAuthConnectionAdapter implements ConnectionAdapter {
   readonly displayName = 'Provider OAuth with PKCE';
   readonly priority = 120;
 
-  constructor(private readonly bridge: ConnectorOAuthBridge | Readonly<Record<string, ConnectorOAuthBridge>>) {}
+  constructor(private readonly bridge: ConnectorOAuthBridge | Readonly<Record<string, ConnectorOAuthBridge>>, private readonly accountBridge?: (context: ConnectionAdapterContext) => ConnectorOAuthBridge) {}
 
   private bridgeFor(context: ConnectionAdapterContext): ConnectorOAuthBridge {
+    // Never run an account-targeted attempt through the legacy service singleton.
+    if (context.attempt.metadata?.connectionId) {
+      if (!this.accountBridge) throw new Error('ACCOUNT_OAUTH_BRIDGE_NOT_CONFIGURED');
+      return this.accountBridge(context);
+    }
     if (typeof (this.bridge as ConnectorOAuthBridge).start === 'function') {
       return this.bridge as ConnectorOAuthBridge;
     }

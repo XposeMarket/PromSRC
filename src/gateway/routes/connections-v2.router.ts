@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { publicConnectionValue } from '../../connections/serialize-public';
 import { getConnectionRuntime } from '../../connections/runtime';
 import { getConfig } from '../../config/config';
-import { getExtensionDescriptor } from '../../extensions/registry';
+import { getExtensionDescriptor, listExtensionDescriptors } from '../../extensions/registry';
 import { bindPluginCredential } from '../../connections/plugin-credential-binding';
 import { requireProtectedOwner, secureInputTransportAllowed } from './secure-access.router';
 import { pluginSetupSurfaceState, requirePluginSetupAdapter } from './plugin-setup-access';
@@ -60,7 +60,9 @@ router.post('/api/connection-attempts', async (req, res) => {
       serviceId, serviceName: req.body?.serviceName,
       requestedCapabilities: Array.isArray(req.body?.requestedCapabilities) ? req.body.requestedCapabilities.map(String) : [],
       readOnly: req.body?.readOnly !== false,
-      metadata: req.body?.metadata && typeof req.body.metadata === 'object' ? req.body.metadata : undefined,
+      // Account routing is established by a dedicated trusted lifecycle endpoint, never arbitrary metadata.
+      metadata: req.body?.metadata && typeof req.body.metadata === 'object'
+        ? Object.fromEntries(Object.entries(req.body.metadata).filter(([key]) => !['connectionId', 'accountGeneration', 'accountAccess', 'ownerId', 'principalId', 'grantLayers'].includes(key))) : undefined,
     });
     const attempt = req.body?.plan === false ? created : await runtime.orchestrator.plan(created.id);
     res.json({ success: true, attempt });
@@ -84,11 +86,15 @@ router.post('/api/connection-attempts/:id/connect', (req, res, next) => {
   const adapter = getConnectionRuntime().orchestrator.getAttempt(req.params.id)?.plan?.strategy.adapter;
   requirePluginSetupAdapter(req, res, next, adapter);
 }, async (req, res) => {
-  try { res.json({ success: true, attempt: await getConnectionRuntime().orchestrator.connect(req.params.id, { approved: true }) }); }
+  try { res.json({ success: true, attempt: await getConnectionRuntime().orchestrator.connect(req.params.id, { approved: true, ...(getConnectionRuntime().orchestrator.getAttempt(req.params.id)?.plan?.strategy.adapter === 'local-resource' && typeof req.body?.path === 'string' ? { path: req.body.path } : {}) }) }); }
   catch (error: any) { res.status(400).json({ success: false, error: error?.message || String(error) }); }
 });
 
-router.post('/api/connection-attempts/:id/continue', async (req, res) => {
+router.post('/api/connection-attempts/:id/continue', (req, res, next) => {
+  const adapter = getConnectionRuntime().orchestrator.getAttempt(req.params.id)?.plan?.strategy.adapter;
+  if (adapter === 'local-resource') return requireProtectedOwner(req, res, next);
+  next();
+}, async (req, res) => {
   try { res.json({ success: true, attempt: await getConnectionRuntime().orchestrator.continue(req.params.id, req.body || {}) }); }
   catch (error: any) { res.status(400).json({ success: false, error: error?.message || String(error) }); }
 });
@@ -124,12 +130,15 @@ router.post('/api/connection-secure-input/:sessionId', (req, res, next) => {
     const session = runtime.secureInput.status(req.params.sessionId);
     const attempt = session.attemptId ? runtime.orchestrator.getAttempt(session.attemptId) : undefined;
     const adapter = attempt?.plan?.strategy.adapter;
-    const bindable = ['api-key', 'setup-token'].includes(adapter || '');
-    const descriptor = session.serviceId ? getExtensionDescriptor(session.serviceId) : undefined;
+    const descriptor = session.serviceId ? listExtensionDescriptors().find(item => item.id === session.serviceId && (!attempt?.metadata?.pluginKind || item.kind === attempt.metadata.pluginKind)) : undefined;
+    const presetFields = adapter === 'mcp-stdio' && descriptor?.kind === 'mcp_preset' && attempt?.metadata?.connectionId
+      && attempt.plan?.strategy.id === `${descriptor.id}-preset`;
+    const bindable = !!presetFields || ['api-key', 'setup-token'].includes(adapter || '');
     const manifestKey = descriptor?.setup?.authType === 'api_key' && descriptor.setup.fields?.length && attempt?.plan?.strategy.id === `${descriptor.id}-manifest-key`;
-    if (bindable && !manifestKey && !descriptor?.connection?.strategies?.some(strategy => strategy.id === attempt?.plan?.strategy.id && ['api-key', 'setup-token'].includes(strategy.adapter))) {
+    if (bindable && !presetFields && !manifestKey && !descriptor?.connection?.strategies?.some(strategy => strategy.id === attempt?.plan?.strategy.id && ['api-key', 'setup-token'].includes(strategy.adapter))) {
       res.status(400).json({ success: false, error: 'UNSUPPORTED_PLUGIN' }); return;
     }
+    const connectionId = typeof attempt?.metadata?.connectionId === 'string' ? attempt.metadata.connectionId : undefined;
     const result = runtime.secureInput.submit(req.params.sessionId, req.body?.values || {});
     if (!bindable) {
       // Non-bindable consumers (e.g. openai-compatible probe) keep the opaque ref for their own continue step.
@@ -140,7 +149,7 @@ router.post('/api/connection-secure-input/:sessionId', (req, res, next) => {
     let stored: { prior: any; connectionId: string } | undefined;
     try {
       stored = runtime.orchestrator.recordStoredCredential(session.attemptId!, result.credentialRef);
-      bindPluginCredential(getConfig().getConfigDir(), session.serviceId!, result.credentialRef, session.attemptId!);
+      bindPluginCredential(getConfig().getConfigDir(), session.serviceId!, result.credentialRef, session.attemptId!, connectionId);
     } catch {
       // N4: correct the pending record first (restore the prior record or remove the one this request created).
       // The previous vault key/binding is never touched here.
@@ -148,7 +157,7 @@ router.post('/api/connection-secure-input/:sessionId', (req, res, next) => {
         res.status(503).json({ success: false, error: 'CREDENTIAL_CLEANUP_REQUIRED' }); return;
       }
       // Bind failed: remove the value we just wrote so no orphan secret remains.
-      try { runtime.secureInput.clearReference(result.credentialRef, session.serviceId!, session.attemptId!); } catch {
+      try { runtime.secureInput.clearReference(result.credentialRef, session.serviceId!, session.attemptId!, { connectionId }); } catch {
         res.status(503).json({ success: false, error: 'CREDENTIAL_CLEANUP_REQUIRED' }); return;
       }
       res.status(400).json({ success: false, error: 'CREDENTIAL_BINDING_FAILED' }); return;

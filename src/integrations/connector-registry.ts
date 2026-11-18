@@ -3,6 +3,8 @@
 // Server-v2.ts imports this and delegates all /api/connections/oauth/* routes here.
 
 import path from 'path';
+import { ConnectorInstanceRegistry, getConnectorInstances } from './connector-instances.js';
+import { currentAccountExecution } from '../connections/account-execution-context.js';
 import { OAuthConnector, OAuthStartResult, OAuthCallbackResult } from './oauth-base.js';
 import { GmailConnector } from './connectors/gmail.js';
 import { SlackConnector } from './connectors/slack.js';
@@ -21,8 +23,10 @@ import { LinkedInConnector } from './connectors/linkedin.js';
 // ─── Registry ─────────────────────────────────────────────────────────────────
 
 const connectors = new Map<string, OAuthConnector>();
+let accountInstances: ConnectorInstanceRegistry | undefined;
 
 export function initConnectorRegistry(configDir: string): void {
+  accountInstances = getConnectorInstances(configDir);
   const registry: OAuthConnector[] = [
     new GmailConnector(configDir),
     new SlackConnector(configDir),
@@ -43,6 +47,11 @@ export function initConnectorRegistry(configDir: string): void {
 }
 
 export function getConnector(id: string): OAuthConnector | undefined {
+  const execution = currentAccountExecution(id);
+  if (execution) {
+    if (!accountInstances) throw new Error('ACCOUNT_RUNTIME_UNAVAILABLE');
+    return accountInstances.get(id, execution.binding.connectionId);
+  }
   return connectors.get(id);
 }
 
@@ -139,7 +148,7 @@ export function hasPendingOAuthFlow(id: string): boolean {
 }
 
 export function isConnectorConnected(id: string): boolean {
-  return connectors.get(id)?.isConnected() ?? false;
+  return getConnector(id)?.isConnected() ?? false;
 }
 
 /**

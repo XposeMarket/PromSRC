@@ -17,11 +17,12 @@
     "capabilities": ["mcp", "filesystem"]
   },
   "setup": {
-    "authType": "none"
+    "authType": "none",
+    "fields": [{ "key": "rootPath", "label": "Allowed folder", "input": "text", "required": true, "secret": false, "placeholder": "Absolute folder path on the host" }]
   },
   "mcpPreset": {
     "transport": "stdio",
     "command": "npx",
-    "args": ["-y", "@modelcontextprotocol/server-filesystem", "C:\\Users"]
+    "args": ["-y", "@modelcontextprotocol/server-filesystem", "{{credential:filesystem:rootPath}}"]
   }
 }

@@ -166,6 +166,7 @@ import { router as proposalsRouter, setProposalsBroadcast, broadcastProposalCrea
 import { router as auditLogRouter } from './routes/audit-log.router';
 import { router as connectionsRouter } from './routes/connections.router';
 import { router as connectionsV2Router } from './routes/connections-v2.router';
+import { pluginAccountsRouter } from './routes/plugin-accounts.router';
 import { router as secureAccessRouter } from './routes/secure-access.router';
 import { router as protectedPluginsRouter } from './routes/protected-plugins.router';
 import { router as extensionsRouter } from './routes/extensions.router';
@@ -1069,6 +1070,7 @@ app.use('/', requireGatewayAuth, requireAccountAccess, proposalsRouter);
 app.use('/', requireGatewayAuth, requireAccountAccess, auditLogRouter);
 app.use('/', requireGatewayAuth, requireAccountAccess, connectionsRouter);
 app.use('/', requireGatewayAuth, requireAccountAccess, connectionsV2Router);
+app.use('/', requireGatewayAuth, requireAccountAccess, pluginAccountsRouter);
 app.use('/', requireGatewayAuth, requireAccountAccess, secureAccessRouter);
 app.use('/', requireGatewayAuth, requireAccountAccess, protectedPluginsRouter);
 app.use('/', requireGatewayAuth, requireAccountAccess, extensionsRouter);

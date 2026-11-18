@@ -101,6 +101,19 @@ export function isConnectionRecord(value: unknown): value is ConnectionRecord {
     && typeof value.health === 'string'
     && (value.contractVersion === undefined || value.contractVersion === 1 || value.contractVersion === 2)
     && (value.account === undefined || isSafeIdentity(value.account))
+    && (value.accountAccess === undefined || (isObject(value.accountAccess)
+      && typeof value.accountAccess.ownerId === 'string' && value.accountAccess.ownerId.length > 0
+      && typeof value.accountAccess.label === 'string' && value.accountAccess.label.length <= 256
+      && ['connector', 'mcp', 'provider', 'browser', 'resource'].includes(String(value.accountAccess.family))
+      && typeof value.accountAccess.instanceId === 'string' && /^[a-zA-Z0-9_-]{1,128}$/.test(value.accountAccess.instanceId)
+      && Number.isSafeInteger(value.accountAccess.generation) && Number(value.accountAccess.generation) >= 1
+      && Number.isSafeInteger(value.accountAccess.policyRevision) && Number(value.accountAccess.policyRevision) >= 1
+      && (value.accountAccess.grants === undefined || (Array.isArray(value.accountAccess.grants) && value.accountAccess.grants.length <= 100
+        && value.accountAccess.grants.every((grant: any) => isObject(grant) && grant.connectionId === value.id
+          && typeof grant.principalId === 'string' && /^(team|task|agent):[^\s]{1,128}$/.test(grant.principalId)
+          && Array.isArray(grant.capabilities) && grant.capabilities.length > 0 && grant.capabilities.every((cap: unknown) => typeof cap === 'string')
+          && (grant.resourceIds === undefined || (Array.isArray(grant.resourceIds) && grant.resourceIds.every((id: unknown) => typeof id === 'string')))
+          && (grant.expiresAt === undefined || (Number.isSafeInteger(grant.expiresAt) && Number(grant.expiresAt) > 0)))))))
     && (value.resources === undefined || (Array.isArray(value.resources) && value.resources.every(isResourceIdentity)))
     && (value.capabilityGrants === undefined || (Array.isArray(value.capabilityGrants) && value.capabilityGrants.every(isCapabilityGrant)))
     && (value.providerApp === undefined || isProviderAppMetadata(value.providerApp))

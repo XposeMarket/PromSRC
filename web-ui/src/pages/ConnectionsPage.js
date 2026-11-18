@@ -1,4 +1,5 @@
 import { openConnectFlow } from '../features/connectors/connect-flow.js';
+import { openExistingPluginAccounts } from '../features/connectors/account-manager.js';
 import { postJson as connectionOwnerPost } from '../features/secure-access/secure-access-core.js';
 /**
  * ConnectionsPage.js
@@ -1235,6 +1236,7 @@ async function pollXurlSetup() {
 }
 
 async function startOAuthFlow(id) {
+  if (await openExistingPluginAccounts(api, id, { onChanged: loadConnectionsState })) return;
   return openConnectFlow(api, { serviceId: id, kind: 'connector' }, { onChanged: loadConnectionsState, onVerify: message => { closeConnectorView(); window.sendChat?.(message); } });
 }
 
@@ -1649,6 +1651,7 @@ async function verifyBrowserLogin(id) {
 }
 
 async function disconnectConnector(id) {
+  if (await openExistingPluginAccounts(api, id, { onChanged: loadConnectionsState, managedOnly: true })) return;
   if (!confirm('Disconnect this connector? Prometheus will lose access until you reconnect.')) return;
 
   try {

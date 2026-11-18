@@ -16,6 +16,9 @@ type Handler = (code: string, state: string, error: string) => Promise<OAuthCall
 
 interface PendingGatewayFlow {
   handler: Handler;
+  expectedState?: string;
+  inFlight?: boolean;
+  serviceId: string;
   resolve: (result: OAuthCallbackResult) => void;
   timer: ReturnType<typeof setTimeout>;
 }
@@ -42,7 +45,7 @@ export function gatewayPublicOrigin(): string {
   }
 }
 
-export function awaitGatewayOAuthCallback(id: string, ttlMs: number, handler: Handler): Promise<OAuthCallbackResult> {
+export function awaitGatewayOAuthCallback(id: string, ttlMs: number, handler: Handler, options?: { serviceId: string; expectedState: string }): Promise<OAuthCallbackResult> {
   const existing = pending.get(id);
   if (existing) {
     clearTimeout(existing.timer);
@@ -56,12 +59,18 @@ export function awaitGatewayOAuthCallback(id: string, ttlMs: number, handler: Ha
       resolve({ success: false, error: 'Timed out waiting for OAuth callback.' });
     }, ttlMs);
     if (typeof (timer as any).unref === 'function') (timer as any).unref();
-    pending.set(id, { handler, resolve, timer });
+    pending.set(id, { handler, resolve, timer, serviceId: options?.serviceId || id, expectedState: options?.expectedState });
   });
 }
 
 export function hasPendingGatewayOAuth(id: string): boolean {
-  return pending.has(id);
+  return pending.has(id) || [...pending.values()].some(flow => flow.serviceId === id);
+}
+export function cancelGatewayOAuthCallback(id: string): void {
+  const flow = pending.get(id);
+  if (!flow) return;
+  pending.delete(id); clearTimeout(flow.timer);
+  flow.resolve({ success: false, error: 'Authorization cancelled.' });
 }
 
 /**
@@ -72,11 +81,18 @@ export async function completeGatewayOAuthCallback(
   id: string,
   query: { code?: string; state?: string; error?: string; error_description?: string },
 ): Promise<OAuthCallbackResult | null> {
-  const flow = pending.get(id);
+  const stateValue = String(query.state || '');
+  const candidates = [...pending.entries()].filter(([, flow]) => flow.serviceId === id && flow.expectedState === stateValue);
+  const match = candidates.length === 1 ? candidates[0] : undefined;
+  const key = match?.[0] || id;
+  const flow = match?.[1] || pending.get(id);
   if (!flow) return null;
+  if (flow.expectedState !== undefined && flow.expectedState !== stateValue) return { success: false, error: 'OAuth state mismatch.' };
   const code = String(query.code || '').replace(/#_$/, '');
   const state = String(query.state || '');
   const error = String(query.error_description || query.error || '');
+  if (flow.inFlight) return { success: false, error: 'OAuth callback already processing.' };
+  flow.inFlight = true;
   let result: OAuthCallbackResult;
   try {
     result = await flow.handler(code, state, error);
@@ -84,9 +100,9 @@ export async function completeGatewayOAuthCallback(
     result = { success: false, error: err?.message || String(err) };
   }
   // A forged request with the wrong state must not consume the real flow.
-  if (!result.success && /state mismatch/i.test(result.error || '')) return result;
+  if (!result.success && /state mismatch/i.test(result.error || '')) { flow.inFlight = false; return result; }
   clearTimeout(flow.timer);
-  pending.delete(id);
+  if (pending.get(key) === flow) pending.delete(key);
   flow.resolve(result);
   return result;
 }

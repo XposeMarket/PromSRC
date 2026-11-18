@@ -1911,3 +1911,17 @@ export function parseLooseMap(raw: any): Record<string, string> {
   }
   return out;
 }
+
+/** Connector discovery includes only account identities authorized for the executing session. */
+export async function buildSessionConnectorStatus(sessionId: string): Promise<string> {
+  const { ConnectionStore } = await import('../connections/connection-store.js');
+  const { sessionAccountChoices } = await import('../connections/account-discovery.js');
+  const records = new ConnectionStore(getConfig().getConfigDir()).list();
+  const choices = await sessionAccountChoices(sessionId, records);
+  if (!records.some(record => record.accountAccess)) return buildConnectorStatus();
+  // Legacy describeStatus may contain the singleton account's email. Never append
+  // that unfiltered identity text to an account-scoped discovery result.
+  return choices.length
+    ? `Authorized accounts (pass the exact id as connection_id; never substitute another account):\n${JSON.stringify(choices)}`
+    : 'No plugin accounts are authorized for this session. Connect an account or obtain an explicit account grant; do not fall back to another identity.';
+}

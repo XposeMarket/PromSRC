@@ -36,6 +36,13 @@ export class ApiKeyConnectionAdapter implements ConnectionAdapter {
       const session = await this.options.createCredentialSession(context, fields);
       return { state: 'awaiting_secure_input', userAction: { type: 'secure-input', label: `Enter credentials for ${context.attempt.serviceName || context.attempt.serviceId}`, credentialSessionId: session.id, fields, expiresAt: session.expiresAt } };
     }
+    if (context.attempt.metadata?.connectionId && context.attempt.serviceId === 'vercel' && this.options.verifyCredential) {
+      const checked = await this.options.verifyCredential(context.credentialRef, context);
+      if (!checked.ok) return { state: 'reauth_required', error: { code: 'ACCOUNT_AUTH_FAILED', message: checked.message || 'Account verification failed.', phase: 'verifying' } };
+      const tools = Array.isArray(strategy.configuration?.registeredTools) ? strategy.configuration.registeredTools.filter((item): item is string => typeof item === 'string') : [];
+      return { state: 'verifying', connection: { configured: true, authenticated: true, authState: 'healthy', credentialRef: context.credentialRef,
+        account: checked.details?.account as ConnectionRecord['account'], registered: true, exposed: true, availableTools: tools, registeredTools: tools, exposedTools: tools } };
+    }
     return { state: 'registering', connection: { configured: true, authenticated: false, authState: 'pending', credentialRef: context.credentialRef } };
   }
 

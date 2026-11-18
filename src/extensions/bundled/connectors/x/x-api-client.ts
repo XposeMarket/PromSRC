@@ -1,5 +1,7 @@
 // X API v2 client + tool executor for the native X connector. Moved out of
 // gateway/tools/handlers/xai-handlers.ts (which now only handles xAI x_search).
+import { currentAccountExecution } from '../../../../connections/account-execution-context.js';
+import { getConnectorInstances } from '../../../../integrations/connector-instances.js';
 import { getValidXApiToken } from '../../../../auth/x-api-oauth.js';
 import { getVault } from '../../../../security/vault.js';
 import { validateXApiRequest } from '../../../../gateway/tools/x-api-request-policy.js';
@@ -143,6 +145,7 @@ function loadXAppBearerToken(): string {
 
 /** Application-only request (usage endpoints reject user-context OAuth). */
 async function fetchXApiAppOnly(path: string): Promise<any> {
+  if (currentAccountExecution('x')) throw new Error('This endpoint requires a separate application credential; it cannot substitute the selected user account.');
   const bearer = loadXAppBearerToken();
   if (!bearer) throw new Error(describeXApiError(403, 'unsupported-authentication: Application-Only token required and none is configured'));
   const res = await fetch(`${X_API_BASE_URL}${path}`, {
@@ -154,7 +157,11 @@ async function fetchXApiAppOnly(path: string): Promise<any> {
 }
 
 async function fetchXApi(path: string, init: RequestInit & { query?: Record<string, any> } = {}): Promise<any> {
-  const token = await getValidXApiToken(getConfigDir());
+  const account = currentAccountExecution('x');
+  const token = account
+    ? await getConnectorInstances(getConfigDir()).get('x',account.binding.connectionId).getValidAccessToken()
+    : await getValidXApiToken(getConfigDir());
+  account?.revalidate();
   const requestPath = buildXApiPath(path, init.query);
   const res = await fetch(`${X_API_BASE_URL}${requestPath}`, {
     ...init,

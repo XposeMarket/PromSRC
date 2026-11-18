@@ -1,0 +1,56 @@
+import assert from 'node:assert/strict';
+import {createRequire} from 'node:module';
+const require=createRequire(import.meta.url);
+const {adoptLegacyNativeAccount}=require('../dist/connections/account-native-migration.js');
+let record={id:'legacy',serviceId:'gmail',serviceName:'Gmail'};
+const original={access_token:'fixture',refresh_token:'fixture-refresh'};
+let staged=null, writes=0,fail=false;
+const store={get:()=>structuredClone(record),update:(_id,patch)=>{if(fail)throw new Error('disk-failed');record={...record,...patch};}};
+const legacy={credentialReference:()=> 'vault:integration.gmail.oauth_tokens',loadTokens:()=>structuredClone(original)};
+const client={loadTokens:()=>staged,saveTokens:t=>{staged=structuredClone(t);writes++;},credentialReference:()=> 'vault:integration.gmail.accounts.legacy.oauth_tokens'};
+const instances={get:(service,id)=>{assert.equal(service,'gmail');assert.equal(id,'legacy');return client;}};
+fail=true;
+assert.throws(()=>adoptLegacyNativeAccount(store,instances,'legacy','owner',legacy),/disk-failed/);
+assert.equal(record.accountAccess,undefined);
+assert.equal(writes,1);
+fail=false;
+assert.equal(adoptLegacyNativeAccount(store,instances,'legacy','owner',legacy),'legacy');
+assert.equal(writes,1);
+assert.deepEqual(record.accountAccess.grants,[]);
+assert.equal(adoptLegacyNativeAccount(store,instances,'legacy','owner',legacy),'legacy');
+assert.throws(()=>adoptLegacyNativeAccount(store,instances,'legacy','other',legacy),/UNAVAILABLE/);
+assert.equal(original.access_token,'fixture');
+record={id:'legacy',serviceId:'gmail'};staged={access_token:'different'};
+assert.throws(()=>adoptLegacyNativeAccount(store,instances,'legacy','owner',legacy),/CONFLICT/);
+console.log('PASS native migration preserves legacy secret, retries interrupted metadata, forbids conflicting overwrite and gives teams no grants');
+
+const {ConnectionStore}=require('../dist/connections/connection-store.js');
+const fs=require('node:fs'),os=require('node:os'),path=require('node:path');
+const dir=fs.mkdtempSync(path.join(os.tmpdir(),'account-store-failure-'));
+try {
+ const records=new ConnectionStore(dir);
+ const input={id:'fixture',serviceId:'gmail',pluginId:'gmail',strategyId:'oauth',adapterId:'connector-oauth',installed:true,enabled:true,configured:true,authenticated:true,registered:true,exposed:false,verified:false,authState:'healthy',health:'healthy',grantedCapabilities:[],registeredTools:[],exposedTools:[]};
+ records.create(input);
+ records.save=()=>{throw new Error('fixture-disk-failure');};
+ assert.throws(()=>records.update('fixture',{enabled:false}),/disk-failure/);
+ assert.equal(records.get('fixture').enabled,true);
+ assert.throws(()=>records.delete('fixture'),/disk-failure/);
+ assert.ok(records.get('fixture'));
+ assert.throws(()=>records.create({...input,id:'new'}),/disk-failure/);
+ assert.equal(records.get('new'),undefined);
+ console.log('PASS failed durable store writes do not publish phantom account updates/create/delete in memory');
+}finally{fs.rmSync(dir,{recursive:true,force:true});}
+
+const {adoptLegacyXAccount}=require('../dist/connections/account-native-migration.js');
+record={id:'legacy-x',serviceId:'x',serviceName:'X'};staged=null;writes=0;
+const xTokens={access_token:'x-fixture',refresh_token:'x-refresh',expires_at:123456,user_id:'user-x',username:'fixture',stored_at:1};
+const xInstances={get:(service,id)=>{assert.equal(service,'x');assert.equal(id,'legacy-x');return client;}};
+assert.equal(adoptLegacyXAccount(store,xInstances,'legacy-x','owner',xTokens),'legacy-x');
+assert.equal(staged.account_id,'user-x');
+assert.equal(staged.access_token,'x-fixture');
+assert.equal(xTokens.user_id,'user-x');
+assert.equal(record.accountAccess.label,'fixture');
+assert.throws(()=>adoptLegacyXAccount(store,xInstances,'legacy-x','other',xTokens),/UNAVAILABLE/);
+record={id:'legacy-x',serviceId:'x'};staged={access_token:'other-x'};
+assert.throws(()=>adoptLegacyXAccount(store,xInstances,'legacy-x','owner',xTokens),/CONFLICT/);
+console.log('PASS X migration preserves source tokens, converts identity and rejects foreign owner/conflicting account tokens');

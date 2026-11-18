@@ -22,7 +22,7 @@ export interface ConnectionOrchestratorOptions {
   adapters: ConnectionAdapterRegistry;
   activity: ConnectionActivityStore;
   plans: ConnectionPlanResolver;
-  validateCredentialReference?: (reference: string, serviceId: string, attemptId: string) => boolean;
+  validateCredentialReference?: (reference: string, serviceId: string, attemptId: string, connectionId?: string) => boolean;
   broadcast?: (event: Record<string, unknown>) => void;
 }
 
@@ -37,6 +37,8 @@ export class ConnectionOrchestrator {
     const requestedCapabilities = input.requestedCapabilities || [];
     const reusable = this.options.attempts.list({ limit: 100 }).find((item) =>
       item.serviceId === canonicalServiceId
+      && item.metadata?.connectionId === input.metadata?.connectionId
+      && item.metadata?.accountGeneration === input.metadata?.accountGeneration
       && item.metadata?.pluginKind === discovery?.matches[0]?.pluginKind
       && !['connected', 'failed', 'cancelled'].includes(item.state)
       && !(item.state === 'awaiting_oauth' && Number(item.metadata?.oauthDiscoveryVersion || 0) < 2)
@@ -117,7 +119,7 @@ export class ConnectionOrchestrator {
   async prepareInput(id: string): Promise<ConnectionAttempt> {
     const attempt = this.requireAttempt(id);
     if (attempt.state !== 'awaiting_approval' || !attempt.plan) return attempt;
-    if (!['api-key', 'setup-token', 'connector-oauth'].includes(attempt.plan.strategy.adapter)) return attempt;
+    if (!['api-key', 'setup-token', 'connector-oauth', 'mcp-stdio'].includes(attempt.plan.strategy.adapter)) return attempt;
     const adapter = this.options.adapters.resolve(attempt.plan.strategy);
     if (!adapter.prepare) return attempt;
     const result = await adapter.prepare(this.context(attempt));
@@ -228,13 +230,20 @@ export class ConnectionOrchestrator {
   async disconnect(connectionId: string): Promise<void> {
     const connection = this.options.connections.get(connectionId);
     if (!connection) throw new Error(`Unknown connection: ${connectionId}`);
+    if (connection.accountAccess) {
+      this.options.connections.update(connectionId, { enabled: false, authenticated: false, exposed: false, exposedTools: [], availableTools: [], authState: 'none', health: 'unavailable', accountAccess: { ...connection.accountAccess, generation: connection.accountAccess.generation + 1 } });
+      invalidateConnectionToolSurfaceCache();
+    }
     const candidates = this.options.attempts.list({ serviceId: connection.serviceId }).filter((item) => item.connectionId === connectionId && item.plan);
     // Use the attempt that owns the persisted reference, not whichever attempt happens to be first.
-    const attempt = candidates.find((item) => Boolean(connection.credentialRef) && this.options.validateCredentialReference?.(connection.credentialRef as string, item.serviceId, item.id) === true) ?? candidates[0];
+    const attempt = candidates.find((item) => Boolean(connection.credentialRef) && this.options.validateCredentialReference?.(connection.credentialRef as string, item.serviceId, item.id, connection.accountAccess ? connection.id : undefined) === true) ?? candidates[0];
     if (attempt?.plan) {
       try {
         const adapter = this.options.adapters.resolve(attempt.plan.strategy);
-        await adapter.disconnect?.(this.context(attempt), connection);
+        const detachAttempt = connection.accountAccess
+          ? { ...attempt, metadata: { ...attempt.metadata, accountGeneration: this.options.connections.get(connectionId)!.accountAccess!.generation } }
+          : attempt;
+        await adapter.disconnect?.(this.context(detachAttempt), connection);
       } catch (error: any) {
         // Cleanup failure must never leave the connection enabled; the vault entry can be retried.
         console.warn(`[connections] disconnect cleanup failed for ${connectionId}:`, error?.message || error);
@@ -247,9 +256,20 @@ export class ConnectionOrchestrator {
   }
 
   private context(attempt: ConnectionAttempt, input?: Record<string, unknown>) {
-    if (attempt.metadata?.pluginKind && input) input = Object.fromEntries(Object.entries(input).filter(([key]) => ['credentialRef', 'approved'].includes(key)));
-    if (input?.credentialRef !== undefined && (typeof input.credentialRef !== 'string' || this.options.validateCredentialReference?.(input.credentialRef, attempt.serviceId, attempt.id) !== true)) {
+    const selectedId = attempt.metadata?.connectionId;
+    if (selectedId !== undefined) {
+      const selected = typeof selectedId === 'string' ? this.options.connections.get(selectedId) : undefined;
+      if (!selected?.accountAccess || selected.serviceId !== attempt.serviceId
+        || selected.pluginId !== (attempt.plan?.pluginId || attempt.pluginId || 'core')
+        || selected.accountAccess.generation !== attempt.metadata?.accountGeneration) throw new Error('ACCOUNT_ATTEMPT_STALE');
+    }
+    if (attempt.metadata?.pluginKind && input) input = Object.fromEntries(Object.entries(input).filter(([key]) => ['credentialRef', 'approved', ...(attempt.plan?.strategy.adapter === 'local-resource' ? ['path'] : [])].includes(key)));
+    if (input?.credentialRef !== undefined && (typeof input.credentialRef !== 'string' || this.options.validateCredentialReference?.(input.credentialRef, attempt.serviceId, attempt.id, typeof attempt.metadata?.connectionId === 'string' ? attempt.metadata.connectionId : undefined) !== true)) {
       throw new Error('Credential reference was not issued for this connection attempt. Enter credentials through its secure card.');
+    }
+    if (attempt.plan?.strategy.adapter === 'local-resource' && typeof selectedId === 'string') {
+      const resource = this.options.connections.get(selectedId)?.configuration?.resourceId;
+      if (typeof resource === 'string') input = { ...input, resourceId: resource };
     }
     return { attempt, credentialRef: typeof input?.credentialRef === 'string' ? input.credentialRef : undefined, configuration: input, emitProgress: (message: string, details?: Record<string, unknown>) => { this.options.attempts.addProgress(attempt.id, { state: this.requireAttempt(attempt.id).state, message, details }); this.emitAttempt(attempt.id); } };
   }
@@ -262,9 +282,15 @@ export class ConnectionOrchestrator {
     if (result.connection && attempt.plan) {
       const now = new Date().toISOString();
       const incomingAccount = result.connection.account;
-      const existingAccountRecord = this.options.connections.findByService(attempt.serviceId)
-        .find((item) => item.enabled && item.account && incomingAccount);
-      if (existingAccountRecord && !accountIdentitiesMatch(existingAccountRecord.account, incomingAccount)) {
+      const targetId = typeof attempt.metadata?.connectionId === 'string' ? attempt.metadata.connectionId : undefined;
+      const target = targetId ? this.options.connections.get(targetId) : undefined;
+      if (targetId && (!target?.accountAccess || target.serviceId !== attempt.serviceId || target.pluginId !== (attempt.plan.pluginId || attempt.pluginId || 'core')
+        || target.accountAccess.generation !== attempt.metadata?.accountGeneration)) {
+        return this.fail(attempt, 'ACCOUNT_UNAVAILABLE', 'Selected account is unavailable for this connection attempt.', false);
+      }
+      const existingAccountRecord = target || this.options.connections.findByService(attempt.serviceId)
+        .find((item) => !item.accountAccess && item.enabled && item.account && incomingAccount);
+      if (existingAccountRecord?.account && incomingAccount && !accountIdentitiesMatch(existingAccountRecord.account, incomingAccount)) {
         return this.fail(attempt, 'ACCOUNT_MISMATCH', 'The provider returned a different account than the existing connection. Disconnect the existing account before connecting another one.', true);
       }
       const record = this.options.connections.upsert({
@@ -273,6 +299,7 @@ export class ConnectionOrchestrator {
         authenticated: false, registered: false, exposed: false, verified: false, authState: 'pending', health: 'unknown',
         grantedCapabilities: attempt.requestedCapabilities, registeredTools: [], exposedTools: [], createdAt: now,
         ...result.connection,
+        ...(target ? { id: target.id, accountAccess: target.accountAccess } : {}),
       } as any);
       connectionId = record.id;
     }
@@ -313,15 +340,19 @@ export class ConnectionOrchestrator {
   /** Persist a manageable pending record before adapter continuation can fail. Returns the prior record (null when created here) for revert. */
   recordStoredCredential(id: string, credentialRef: string): { prior: ConnectionRecord | null; connectionId: string } {
     const attempt = this.requireAttempt(id);
-    if (!attempt.plan || !['api-key', 'setup-token'].includes(attempt.plan.strategy.adapter) || this.options.validateCredentialReference?.(credentialRef, attempt.serviceId, id) !== true) throw new Error('CREDENTIAL_BINDING_MISMATCH');
+    this.context(attempt);
+    const selectedId = typeof attempt.metadata?.connectionId === 'string' ? attempt.metadata.connectionId : undefined;
+    if (!attempt.plan || !['api-key', 'setup-token', ...(selectedId && attempt.metadata?.pluginKind === 'mcp_preset' ? ['mcp-stdio'] : [])].includes(attempt.plan.strategy.adapter) || this.options.validateCredentialReference?.(credentialRef, attempt.serviceId, id, selectedId) !== true) throw new Error('CREDENTIAL_BINDING_MISMATCH');
     const pluginId = attempt.plan.pluginId || attempt.pluginId || 'core';
-    const prior = this.options.connections.findByService(attempt.serviceId).find((item) => item.pluginId === pluginId && item.strategyId === attempt.plan!.strategy.id) ?? null;
+    const prior = selectedId ? this.options.connections.get(selectedId)!
+      : this.options.connections.findByService(attempt.serviceId).find((item) => !item.accountAccess && item.pluginId === pluginId && item.strategyId === attempt.plan!.strategy.id) ?? null;
     const record = this.options.connections.upsert({
       pluginId, serviceId: attempt.serviceId, serviceName: attempt.serviceName,
       strategyId: attempt.plan.strategy.id, adapterId: attempt.plan.strategy.adapter, installed: true, enabled: true,
       configured: true, authenticated: false, registered: false, exposed: false, verified: false,
       authState: 'pending', health: 'unknown', grantedCapabilities: attempt.requestedCapabilities,
       registeredTools: [], exposedTools: [], credentialRef,
+      ...(selectedId ? { id: selectedId, accountAccess: prior!.accountAccess } : {}),
     });
     this.options.attempts.update(id, { connectionId: record.id });
     this.emitAttempt(id);

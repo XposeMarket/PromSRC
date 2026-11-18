@@ -1,3 +1,5 @@
+import { ConnectorInstanceRegistry } from '../integrations/connector-instances.js';
+import type { OAuthConnector } from '../integrations/oauth-base.js';
 import type { OAuthCallbackResult, OAuthConnectorMetadata } from '../integrations/oauth-base';
 import { cancelConnectorOAuth } from '../integrations/connector-registry';
 import { buildXOAuthBridge } from './x-oauth-bridge';
@@ -44,29 +46,29 @@ const NATIVE_OAUTH_CONNECTORS: Readonly<Record<string, string>> = Object.freeze(
   instagram: 'Instagram', linkedin: 'LinkedIn', tiktok: 'TikTok',
 });
 
-function runtimeFor(id: string): ConnectorRuntime {
-  const connector = getConnector(id) as ConnectorRuntime | undefined;
+function runtimeFor(id: string, instance?: OAuthConnector): ConnectorRuntime {
+  const connector = (instance || getConnector(id)) as ConnectorRuntime | undefined;
   if (!connector) throw new Error(`${NATIVE_OAUTH_CONNECTORS[id] || id} connector runtime is unavailable.`);
   return connector;
 }
 
-function tokensFor(id: string): Record<string, unknown> {
+function tokensFor(id: string, instance?: OAuthConnector): Record<string, unknown> {
   try {
-    const tokens = runtimeFor(id).loadTokens?.();
+    const tokens = runtimeFor(id, instance).loadTokens?.();
     return tokens && typeof tokens === 'object' ? tokens : {};
   } catch {
     return {};
   }
 }
 
-function baseAccount(id: string): ReturnType<typeof normalizeConnectionAccountIdentity> {
-  const metadata = getConnectorOAuthMetadata(id);
+function baseAccount(id: string, instance?: OAuthConnector): ReturnType<typeof normalizeConnectionAccountIdentity> {
+  const metadata = instance?.getOAuthMetadata() || getConnectorOAuthMetadata(id);
   return normalizeConnectionAccountIdentity({ provider: id, ...(metadata?.account || {}) }, id);
 }
 
-async function resourcesFor(id: string) {
-  const connector = runtimeFor(id);
-  const tokens = tokensFor(id);
+async function resourcesFor(id: string, instance?: OAuthConnector) {
+  const connector = runtimeFor(id, instance);
+  const tokens = tokensFor(id, instance);
 
   if (id === 'ga4' && connector.listProperties) {
     const properties = await connector.listProperties();
@@ -117,12 +119,12 @@ async function resourcesFor(id: string) {
   return [];
 }
 
-async function verifyNativeConnector(id: string): Promise<ConnectorOAuthVerification> {
-  const connector = runtimeFor(id);
+async function verifyNativeConnector(id: string, instance?: OAuthConnector): Promise<ConnectorOAuthVerification> {
+  const connector = runtimeFor(id, instance);
   if (connector.isConnected && !connector.isConnected()) throw new Error(`${NATIVE_OAUTH_CONNECTORS[id]} authorization is not connected.`);
 
-  let account = baseAccount(id);
-  const tokens = tokensFor(id);
+  let account = baseAccount(id, instance);
+  const tokens = tokensFor(id, instance);
 
   if (id === 'instagram' && connector.getProfile) {
     const profile = await connector.getProfile();
@@ -135,13 +137,13 @@ async function verifyNativeConnector(id: string): Promise<ConnectorOAuthVerifica
     const identity = profile?.sub || profile?.open_id;
     if (!identity) throw new Error(`${id} returned no account identity.`);
     account = normalizeConnectionAccountIdentity({ provider: id, providerAccountId: identity, username: profile.username, displayName: profile.name || profile.display_name }, id);
-  } else if (id === 'github' && connector.getUser) {
+  } else if ((id === 'github' || id === 'x') && connector.getUser) {
     const user = await connector.getUser();
     account = normalizeConnectionAccountIdentity({
       provider: id,
       providerAccountId: user?.id,
       displayName: user?.name || user?.login,
-      username: user?.login,
+      username: user?.username || user?.login,
       email: user?.email,
     }, id);
   } else if (id === 'gmail' && connector.getProfile) {
@@ -208,7 +210,7 @@ async function verifyNativeConnector(id: string): Promise<ConnectorOAuthVerifica
     }, id);
   }
 
-  return { account, resources: await resourcesFor(id) };
+  return { account, resources: await resourcesFor(id, instance) };
 }
 
 function metadataFor(id: string): OAuthConnectorMetadata | undefined {
@@ -238,4 +240,21 @@ export function buildConnectorOAuthBridges(): Readonly<Record<string, ConnectorO
     clear: () => { cancelConnectorOAuth(id); disconnectConnector(id); },
     credentialReference: () => getConnector(id)?.credentialReference() || '',
   } satisfies ConnectorOAuthBridge])) };
+}
+
+/** Account lifecycle bridge: no service-wide revoke or fallback to the legacy client. */
+export function buildAccountOAuthBridge(instances: ConnectorInstanceRegistry, serviceId: string, connectionId: string, attemptId: string): ConnectorOAuthBridge {
+  if (serviceId !== 'x' && !Object.prototype.hasOwnProperty.call(NATIVE_OAUTH_CONNECTORS, serviceId)) throw new Error('UNSUPPORTED_ACCOUNT_OAUTH');
+  const client = instances.get(serviceId, connectionId);
+  return {
+    id: serviceId, name: serviceId === 'x' ? 'X / Twitter' : NATIVE_OAUTH_CONNECTORS[serviceId],
+    start: (expected, scopes) => instances.start(serviceId, connectionId, attemptId, expected, scopes),
+    poll: async () => instances.poll(serviceId, connectionId, attemptId),
+    isConnected: () => !instances.hasPending(serviceId, connectionId) && client.isConnected(),
+    metadata: async () => ({ ...client.getOAuthMetadata(), resources: await resourcesFor(serviceId, client) }),
+    verify: () => verifyNativeConnector(serviceId, client),
+    cancel: () => instances.cancel(serviceId, connectionId),
+    clear: () => instances.disconnect(serviceId, connectionId),
+    credentialReference: () => client.credentialReference(),
+  };
 }

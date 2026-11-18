@@ -146,6 +146,8 @@ function persistSession(): void {
 }
 
 function clearSession(): void {
+  const { clearAllAccountSessionAuthorities } = require('../../connections/account-session-authority');
+  clearAllAccountSessionAuthorities();
   _session = null;
   persistSession();
 }
@@ -447,6 +449,9 @@ router.post('/api/account/login', async (req, res) => {
 
   try {
     const nextSession = await buildVerifiedSession(accessToken, refreshToken);
+    // A new login is a new authorization lifetime, even for the same account.
+    const { clearAllAccountSessionAuthorities } = require('../../connections/account-session-authority');
+    clearAllAccountSessionAuthorities();
     _session = nextSession;
     persistSession();
     return res.json(buildAuthenticatedResponse(_session));
@@ -482,6 +487,9 @@ router.post('/api/account/login/password', async (req, res) => {
 
     const nextSession = await buildVerifiedSession(accessToken, refreshToken);
 
+    // A new login is a new authorization lifetime, even for the same account.
+    const { clearAllAccountSessionAuthorities } = require('../../connections/account-session-authority');
+    clearAllAccountSessionAuthorities();
     _session = nextSession;
     persistSession();
 

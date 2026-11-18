@@ -17,11 +17,15 @@ export class ConnectionStore {
     const record: ConnectionRecord = { ...input, id: input.id ?? `connection_${randomUUID()}`, schemaVersion: CONNECTION_SCHEMA_VERSION, createdAt: now, updatedAt: now };
     assertConnectionRecord(record);
     if (this.data.connections[record.id]) throw new Error(`Connection already exists: ${record.id}`);
-    this.data.connections[record.id] = record; this.save(); return structuredClone(record);
+    this.data.connections[record.id] = record;
+    try { this.save(); } catch (error) { delete this.data.connections[record.id]; throw error; }
+    return structuredClone(record);
   }
   upsert(input: NewConnection): ConnectionRecord {
     if (input.id && this.data.connections[input.id]) return this.update(input.id, input);
-    const existing = Object.values(this.data.connections).find((item) => item.serviceId === input.serviceId && item.pluginId === input.pluginId && item.strategyId === input.strategyId);
+    // Account-aware creates must never overwrite an unrelated sibling through service deduplication.
+    if (input.accountAccess) return this.create(input);
+    const existing = Object.values(this.data.connections).find((item) => !item.accountAccess && item.serviceId === input.serviceId && item.pluginId === input.pluginId && item.strategyId === input.strategyId);
     return existing ? this.update(existing.id, input) : this.create(input);
   }
   get(id: string): ConnectionRecord | undefined { const value = this.data.connections[id]; return value ? structuredClone(value) : undefined; }
@@ -40,9 +44,16 @@ export class ConnectionStore {
   update(id: string, patch: Partial<Omit<ConnectionRecord, 'id' | 'schemaVersion' | 'createdAt'>>): ConnectionRecord {
     const current = this.data.connections[id]; if (!current) throw new Error(`Unknown connection: ${id}`);
     const next: ConnectionRecord = { ...current, ...patch, id, schemaVersion: CONNECTION_SCHEMA_VERSION, createdAt: current.createdAt, updatedAt: new Date().toISOString() };
-    assertConnectionRecord(next); this.data.connections[id] = next; this.save(); return structuredClone(next);
+    assertConnectionRecord(next); this.data.connections[id] = next;
+    try { this.save(); } catch (error) { this.data.connections[id] = current; throw error; }
+    return structuredClone(next);
   }
-  delete(id: string): boolean { if (!this.data.connections[id]) return false; delete this.data.connections[id]; this.save(); return true; }
+  delete(id: string): boolean {
+    const current = this.data.connections[id]; if (!current) return false;
+    delete this.data.connections[id];
+    try { this.save(); } catch (error) { this.data.connections[id] = current; throw error; }
+    return true;
+  }
 
   private load(): ConnectionStoreFile {
     if (!fs.existsSync(this.filePath)) return { version: 1, updatedAt: new Date().toISOString(), connections: {} };

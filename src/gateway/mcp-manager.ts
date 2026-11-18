@@ -518,7 +518,12 @@ export class MCPManager {
     return new Promise((resolve) => {
       try {
         // HIGH-04: resolve vault: refs, then sanitize env vars
-        const resolvedEnv = this.resolveEnvSecrets(cfg.env || {});
+        // Resolve account fields only at the spawn boundary. Never put plaintext in configs or session.config.
+        const { resolveProtectedMcpLaunch } = require('../connections/mcp-account-host') as typeof import('../connections/mcp-account-host');
+        const accountLaunch = resolveProtectedMcpLaunch(this.configDir, cfg.id);
+        if (accountLaunch && accountLaunch.transport !== 'stdio') throw new Error('MCP_ACCOUNT_TRANSPORT_MISMATCH');
+        const launch = accountLaunch || cfg;
+        const resolvedEnv = this.resolveEnvSecrets(launch.env || {});
         if (resolvedEnv.missingRefs.length > 0) {
           session.status = 'error';
           session.error = `Missing vault secret(s): ${resolvedEnv.missingRefs.join(', ')}`;
@@ -526,11 +531,11 @@ export class MCPManager {
           return;
         }
         const safeUserEnv = MCPManager.sanitizeEnv(resolvedEnv.env);
-        const env = buildMcpServerEnv({ env: safeUserEnv, envPassthrough: cfg.envPassthrough }, process.env);
+        const env = buildMcpServerEnv({ env: safeUserEnv, envPassthrough: accountLaunch ? [] : cfg.envPassthrough }, process.env);
 
         // CRIT-02: shell: false always — args are passed as a list, not a shell string.
         // This prevents metacharacter injection via cfg.args on all platforms.
-        const proc = spawn(cfg.command!, cfg.args || [], {
+        const proc = spawn(launch.command!, launch.args || [], {
           env,
           stdio: ['pipe', 'pipe', 'pipe'],
           shell: false,  // SECURITY: never true — prevents shell injection via args
@@ -749,6 +754,10 @@ export class MCPManager {
   // ── Tool execution ─────────────────────────────────────────────────────────
 
   async callTool(serverId: string, toolName: string, args: Record<string, any>): Promise<MCPToolResult> {
+    args = structuredClone(args); // caller mutations cannot change the validated transport payload
+    const { ConnectionStore } = await import('../connections/connection-store.js');
+    const { assertMcpAccountBoundary } = await import('../connections/account-tool-boundary.js');
+    assertMcpAccountBoundary(new ConnectionStore(this.configDir).list(), serverId, toolName, args);
     const session = this.sessions.get(serverId);
     if (!session) throw new Error(`MCP server "${serverId}" not connected`);
     if (session.status !== 'connected') throw new Error(`MCP server "${serverId}" is ${session.status}`);
@@ -757,6 +766,7 @@ export class MCPManager {
       const cfg = session.config;
       // Use session-scoped headers (including Mcp-Session-Id) plus a fresh OAuth token.
       const headers = await this.buildHttpHeaders(session);
+      assertMcpAccountBoundary(new ConnectionStore(this.configDir).list(), serverId, toolName, args);
       const resp = await fetch(cfg.url!, {
         method: 'POST', headers,
         body: JSON.stringify({ jsonrpc: '2.0', id: session.requestId++, method: 'tools/call', params: { name: toolName, arguments: args } }),

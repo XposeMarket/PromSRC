@@ -53,6 +53,14 @@ export function buildMcpServerConfigFromPreset(presetId: string, credentials: Re
   const preset = getExtensionRuntimeRegistry().getMcpPreset(presetId);
   if (!preset) throw new Error(`Unknown MCP preset: ${presetId}`);
   const config = asRecord(preset.config);
+  const setup = asRecord(config.setup);
+  const fields = Array.isArray(setup.fields) ? setup.fields : [];
+  for (const field of fields) {
+    if (field && typeof field === 'object' && field.required === true) {
+      const key = String(field.key || '');
+      if (!key || typeof credentials[key] !== 'string' || !credentials[key].trim()) throw new Error(`MCP_PRESET_INPUT_REQUIRED: ${key || 'field'}`);
+    }
+  }
 
   const resolve = (raw: string): string => {
     let out = String(raw ?? '');

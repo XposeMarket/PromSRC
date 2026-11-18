@@ -31,6 +31,6 @@
   "mcpPreset": {
     "transport": "stdio",
     "command": "npx",
-    "args": ["-y", "@modelcontextprotocol/server-postgres", "postgresql://localhost/mydb"]
+    "args": ["-y", "@modelcontextprotocol/server-postgres", "{{credential:postgres:connectionString}}"]
   }
 }

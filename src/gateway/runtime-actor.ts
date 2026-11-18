@@ -45,6 +45,12 @@ export function setRuntimeActorContext(sessionId: string, actor: RuntimeActorCon
     executionRoot: cleanPath(actor.executionRoot),
     allowedWorkPaths: Array.from(new Set((actor.allowedWorkPaths || []).map((p) => cleanPath(p)).filter(Boolean) as string[])),
   };
+  const previous = actors.get(id);
+  if (id && (!previous || previous.kind !== normalized.kind || previous.agentId !== normalized.agentId
+    || previous.teamId !== normalized.teamId)) {
+    const { clearAccountSessionAuthority } = require('../connections/account-session-authority');
+    clearAccountSessionAuthority(id);
+  }
   if (id) actors.set(id, normalized);
   ensureRuntimeActorMemory(normalized);
   return normalized;
@@ -55,7 +61,11 @@ export function getRuntimeActorContext(sessionId: string): RuntimeActorContext |
 }
 
 export function clearRuntimeActorContext(sessionId: string): void {
-  actors.delete(String(sessionId || '').trim());
+  const id = String(sessionId || '').trim();
+  actors.delete(id);
+  // Clear delegated account authority with actor teardown, including descendant sessions.
+  const { clearAccountSessionAuthority } = require('../connections/account-session-authority');
+  clearAccountSessionAuthority(id);
 }
 
 export function isDistinctRuntimeActor(actor: RuntimeActorContext | null | undefined): boolean {

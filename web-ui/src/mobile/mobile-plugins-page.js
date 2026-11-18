@@ -1,5 +1,6 @@
 // Mobile Plugins page (replaces the old "More" landing on mobile only).
 import { openConnectFlow } from '../features/connectors/connect-flow.js';
+import { openExistingPluginAccounts } from '../features/connectors/account-manager.js';
 //
 // One alphabetical list of everything the gateway can plug into the model:
 // bundled connectors, MCP servers, and plugins imported from Claude Code /
@@ -355,6 +356,10 @@ function openSheet(page, row, navigate, onChanged) {
   wrap.addEventListener('click', (event) => { if (event.target === wrap) close(); });
   wrap.querySelector('.pm-plugin-sheet-close')?.addEventListener('click', close);
   const runDisconnect = async (button) => {
+    if (row.kind === 'connector') {
+      try { if (await openExistingPluginAccounts(mobileGatewayFetch,row.id,{onChanged,managedOnly:true})) { close(); return; } }
+      catch(error) { pmToast(`Could not load accounts: ${error?.message || error}`,'error'); return; }
+    }
     const label = row.kind === 'imported' ? 'Uninstall' : 'Disconnect';
     if (!window.confirm(`${label} ${row.name}?`)) return;
     button.disabled = true;
@@ -372,6 +377,9 @@ function openSheet(page, row, navigate, onChanged) {
   };
   wrap.querySelector('[data-plugin-disconnect]')?.addEventListener('click', (event) => runDisconnect(event.currentTarget));
   wrap.querySelector('[data-plugin-primary]')?.addEventListener('click', async (event) => {
+    try {
+      if (row.kind === 'connector' && await openExistingPluginAccounts(mobileGatewayFetch, row.id, { onChanged })) { close(); return; }
+    } catch (error) { pmToast(`Could not load accounts: ${error?.message || error}`, 'error'); return; }
     if (primaryIsDisconnect) { await runDisconnect(event.currentTarget); return; }
     if (row.oneTap && !row.connected) {
       const button = event.currentTarget;

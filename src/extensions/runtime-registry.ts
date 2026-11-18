@@ -63,6 +63,7 @@ function firstSentence(text: string, max = 90): string {
 export function buildConnectorWrapperDefinition(spec: ConnectorWrapperSpec): any {
   const properties: Record<string, any> = {
     action: { type: 'string', enum: Object.keys(spec.actions), description: 'Which operation to run. Pass that operation\'s arguments alongside.' },
+    connection_id: { type: 'string', description: 'Exact connected account ID. Required when multiple accounts exist; never guesses or falls back to a personal account.' },
   };
   for (const action of Object.values(spec.actions)) {
     for (const [key, schema] of Object.entries<any>(action.parameters?.properties || {})) {
@@ -303,7 +304,17 @@ export class PrometheusExtensionRuntimeRegistry {
   }
 
   listToolDefinitions(): any[] {
-    return this.listTools().map(toFunctionTool);
+    return this.listTools().map(tool => this.accountToolDefinition(tool));
+  }
+
+  private accountToolDefinition(tool: RegisteredTool): any {
+      const definition = toFunctionTool(tool);
+      if (this.connectorIdForTool(tool)) {
+        definition.function.parameters = { ...definition.function.parameters,
+          properties: { ...definition.function.parameters.properties,
+            connection_id: { type: 'string', description: 'Exact connected account ID; required when ambiguous. No personal-account fallback.' } } };
+      }
+      return definition;
   }
 
   private connectorIdForTool(tool: RegisteredTool): string {
@@ -359,7 +370,7 @@ export class PrometheusExtensionRuntimeRegistry {
         }
         return connectedById.get(connectorId) === true;
       })
-      .map(toFunctionTool);
+      .map(tool => this.accountToolDefinition(tool));
   }
 
   /**
@@ -438,16 +449,30 @@ export class PrometheusExtensionRuntimeRegistry {
     if (!tool) {
       return { result: `Extension tool not found: ${name}`, error: true };
     }
-    if (!this.isToolAvailable(name)) {
+    args = structuredClone(args || {}); // own the payload before any async boundary
+    const accountService = this.connectorIdForTool(tool);
+    if (accountService) {
+      const { getConnectionRuntime } = await import('../connections/runtime.js');
+      const { assertAccountToolBoundary } = await import('../connections/account-tool-boundary.js');
+      assertAccountToolBoundary(getConnectionRuntime().connections.list(), accountService, name, args || {});
+    }
+    const { currentAccountExecution: boundExecution } = await import('../connections/account-execution-context.js');
+    // Scoped calls already passed exact-record validation; a sibling's singleton health cannot veto them.
+    if (!boundExecution() && !this.isToolAvailable(name)) {
       return { result: `Extension tool "${name}" is not available for an enabled connection. Connect or enable the owning connector before use.`, error: true };
     }
     const extension = this.extensions.get(tool.extensionId);
     const connectorId = this.connectorIdForTool(tool);
     const connectorScope = connectorId || tool.extensionId;
+    const { currentAccountExecution } = await import('../connections/account-execution-context.js');
+    const scopedExecution = currentAccountExecution();
+    const healthScope = scopedExecution ? `${connectorScope}:account:${scopedExecution.binding.connectionId}` : connectorScope;
     try {
       const permissionManifest = extension?.manifest || { id: tool.extensionId };
       assertPluginPermission(permissionManifest, { kind: 'tool', name });
-      const result = await withPluginPermissions(permissionManifest, () => tool.execute(args || {}, {
+      const providerArgs = { ...(args || {}) };
+      if (accountService) delete providerArgs.connection_id; // host routing metadata is never provider API input
+      const result = await withPluginPermissions(permissionManifest, () => tool.execute(providerArgs, {
         extensionId: tool.extensionId,
         trustLevel: extension?.trustLevel || 'local',
         getCredential: (fieldKey: string, connectorId?: string) => {
@@ -457,16 +482,16 @@ export class PrometheusExtensionRuntimeRegistry {
       }));
       const message = String(result?.result || '');
       if (result?.error && /token refresh failed|invalid_request|invalid_grant|token was invalid|unauthori[sz]ed|invalid token|token revoked|\b401\b/i.test(message)) {
-        this.connectorHealth.set(connectorScope, { authState: 'expired_or_invalid', lastAuthError: message.slice(0, 500), reauthRequired: true, at: Date.now() });
+        this.connectorHealth.set(healthScope, { authState: 'expired_or_invalid', lastAuthError: message.slice(0, 500), reauthRequired: true, at: Date.now() });
         this.connectorStatusCache = null;
       } else if (!result?.error) {
-        this.connectorHealth.delete(connectorScope);
+        this.connectorHealth.delete(healthScope);
       }
       return result;
     } catch (error: any) {
       const message = String(error?.message || error);
       if (/token refresh failed|invalid_request|invalid_grant|token was invalid|unauthori[sz]ed|invalid token|token revoked|\b401\b/i.test(message)) {
-        this.connectorHealth.set(connectorScope, { authState: 'expired_or_invalid', lastAuthError: message.slice(0, 500), reauthRequired: true, at: Date.now() });
+        this.connectorHealth.set(healthScope, { authState: 'expired_or_invalid', lastAuthError: message.slice(0, 500), reauthRequired: true, at: Date.now() });
         this.connectorStatusCache = null;
       }
       throw error;

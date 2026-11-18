@@ -9,7 +9,7 @@ import path from 'path';
 import http from 'http';
 import crypto from 'crypto';
 import { getVault } from '../security/vault.js';
-import { GATEWAY_OAUTH_CALLBACK_PREFIX, awaitGatewayOAuthCallback, gatewayPublicOrigin } from './gateway-oauth-callback.js';
+import { GATEWAY_OAUTH_CALLBACK_PREFIX, awaitGatewayOAuthCallback, cancelGatewayOAuthCallback, gatewayPublicOrigin } from './gateway-oauth-callback.js';
 
 export interface OAuthConnectorConfig {
   id: string;
@@ -120,8 +120,23 @@ export abstract class OAuthConnector {
 
   get id() { return this.cfg.id; }
 
+  private accountInstanceId?: string;
+  private tokenGeneration = 0;
+  /** Bind a freshly constructed client once; never switch a shared client's account. */
+  public bindAccountInstance(connectionId: string): this {
+    if (this.refreshInFlight || activeFlows.has(this.flowKey)) throw new Error('ACCOUNT_INSTANCE_BUSY');
+    if (!/^[a-zA-Z0-9_-]{1,128}$/.test(connectionId)) throw new Error('INVALID_CONNECTION_ID');
+    if (this.accountInstanceId && this.accountInstanceId !== connectionId) throw new Error('ACCOUNT_INSTANCE_IMMUTABLE');
+    this.accountInstanceId = connectionId;
+    return this;
+  }
+  public get connectionInstanceId(): string | undefined { return this.accountInstanceId; }
+  private get flowKey(): string { return this.accountInstanceId ? `${this.cfg.id}:${this.accountInstanceId}` : this.cfg.id; }
+
   protected vaultKey(): string {
-    return `integration.${this.cfg.id}.oauth_tokens`;
+    return this.accountInstanceId
+      ? `integration.${this.cfg.id}.accounts.${this.accountInstanceId}.oauth_tokens`
+      : `integration.${this.cfg.id}.oauth_tokens`;
   }
 
   /** Opaque vault reference only; never returns a credential value. */
@@ -136,11 +151,14 @@ export abstract class OAuthConnector {
   }
 
   saveTokens(tokens: ConnectorTokens): void {
+    this.tokenGeneration++;
     getVault(this.configDir).set(this.vaultKey(), JSON.stringify(tokens), `oauth:save:${this.cfg.id}`);
     this.updateConnectionsFile(true, tokens.account_email);
   }
 
   clearTokens(): void {
+    this.tokenGeneration++;
+    this.cancelFlow();
     getVault(this.configDir).delete(this.vaultKey(), `oauth:clear:${this.cfg.id}`);
     this.updateConnectionsFile(false);
   }
@@ -201,6 +219,8 @@ export abstract class OAuthConnector {
   }
 
   private updateConnectionsFile(connected: boolean, accountEmail?: string): void {
+    // Instance lifecycle is persisted by the canonical ConnectionStore, not the legacy service projection.
+    if (this.accountInstanceId) return;
     try {
       const connectionsPath = path.join(this.configDir, 'connections.json');
       let data: Record<string, any> = {};
@@ -233,7 +253,7 @@ export abstract class OAuthConnector {
     return tokens.access_token;
   }
 
-  private refreshInFlight: { refreshToken: string; promise: Promise<ConnectorTokens> } | null = null;
+  private refreshInFlight: { refreshToken: string; generation: number; promise: Promise<ConnectorTokens> } | null = null;
 
   /** True while `existing` is still the stored grant (not reconnected, not disconnected). */
   private isCurrentGrant(existing: ConnectorTokens): boolean {
@@ -249,9 +269,10 @@ export abstract class OAuthConnector {
    */
   async refreshTokens(existing: ConnectorTokens): Promise<ConnectorTokens> {
     const key = String(existing.refresh_token || '');
-    if (this.refreshInFlight && this.refreshInFlight.refreshToken === key) return this.refreshInFlight.promise;
-    const promise = this.refreshTokensOnce(existing);
-    this.refreshInFlight = { refreshToken: key, promise };
+    if (this.refreshInFlight && this.refreshInFlight.refreshToken === key && this.refreshInFlight.generation === this.tokenGeneration) return this.refreshInFlight.promise;
+    const generation = this.tokenGeneration;
+    const promise = this.refreshTokensOnce(existing, generation);
+    this.refreshInFlight = { refreshToken: key, generation, promise };
     try {
       return await promise;
     } finally {
@@ -259,7 +280,7 @@ export abstract class OAuthConnector {
     }
   }
 
-  private async refreshTokensOnce(existing: ConnectorTokens): Promise<ConnectorTokens> {
+  private async refreshTokensOnce(existing: ConnectorTokens, generation: number): Promise<ConnectorTokens> {
     assertTokenRefreshAllowed('connector-oauth');
     this.loadCredentialsFromVault();
     if (!existing.refresh_token) throw new Error(`No refresh token for ${this.cfg.name}.`);
@@ -287,7 +308,7 @@ export abstract class OAuthConnector {
       // Retrying cannot fix it, so persist the state and say what to do.
       if (res.status === 400 || res.status === 401 || /invalid_grant|invalid_client|unauthorized_client/.test(code)) {
         const reason = `${code || `HTTP ${res.status}`}: authorization expired or was revoked`;
-        if (this.isCurrentGrant(existing)) {
+        if (generation === this.tokenGeneration && this.isCurrentGrant(existing)) {
           try { getVault(this.configDir).set(this.vaultKey(), JSON.stringify({ ...existing, reauth_required_at: Date.now(), reauth_reason: reason }), `oauth:reauth:${this.cfg.id}`); } catch { /* best effort */ }
         }
         throw new Error(`${this.cfg.name} needs to be reconnected: the saved login was rejected (${reason}). Reconnect ${this.cfg.name} in the Connections panel.`);
@@ -301,11 +322,9 @@ export abstract class OAuthConnector {
       refresh_token: data.refresh_token || existing.refresh_token,
       expires_at: Date.now() + (data.expires_in || 3600) * 1000,
     };
-    if (!this.isCurrentGrant(existing)) {
+    if (generation !== this.tokenGeneration || !this.isCurrentGrant(existing)) {
       // Reconnected or disconnected while the request was in flight: keep what is stored now.
-      const current = this.loadTokens();
-      if (!current) throw new Error(`${this.cfg.name} not connected. Connect via the Connections panel.`);
-      return current;
+      throw new Error(`${this.cfg.name} authorization changed while refreshing. Retry with the selected account.`);
     }
     this.saveTokens(tokens);
     return tokens;
@@ -407,7 +426,7 @@ export abstract class OAuthConnector {
   }
 
   private cancelListener?: () => void;
-  cancelFlow(): void { activeFlows.delete(this.cfg.id); this.cancelListener?.(); this.cancelListener = undefined; }
+  cancelFlow(): void { cancelGatewayOAuthCallback(this.flowKey); activeFlows.delete(this.flowKey); this.cancelListener?.(); this.cancelListener = undefined; }
 
   startFlow(expectedAccountId?: string, requestedScopes?: string[]): OAuthStartResult {
     this.loadCredentialsFromVault();
@@ -419,11 +438,11 @@ export abstract class OAuthConnector {
         error: `${this.cfg.name} OAuth app is not configured. Add the provider app credentials in Advanced setup.`,
       };
     }
-    const existing = activeFlows.get(this.cfg.id);
+    const existing = activeFlows.get(this.flowKey);
     if (existing && Date.now() - existing.createdAt <= FLOW_TTL_MS) {
       return { success: false, authUrl: '', flowId: this.cfg.id, error: `${this.cfg.name} authorization is already in progress.` };
     }
-    activeFlows.delete(this.cfg.id);
+    activeFlows.delete(this.flowKey);
     const state = crypto.randomBytes(16).toString('hex');
     const scopes = [...new Set((requestedScopes || this.cfg.scopes)
       .map((scope) => String(scope || '').trim())
@@ -452,16 +471,16 @@ export abstract class OAuthConnector {
     }
     this.decorateAuthParams(params);
 
-    activeFlows.set(this.cfg.id, flowState);
+    activeFlows.set(this.flowKey, flowState);
     const authUrl = `${this.cfg.authUrl}?${params.toString()}`;
     return { success: false, authUrl, flowId: this.cfg.id };
   }
 
   public async handleCallback(code: string, returnedState: string, returnedNonce?: string): Promise<OAuthCallbackResult> {
     this.loadCredentialsFromVault();
-    const flow = activeFlows.get(this.cfg.id);
+    const flow = activeFlows.get(this.flowKey);
     if (!flow || Date.now() - flow.createdAt > FLOW_TTL_MS) {
-      activeFlows.delete(this.cfg.id);
+      activeFlows.delete(this.flowKey);
       return { success: false, error: 'OAuth session expired or not found. Click Connect again.' };
     }
     if (returnedState !== flow.state) {
@@ -491,12 +510,12 @@ export abstract class OAuthConnector {
 
     if (!res.ok) {
       await res.text().catch(() => '');
-      activeFlows.delete(this.cfg.id);
+      activeFlows.delete(this.flowKey);
       return { success: false, error: `Token exchange failed (${res.status}).` };
     }
 
     const data = await res.json() as any;
-    if (activeFlows.get(this.cfg.id) !== flow) return { success: false, error: 'OAuth session cancelled or replaced.' };
+    if (activeFlows.get(this.flowKey) !== flow) return { success: false, error: 'OAuth session cancelled or replaced.' };
 
     if (!data?.access_token || typeof data.access_token !== 'string') {
       return { success: false, error: 'Token exchange returned no access token.' };
@@ -525,8 +544,8 @@ export abstract class OAuthConnector {
     if (flow.expectedAccountId && tokens.account_id && flow.expectedAccountId !== tokens.account_id) {
       return { success: false, error: 'OAuth account mismatch — the selected provider account did not authorize this connection.' };
     }
-    if (activeFlows.get(this.cfg.id) !== flow) return { success: false, error: 'OAuth session cancelled or replaced.' };
-    activeFlows.delete(this.cfg.id);
+    if (activeFlows.get(this.flowKey) !== flow) return { success: false, error: 'OAuth session cancelled or replaced.' };
+    activeFlows.delete(this.flowKey);
     this.saveTokens(tokens);
 
     return { success: true, account_email: tokens.account_email };
@@ -534,10 +553,12 @@ export abstract class OAuthConnector {
 
   listenForCallback(): Promise<OAuthCallbackResult> {
     if (this.cfg.gatewayCallback && gatewayPublicOrigin()) {
-      return awaitGatewayOAuthCallback(this.cfg.id, FLOW_TTL_MS, async (code, state, error) => {
+      const flow = activeFlows.get(this.flowKey);
+      if (!flow) return Promise.resolve({ success: false, error: 'OAuth session not active.' });
+      return awaitGatewayOAuthCallback(this.flowKey, FLOW_TTL_MS, async (code, state, error) => {
         if (error || !code) return { success: false, error: error || 'No authorization code' };
         return this.handleCallback(code, state);
-      });
+      }, { serviceId: this.cfg.id, expectedState: flow.state });
     }
     return new Promise((resolve) => {
       let finished = false;
@@ -556,7 +577,7 @@ export abstract class OAuthConnector {
           if (finished) return;
           finished = true;
           if (timeout) clearTimeout(timeout);
-          activeFlows.delete(this.cfg.id);
+          activeFlows.delete(this.flowKey);
           res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
           res.end(html);
           server.close(() => undefined);
@@ -596,14 +617,14 @@ export abstract class OAuthConnector {
         if (finished) return;
         finished = true;
         if (timeout) clearTimeout(timeout);
-        activeFlows.delete(this.cfg.id);
+        activeFlows.delete(this.flowKey);
         resolve({ success: false, error: `Callback server error: ${e.message}` });
       });
       server.listen(this.cfg.callbackPort, 'localhost', () => {
         timeout = setTimeout(() => {
           if (finished) return;
           finished = true;
-          activeFlows.delete(this.cfg.id);
+          activeFlows.delete(this.flowKey);
           server.close(() => undefined);
           resolve({ success: false, error: 'Timed out waiting for OAuth callback.' });
         }, FLOW_TTL_MS);

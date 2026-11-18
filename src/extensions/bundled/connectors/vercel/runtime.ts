@@ -6,6 +6,7 @@ import type {
 } from '../../../runtime-api.js';
 import { getVercelCredentials } from '../../../../integrations/connection-state.js';
 import { getConfig } from '../../../../config/config.js';
+import { currentAccountExecution } from '../../../../connections/account-execution-context.js';
 import { resolveBoundPluginCredential } from '../../../../connections/plugin-credential-binding';
 
 const ID = 'vercel';
@@ -134,8 +135,21 @@ function pickRecord(value: unknown): JsonRecord | undefined {
 }
 
 function getAuth(context?: PrometheusToolContext): VercelAuth | null {
+  const execution = currentAccountExecution(ID);
+  if (execution) {
+    const directory = getConfig().getConfigDir();
+    const read = (field: string) => resolveBoundPluginCredential(directory, ID, field, execution.binding.connectionId).value || '';
+    const token = read('apiKey') || read('token');
+    return token ? { token, projectId: read('projectId'), teamId: read('teamId') } : null;
+  }
   const bound = resolveBoundPluginCredential(getConfig().getConfigDir(), ID, 'apiKey');
-  if (bound.handled) { const saved = getVercelCredentials(); return saved ? { token: saved.apiKey, projectId: saved.projectId, teamId: saved.teamId } : null; }
+  if (bound.handled) {
+    const token = bound.value || resolveBoundPluginCredential(getConfig().getConfigDir(), ID, 'token').value;
+    if (!token) return null;
+    return { token,
+      projectId: resolveBoundPluginCredential(getConfig().getConfigDir(), ID, 'projectId').value,
+      teamId: resolveBoundPluginCredential(getConfig().getConfigDir(), ID, 'teamId').value };
+  }
   const token =
     pickString(context?.getCredential?.('apiKey', ID)) ||
     pickString(context?.getCredential?.('token', ID)) ||

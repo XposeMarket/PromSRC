@@ -11,6 +11,8 @@ export { startMainChatGoalRunner, resumeMainChatGoalsInterruptedForRestart } fro
 import { cleanGeneratedSessionTitle, sessionTitleTranscript, maybeAutoNameChatSession } from './chat/pipeline/session-title';
 export { cleanGeneratedSessionTitle, sessionTitleTranscript, maybeAutoNameChatSession } from './chat/pipeline/session-title';
 import { runInteractiveTurn, configureInteractiveTurnDependencies } from './chat/pipeline/interactive-turn';
+import { bindInteractivePluginAccountAuthority } from './plugin-account-authority';
+import { clearAccountSessionAuthority } from '../../connections/account-session-authority';
 export {  } from './chat/pipeline/interactive-turn';
 import { describeRestartProvenance, extractPreRestartArtifacts, buildPreRestartWorkDigest, pendingBackgroundWakeRetries, wakeInterruptedBackgroundOwner, retriggerInterruptedMainChat, announceRestartContinuityResumed, configureRestartContinuityDependencies } from './chat/pipeline/restart-continuity';
 export { describeRestartProvenance, extractPreRestartArtifacts, buildPreRestartWorkDigest, pendingBackgroundWakeRetries, wakeInterruptedBackgroundOwner, retriggerInterruptedMainChat, announceRestartContinuityResumed } from './chat/pipeline/restart-continuity';
@@ -2626,6 +2628,8 @@ router.post('/api/chat', async (req, res) => {
   });
 
   try {
+    // Only the admitted, owner-proved request may authorize account use for this turn.
+    bindInteractivePluginAccountAuthority(req, resolvedSessionId);
     const result = await runInteractiveTurn(
       message,
 	      resolvedSessionId,
@@ -2731,6 +2735,7 @@ router.post('/api/chat', async (req, res) => {
       sendSSE('error', { message: err.message || 'Unknown error' });
     }
   } finally {
+    clearAccountSessionAuthority(resolvedSessionId);
     finishPlannedChatRun(runtimeId, abortSignal.aborted
       ? (/watchdog|restart|shutdown/i.test(String(abortSignal.reason || '')) ? 'interrupted' : 'cancelled')
       : plannedRunFailed ? 'failed' : 'completed');

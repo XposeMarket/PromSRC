@@ -31,6 +31,6 @@
   "mcpPreset": {
     "transport": "stdio",
     "command": "npx",
-    "args": ["-y", "@modelcontextprotocol/server-sqlite", "--db-path", "C:\\path\\to\\db.sqlite"]
+    "args": ["-y", "@modelcontextprotocol/server-sqlite", "--db-path", "{{credential:sqlite:dbPath}}"]
   }
 }

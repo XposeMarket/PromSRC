@@ -2382,6 +2382,40 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
         };
       }
 
+  // Resolve plugin account identity before approval. Arguments select, but never authorize, an account.
+  let preparedAccount: ReturnType<typeof import('../../connections/account-runtime-binding').prepareRuntimeAccountAction> | undefined;
+  let accountServiceId = getExtensionRuntimeRegistry().getConnectorIdForTool(name);
+  let resolvedConnectionId = args?.connection_id;
+  let accountCapability = name;
+  if (name.startsWith('mcp__')) {
+    const match = /^mcp__(.+?)__(.+)$/.exec(name);
+    if (match) {
+      const { getConnectionRuntime } = await import('../../connections/runtime.js');
+      const records = getConnectionRuntime().connections.list().filter(record => record.accountAccess?.family === 'mcp'
+        && (record.accountAccess.instanceId === match[1] || record.configuration?.mcpServerId === match[1]));
+      if (records.length > 1) return { name, args, result: 'ACCOUNT_SELECTION_REQUIRED', error: true };
+      if (records.length === 1) {
+        accountServiceId = records[0].serviceId;
+        if (resolvedConnectionId !== undefined && resolvedConnectionId !== records[0].id) return { name, args, result: 'ACCOUNT_UNAVAILABLE', error: true };
+        resolvedConnectionId = records[0].id;
+        accountCapability = match[2];
+      }
+    }
+  }
+  if (accountServiceId) {
+    const { getConnectionRuntime } = await import('../../connections/runtime.js');
+    const runtime = getConnectionRuntime();
+    if (args?.connection_id !== undefined || runtime.connections.list().some(record => record.serviceId === accountServiceId && record.accountAccess)) {
+      try {
+        if (args?.connection_id !== undefined && typeof args.connection_id !== 'string') throw new Error('INVALID_CONNECTION_ID');
+        const { prepareRuntimeAccountAction } = await import('../../connections/account-runtime-binding.js');
+        preparedAccount = prepareRuntimeAccountAction({ sessionId, serviceId: accountServiceId,
+          connectionId: resolvedConnectionId, tool: name, capability: accountCapability, args: { ...args }, readArgs: () => ({ ...args }), readConnections: () => runtime.connections.list() });
+        approvalDisplayToolName += ` [account: ${preparedAccount.approvalAccount.label}; ${preparedAccount.approvalAccount.identity}; id: ${preparedAccount.binding.connectionId}]`;
+      } catch (error: any) { return { name, args, result: String(error?.message || error), error: true }; }
+    }
+  }
+
   // [A4] Policy evaluation + audit trail — log every tool call, non-blocking
   let evaluation = {
     tier: 'commit' as 'read' | 'propose' | 'commit',
@@ -2632,7 +2666,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
     }
 	  }
 
-  if (name !== 'run_command' && name !== 'start_process' && evaluation.tier !== 'read' && !bypassGenericToolApproval) {
+  if (name !== 'run_command' && name !== 'start_process' && evaluation.tier !== 'read' && (!bypassGenericToolApproval || !!preparedAccount)) {
     const approvalQueue = getApprovalQueue();
     const activeTask = resolveTaskForSession(sessionId);
     const activeTaskId = String(activeTask?.id || '').trim() || undefined;
@@ -2646,9 +2680,9 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
     })();
     const action = `Run ${approvalDisplayToolName}${summaryArgs && summaryArgs !== '{}' ? ` with ${summaryArgs}` : ''}`;
     const permissionCandidate = await buildScopedToolPermissionCandidate(name, args, Number(evaluation.riskScore || 0));
-    const existingToolGrant = permissionCandidate ? findCommandPermissionGrant(permissionCandidate) : null;
+    const existingToolGrant = !preparedAccount && permissionCandidate ? findCommandPermissionGrant(permissionCandidate) : null;
 
-    if (existingToolGrant || isGoalAutonomousApprovalBypass || bypassGenericToolApproval) {
+    if (!preparedAccount && (existingToolGrant || isGoalAutonomousApprovalBypass || bypassGenericToolApproval)) {
       try {
         appendAuditEntry({
           timestamp: new Date().toISOString(),
@@ -2690,8 +2724,8 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
       originType: approvalOrigin.originType,
       originLabel: approvalOrigin.originLabel,
       toolName: approvalDisplayToolName,
-      toolArgs: args,
-      commandPermissionCandidate: permissionCandidate || undefined,
+      toolArgs: preparedAccount ? { ...args, account: preparedAccount.approvalAccount } : args,
+      commandPermissionCandidate: preparedAccount ? undefined : permissionCandidate || undefined,
       action,
       reason: evaluation.reason,
       policyTier: 'commit',
@@ -3704,7 +3738,8 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
     return { name, args, result: `Error: ${err.message}`, error: true };
   }
   };
-  if (!externalSideEffect) return dispatch();
-  const result = await getOperationLedger().execute({ sessionId, toolName: name, args }, dispatch, forceReexecute);
+  const accountDispatch = () => preparedAccount ? preparedAccount.run(dispatch) : dispatch();
+  if (!externalSideEffect) return accountDispatch();
+  const result = await getOperationLedger().execute({ sessionId, toolName: name, args: preparedAccount ? { ...args, __accountBinding: preparedAccount.binding } : args }, accountDispatch, forceReexecute);
   return { name, args, ...result };
 }
