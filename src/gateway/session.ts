@@ -1624,8 +1624,16 @@ function getSortedSessionSummaries(
 ): SessionSummary[] {
   ensureSessionDir();
   let index = loadSessionIndex();
-  const hasSessionFiles = fs.readdirSync(SESSION_DIR).some((f) => f.endsWith('.json') && f !== '_index.json');
-  if (hasSessionFiles && !sessionIndexRepairCheckAttempted) {
+  // The index-repair check below only ever runs once per process. Probing the
+  // session directory is a synchronous syscall that blocks the event loop for
+  // the whole scan, so it must stay behind the same one-shot guard instead of
+  // running on every session list. Large installs carry tens of thousands of
+  // session files, where an unconditional scan costs tens of milliseconds of
+  // blocked event loop on every request.
+  if (!sessionIndexRepairCheckAttempted) {
+    const hasSessionFiles = Object.keys(index.summaries).length > 0
+      || fs.readdirSync(SESSION_DIR).some((f) => f.endsWith('.json') && f !== '_index.json');
+    if (!hasSessionFiles) return [];
     sessionIndexRepairCheckAttempted = true;
     if (Object.keys(index.summaries).length === 0) {
       index = rebuildSessionIndex();

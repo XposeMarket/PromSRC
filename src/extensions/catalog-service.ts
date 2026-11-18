@@ -1,3 +1,5 @@
+import fs from 'fs';
+import path from 'path';
 import { getConfig } from '../config/config.js';
 import { isConnected as isAnthropicConnected } from '../auth/anthropic-oauth.js';
 import { isConnected as isOpenAIConnected } from '../auth/openai-oauth.js';
@@ -199,9 +201,36 @@ function safeGetConnectorStatuses(): ConnectorStatusMap {
   }
 }
 
+// `new ConnectionStore(...)` parses connections-v2.json in its constructor, and
+// an unfiltered catalog build constructs one per kind. That turned a single
+// catalog request into several synchronous disk reads on the gateway event
+// loop, on a hot path the mobile app hits whenever it opens model controls.
+//
+// Catalog building only reads connection records, so the loaded store can be
+// reused. The cache is keyed on the file's mtime/size so any write - including
+// one from another process - is picked up on the next call, and a failed load
+// is never cached.
+let connectionStoreCache: { store: ConnectionStore; key: string } | null = null;
+
+function connectionStoreForCatalog(): ConnectionStore {
+  const configDir = getConfig().getConfigDir();
+  const filePath = path.join(configDir, 'connections-v2.json');
+  let key: string;
+  try {
+    const stat = fs.statSync(filePath);
+    key = `${filePath}:${stat.mtimeMs}:${stat.size}`;
+  } catch {
+    key = `${filePath}:missing`;
+  }
+  if (connectionStoreCache && connectionStoreCache.key === key) return connectionStoreCache.store;
+  const store = new ConnectionStore(configDir);
+  connectionStoreCache = { store, key };
+  return store;
+}
+
 function buildCatalogItems(kind: ExtensionKind): CatalogItem[] {
   const descriptors = listExtensionDescriptors(kind);
-  const canonical = new ConnectionStore(getConfig().getConfigDir());
+  const canonical = connectionStoreForCatalog();
 
   if (kind === 'connector') {
     const savedConnections = loadSavedConnections();

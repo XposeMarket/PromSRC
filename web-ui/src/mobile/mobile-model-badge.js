@@ -817,12 +817,50 @@ async function _openReasoningSheet() {
   const sheet = _openSheet('', '<div class="pm-msheet-loading">Loading...</div>');
   sheet?.classList.add('is-reasoning');
   document.getElementById('pm-msheet-scrim')?.classList.add('is-reasoning');
-  await Promise.all([_loadLlm(true), _loadCatalog(false), _loadCredentialedIds(true)]);
-  await refreshMobileModelBadge(true);
-  const { provider } = _activeModel(_llmCache);
-  const cfg = (_llmCache.providers || {})[provider] || {};
-  _renderReasoningBody(provider, cfg, { onAdvanced: _openSwitchSheet });
+
+  // Stale-while-revalidate. Previously every open forced all three loaders to
+  // bypass their caches, so the sheet sat on "Loading..." for three serial-ish
+  // round trips before the slider could paint - the visible lag when tapping
+  // the badge. These values change rarely, and the caches are already
+  // invalidated where they can change (refreshMobileModelBadge() clears
+  // _llmCache on main_model_changed/model_switched).
+  //
+  // So: paint immediately from cache when we have it, then refetch in the
+  // background and repaint only if the effective values actually changed.
+  // First open still awaits, because there is nothing to show yet.
+  const haveCache = Boolean(_llmCache && _catalogCache && _credentialedIds);
+  if (!haveCache) {
+    await Promise.all([_loadLlm(false), _loadCatalog(false), _loadCredentialedIds(false)]);
+  }
+  await refreshMobileModelBadge(false);
+
+  const paint = () => {
+    const { provider } = _activeModel(_llmCache);
+    const cfg = (_llmCache.providers || {})[provider] || {};
+    _renderReasoningBody(provider, cfg, { onAdvanced: _openSwitchSheet });
+    return { provider, model: cfg.model, effort: cfg.reasoning_effort };
+  };
+  const shown = paint();
+
+  if (haveCache) {
+    // Revalidate off the critical path. Bail out if the user already closed the
+    // sheet or navigated to a different sheet, so we never repaint over them.
+    void Promise.all([_loadLlm(true), _loadCatalog(true), _loadCredentialedIds(true)])
+      .then(async () => {
+        await refreshMobileModelBadge(false);
+        const live = document.getElementById('pm-msheet');
+        if (!live || !live.classList.contains('is-reasoning')) return;
+        if (!document.getElementById('pm-reasoning-selector')) return;
+        const { provider } = _activeModel(_llmCache);
+        const cfg = (_llmCache.providers || {})[provider] || {};
+        if (provider === shown.provider && cfg.model === shown.model
+          && cfg.reasoning_effort === shown.effort) return;
+        paint();
+      })
+      .catch(() => {});
+  }
 }
+
 
 function _renderReasoningBody(provider, cfg, { onAdvanced = _openSwitchSheet, onSave = null } = {}) {
   const options = _effortOptions(provider, cfg);
