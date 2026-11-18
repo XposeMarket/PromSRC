@@ -661,6 +661,8 @@ function syncPromBotControls() {
     button.title = promBotMode ? 'Prom Bot · On' : 'Prom Bot';
   }
   if (section) section.hidden = !promBotMode;
+  // Bot mode lists dots under Bots, so the regular chat lists hide them (CSS).
+  document.body?.classList.toggle('prom-bot-mode-on', promBotMode);
   renderPromBotBots();
 }
 

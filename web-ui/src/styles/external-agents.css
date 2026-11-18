@@ -352,3 +352,6 @@ textarea.pm-project-folder-input { resize: vertical; min-height: 96px; line-heig
 body:not(.pm-mobile-active) .chat-session-item[data-session-id^="dot_"] .imported-source-logo--openai { display: inline-block; width: 16px; height: 16px; flex: 0 0 16px; margin-right: 6px; vertical-align: -3px; }
 body:not(.pm-mobile-active) .chat-session-item[data-session-id^="dot_"] .job-item-title-wrap { display: flex; align-items: center; }
 #prom-bot-bots-section .sidebar-section-toggle { cursor: default; }
+
+/* Desktop Prom Bot mode: dots live in the Bots section only, not the regular chat lists. */
+body.prom-bot-mode-on:not(.pm-mobile-active) #sidebar .chat-session-item[data-session-id^="dot_"]:not(#prom-bot-bots-list .chat-session-item) { display: none !important; }
