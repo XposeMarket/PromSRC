@@ -194,6 +194,51 @@ fs.mkdirSync(process.env.PROMETHEUS_WORKSPACE_DIR, { recursive: true });
   const freshBlock = store.buildProjectContextBlock(fsid)!;
   assert.doesNotMatch(freshBlock, /FIRST session|## Project notes/);
 
+  // 7. A chat run by an outside agent gets the project's instructions and notes: at the start of the
+  //    upstream session and again when they change, never on a slash command, never in the saved chat.
+  const agents = require('../external-agents/store') as typeof import('../external-agents/store');
+  const registry = require('../external-agents/registry') as typeof import('../external-agents/registry');
+  const runner = require('../external-agents/turn-runner') as typeof import('../external-agents/turn-runner');
+  agents.setExternalAgentStorePathForTests(path.join(root, 'external-agents.json'));
+  agents.updateExternalAgentEntry('codex', { enabled: true, lastStatus: 'ready', lastStatusText: 'Connected' });
+  const sent: string[] = [];
+  registry.setExternalAgentAdapterForTests({
+    id: 'codex', name: 'Codex', tile: 'codex', capabilities: {},
+    detect: async () => ({ found: true }), verify: async () => ({ status: 'ready' }), shutdown: async () => undefined,
+    runTurn: async (input: any) => { sent.push(input.text); input.onSessionBound?.('up_1'); return { upstreamSessionId: 'up_1', status: 'completed', finalText: 'ok' }; },
+  } as any);
+  try {
+    const hsid = 'sess_projects_v2_harness_ctx';
+    session.getSession(hsid);
+    const bound = runner.bindExternalAgentForRequest(hsid, { id: 'codex', cwd: root });
+    assert.ok(bound.ok && bound.binding, 'harness chat bound');
+    session.flushSession(hsid);
+    assert.equal(store.buildHarnessProjectContext(hsid), null, 'a chat in no project sends nothing');
+    const ctxProject = store.createProject('Harness context');
+    store.attachSessionToProject(ctxProject.id, hsid);
+    assert.equal(store.buildHarnessProjectContext(hsid), null, 'an empty project sends nothing');
+    store.updateProject(ctxProject.id, { instructions: 'Always use pnpm.' } as any);
+    store.writeProjectNotes(ctxProject.id, '# Harness context\n\n## Status\n\nLaunch is Dec 1.\n');
+    const turn = (message: string) => runner.runExternalAgentTurn({ sessionId: hsid, message, sendSSE: () => undefined } as any, session.getSessionExternalAgent(hsid)!);
+    await turn('first');
+    assert.match(sent[0], /^\[Project context from Prometheus: Harness context\]/);
+    assert.match(sent[0], /## Project instructions \(written by the user; follow them\)\nAlways use pnpm\./);
+    assert.match(sent[0], /## Project notes[^\n]*\n[\s\S]*Launch is Dec 1\./);
+    assert.ok(sent[0].endsWith('\n\nfirst'), 'the user message follows the context');
+    assert.doesNotMatch(sent[0], /read_file|PROJECT NOTES:|Knowledge Files/, 'nothing that needs Prometheus tools');
+    await turn('second');
+    assert.equal(sent[1], 'second', 'context is not repeated inside one upstream session');
+    store.updateProject(ctxProject.id, { instructions: 'Always use npm.' } as any);
+    await turn('/harness-only now');
+    assert.equal(sent[2], '/harness-only now', "the agent's own slash command is passed through untouched");
+    await turn('third');
+    assert.match(sent[3], /Always use npm\.[\s\S]*\n\nthird$/, 'changed instructions are sent again');
+    const saved = (session.getSession(hsid).history || []).filter((m: any) => m.role === 'user').map((m: any) => String(m.content));
+    assert.ok(saved.length > 0 && saved.every((text: string) => !text.includes('Project context from Prometheus')), 'the saved chat keeps only what the user typed');
+  } finally {
+    registry.setExternalAgentAdapterForTests(null);
+  }
+
   console.log('project-notes regression: ok');
 })().catch((error) => {
   console.error(error);

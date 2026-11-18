@@ -168,6 +168,8 @@ export interface ExternalAgentBinding {
   agentId: ExternalAgentId;
   cwd: string;
   upstreamSessionId?: string;
+  /** Hash of the project instructions + notes last sent to the upstream session; a change sends them again. */
+  projectContextHash?: string;
   boundAt: string;
   lastTurn?: { status: 'completed' | 'interrupted' | 'failed'; upstreamTurnId?: string; endedAt: string; error?: string; upstreamMissing?: boolean };
 }
@@ -196,6 +198,7 @@ export function normalizeExternalAgentBinding(input: any): ExternalAgentBinding 
     ...(typeof input.selectedModel === 'string' && input.selectedModel.trim() ? { selectedModel: input.selectedModel.trim().slice(0, 200) } : {}),
     ...(typeof input.selectedEffort === 'string' && /^[a-z_-]{1,20}$/.test(input.selectedEffort) ? { selectedEffort: input.selectedEffort } : {}),
     ...(typeof input.currentModel === 'string' && input.currentModel.trim() ? { currentModel: input.currentModel.trim().slice(0, 200) } : {}),
+    ...(typeof input.projectContextHash === 'string' && /^[a-f0-9]{16,64}$/.test(input.projectContextHash) ? { projectContextHash: input.projectContextHash } : {}),
     boundAt: String(input.boundAt || '').trim().slice(0, 40) || new Date().toISOString(),
     ...(lastStatus ? {
       lastTurn: {
