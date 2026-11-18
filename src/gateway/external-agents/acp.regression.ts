@@ -1,6 +1,9 @@
 import assert from 'assert';
 import path from 'path';
+import fs from 'fs';
+import os from 'os';
 import { AcpAdapter } from './adapters/acp';
+import { resolveWindowsShim } from './executable';
 import type { ExternalTurnInput } from './types';
 async function main() {
  const outgoing: any[] = []; const events: any[] = []; let bound = '';
@@ -35,6 +38,18 @@ async function main() {
  assert.equal(outgoing.filter((m) => m.method === 'session/prompt').length, before, 'stop while binding sends no prompt');
  await adapter.shutdown(); assert.equal(adapter.isRunning(), false);
  assert.equal((await new AcpAdapter('hermes', { resolve: () => null }).verify()).status, 'not_installed');
+ // Real OpenClaw install (Nov 2026): the npm cmd-shim probes `%dp0%\node.exe` BEFORE naming the program.
+ // Taking the first match launched bare node, which exited immediately and looked like "cannot connect".
+ const shimDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prom-shim-'));
+ fs.writeFileSync(path.join(shimDir, 'node.exe'), '');
+ fs.mkdirSync(path.join(shimDir, 'node_modules', 'openclaw'), { recursive: true });
+ fs.writeFileSync(path.join(shimDir, 'node_modules', 'openclaw', 'openclaw.mjs'), '');
+ fs.writeFileSync(path.join(shimDir, 'openclaw.cmd'), '@ECHO off\r\nSETLOCAL\r\nIF EXIST "%dp0%\\node.exe" (\r\n  SET "_prog=%dp0%\\node.exe"\r\n) ELSE (\r\n  SET "_prog=node"\r\n)\r\n"%_prog%"  "%dp0%\\node_modules\\openclaw\\openclaw.mjs" %*\r\n');
+ const shim = resolveWindowsShim(path.join(shimDir, 'openclaw.cmd'));
+ assert.ok(shim, 'npm shim resolves');
+ assert.equal(path.basename(shim!.command).toLowerCase(), 'node.exe', 'bundled interpreter runs the program');
+ assert.deepEqual(shim!.args.map((a) => path.basename(a)), ['openclaw.mjs'], 'program is the entry script, not node.exe');
+ fs.rmSync(shimDir, { recursive: true, force: true });
  console.log('ACP regression: ok (fixture processes only)');
 }
 main().catch((error) => { console.error(error); process.exitCode = 1; });

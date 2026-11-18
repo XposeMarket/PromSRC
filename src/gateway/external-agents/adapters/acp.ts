@@ -6,6 +6,11 @@ import type { ExternalAgentAdapter, ExternalAgentCapabilities, ExternalAgentVeri
 
 export type AcpAgentId = 'hermes' | 'cursor' | 'openclaw';
 const NAMES = { hermes: 'Hermes', cursor: 'Cursor', openclaw: 'OpenClaw' };
+// Real cold starts measured on Windows (Nov 2026): OpenClaw ACP ~27 s to answer initialize
+// (it boots a Gateway client), Hermes ~20-40 s (plugin discovery + gateway attach).
+// A 10 s budget wrongly reported both as unreachable.
+const ACP_STARTUP_TIMEOUT_MS = 90000;
+const ACP_SESSION_TIMEOUT_MS = 60000;
 const CAPS: ExternalAgentCapabilities = { resume: false, interrupt: true, approvals: true, images: false, modelList: false };
 interface Options { resolve?: () => ResolvedCommand | null; onOutgoing?: (message: any) => void }
 function resolveAgent(id: AcpAgentId): ResolvedCommand | null {
@@ -14,7 +19,11 @@ function resolveAgent(id: AcpAgentId): ResolvedCommand | null {
   // Never run an unrelated `agent` from PATH: Grok also uses that executable name.
   const candidates = id === 'cursor'
     ? [...findOnPath('cursor-agent'), path.join(home, '.local', 'bin', 'agent')]
-    : [...findOnPath(id), ...(id === 'hermes' ? [path.join(home, '.hermes', 'hermes-agent', 'venv', 'bin', 'hermes')] : [])];
+    : [...findOnPath(id), ...(id === 'hermes' ? [
+        // Official Windows installer location (a gateway started before install has a stale PATH).
+        ...(process.env.LOCALAPPDATA ? [path.join(process.env.LOCALAPPDATA, 'hermes', 'bin', 'hermes.exe')] : []),
+        path.join(home, '.hermes', 'hermes-agent', 'venv', 'bin', 'hermes'),
+      ] : [])];
   return resolveFromCandidates([...(configured ? [configured] : []), ...candidates]);
 }
 
@@ -36,7 +45,7 @@ export class AcpAdapter implements ExternalAgentAdapter {
   }
   private async initialize(client: JsonRpcStdioClient) {
     await client.start();
-    const result = await client.request('initialize', { protocolVersion: 1, clientCapabilities: {}, clientInfo: { name: 'prometheus', version: '1' } }, 10000);
+    const result = await client.request('initialize', { protocolVersion: 1, clientCapabilities: {}, clientInfo: { name: 'prometheus', version: '1' } }, ACP_STARTUP_TIMEOUT_MS);
     if (result?.protocolVersion !== 1) throw new Error('Unsupported ACP protocol version.');
     this.capabilities.resume = result.agentCapabilities?.loadSession === true;
     return result;
@@ -128,9 +137,9 @@ export class AcpAdapter implements ExternalAgentAdapter {
       if (upstream) {
         if (!info.agentCapabilities?.loadSession) return { upstreamSessionId: upstream, status: 'failed', finalText: '', error: `${this.name} does not support resuming this session. Start a new chat explicitly.` };
         // History emitted during load is already in Prometheus; suppress its replay.
-        modelState = await client.request('session/load', { sessionId: upstream, cwd: input.cwd, mcpServers: [] }, 15000);
+        modelState = await client.request('session/load', { sessionId: upstream, cwd: input.cwd, mcpServers: [] }, ACP_SESSION_TIMEOUT_MS);
       } else {
-        const created = await client.request('session/new', { cwd: input.cwd, mcpServers: [] }, 15000);
+        const created = await client.request('session/new', { cwd: input.cwd, mcpServers: [] }, ACP_SESSION_TIMEOUT_MS);
         if (typeof created?.sessionId !== 'string' || !created.sessionId || created.sessionId.length > 300) throw new Error('Invalid upstream session identity.');
         upstream = created.sessionId;
         modelState = created;
@@ -143,7 +152,7 @@ export class AcpAdapter implements ExternalAgentAdapter {
       if (input.signal.aborted) return { upstreamSessionId: upstream, status: 'interrupted', finalText: '' };
       if (input.model) {
         if (!models.some((m: { id: string }) => m.id === input.model)) throw new Error('Model is not available in this agent session.');
-        await client.request('session/set_model', { sessionId: upstream, modelId: input.model }, 15000);
+        await client.request('session/set_model', { sessionId: upstream, modelId: input.model }, ACP_SESSION_TIMEOUT_MS);
       }
       acceptingUpdates = true;
       input.emit({ type: 'state', phase: 'running' });

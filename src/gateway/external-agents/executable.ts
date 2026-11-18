@@ -59,10 +59,17 @@ export function resolveWindowsShim(shimPath: string): ResolvedCommand | null {
   let text = '';
   try { text = fs.readFileSync(shimPath, 'utf8').slice(0, 8192); } catch { return null; }
   // npm cmd-shim: "%dp0%\node_modules\@openai\codex\bin\codex.js"; ps1: "$basedir/node_modules/...".
-  const match = text.match(/(?:%~?dp0%?|\$basedir)[\\/]+([^"'\r\n%$]+?\.(?:c?js|mjs|exe))/i);
-  if (!match) return null;
-  const target = path.resolve(dir, match[1].replace(/[\\/]+/g, path.sep));
-  if (!isFile(target)) return null;
+  // Standard npm shims start with `IF EXIST "%dp0%\node.exe"` (the interpreter probe), so the
+  // FIRST match is the bundled node.exe, not the program. Skip interpreter matches and take the
+  // first real entry (found by a real OpenClaw install: it launched bare node and exited).
+  const pattern = /(?:%~?dp0%?|\$basedir)[\\/]+([^"'\r\n%$]+?\.(?:c?js|mjs|exe))/gi;
+  let target = '';
+  for (const match of text.matchAll(pattern)) {
+    const candidate = path.resolve(dir, match[1].replace(/[\\/]+/g, path.sep));
+    if (/^node(?:\.exe)?$/i.test(path.basename(candidate))) continue;
+    if (isFile(candidate)) { target = candidate; break; }
+  }
+  if (!target) return null;
   if (/\.exe$/i.test(target)) return { command: target, args: [], source: shimPath };
   const localNode = path.join(dir, 'node.exe');
   const node = isFile(localNode) ? localNode : process.execPath;
