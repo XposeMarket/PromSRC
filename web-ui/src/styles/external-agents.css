@@ -79,6 +79,8 @@ body.ea-agent-codex #chat-context-window-btn { display: none !important; }
 .ea-sheet {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 10071; padding: 10px 14px calc(16px + env(safe-area-inset-bottom, 0px));
   border-top: 1px solid var(--ea-line); border-radius: 16px 16px 0 0; background: var(--ea-raised); color: var(--ea-text);
+  /* Appended to <body>, outside the app shell: inherit the app font explicitly instead of the UA serif. */
+  font-family: var(--pm-font, var(--font-sans, system-ui, -apple-system, "Segoe UI", sans-serif));
 }
 .ea-sheet-handle { width: 36px; height: 4px; margin: 0 auto 10px; border-radius: 999px; background: var(--ea-line); }
 .ea-sheet-title { margin: 0 0 6px; font-size: 15px; font-weight: 600; }
