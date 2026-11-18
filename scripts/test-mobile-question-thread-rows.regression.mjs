@@ -237,7 +237,7 @@ assert.match(pages, /applyToolActivityEvent\(message\.liveTraceEntries, phase, p
       }
   assert.equal(matrixCases, 192);
 }
-assert.match(runtime, /find\(\(turn\) => turn\?\.role === 'ai' && !isQuestionOnly\(turn\)\)/, 'recovery latest turn skips question-only rows');
+assert.match(runtime, /find\(\(turn\) => turn\?\.role === 'ai' && !isQuestionOnly\(turn\) && !isMobileDeliveryRow\(turn\)\)/, 'recovery latest turn skips question-only and delivery_send rows');
 assert.doesNotMatch(rendererRuntime, /: type === 'error' \? 'Tool error' : 'Tool';/, 'no plain Tool label');
 
 // Must: collapseEmptyLiveRows folds only into an eligible explicit host; an ineligible host keeps the placeholder.

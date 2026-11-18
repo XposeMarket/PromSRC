@@ -7,8 +7,9 @@ import { formatModelWithReasoning } from '../model-display.js';
 import { pinRuntimeChrome as pinChrome, restorableBackgroundStatuses as restorableBg, agentTitleHtml, alignBottomAbove as alignAbove } from './mobile-runtime-chrome.js';
 import { splitBackgroundAgentTimeline } from '../features/chat/core/background-agent-timeline.js';
 import { composerDraftKey, readComposerDraft, saveComposerDraft } from '../features/chat/composer-drafts.js';
-import { createReconnectStatusController as mkReconnect, createRestartContinuityHandler as mkRestart, isRestartSuspendedRun as isRestartSuspended, resolveRestartRecoveryMerge as resolveRestartMerge, shouldHoldStreamingTurn as holdStreamingTurn, revivableTurn as revivable, reviveIfFrozen as reviveFz, findLiveSteerContinuation as liveSteer, dropOrphanLiveRows as dropOrphans, reuseEmptyLiveRow as reuseEmptyLive, collapseEmptyLiveRows as collapseEmpty, mobileReplayFrameAfterSteer } from './mobile-restart-continuity.js';
+import { createReconnectStatusController as mkReconnect, createRestartContinuityHandler as mkRestart, isRestartSuspendedRun as isRestartSuspended, resolveRestartRecoveryMerge as resolveRestartMerge, shouldHoldStreamingTurn as holdStreamingTurn, revivableTurn as revivable, reviveIfFrozen as reviveFz, findLiveSteerContinuation as liveSteer, dropOrphanLiveRows as dropOrphans, reuseEmptyLiveRow as reuseEmptyLive, collapseEmptyLiveRows as collapseEmpty, mobileReplayFrameAfterSteer, noteRowStreamSeq, liveRowMissingStreamHead as missingHead } from './mobile-restart-continuity.js';
 import { isMobileQuestionOnlyRow as isQuestionOnly } from './mobile-question-rows.js';
+import { isMobileDeliveryRow } from './mobile-thread-order.js';
 import { resolveKeyboardBandTop, settleLoop } from './mobile-keyboard-band.js';
 import { createMobileChatCamera } from './mobile-chat-camera.js';
 import { finalizeMobileMainPlan } from './mobile-plan-finalize.js';
@@ -2786,7 +2787,8 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
 
       const activeThread = _activeMobileThread();
       // A hidden question-only row is never the live turn; prefer the run's row.
-      const latestAssistantTurn = [...activeThread].reverse().find((turn) => turn?.role === 'ai' && !isQuestionOnly(turn))
+      // Nor is a delivery_send row; it sits after the live row mid-turn.
+      const latestAssistantTurn = [...activeThread].reverse().find((turn) => turn?.role === 'ai' && !isQuestionOnly(turn) && !isMobileDeliveryRow(turn))
         || _findLatestAssistantTurn(activeThread);
       const latestUserTurn = [...activeThread].reverse().find((turn) => turn?.role === 'user') || null;
       const latestServerUserTurn = [...recoveredSessionHistory].reverse().find((turn) => {
@@ -2906,7 +2908,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
       const statusLatestAssistantText = normalizeRecoveryAnswer(status?.latestAssistant?.content);
       const recoveredLatestAssistant = [...recoveredSessionHistory].reverse().find((turn) => {
         const role = String(turn?.role || '').toLowerCase();
-        return (role === 'ai' || role === 'assistant') && _mobileAssistantHasVisibleAnswer(turn);
+        return (role === 'ai' || role === 'assistant') && !isMobileDeliveryRow({ ...turn, role: 'ai' }) && _mobileAssistantHasVisibleAnswer(turn);
       }) || null;
       const recoveredLatestAssistantText = normalizeRecoveryAnswer(_mobileMessageCopyText(recoveredLatestAssistant));
       const answerMatchesLocal = (candidateText) => !!candidateText
@@ -3173,6 +3175,21 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
           events = Array.isArray(replay?.events) ? replay.events : [];
           if (!isCurrentRecoveryTarget()) return;
         }
+        // A live frame that beat recovery advanced the cursor past the run's
+        // earlier tool stream; rebuild that row from a full replay (IMG_2065).
+        let rebuiltHead = false;
+        if (!shouldResetForReplay && missingHead(aiTurn, { replayStreamId, firstSeq, steer: recoverySteerBoundary })) {
+          shouldResetForReplay = true;
+          rebuiltHead = true;
+          replayAfter = 0;
+          receipts?.clear?.(requestedSession);
+          if (!__pmChat.activeRuns || typeof __pmChat.activeRuns !== 'object') __pmChat.activeRuns = {};
+          __pmChat.activeRuns[requestedSession] = { ...(__pmChat.activeRuns[requestedSession] || {}), lastSeq: 0, streamId: replayStreamId };
+          _rememberMobileActiveRun(requestedSession, { lastSeq: 0, streamId: replayStreamId });
+          replay = await loadMobileChatStreamReplay(requestedSession, 0).catch(() => replay);
+          events = Array.isArray(replay?.events) ? replay.events : [];
+          if (!isCurrentRecoveryTarget()) return;
+        }
         // Plan frames can sit before the cursor; the server keeps the latest.
         if (replay?.stream?.progressState) {
           _applyMobileMainPlanProgress(replay.stream.progressState, requestedSession);
@@ -3185,6 +3202,14 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
           });
           if (activeRunProcessLog.length) _mergeMobileProcessEntries(aiTurn, activeRunProcessLog);
           _mergeMobileWorkflowTraceFromProcessEntries(aiTurn);
+        }
+        if (shouldResetForReplay && events.length && String(aiTurn.workflowPart || '') !== 'before_interruption') {
+          // Live frames that landed during the replay fetch advanced the cursor
+          // again, so every replayed frame looked like a duplicate and the row
+          // kept only a few tail tools. The full replay owns the timeline from
+          // here (no await below).
+          receipts?.clear?.(requestedSession);
+          __pmChat.activeRuns[requestedSession] = { ...(__pmChat.activeRuns[requestedSession] || {}), lastSeq: 0, streamId: replayStreamId };
         }
         let terminal = '';
         aiTurn._pmRecoveryReplay = true;
@@ -3203,6 +3228,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
           endMobileReplayRenderBatch();
           delete aiTurn._pmRecoveryReplay;
         }
+        if (rebuiltHead && replayStreamId) aiTurn._pmHeadVerified = replayStreamId;
         _mergeMobileWorkflowTraceFromProcessEntries(aiTurn);
         if (!isCurrentRecoveryTarget()) return;
         flushMobileReplayRenderBatch();
@@ -6555,6 +6581,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
         delete aiTurn.workEndedAt;
       }
     }
+    noteRowStreamSeq(aiTurn, evt);
     if (evt.streamId) aiTurn._streamId = String(evt.streamId).trim();
     if (evt.runtimeId || evt.run?.id || evt.activeRun?.id) {
       aiTurn.runtimeId = String(evt.runtimeId || evt.run?.id || evt.activeRun?.id || '').trim();
