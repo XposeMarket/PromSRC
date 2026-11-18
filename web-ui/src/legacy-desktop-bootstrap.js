@@ -2239,6 +2239,9 @@ function renderSessionsList() {
       return title.includes(_sessionSearchQuery) || msgs.includes(_sessionSearchQuery) || indexedMatchIds.has(String(s.id));
     });
   }
+  // Agents filter (bottom of the list): Prometheus and/or connected harnesses.
+  const harnessSidebar = window.__promHarnessSidebar;
+  if (harnessSidebar) sorted = sorted.filter((s) => harnessSidebar.visible(s));
 
   const pinned = sorted.filter(s => _pinnedChats.includes(s.id));
   const unpinned = sorted.filter(s => !_pinnedChats.includes(s.id));
@@ -2260,9 +2263,14 @@ function renderSessionsList() {
     }
   }
 
-  const projectRows = typeof window.renderProjectChatRows === 'function'
+  const promProjectRows = (!harnessSidebar || harnessSidebar.isVisible('prometheus')) && typeof window.renderProjectChatRows === 'function'
     ? window.renderProjectChatRows({ query: _sessionSearchQuery })
     : '';
+  // After the last Prometheus project: one collapsible section per connected harness.
+  const harnessRows = harnessSidebar && !_sessionSearchQuery
+    ? harnessSidebar.projectsHtml({ chatRow: (c) => renderChatSessionCard({ id: c.id, title: c.title, lastMessageAt: c.lastMessageAt, channel: 'web', history: [], ...((window.chatSessions || []).find((s) => String(s?.id) === c.id) || {}) }, { projectNested: true }) })
+    : '';
+  const projectRows = promProjectRows + harnessRows;
   const projectsSection = document.getElementById('sidebar-projects-section');
   const projectsListEl = document.getElementById('sidebar-projects-list');
   if (projectsSection && projectsListEl) {
@@ -2294,6 +2302,7 @@ function renderSessionsList() {
     </button>`;
   }
 
+  content += harnessSidebar?.filterButtonHtml?.() || '';
   content += `<button class="sessions-show-more-btn settled-entry-btn" onclick="toggleSettledSessionsView()" style="width:100%;margin-top:8px;padding:8px 12px;background:transparent;border:1px solid var(--line);color:var(--sidebar-muted, var(--muted));border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;font-family:'Manrope',sans-serif;transition:all 0.15s ease" onmouseover="this.style.background='color-mix(in srgb, var(--pm-gold, var(--brand)) 10%, transparent)'" onmouseout="this.style.background='transparent'">
     Settled
   </button>`;

@@ -48,6 +48,9 @@ async function call(path, opts = {}) {
   return res.json();
 }
 
+/** JSON request through the active surface's fetch helper (desktop api / mobile gateway fetch). */
+export function externalAgentRequest(path, opts) { return call(path, opts); }
+
 function notify() {
   for (const fn of st.listeners) { try { fn(); } catch { /* UI only */ } }
 }

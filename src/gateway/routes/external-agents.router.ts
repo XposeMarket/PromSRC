@@ -18,9 +18,43 @@ import {
 } from '../external-agents/registry';
 import { listPendingRequests, respondToPendingRequest } from '../external-agents/pending-requests';
 import { resolveExternalAgentCwd, bindExternalAgentForRequest, startFreshUpstreamSession } from '../external-agents/turn-runner';
-import { getSessionExternalAgent } from '../session';
+import { getSessionExternalAgent, listSessionSummaries } from '../session';
 
 export const router = Router();
+
+const IMPORT_SOURCE_AGENT: Record<string, string> = {
+  codex: 'codex', 'codex-local': 'codex', openai_codex: 'codex',
+  claude: 'claude-code', 'claude-code': 'claude-code', 'claude-code-local': 'claude-code',
+  hermes: 'hermes', 'hermes-local': 'hermes', openclaw: 'openclaw', 'openclaw-local': 'openclaw',
+  cursor: 'cursor', 'cursor-local': 'cursor',
+};
+
+/**
+ * Which harness each chat belongs to, for the sidebar harness filter and the
+ * per-harness project folders. Live chats use their binding; imported chats
+ * use their import source. Chats not listed are Prometheus chats. Registered
+ * before /api/external-agents/:id so the literal path wins.
+ */
+router.get('/api/external-agents/session-map', (_req, res) => {
+  const sessions: Record<string, { agentId: string; cwd?: string; title: string; at: number; imported?: boolean }> = {};
+  try {
+    for (const s of listSessionSummaries() as any[]) {
+      if (!s?.id) continue;
+      const at = Number(s.lastMessageAt || s.lastActiveAt || s.updatedAt || s.createdAt || 0) || 0;
+      const title = String(s.title || 'New chat').slice(0, 200);
+      if (s.externalAgent?.agentId) {
+        sessions[s.id] = { agentId: String(s.externalAgent.agentId), cwd: String(s.externalAgent.cwd || ''), title, at };
+        continue;
+      }
+      const src = s.externalImport?.source || {};
+      const key = [src.adapter, src.provider].map((v: any) => String(v || '').trim().toLowerCase()).find((v: string) => IMPORT_SOURCE_AGENT[v]);
+      if (key) sessions[s.id] = { agentId: IMPORT_SOURCE_AGENT[key], title, at, imported: true };
+    }
+  } catch {
+    /* an unreadable index means an empty map, never a failed sidebar */
+  }
+  res.json({ success: true, sessions });
+});
 
 router.get('/api/external-agents/:id/models', async (req, res) => {
   const id = parseExternalAgentId(req.params.id);

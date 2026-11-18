@@ -16,6 +16,7 @@ import {
 import { mountMinimalAgentComposer } from './external-agent-composer.js';
 import { setDesktopAgentModel, agentModelForSend, agentEffortForSend } from './external-agent-desktop-models.js';
 import { agentLogoHtml } from './external-agent-logos.js';
+import { initHarnessSidebar } from './external-agent-sidebar.js';
 
 const ui = { host: null, menuOpen: false, lastSession: '', lastEmpty: null };
 
@@ -148,6 +149,11 @@ window.__promExternalAgent = {
 };
 
 onExternalAgentsChange(render);
+initHarnessSidebar({
+  surface: 'desktop',
+  rerender: () => { try { window.renderSessionsList?.(); } catch { /* sidebar not ready */ } },
+  newChat: () => window.newChatSession?.(),
+});
 document.addEventListener('click', (event) => {
   if (ui.menuOpen && ui.host && !ui.host.contains(event.target)) { ui.menuOpen = false; render(); }
 });

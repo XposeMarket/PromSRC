@@ -15,6 +15,7 @@ import { finalizeMobileMainPlan } from './mobile-plan-finalize.js';
 import { createMobileSilenceBackstop, claimMobileFinalize, selectMobileTurnRowsToFinalize } from './mobile-turn-lifecycle.js';
 import { rememberMobileStreamOwner } from './mobile-stream-owner.js';
 import { mountMobileAgentRow, mobileAgentFieldForSend, mobileAgentStreamEvent, syncMobileAgentRequests } from '../chat/external-agent-mobile.js';
+import { harnessFolderPickerOptions, pickHarnessFolderOption, onHarnessSidebarChange } from '../chat/external-agent-sidebar.js';
 import { attachNativePicker } from './mobile-native-picker.js';
 import { mountSecureAccessDock, createSecureAccessContinuation } from '../features/secure-access/secure-access-core.js';
 import { installComposerSecretGuard } from '../features/secure-access/protected-plugin-entry.js';
@@ -1483,12 +1484,21 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
   });
   nativeProjectPicker = attachNativePicker(projectChip, {
     label: 'Directed chat',
-    options: () => nativeProjectPickerOptions.map((option) => ({
+    // A connected agent (Codex, Claude Code, ...) lists its own projects here.
+    options: () => harnessFolderPickerOptions() || nativeProjectPickerOptions.map((option) => ({
       ...option,
       selected: option.value === targetProjectId,
     })),
     onChange: (value) => {
       const selected = String(value || '');
+      if (pickHarnessFolderOption(selected)) {
+        targetProjectId = '';
+        targetProjectLabel = '';
+        rememberChatContext();
+        renderChatProjectChip();
+        nativeProjectPicker?.refresh();
+        return;
+      }
       if (selected === '__pm_new_project__') {
         nativeProjectPicker?.refresh();
         openNewProjectPopover();
@@ -1531,6 +1541,10 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
     nativeProjectPicker?.refresh();
   };
   void loadNativeProjectPickerOptions();
+  const stopHarnessFolderUpdates = onHarnessSidebarChange(() => {
+    if (!projectChip?.isConnected) { stopHarnessFolderUpdates(); return; }
+    nativeProjectPicker?.refresh();
+  });
   const stopGatewayTargetUpdates = onGatewayCatalogChanged(() => {
     renderChatTargetChip();
     nativeTargetPicker?.refresh();

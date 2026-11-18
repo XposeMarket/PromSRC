@@ -189,3 +189,75 @@ body.pm-mobile-active #pm-new-chat-context-dock.ea-new-chat-context .pm-new-chat
 .ea-menu-item { align-items: center; }
 .ea-menu-check { margin-left: auto; opacity: .8; font-size: 13px; }
 .ea-card-head .ea-logo { width: 20px; height: 20px; }
+
+/* ---- Harness sections under Projects + Agents chat filter ------------------- */
+.ea-harness-projects, .ea-harness-filter-btn, .ea-folder-list {
+  /* Drawer section titles use a display serif; harness rows match ordinary chat rows instead. */
+  font-family: var(--pm-font, var(--font-sans, system-ui, -apple-system, "Segoe UI", sans-serif));
+}
+.ea-harness-projects { margin-top: 2px; }
+.ea-harness-projects .ea-harness-head, .ea-harness-projects .ea-harness-folder-btn { font-family: inherit; letter-spacing: normal; text-transform: none; }
+.ea-harness-head, .ea-harness-folder-btn {
+  appearance: none; width: 100%; display: flex; align-items: center; gap: 7px; min-height: 32px; padding: 5px 8px;
+  border: 0; border-radius: 8px; background: transparent; color: var(--ea-text, var(--text)); font: inherit; font-size: 13px; text-align: left; cursor: pointer;
+}
+.ea-harness-head:hover, .ea-harness-folder-btn:hover { background: color-mix(in srgb, var(--ea-line, var(--line)) 40%, transparent); }
+.ea-harness-head .ea-logo { width: 16px; height: 16px; }
+.ea-harness-chev { display: inline-flex; width: 14px; height: 14px; color: var(--ea-muted, var(--muted)); transition: transform .15s ease; }
+.ea-harness-chev svg, .ea-harness-folder-icon svg { width: 14px; height: 14px; }
+[aria-expanded="true"] > .ea-harness-chev { transform: rotate(90deg); }
+.ea-harness-folder-icon { display: inline-flex; color: var(--ea-muted, var(--muted)); }
+.ea-harness-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ea-harness-count { font-size: 11px; color: var(--ea-muted, var(--muted)); }
+.ea-harness-folders { margin: 0 0 4px 14px; padding-left: 6px; border-left: 1px solid color-mix(in srgb, var(--ea-line, var(--line)) 76%, transparent); }
+.ea-harness-folder-row { display: flex; align-items: center; }
+.ea-harness-folder-row .ea-harness-folder-btn { flex: 1; min-width: 0; }
+.ea-harness-new {
+  appearance: none; flex: none; width: 26px; height: 26px; border: 0; border-radius: 7px; background: transparent;
+  color: var(--ea-muted, var(--muted)); font-size: 16px; line-height: 1; cursor: pointer;
+}
+.ea-harness-new:hover { background: color-mix(in srgb, var(--ea-line, var(--line)) 45%, transparent); color: var(--ea-text, var(--text)); }
+.ea-harness-chats { margin-left: 14px; }
+.ea-harness-empty { padding: 4px 8px 6px 28px; font-size: 12px; color: var(--ea-muted, var(--muted)); }
+.ea-harness-mobile .ea-harness-head, .ea-harness-mobile .ea-harness-folder-btn { min-height: 40px; font-size: 15px; }
+.ea-harness-mobile .ea-harness-new { width: 36px; height: 36px; font-size: 20px; }
+
+.ea-harness-filter-btn {
+  appearance: none; width: 100%; display: flex; align-items: center; gap: 8px; margin-top: 8px; padding: 7px 12px;
+  border: 1px solid var(--ea-line, var(--line)); border-radius: 8px; background: transparent;
+  color: var(--ea-text, var(--text)); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.ea-harness-filter-btn:hover { background: color-mix(in srgb, var(--ea-line, var(--line)) 35%, transparent); }
+.ea-harness-filter-btn.is-filtered { border-color: color-mix(in srgb, var(--pm-gold, var(--brand)) 55%, var(--ea-line, var(--line))); }
+.ea-harness-filter-logos { display: inline-flex; }
+.ea-harness-filter-logos .ea-logo { width: 16px; height: 16px; margin-right: -4px; box-shadow: 0 0 0 2px var(--ea-raised, var(--panel, #111)); }
+.ea-harness-filter-label { flex: 1; text-align: left; margin-left: 4px; }
+.pm-drawer-session-list .ea-harness-filter-btn { min-height: 44px; font-size: 14px; border-radius: 12px; }
+.ea-filter-scrim { position: fixed; inset: 0; z-index: 10071; border: 0; background: transparent; }
+.ea-filter-menu { z-index: 10072; min-width: 220px; font-family: var(--pm-font, var(--font-sans, system-ui, -apple-system, "Segoe UI", sans-serif)); }
+.ea-filter-menu .ea-filter-title { padding: 4px 8px 6px; font-size: 12px; font-weight: 600; color: var(--ea-muted); margin: 0; }
+.ea-filter-name { flex: 1; }
+.ea-filter-box {
+  width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center; border-radius: 5px;
+  border: 1px solid var(--ea-line); font-size: 12px; color: var(--ea-text);
+}
+.ea-filter-item.is-active .ea-filter-box { background: color-mix(in srgb, var(--pm-gold, var(--brand)) 30%, transparent); border-color: transparent; }
+.ea-filter-all { justify-content: center; color: var(--ea-muted); }
+
+/* Chat / Project picker while a harness runs the new chat: that harness's projects only. */
+body.ea-folder-choice #chat-new-context-popover > .chat-new-context-option,
+body.ea-folder-choice .pm-new-chat-context-popover[data-popover-type="project"] > .pm-new-chat-context-option,
+.ea-folder-mode > .chat-new-context-loading,
+.ea-folder-mode > .pm-new-chat-context-loading,
+.ea-folder-mode > .chat-new-context-popover-title,
+.ea-folder-mode > .pm-new-chat-context-popover-title { display: none !important; }
+.ea-folder-list { display: flex; flex-direction: column; gap: 1px; }
+.ea-folder-title { display: flex; align-items: center; gap: 7px; padding: 4px 8px 6px; font-size: 12px; font-weight: 600; color: var(--ea-muted, var(--muted)); }
+.ea-folder-title .ea-logo { width: 14px; height: 14px; }
+.ea-folder-option {
+  appearance: none; display: flex; align-items: center; gap: 8px; width: 100%; min-height: 34px; padding: 6px 8px;
+  border: 0; border-radius: 8px; background: transparent; color: inherit; font: inherit; font-size: 13px; text-align: left; cursor: pointer;
+}
+.ea-folder-option:hover, .ea-folder-option.is-active { background: color-mix(in srgb, var(--ea-line, var(--line)) 45%, transparent); }
+.ea-folder-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pm-new-chat-context-popover .ea-folder-option { min-height: 44px; font-size: 15px; }
