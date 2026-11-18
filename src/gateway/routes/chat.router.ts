@@ -62,6 +62,7 @@ import {
   readModelUsageEventsForSession,
   readModelUsageEventsSince,
   getUsageCalibration,
+  resolveProviderPromptTokens,
   type ModelUsageEvent,
 } from '../../providers/model-usage';
 import { estimateContextCostMicros, resolveModelPricing } from '../../providers/model-pricing';
@@ -18145,8 +18146,14 @@ export function buildContextWindowCurrentState(input: {
   const latestProviderInputTokens = hasCurrentHistory
     ? Math.max(0, Number(lastCall.estimatedProviderInputTokens || 0))
     : 0;
+  // Anthropic reports `input_tokens` as the uncached remainder only; the cached
+  // prefix it actually processed lands in cache read/write. Reading inputTokens
+  // directly made a warm 140k-token Claude turn report ~2 tokens, pinning the
+  // context bar at 0% on both mobile and desktop. resolveProviderPromptTokens
+  // normalizes this per provider (and must not add cache for OpenAI-style
+  // usage, where cached_tokens is a subset of the reported input).
   const latestProviderReportedInputTokens = hasCurrentHistory && lastCall.source === 'provider'
-    ? Math.max(0, Number(lastCall.inputTokens || 0))
+    ? Math.max(0, resolveProviderPromptTokens(lastCall))
     : 0;
   const activeSkillEstimate = buildActiveSkillsContextEstimate(input.sessionId, input.profile);
   const activeSkillTokens = activeSkillEstimate.tokens;
