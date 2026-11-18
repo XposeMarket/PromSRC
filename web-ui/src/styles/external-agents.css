@@ -198,6 +198,8 @@ body.pm-mobile-active:has(#pm-new-chat-context-dock.ea-new-chat-context) .pm-mob
 .ea-logo { width: 18px; height: 18px; flex: none; object-fit: contain; border-radius: 4px; display: inline-block; vertical-align: middle; }
 .ea-logo-codex, .ea-logo-cursor { background: #fff; padding: 2px; box-sizing: border-box; }
 .ea-logo-openclaw { object-fit: cover; object-position: left center; }
+.ea-logo-prometheus { border-radius: 50%; }
+body.pm-mobile-active #pm-chat-target-chip[hidden] { display: none !important; }
 .ea-sheet .ea-logo, .ea-menu .ea-logo { width: 22px; height: 22px; }
 body.pm-mobile-active #pm-new-chat-context-dock.ea-new-chat-context .pm-new-chat-context-icon .ea-logo { width: 20px; height: 20px; }
 .ea-menu-item { align-items: center; }
