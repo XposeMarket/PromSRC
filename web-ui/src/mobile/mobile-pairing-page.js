@@ -445,7 +445,29 @@ export async function renderPairPage(page, { code, navigate, addMode = false }) 
           page.querySelector('#pm-pair-back')?.addEventListener('click', () => navigate('#mobile/gateways'));
           return;
         }
-        upsertGateway(gateway, { token: r.deviceToken, deviceId: r.deviceId });
+        // Retry the local write with this approval; never re-poll its spent token.
+        while (true) {
+          try {
+            upsertGateway(gateway, { token: r.deviceToken, deviceId: r.deviceId, approvedPair: true });
+            break;
+          } catch (error) {
+            setStage({ title: 'Approved, but not saved on this phone',
+              sub: error?.message === 'Pairing conflicts with an existing computer.'
+                ? 'This identity is already saved for a different computer. Your existing connection was not changed.'
+                : 'Keep this screen open. Allow site storage or free space, then retry without scanning again.',
+              status: '', actions: '<button class="pm-btn primary" id="pm-pair-retry-save">Retry save</button><button class="pm-btn ghost" id="pm-pair-back">Back to gateways</button>' });
+            const retry = await new Promise(resolve => {
+              page.querySelector('#pm-pair-retry-save')?.addEventListener('click', () => resolve(true), { once: true });
+              page.querySelector('#pm-pair-back')?.addEventListener('click', () => resolve(false), { once: true });
+            });
+            if (!retry) {
+              clearPendingGatewayPair();
+              _clearPendingManualGatewayOrigin();
+              navigate('#mobile/gateways');
+              return;
+            }
+          }
+        }
         setActiveGatewayId(gateway.gatewayId);
         // Preserve the old one-gateway token only for the original same-origin
         // target. Every other gateway gets its own credential slot.
