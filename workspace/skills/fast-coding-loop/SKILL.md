@@ -5,11 +5,12 @@ description: "Default coding workflow for Prometheus main chat and every coding 
 
 # Fast Coding Loop (default coding workflow)
 
-Every tool call is a full model round trip that re-sends the whole prompt (often 5-15 s each). A 120-call investigation is 10-20 minutes no matter how small each read is. Optimize for **fewest calls**, not fewest tokens per call.
+Every tool call is a full model round trip that re-sends the whole prompt (often 5-15 s each). A 120-call investigation is 10-20 minutes no matter how small each read is. Avoid wasted calls by batching, rather than making each call small.
 
-## Budget
-- Typical bug: <= 12 calls before the first edit, <= 25 total. Multi-area work (3+ subsystems): ~10 per area.
-- At ~20 calls with no edit: stop, write down exactly what is unknown, then do one targeted probe or ask.
+## No call limit
+- There is no tool-call limit, for main chat or for any agent. Use as many calls as the task needs to finish it and verify it. Never stop early, cut scope, or skip verification to stay under a call count.
+- The steps below exist to avoid wasted round trips (one-pattern searches, tiny repeated reads, a build after every hunk). They are not a reason to do less work.
+- If a long stretch of reading has produced no edit and no new finding, write down exactly what is still unknown and pick the probe that answers it.
 - Investigation agents: return a concise findings list (file:line + one-line cause + proposed fix). No exhaustive citation reports.
 
 ## 0. Before searching
@@ -46,7 +47,7 @@ node --check changed.js; npx tsc --noEmit | Select-Object -Last 10; node scripts
 Wait once. Restart the gateway only after the build step prints exit 0.
 
 ## Delegating (background agents)
-Spawn only when the work is genuinely parallel or long. A brief must contain: exact files/dirs, the concrete questions, the budget ("<= 20 tool calls"), the output shape ("<= 15 bullets, file:line + cause + fix"), and read-only vs edit scope. Never ask for a "full report with citations". Do useful foreground work while it runs instead of waiting in long blocks. For multi-lane implementation with worktrees see `background-coding-agent-lanes`.
+Spawn only when the work is genuinely parallel or long. A brief must contain: exact files/dirs, the concrete questions, the output shape ("<= 15 bullets, file:line + cause + fix"), and read-only vs edit scope. Do not put a tool-call limit in the brief: agents use as many calls as the task needs. Never ask for a "full report with citations". Do useful foreground work while it runs instead of waiting in long blocks. For multi-lane implementation with worktrees see `background-coding-agent-lanes`.
 
 ## Anti-patterns that cause 5+ minute turns
 - One pattern per grep, then another, then another.

@@ -165,6 +165,8 @@ There are three related but independent “instruction routing” concepts:
 2. `instruction-segment-registry.ts` and instruction-intent routing select/trace operating-instruction segments by intent and actor.
 3. Provider `tools` schemas represent actionable function contracts; the model output is then checked by the gateway permission/approval system.
 
+The `files` block's CODING SPEED text in `TOOL_BLOCKS` is batching guidance only (one multi-pattern locate, big batched reads, batched edits, verify once). It sets no tool-call limit, for main chat or agents, and says so in the prompt. Do not add call-count caps there, in the `fast-coding-loop` skill, or in agent briefs; `src/runtime/tool-category-routing.regression.ts` fails if a call count comes back.
+
 Prompt-manifest `declaredPolicyIds`/`systemSegmentIds` are diagnostic identifiers, not prompt text. The current manifest can report instruction resolution and Stage 4 intent-routing results without exposing whole private instructions. For a discrepancy, compare builder output, manifest segment/hash report, final provider surface and tool authorization state separately.
 
 When a safe low-level capability or native category has changed, don't patch the monolithic policy prose alone. Update the owning category/registry/tool builder and then check how it is represented in prompt instructions. [generated/tool-categories](generated/tool-categories.md) is the source-backed list; `self/35-native-tool-category-prompt-signals.md` is a cross-cutting source-copy hint, not the source of enforcement.
