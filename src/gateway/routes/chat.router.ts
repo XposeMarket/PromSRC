@@ -1886,7 +1886,6 @@ import {
 } from '../agents-runtime/agent-builder-integration';
 
 
-import { elideStaleToolResults, TOOL_RESULT_ELISION_BATCH_MIN_CHARS } from './tool-result-elision';
 
 import {
   buildTurnContextPacket,

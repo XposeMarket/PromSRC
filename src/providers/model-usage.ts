@@ -1,6 +1,6 @@
 import fs from 'fs';
 import { createHash } from 'crypto';
-import { ensureSessionUsageIndex, readIndexedSessionUsage, readRecentUsage, readUsageRange, resetSessionUsageIndexes } from './model-usage-index';
+import { ensureSessionUsageIndex, readIndexedSessionUsage, readRecentUsage, readUsageRange, resetSessionUsageIndexes, scanRecentUsage } from './model-usage-index';
 import path from 'path';
 import type { UsageLifetimeTotal } from './model-usage-index';
 import { getConfig } from '../config/config';
@@ -574,6 +574,59 @@ export async function readRecentModelUsageEvents(cutoff: number): Promise<ModelU
   return readUsageOrEmpty(() => readRecentUsage(usageLogPath(), cutoff), []);
 }
 
+/** Tokens and calls for one provider/account over a recent window; `timestamp` is its newest row. */
+export interface UsageWindowTotal {
+  provider: string;
+  accountId: string;
+  totalTokens: number;
+  calls: number;
+  timestamp: string;
+}
+
+const WINDOW_TOTALS_TTL_MS = 15_000;
+let _windowTotals: { key: string; settledAt: number; value: Promise<UsageWindowTotal[]> } | null = null;
+/** A row can be appended with an earlier timestamp, so the scan looks back this far and filters inside. */
+const WINDOW_SCAN_HORIZON_MS = 35 * 86400000;
+
+/**
+ * Token totals per provider/account for rows at or after `cutoff`.
+ *
+ * The usage card used to load every row of the last 35 days as full objects on
+ * each poll (Nov 18 2026: 77,483 rows, 133 MB held per call), and each open
+ * tab or phone polled on its own, so eight overlapping polls put over 1 GB on
+ * the gateway heap. This sums while scanning and keeps no row. Overlapping
+ * callers share one scan, and the result is reused for 15 seconds.
+ */
+export function readModelUsageTotalsSince(cutoff: number): Promise<UsageWindowTotal[]> {
+  const file = usageLogPath();
+  const key = `${file}\u0000${cutoff}`;
+  const cached = _windowTotals;
+  // A scan that is still running is always shared; the 15 seconds count from when it finished.
+  if (cached && cached.key === key && (!cached.settledAt || Date.now() - cached.settledAt < WINDOW_TOTALS_TTL_MS)) return cached.value;
+  const value = readUsageOrEmpty(async () => {
+    const totals = new Map<string, UsageWindowTotal>();
+    await scanRecentUsage(file, Math.min(cutoff, Date.now() - WINDOW_SCAN_HORIZON_MS), (event) => {
+      if (!(Date.parse(event.timestamp) >= cutoff)) return;
+      const provider = String(event.provider || '');
+      const accountId = String(event.accountId || '');
+      const totalKey = `${provider}\u0000${accountId}`;
+      let total = totals.get(totalKey);
+      if (!total) {
+        total = { provider, accountId, totalTokens: 0, calls: 0, timestamp: event.timestamp };
+        totals.set(totalKey, total);
+      }
+      total.totalTokens += Number(event.totalTokens) || 0;
+      total.calls += 1;
+    });
+    return Array.from(totals.values());
+  }, [] as UsageWindowTotal[]);
+  const entry = { key, settledAt: 0, value };
+  _windowTotals = entry;
+  // A failed scan must not be served from cache for the next 15 seconds.
+  value.then(() => { entry.settledAt = Date.now(); }, () => { if (_windowTotals === entry) _windowTotals = null; });
+  return value;
+}
+
 /** All complete rows, including history older than the recent billing window. */
 export async function readModelUsageLifetimeTotals(): Promise<UsageLifetimeTotal[]> {
   return readUsageOrEmpty(async () => Array.from((await ensureSessionUsageIndex(usageLogPath())).totals.values(), total => ({ ...total })), []);
@@ -586,6 +639,7 @@ export async function warmModelUsageIndex(): Promise<{ events: number; durationM
 }
 
 export function resetModelUsageIndexForTests(): void {
+  _windowTotals = null;
   resetUsageReadCache();
   resetSessionUsageIndexes();
 }

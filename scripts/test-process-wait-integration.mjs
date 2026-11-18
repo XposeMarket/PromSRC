@@ -6,7 +6,7 @@ import path from 'node:path';
 import ts from 'typescript';
 import { ProcessSupervisor } from '../src/gateway/process/supervisor.ts';
 import { ProcessRunStore } from '../src/gateway/process/store.ts';
-import { boundedProcessWait, processWaitBudget } from '../src/gateway/process/bounded-wait.ts';
+import { boundedProcessWait, formatWaitClock, processWaitBudget } from '../src/gateway/process/bounded-wait.ts';
 import { classifyCommandTermination } from '../src/gateway/process/command-outcome.ts';
 import { capCommandOutput } from '../src/gateway/agents-runtime/command-output-cap.ts';
 const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'prom-wait-test-'));
@@ -14,7 +14,8 @@ const supervisor = new ProcessSupervisor(new ProcessRunStore(path.join(fixture, 
 const source = fs.readFileSync('src/gateway/agents-runtime/handlers/misc.ts', 'utf8');
 const body = source.slice(source.indexOf("      case 'process_wait': {") + "      case 'process_wait': {".length, source.indexOf("      case 'process_kill': {")).trim().replace(/}\s*$/, '');
 const compiled = ts.transpile(`async function invoke(args: any, deps: any) { const name='process_wait'; ${body} }`, { target: ts.ScriptTarget.ES2022 });
-const invoke = new Function('getProcessSupervisor', 'boundedProcessWait', 'processWaitBudget', 'classifyCommandTermination', 'capCommandOutput', compiled + ';return invoke;')(() => supervisor, boundedProcessWait, processWaitBudget, classifyCommandTermination, capCommandOutput);
+const invoke = new Function('getProcessSupervisor', 'boundedProcessWait', 'processWaitBudget', 'classifyCommandTermination', 'capCommandOutput', 'formatWaitClock', compiled + ';return invoke;')(() => supervisor, boundedProcessWait, processWaitBudget, classifyCommandTermination, capCommandOutput, formatWaitClock);
+assert.equal(formatWaitClock(75_000), '1:15'); assert.equal(formatWaitClock(180_000), '3:00');
 const runs = [];
 try {
   fs.writeFileSync(path.join(fixture, 'long.cjs'), 'setTimeout(()=>{console.log("final-output");process.exit(0)},32000)');
@@ -25,8 +26,16 @@ try {
     const result = await invoke({ runId: run.runId, timeout_ms: 300000 }, { abortSignal: token }); clearTimeout(timer);
     assert.equal(result.extra.cancelled, true); assert.ok(Date.now() - started < 2000); assert.notEqual(supervisor.get(run.runId).state, 'exited');
   }
-  let progress = 0; const started = Date.now();
-  const result = await invoke({ runId: run.runId, timeout_ms: 300000 }, { sendSSE: (event) => { assert.equal(event, 'tool_progress'); progress++; } });
+  let progress = 0; const progressEvents = []; const started = Date.now();
+  const result = await invoke({ runId: run.runId, timeout_ms: 300000 }, { sendSSE: (event, data) => {
+    assert.equal(event, 'tool_progress'); progress++; progressEvents.push(data);
+  } });
+  // The progress line is user-facing: readable clock, no internal run id, no floating pill.
+  // Checked here because the wait swallows errors thrown by its progress callback.
+  for (const data of progressEvents) {
+    assert.match(data.message, /^Command still running \u00b7 \d+:\d\d of 5:00$/);
+    assert.ok(!data.message.includes(run.runId)); assert.notEqual(data.show_pill, true);
+  }
   assert.equal(result.error, false, JSON.stringify(result)); assert.match(result.result, /final-output/); assert.ok(Date.now() - started > 30000); assert.ok(progress >= 2);
   assert.equal(result.extra.terminationReason, 'exit');
   const missing = await invoke({ runId: 'nonexistent' }, {}); assert.equal(missing.error, true);

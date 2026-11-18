@@ -94,6 +94,52 @@ async function main() {
     assert.ok(requests.every(r => r.tools?.[0].name === 'write_file'));
     assert.equal(requests.at(-1).messages.at(-1).content[0].type, 'tool_result');
 
+    // Round-trip real wire messages across worker-style serialization. Keep the
+    // entire signed prefix when the caller changes context and unlocks a tool.
+    const signedHistory: ChatMessage[] = [
+      { role: 'system', content: 'Stable policy' + PROMPT_CACHE_MARKER + 'first context' },
+      { role: 'user', content: 'Inspect the fixture' },
+    ];
+    const signedBlocks = [
+      { type: 'text', text: 'Checking.' },
+      { type: 'thinking', thinking: '', signature: 'part-one-two' },
+      { type: 'redacted_thinking', data: 'opaque' },
+      { type: 'tool_use', id: 'a', name: 'write_file', input: { path: 'a' } },
+    ];
+    nextResponse = () => stream([
+      event('content_block_start', { index: 0, content_block: signedBlocks[0] }),
+      event('content_block_stop', { index: 0 }),
+      event('content_block_start', { index: 1, content_block: { type: 'thinking', thinking: '', signature: '' } }),
+      ...['part-one', '-two'].map(signature => event('content_block_delta', { index: 1, delta: { type: 'signature_delta', signature } })),
+      event('content_block_stop', { index: 1 }),
+      event('content_block_start', { index: 2, content_block: signedBlocks[2] }),
+      event('content_block_stop', { index: 2 }),
+      event('content_block_start', { index: 3, content_block: signedBlocks[3] }),
+      event('content_block_stop', { index: 3 }),
+      ...finish('tool_use'),
+    ]);
+    const signedModel = 'claude-opus-5-5';
+    const signed = await adapter.chat(signedHistory, signedModel, { tools, think: 'high', onToken: () => {} });
+    const initial = requests.at(-1);
+    signedHistory.push(structuredClone(signed.message), { role: 'tool', content: 'file evidence', tool_call_id: 'a' });
+    signedHistory[0].content = 'Updated policy' + PROMPT_CACHE_MARKER + 'new context';
+    const expanded = [...tools, { type: 'function', function: { name: 'inspect', parameters: { type: 'object' } } }];
+    nextResponse = () => Response.json({ content: [{ type: 'tool_use', id: 'b', name: 'inspect', input: {} }], stop_reason: 'tool_use' });
+    const expandedRound = await adapter.chat(signedHistory, signedModel, { tools: expanded, think: 'high' });
+    const second = requests.at(-1);
+    assert.deepEqual(second.messages.find((m: any) => m.role === 'assistant').content, signedBlocks);
+    assert.deepEqual(second.tools, initial.tools);
+    assert.deepEqual(second.system, initial.system);
+    assert.ok(second.messages.at(-1).content.some((b: any) => b.type === 'tool_addition' && b.tool.definition.name === 'inspect'));
+    const withoutMarkers = (value: any) => JSON.parse(JSON.stringify(value, (key, val) => key === 'cache_control' ? undefined : val));
+    assert.deepEqual(withoutMarkers(second.messages.slice(0, initial.messages.length)), withoutMarkers(initial.messages));
+    signedHistory.push(structuredClone(expandedRound.message), { role: 'tool', content: 'inspected', tool_call_id: 'b' });
+    await adapter.chat(signedHistory, signedModel, { tools, think: 'high' });
+    const third = requests.at(-1);
+    assert.deepEqual(withoutMarkers(third.messages.slice(0, second.messages.length)), withoutMarkers(second.messages));
+    assert.ok(third.messages.at(-1).content.some((b: any) => b.type === 'tool_removal' && b.tool.name === 'inspect'));
+    assert.ok(JSON.stringify(third.messages).includes('file evidence'));
+
     // Volatile per-turn context leaves `system` and rides after the history
     // cache breakpoint, so history stays a cache hit across turns and rounds.
     const volMessages: ChatMessage[] = [
