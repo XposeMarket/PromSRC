@@ -3,6 +3,7 @@ import { acpToolToNative, toolResultText } from '../native-tool-map';
 import path from 'path';
 import { findOnPath, resolveFromCandidates, type ResolvedCommand } from '../executable';
 import { JsonRpcStdioClient } from '../jsonrpc-stdio';
+import { createAcpFileTracker } from '../file-touches';
 import type { ExternalAgentAdapter, ExternalAgentCapabilities, ExternalAgentVerifyResult, ExternalTurnInput, ExternalTurnResult } from '../types';
 
 export type AcpAgentId = 'hermes' | 'cursor' | 'openclaw';
@@ -75,6 +76,7 @@ export class AcpAdapter implements ExternalAgentAdapter {
     const command = this.resolve();
     if (!command) return { upstreamSessionId: upstream, status: 'failed', finalText: '', error: `${this.name} is not installed.` };
     let stopTimer: ReturnType<typeof setTimeout> | undefined;
+    const noteFiles = createAcpFileTracker();
     const client = this.client(command, {
       cwd: input.cwd,
       onExit: () => lifetime.abort(),
@@ -82,6 +84,9 @@ export class AcpAdapter implements ExternalAgentAdapter {
         if (!acceptingUpdates || params?.sessionId !== upstream || method !== 'session/update') return;
         const update = params.update;
         if (!update) return;
+        // Edits the agent reports as done build the end-of-turn file card.
+        const touched = noteFiles(update);
+        if (touched.length) input.emit({ type: 'file_change', files: touched });
         if (update.sessionUpdate === 'agent_message_chunk' && update.content?.type === 'text') {
           text += update.content.text; input.emit({ type: 'text_delta', text: update.content.text });
         } else if (update.sessionUpdate === 'agent_thought_chunk' && update.content?.type === 'text') {

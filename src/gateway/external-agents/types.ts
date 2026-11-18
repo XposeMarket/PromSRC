@@ -59,6 +59,13 @@ export interface ExternalAgentSnapshot {
 
 export type ExternalItemKind = 'command' | 'file_change' | 'mcp_tool' | 'web_search' | 'plan' | 'other';
 
+/** A file the agent reports it changed. `diff` holds the changed lines when the agent supplied them. */
+export interface ExternalFileTouch {
+  path: string;
+  status?: 'added' | 'modified' | 'deleted';
+  diff?: string;
+}
+
 export type ExternalAgentEvent =
   | { type: 'state'; phase: 'starting' | 'resuming' | 'running' }
   | { type: 'text_delta'; text: string }
@@ -68,6 +75,8 @@ export type ExternalAgentEvent =
   /** output = the tool's own result text, shown where native tool output shows. */
   | { type: 'item_completed'; itemId: string; kind: ExternalItemKind; ok: boolean; summary: string; exitCode?: number; title?: string; output?: string }
   | { type: 'usage'; usedTokens?: number; maxTokens?: number }
+  /** File edits that finished without error: they build the end-of-turn file card. */
+  | { type: 'file_change'; files: ExternalFileTouch[] }
   | { type: 'notice'; text: string };
 
 export type ExternalRequestKind = 'command' | 'file_change' | 'permissions' | 'question' | 'plan' | 'other';
@@ -83,6 +92,7 @@ export interface ExternalUserRequest {
     command?: string;
     cwd?: string;
     reason?: string;
+    preview?: string;
     files?: string[];
     /** Permission cards: every item an Allow button would grant, one readable line each. */
     grants?: string[];
@@ -132,6 +142,7 @@ export interface ExternalTurnResult {
   finalText: string;
   error?: string;
   model?: string;
+  fallbackModel?: string;
   /** The stored upstream session could not be found on resume. */
   upstreamMissing?: boolean;
   /** Called once the chat has saved this turn's reply to disk. Adapters that mirror an outside conversation mark their messages handled here. */

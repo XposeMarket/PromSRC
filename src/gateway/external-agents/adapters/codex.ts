@@ -15,6 +15,7 @@ import path from 'path';
 import { JsonRpcStdioClient, type JsonRpcServerRequest } from '../jsonrpc-stdio';
 import { codexItemToNative } from '../native-tool-map';
 import { compareVersions, readProgramVersion, resolveCodexCommand, type ResolvedCommand } from '../executable';
+import { codexFileTouches } from '../file-touches';
 import {
   sanitizeAgentText,
   type ExternalAgentAdapter,
@@ -362,6 +363,10 @@ export class CodexAdapter implements ExternalAgentAdapter {
         if (delta) ctx.emit({ type: 'reasoning_delta', text: delta });
         return;
       }
+      case 'item/reasoning/summaryPartAdded':
+        // A new section of the reasoning summary: keep the sections apart in the stream.
+        if (Number(params?.summaryIndex) > 0) ctx.emit({ type: 'reasoning_delta', text: '\n\n' });
+        return;
       case 'item/commandExecution/outputDelta': {
         const itemId = short(params?.itemId, 300);
         if (itemId) ctx.outputTail.set(itemId, `${ctx.outputTail.get(itemId) || ''}${String(params?.delta ?? '')}`.slice(-2000));
@@ -458,6 +463,8 @@ export class CodexAdapter implements ExternalAgentAdapter {
       detail = files.slice(0, 20).join('\n');
       ok = !['failed', 'declined'].includes(String(item.status));
       summary = ok ? (files.slice(0, 5).join(', ') || 'Done') : `Status: ${short(item.status, 40)}`;
+      // What Codex reports it applied builds the end-of-turn file card.
+      if (completed && ok) ctx.emit({ type: 'file_change', files: codexFileTouches(item) });
     } else if (type === 'mcpToolCall' || type === 'dynamicToolCall') {
       kind = 'mcp_tool';
       title = `Used ${short([item.server || item.namespace, item.tool].filter(Boolean).join(' / '), 120) || 'a tool'}`;
@@ -584,11 +591,11 @@ export class CodexAdapter implements ExternalAgentAdapter {
     this.busy += 1;
     try {
       const client = await this.controlClient();
-      const models: Array<{ id: string; label: string; efforts: string[] }> = [];
+      const models: Array<{ id: string; label: string; efforts: string[]; isDefault: boolean }> = [];
       let cursor: string | undefined;
       for (let page = 0; page < 10; page++) {
         const response = await client.request('model/list', { limit: 100, ...(cursor ? { cursor } : {}) }, this.timeoutMs);
-        for (const item of response?.data || []) if (!item.hidden && typeof item.model === 'string') models.push({ id: item.model, label: String(item.displayName || item.model), efforts: (item.supportedReasoningEfforts || []).map((e: { reasoningEffort: string }) => e.reasoningEffort) });
+        for (const item of response?.data || []) if (!item.hidden && typeof item.model === 'string') models.push({ id: item.model, label: String(item.displayName || item.model), efforts: (item.supportedReasoningEfforts || []).map((e: { reasoningEffort: string }) => e.reasoningEffort), isDefault: item.isDefault === true });
         cursor = response?.nextCursor || undefined;
         if (!cursor) break;
       }
@@ -636,58 +643,16 @@ export class CodexAdapter implements ExternalAgentAdapter {
       if (input.signal.aborted) return { upstreamSessionId: threadId, status: 'interrupted', finalText: '' };
       input.emit({ type: 'state', phase: 'running' });
       const text = sanitizeAgentText(input.text);
-      const boundThreadId = threadId;
-      return await new Promise<ExternalTurnResult>((resolve) => {
-        const requestLifetime = new AbortController();
-        const onAbort = () => { requestLifetime.abort(); this.interrupt(ctx); };
-        const ctx: TurnContext = {
-          threadId: boundThreadId,
-          runtime: held,
-          turnId: '',
-          emit: input.emit,
-          requestUser: input.requestUser,
-          signal: requestLifetime.signal,
-          messageOrder: [],
-          messageText: new Map(),
-          outputTail: new Map(),
-          fileChangePaths: new Map(),
-          startedItems: new Set(),
-          runningCommands: new Set(),
-          endAfterStop: false,
-          planCount: 0,
-          lastError: '',
-          done: false,
-          interruptSent: false,
-          graceTimer: null,
-          finish: (status, error) => {
-            if (ctx.done) return;
-            ctx.done = true;
-            requestLifetime.abort();
-            if (ctx.graceTimer) clearTimeout(ctx.graceTimer);
-            this.turns.delete(boundThreadId);
-            input.signal.removeEventListener('abort', onAbort);
-            resolve({
-              upstreamSessionId: boundThreadId,
-              ...(ctx.turnId ? { upstreamTurnId: ctx.turnId } : {}),
-              status,
-              finalText: this.finalText(ctx),
-              ...(error ? { error: short(error) } : {}),
-              ...(model ? { model } : {}),
-            });
-          },
-        };
-        this.turns.set(boundThreadId, ctx);
-        input.signal.addEventListener('abort', onAbort, { once: true });
-        client.request('turn/start', { threadId: boundThreadId, ...(input.model ? { model: input.model } : {}), ...(input.effort ? { effort: input.effort } : {}), input: [{ type: 'text', text, text_elements: [] }] }, this.timeoutMs)
-          .then((res: any) => {
-            // The turn/start answer is authoritative for which turn is ours.
-            const turnId = short(res?.turn?.id, 300);
-            if (turnId && !ctx.done) this.adoptTurnId(ctx, turnId);
-            if (input.signal.aborted) this.interrupt(ctx);
-          })
-          .catch((error: any) => ctx.finish(input.signal.aborted ? 'interrupted' : 'failed', short(error?.message || error)));
-        if (input.signal.aborted) onAbort();
-      });
+      const first = await this.sendTurn(input, held, threadId, text, { startModel: input.model, reportModel: model });
+      // Codex's own configured model can be one this Codex build refuses. Retry once, in the same thread, with a model
+      // Codex lists, but only when the user has not picked a model and nothing from this attempt reached them.
+      if (input.model || first.result.status !== 'failed' || first.touched || input.signal.aborted || !/\bmodel\b.*\bnot supported\b/i.test(first.result.error || '')) return first.result;
+      const fallback = await this.listedFallbackModel(input.cwd);
+      if (!fallback) return first.result;
+      input.emit({ type: 'notice', text: `Codex's configured model isn't available in this Codex version, so this chat is using ${fallback.label}. Update Codex or pick a model to change it.` });
+      const retry = await this.sendTurn(input, held, threadId, text, { startModel: fallback.id, reportModel: fallback.id });
+      if (retry.result.status === 'failed') return first.result;
+      return retry.result.status === 'completed' ? { ...retry.result, fallbackModel: fallback.id } : retry.result;
     } catch (error: any) {
       return {
         upstreamSessionId: threadId,
@@ -702,6 +667,93 @@ export class CodexAdapter implements ExternalAgentAdapter {
       this.scheduleIdle();
     }
   }
+
+  /** The model Codex marks as its default, else the first one listed. Undefined when the list is empty or unreadable. */
+  private async listedFallbackModel(cwd: string): Promise<{ id: string; label: string } | undefined> {
+    try {
+      const catalog = await this.listModels({ cwd });
+      const entry = catalog.models.find((item) => item.isDefault) || catalog.models[0];
+      return entry ? { id: entry.id, label: entry.label } : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * One turn/start on an already bound thread. `touched` becomes true once anything from this attempt
+   * reached the user (text, reasoning, an item, or a request for the user), which rules out a silent retry.
+   */
+  private sendTurn(
+    input: ExternalTurnInput,
+    held: Runtime,
+    threadId: string,
+    text: string,
+    models: { startModel?: string; reportModel?: string },
+  ): Promise<{ result: ExternalTurnResult; touched: boolean }> {
+    let touched = false;
+    const boundThreadId = threadId;
+    return new Promise((resolve) => {
+      const requestLifetime = new AbortController();
+      const onAbort = () => { requestLifetime.abort(); this.interrupt(ctx); };
+      const ctx: TurnContext = {
+        threadId: boundThreadId,
+        runtime: held,
+        turnId: '',
+        emit: (event) => {
+          if (event.type === 'text_delta' || event.type === 'reasoning_delta' || event.type === 'item_started' || event.type === 'item_completed') touched = true;
+          input.emit(event);
+        },
+        requestUser: (...args: Parameters<ExternalTurnInput['requestUser']>) => {
+          touched = true;
+          return input.requestUser(...args);
+        },
+        signal: requestLifetime.signal,
+        messageOrder: [],
+        messageText: new Map(),
+        outputTail: new Map(),
+        fileChangePaths: new Map(),
+        startedItems: new Set(),
+        runningCommands: new Set(),
+        endAfterStop: false,
+        planCount: 0,
+        lastError: '',
+        done: false,
+        interruptSent: false,
+        graceTimer: null,
+        finish: (status, error) => {
+          if (ctx.done) return;
+          ctx.done = true;
+          requestLifetime.abort();
+          if (ctx.graceTimer) clearTimeout(ctx.graceTimer);
+          this.turns.delete(boundThreadId);
+          input.signal.removeEventListener('abort', onAbort);
+          resolve({
+            touched,
+            result: {
+              upstreamSessionId: boundThreadId,
+              ...(ctx.turnId ? { upstreamTurnId: ctx.turnId } : {}),
+              status,
+              finalText: this.finalText(ctx),
+              ...(error ? { error: short(error) } : {}),
+              ...(models.reportModel ? { model: models.reportModel } : {}),
+            },
+          });
+        },
+      };
+      this.turns.set(boundThreadId, ctx);
+      input.signal.addEventListener('abort', onAbort, { once: true });
+      held.client.request('turn/start', { threadId: boundThreadId, ...(models.startModel ? { model: models.startModel } : {}), ...(input.effort ? { effort: input.effort } : {}), input: [{ type: 'text', text, text_elements: [] }] }, this.timeoutMs)
+        .then((res: any) => {
+          // The turn/start answer is authoritative for which turn is ours.
+          const turnId = short(res?.turn?.id, 300);
+          if (turnId && !ctx.done) this.adoptTurnId(ctx, turnId);
+          if (input.signal.aborted) this.interrupt(ctx);
+        })
+        .catch((error: any) => ctx.finish(input.signal.aborted ? 'interrupted' : 'failed', short(error?.message || error)));
+      if (input.signal.aborted) onAbort();
+    });
+  }
+
 
   /**
    * Stop: `turn/interrupt` to Codex, keep what streamed, wait briefly for Codex's own turn/completed.

@@ -1,5 +1,5 @@
 import assert from 'assert';
-import { ClaudeCodeAdapter } from './adapters/claude-code';
+import { ClaudeCodeAdapter, claudeRequestCard } from './adapters/claude-code';
 async function main() {
   const command = { command: '/fixture/claude', args: [], source: '/fixture/claude' };
   const inputs: any[] = [];
@@ -48,6 +48,21 @@ async function main() {
   // Import the installed real SDK without invoking query or launching the CLI.
   const load = new Function('return import("@prometheus/claude-driver")');
   assert.equal(typeof (await load()).createQuery, 'function');
+  // Request cards show the real file and content, never raw JSON.
+  const writePath = 'C:\\Users\\me\\My  Notes\\a.txt';
+  const write = claudeRequestCard('Write', { file_path: writePath, content: 'hello' }, '/fixture');
+  assert.equal(write.detail.files?.[0], writePath);
+  assert.ok(!JSON.stringify(write.detail).includes('\\\\\\\\'), 'no four backslashes in a row');
+  assert.equal(write.detail.reason, undefined);
+  assert.equal(write.detail.preview, 'hello');
+  assert.equal(claudeRequestCard('Edit', { file_path: 'f', old_string: 'a\nb', new_string: 'c' }, '/fixture').detail.preview, '- a\n- b\n+ c');
+  assert.equal(claudeRequestCard('Mystery', { query: 'x', limit: 3 }, '/fixture').detail.preview, 'query: x\nlimit: 3');
+  const long = claudeRequestCard('Write', { file_path: 'f', content: 'x'.repeat(5000) }, '/fixture');
+  assert.ok(long.detail.preview?.endsWith('… (showing the first 2,000 of 5,000 characters)'));
+  assert.ok(long.detail.preview?.startsWith('x'.repeat(2000)));
+  const bash = claudeRequestCard('Bash', { command: 'ls', description: 'List files' }, '/fixture');
+  assert.equal(bash.kind, 'command'); assert.equal(bash.detail.command, 'ls'); assert.equal(bash.detail.reason, 'List files');
+
   console.log('claude-code regression: ok (fake SDK; real SDK module load only)');
 }
 main().catch((error) => { console.error(error); process.exitCode = 1; });
