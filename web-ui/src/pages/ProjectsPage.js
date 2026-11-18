@@ -935,6 +935,10 @@ async function loadProjectEditors(projectId) {
   const project = _projects.find(p => p.id === projectId);
   if (!project) return;
 
+  // A folder editor left open belongs to the project that was showing before: close it.
+  const folderEditor = document.getElementById('project-folder-editor');
+  if (folderEditor) { folderEditor.hidden = true; folderEditor.innerHTML = ''; }
+
   const instrTA = document.getElementById('proj-instructions-ta');
   const memTA = document.getElementById('proj-memory-ta');
   const workspaceName = document.getElementById('project-workspace-name');
@@ -1002,6 +1006,8 @@ window.editProjectFolder = function() {
   host.querySelector('[data-folder-cancel]').addEventListener('click', closeEditor);
   host.querySelector('[data-folder-save]').addEventListener('click', async (event) => {
     const saveBtn = event.currentTarget;
+    // Never save into a project that is no longer the one on screen.
+    if (document.body.dataset.projectId !== projectId) { closeEditor(); return; }
     saveBtn.disabled = true;
     errorEl.hidden = true;
     try {

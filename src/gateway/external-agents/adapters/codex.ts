@@ -117,6 +117,10 @@ export class CodexAdapter implements ExternalAgentAdapter {
 
   private client: JsonRpcStdioClient | null = null;
   private starting: Promise<JsonRpcStdioClient> | null = null;
+  /** A forced stop in progress; nothing new starts until it settles. */
+  private stopping: Promise<boolean> | null = null;
+  /** An app-server whose forced stop could not be confirmed. */
+  private stuck: JsonRpcStdioClient | null = null;
   private loadedThreads = new Set<string>();
   private turns = new Map<string, TurnContext>();
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -156,6 +160,14 @@ export class CodexAdapter implements ExternalAgentAdapter {
 
   private async ensureClient(): Promise<JsonRpcStdioClient> {
     this.clearIdle();
+    if (this.client?.alive) return this.client;
+    // A forced stop is still ending the old app-server: nothing new starts until it is confirmed gone.
+    if (this.stopping) await this.stopping;
+    if (this.stuck) {
+      const gone = await this.stuck.stop(3000, { tree: true }).catch(() => false);
+      if (!gone) throw new Error('Codex did not stop when asked, so Prometheus will not start another one beside it. End the Codex process on this computer or restart Prometheus, then send the message again.');
+      this.stuck = null;
+    }
     if (this.client?.alive) return this.client;
     if (this.starting) return this.starting;
     this.starting = (async () => {
@@ -623,7 +635,13 @@ export class CodexAdapter implements ExternalAgentAdapter {
       // Other chats share this app-server. Their turns end with a plain reason instead of hanging.
       for (const other of [...this.turns.values()]) other.finish('failed', 'Codex did not confirm a stop request, so Prometheus restarted it. Send the message again.');
     }
-    void client.stop().catch(() => undefined);
+    // The commands Codex started go with it, and the next message waits until the old process is confirmed gone.
+    const stopping: Promise<boolean> = client.stop(3000, { tree: true }).catch(() => false).then((gone) => {
+      if (!gone) this.stuck = client;
+      if (this.stopping === stopping) this.stopping = null;
+      return gone;
+    });
+    this.stopping = stopping;
   }
 
   private finalText(ctx: TurnContext): string {
@@ -690,9 +708,11 @@ function describePermissionGrant(requested: unknown): { lines: string[]; complet
       }
       return;
     }
+    // Shown exactly as Codex sent it. A value that is too long, has line breaks or control characters, or
+    // starts or ends with spaces cannot be shown faithfully, so that request can only be declined.
     const text = String(value);
-    if (text.length > 400) complete = false;
-    add(`${label}: ${short(text, 400)}`);
+    if (text.length > 400 || text !== text.trim() || /[\u0000-\u001f\u007f]/.test(text)) complete = false;
+    add(`${label}: ${text.slice(0, 400)}`);
   };
   walk(requested, '', 0);
   return { lines, complete };
