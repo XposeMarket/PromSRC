@@ -4215,7 +4215,9 @@ handleTrustedMain('owner-consent:request', async (_event, payload = {}) => {
   const routePath = String(payload?.path || '');
   const body = typeof payload?.body === 'string' ? payload.body : '';
   if (Buffer.byteLength(body, 'utf8') > 32 * 1024) throw new Error('Approval request is too large.');
-  if (!/^\/api\/secure-access\//.test(routePath)) throw new Error('This action does not use owner approval.');
+  // Plugin setup uses the same native human challenge. Pairing has its own IPC.
+  const pluginSetup = /^\/api\/(?:connection-attempts\/[A-Za-z0-9_-]+\/connect|connection-secure-input\/[A-Za-z0-9_-]+)$/.test(routePath);
+  if (!pluginSetup && !/^\/api\/secure-access\//.test(routePath)) throw new Error('This action does not use owner approval.');
   const header = await ownerConsent.request({ method, path: routePath, body, detail: String(payload?.detail || '') });
   return header ? { approved: true, header } : { approved: false };
 });
@@ -4444,6 +4446,12 @@ function createWindow() {
 
   Menu.setApplicationMenu(null);
   const ownerWindow = mainWindow;
+  // Native edit command: never read the clipboard into the renderer bridge or the model.
+  ownerWindow.webContents.on('context-menu', (_event, params) => {
+    if (params.isEditable && params.formControlType === 'input-password' && params.editFlags.canPaste) {
+      Menu.buildFromTemplate([{ role: 'paste' }]).popup({ window: ownerWindow });
+    }
+  });
   installSecureAccessOwnerCookie(ownerWindow).finally(() => {
     if (ownerWindow && !ownerWindow.isDestroyed()) ownerWindow.loadURL(GATEWAY_URL);
   });
