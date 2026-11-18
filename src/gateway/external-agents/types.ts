@@ -73,6 +73,7 @@ export interface ExternalUserRequest {
     command?: string;
     cwd?: string;
     reason?: string;
+    preview?: string;
     files?: string[];
     /** Permission cards: every item an Allow button would grant, one readable line each. */
     grants?: string[];

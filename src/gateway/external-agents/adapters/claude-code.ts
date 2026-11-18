@@ -5,6 +5,76 @@ import path from 'path';
 import { findOnPath, resolveFromCandidates, type ResolvedCommand } from '../executable';
 import type { ExternalAgentAdapter, ExternalAgentCapabilities, ExternalTurnInput, ExternalTurnResult, ExternalAgentVerifyResult } from '../types';
 
+export interface ClaudeRequestCard {
+  kind: 'command' | 'permissions';
+  title: string;
+  detail: { cwd: string; command?: string; reason?: string; files?: string[]; preview?: string };
+}
+const PREVIEW_LIMIT = 2000;
+function textOf(value: unknown): string | undefined { return typeof value === 'string' && value.length > 0 ? value : undefined; }
+function rawText(value: unknown): string { return typeof value === 'string' ? value : (JSON.stringify(value) ?? ''); }
+function editBlock(oldText: string, newText: string): string {
+  return [...oldText.split('\n').map((line) => `- ${line}`), ...newText.split('\n').map((line) => `+ ${line}`)].join('\n');
+}
+function capPreview(text: string): string {
+  if (text.length <= PREVIEW_LIMIT) return text;
+  return `${text.slice(0, PREVIEW_LIMIT)}\n… (showing the first 2,000 of ${text.length.toLocaleString('en-US')} characters)`;
+}
+/** Builds the user-facing permission card for one Claude Code tool request. Never echoes raw JSON. */
+export function claudeRequestCard(name: string, args: Record<string, unknown>, cwd: string): ClaudeRequestCard {
+  const detail: ClaudeRequestCard['detail'] = { cwd };
+  let kind: ClaudeRequestCard['kind'] = 'permissions';
+  let title = `Claude Code wants to use ${name}`;
+  const filePath = textOf(args.file_path);
+  if (name === 'Bash' || name === 'PowerShell') {
+    kind = 'command';
+    title = 'Claude Code wants to run a command';
+    detail.command = String(args.command || '');
+    const description = textOf(args.description);
+    if (description !== undefined) detail.reason = description;
+  } else if (name === 'Write') {
+    title = 'Claude Code wants to write a file';
+    if (filePath !== undefined) detail.files = [filePath];
+    detail.preview = rawText(args.content);
+  } else if (name === 'Edit') {
+    title = 'Claude Code wants to edit a file';
+    if (filePath !== undefined) detail.files = [filePath];
+    detail.preview = editBlock(rawText(args.old_string), rawText(args.new_string));
+    if (args.replace_all === true) detail.reason = 'Replaces every occurrence.';
+  } else if (name === 'MultiEdit') {
+    title = 'Claude Code wants to edit a file';
+    if (filePath !== undefined) detail.files = [filePath];
+    const edits: unknown[] = Array.isArray(args.edits) ? args.edits : [];
+    detail.preview = edits.map((item) => {
+      const edit: Record<string, unknown> = typeof item === 'object' && item !== null ? (item as Record<string, unknown>) : {};
+      return editBlock(rawText(edit.old_string), rawText(edit.new_string));
+    }).join('\n\n');
+  } else if (name === 'NotebookEdit') {
+    title = 'Claude Code wants to edit a notebook';
+    const notebookPath = textOf(args.notebook_path);
+    if (notebookPath !== undefined) detail.files = [notebookPath];
+    detail.preview = rawText(args.new_source);
+  } else if (['Read', 'Glob', 'Grep', 'LS'].includes(name)) {
+    title = 'Claude Code wants to read files';
+    const target = filePath ?? textOf(args.path);
+    if (target !== undefined) detail.files = [target];
+    const pattern = textOf(args.pattern);
+    if (pattern !== undefined) detail.reason = `Pattern: ${pattern}`;
+  } else if (name === 'WebFetch') {
+    title = 'Claude Code wants to open a web page';
+    const url = textOf(args.url);
+    if (url !== undefined) detail.reason = url;
+  } else if (name === 'WebSearch') {
+    title = 'Claude Code wants to search the web';
+    const query = textOf(args.query);
+    if (query !== undefined) detail.reason = query;
+  } else {
+    detail.preview = Object.entries(args).map(([key, value]) => `${key}: ${rawText(value)}`).join('\n');
+  }
+  if (detail.preview !== undefined) detail.preview = capPreview(detail.preview);
+  return { kind, title, detail };
+}
+
 // Use native import at runtime: the SDK is ESM, while the gateway is CommonJS.
 const importDriver = new Function('return import("@prometheus/claude-driver")') as () => Promise<{ createQuery: (input: any) => any }>;
 const CAPS: ExternalAgentCapabilities = { resume: true, interrupt: true, approvals: true, images: false, modelList: true };
@@ -108,9 +178,10 @@ export class ClaudeCodeAdapter implements ExternalAgentAdapter {
             id: String(i), prompt: String(q.question || ''), multi: !!q.multiSelect,
             options: (q.options || []).map((o: any) => ({ id: String(o.label), label: String(o.label) })),
           })) : undefined;
-          const answer = await input.requestUser({ kind: questions ? 'question' : name === 'Bash' ? 'command' : 'permissions',
-            title: questions ? 'Claude Code has a question' : `Claude Code: ${name}`,
-            detail: { cwd: input.cwd, ...(name === 'Bash' ? { command: String(args.command || '') } : { reason: detailText }), ...(questions ? { questions } : {}) },
+          const card = claudeRequestCard(name, args, input.cwd);
+          const answer = await input.requestUser({ kind: questions ? 'question' : card.kind,
+            title: questions ? 'Claude Code has a question' : card.title,
+            detail: questions ? { cwd: input.cwd, questions } : card.detail,
             options: questions ? [{ id: 'answer', label: 'Send answer', kind: 'answer' }, { id: 'deny', label: 'Cancel', kind: 'deny' }] : [{ id: 'allow', label: 'Allow once', kind: 'allow_once' }, { id: 'deny', label: 'Deny', kind: 'deny' }],
           }, { signal: abort.signal, cancelResponse: { optionId: 'deny' } });
           if (abort.signal.aborted || !['allow', 'answer'].includes(answer.optionId)) return { behavior: 'deny', message: 'Denied by the user or the turn ended.' };
