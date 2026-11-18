@@ -182,6 +182,8 @@ jobs:
         run: node scripts/test-dynamic-require-paths.mjs
       - name: Verify web UI architecture guardrails
         run: node scripts/test-web-ui-architecture-guardrails.mjs
+      - name: Verify mobile tool-progress pill clears and retires
+        run: node scripts/test-mobile-tool-progress-state.mjs
       - name: Verify mobile agent activity presentation
         run: npm run test:mobile-agent-activity
       - name: Verify shared chat core contract

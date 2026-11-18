@@ -6713,7 +6713,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
         _collectMediaFromToolEvent(aiTurn, evt);
         _appendMobileProcess(aiTurn, evt.error ? 'error' : 'result', `${label}${result ? ` -> ${result}` : ' complete'}`, evt);
         _applyMobileToolActivity(aiTurn, 'result', evt);
-        if (_clearMobileToolProgress(requestedSession, String(evt.action || evt.name || evt.toolName || ''))) {
+        if (_clearMobileToolProgress(requestedSession, String(evt.action || evt.name || evt.toolName || ''), String(evt.toolCallId || evt.tool_call_id || ''))) {
           _renderMobileToolProgressDock(toolProgressDock, requestedSession);
         }
         renderStreamingThreadNow();
