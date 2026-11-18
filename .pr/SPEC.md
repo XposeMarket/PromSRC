@@ -1,29 +1,40 @@
-# OAuth pending action and phone completion repair
-Tier: 1; explicit live-fix authorization and separate review waiver in this incident.
-Surface: both
-Parity: shared module: web-ui/src/features/connectors/connect-flow.js:92 shared controller and backend; mobile uses existing secure browser viewer, desktop retains external-browser flow. Real Chromium tests at desktop1440/mobile390.
-Size justification: one bounded end-to-end authorization repair requires shared controller, existing viewer, route helper, two regression tests and docs.
-## Problem
-Saved credentials lost pending action after poll. After that fix, mobile still suppresses loopback authorization and sends user to PC.
-## Chosen approach
-Retain/recover pending action; wire mobile loopback connector OAuth to the existing in-house login handoff with paired/native-owner checks and server-derived browser identity/URL. Recheck exact attempt on viewer return, keep secrets DOM-only. No public callback or redirect config changes.
-## Files
-- src/connections/runtime.ts
-- scripts/test-connection-runtime-identity.cjs
-- .pr/SPEC.md
-- src/connections/adapters/connector-oauth.ts
-- src/connections/oauth-phone-handoff.ts
-- src/gateway/routes/connections-v2.router.ts
-- web-ui/src/features/connectors/connect-flow.js
-- web-ui/src/mobile/mobile-login-handoff.js
-- scripts/test-plugin-quick-connect.cjs
-- scripts/test-oauth-phone-handoff.cjs
-- workspace/self/12-connectors-mcp-integrations.md
-## Acceptance
-Test: node --import tsx scripts/test-connection-runtime-identity.cjs && node scripts/test-oauth-phone-handoff.cjs && node scripts/test-plugin-quick-connect.cjs
-Actual shared form -> save -> pending polls -> phone viewer -> provider callback -> connected; close/reopen without key reentry; desktop unchanged. Reject unpaired/spoofed/expired/terminal/wrong-adapter handoffs; no caller URL/session override. Build/UI checks plus live browser readiness. Synthetic test provider is not real X consent.
-## Risks
-OAuth user consent still required by X; do not claim account connection until live status says connected. In-house Electron bridge required, fail clearly if unavailable. Preserve existing user approval and callback state/PKCE validation. Rollback only this branch's changed files, preserving other live hotfixes.
+# SPEC: rounds that ran as one parallel batch are not idle rounds
 
-## Scope notes
-Folded PR860 runtime identity hotfix already on live into this branch to eliminate docs/spec collision. Runtime code unchanged from deployed version. Both previous repairs remain available as standalone PRs; no merge performed.
+Tier: 1 + review (fix inside a sensitive area: core chat engine)
+Surface: backend
+Parity: n/a (shared turn loop, every surface, model and agent type uses it)
+Test: npx tsx src/testing/replay/idle-round-ceiling.regression.ts
+
+## Problem
+The idle-round ceiling ends a turn after 8 consecutive rounds in which the runtime dispatched no tool. When every call in a round is parallel-safe, the whole round runs up front as one batch (`handle-chat.ts` `if (canRunParallelBatch)`), which increments `toolDispatchCount`. The round-start snapshot `toolDispatchCountAtRoundStart` was taken after that batch, and the ordered loop then reuses the batch results without dispatching again. So the counter equals the snapshot and the round is counted as idle even though every call ran.
+
+Evidence, 2026-11-10: background agent bg_fe35a9f2 (Haiku 5.5) ran 8 rounds of batched reads, 21 calls, 20 results, and was ended with "the model kept requesting calls that were not run (8 rounds in a row)". A second agent was cut off the same way mid-fix. Agents are told to batch independent reads, so this hits well-behaved turns.
+
+## Existing code
+- `src/gateway/routes/chat/pipeline/handle-chat.ts`: counter declared near line 1011, incremented in `executeToolWithTelemetry`, compared after the ordered loop.
+- `src/gateway/chat/tool-dispatch-policy.ts`: `resolveIdleRoundLimit`, default 8.
+- `src/testing/replay/scenarios.ts`: `runaway-turn-has-a-ceiling` covers the ceiling itself. No scenario covers consecutive fully parallel rounds.
+
+## Options
+1. Take the snapshot before the up-front parallel batch (2 lines moved). Smallest, fully works.
+2. Track "round dispatched" as a boolean set in every dispatch path. More code, same result.
+3. Raise the limit. Does not fix it.
+
+## Chosen approach
+Option 1.
+
+## Acceptance
+- 10 consecutive rounds of two parallel-safe calls each all run, and the turn ends with the model's final text.
+- A model repeating a blocked call is still stopped by the ceiling (`runaway-turn-has-a-ceiling` unchanged and passing).
+
+## Out of scope
+The limit value, the cut-off message, lazy parallel groups (already counted: they dispatch inside the ordered loop, after the snapshot).
+
+## Files
+- `src/gateway/routes/chat/pipeline/handle-chat.ts` - move the snapshot above the parallel batch
+- `src/testing/replay/scenarios.ts` - new contract scenario `parallel-rounds-are-not-idle` (also runs in `npm run test:replay`)
+- `src/testing/replay/idle-round-ceiling.regression.ts` - runs both polarities: the new scenario and `runaway-turn-has-a-ceiling`
+- `package.json` - `test:idle-round-ceiling` script
+
+## Risks
+A round is now idle only if nothing was dispatched in either path, which is what the comment at the comparison already says. Rollback: revert the commit.
