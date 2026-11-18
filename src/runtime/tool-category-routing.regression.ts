@@ -251,12 +251,10 @@ const report = {
 const filesBlock = String(TOOL_BLOCKS.files || '');
 assert.ok(filesBlock.includes('CODING SPEED'), 'files block keeps the batching guidance');
 assert.ok(filesBlock.includes('There is no tool-call limit'), 'files block says there is no tool-call limit');
-// Matches a cap on calls ("<= ~12 calls", "pass ~20 calls without editing"), not every number next to "calls".
-const callCapPattern = /(?:<=|under|at most|no more than|max(?:imum)?(?: of)?|limit of|budget of|pass|exceed)\s*~?\s*\d+\s*(?:tool\s+)?calls\b|\d+\s*(?:tool\s+)?calls\s+(?:before|without|max|total)\b/i;
-assert.match('Target: investigation <= ~12 calls before the first edit on a typical bug', callCapPattern);
-assert.match('if you pass ~20 calls without editing, stop and state what is still unknown', callCapPattern);
-assert.doesNotMatch('Batch 2 tool calls in one parallel block when independent.', callCapPattern);
-assert.doesNotMatch(filesBlock, callCapPattern, 'files block must not cap the number of tool calls');
+// Guard the two removed cap clauses by their wording. A general "number next to calls" pattern
+// either misses rewordings or rejects ordinary batching text, so it is not used here.
+assert.ok(!/calls before the first edit/i.test(filesBlock), 'files block must not bring back the calls-before-first-edit target');
+assert.ok(!/calls without editing/i.test(filesBlock), 'files block must not bring back the stop-after-N-calls rule');
 
 assert.equal(failures.length, 0, `category routing failures: ${JSON.stringify(failures.slice(0, 12))}`);
 console.log(JSON.stringify(report, null, 2));

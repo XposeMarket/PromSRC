@@ -5,7 +5,7 @@ description: "Default coding workflow for Prometheus main chat and every coding 
 
 # Fast Coding Loop (default coding workflow)
 
-Every tool call is a full model round trip that re-sends the whole prompt (often 5-15 s each). A 120-call investigation is 10-20 minutes no matter how small each read is. Avoid wasted calls by batching, rather than making each call small.
+Every tool call is a full model round trip that re-sends the whole prompt, so wasted calls add up. Avoid them by batching, rather than making each call small.
 
 ## No call limit
 - There is no tool-call limit, for main chat or for any agent. Use as many calls as the task needs to finish it and verify it. Never stop early, cut scope, or skip verification to stay under a call count.
