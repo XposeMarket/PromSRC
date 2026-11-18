@@ -123,6 +123,7 @@ export async function handleMiscTool(ctx: handleMiscToolContext): Promise<Awaite
 
       case 'apply_workspace_patchset': {
         args = normalizeWorkspacePatchsetArgs(args);
+        if (args.dry_run === true || args.check === true) return { name, args, result: 'No files changed: patchset has no dry run. Use preview_patch with a unified diff.', error: true };
         ctx.updateArgs(args);
         const patchEdits = Array.isArray(args.edits) ? args.edits : [];
         if (!patchEdits.length) return { name, args, result: 'edits array is required and must not be empty', error: true };
@@ -518,7 +519,7 @@ export async function handleMiscTool(ctx: handleMiscToolContext): Promise<Awaite
               continue;
             }
             delegatedTool = isWebUi ? 'read_webui_source' : 'read_source';
-            const readArgs: any = { file: sourceFile, max_lines: defaultLines };
+            const readArgs: any = { file: sourceFile, max_lines: Number(args.max_lines_per_file) || entry.num_lines || defaultLines };
             for (const key of ['start_line', 'num_lines', 'head', 'tail', 'full', 'allow_large']) {
               if (entry?.[key] !== undefined) readArgs[key] = entry[key];
             }
@@ -1618,8 +1619,8 @@ export async function handleMiscTool(ctx: handleMiscToolContext): Promise<Awaite
       case 'process_log': {
         const runId = String(args.runId || args.run_id || '').trim();
         if (!runId) return { name, args, result: 'runId is required', error: true };
-        const log = getProcessSupervisor().log(runId, Number(args.maxChars || args.max_chars || 120000));
-        return { name, args, result: log.combined || '(no output)', error: false };
+        const log = getProcessSupervisor().logPage(runId, Number(args.offset_bytes) || 0, Number(args.maxChars || args.max_chars) || 64000);
+        return { name, args, result: log || '(no output)', error: false };
       }
 
       case 'process_wait': {
@@ -1649,7 +1650,7 @@ export async function handleMiscTool(ctx: handleMiscToolContext): Promise<Awaite
         if (observation.kind === 'deadline') {
           const run = supervisor.get(runId);
           if (!run) return { name, args, result: `Process ${runId} is unavailable.`, error: true, extra: { runId, unavailable: true, waitMs } };
-          const tail = capCommandOutput(supervisor.log(runId).combined, { maxChars: args.maxChars ?? args.max_chars, runId });
+          const tail = capCommandOutput(supervisor.logPage(runId), { maxChars: args.maxChars ?? args.max_chars, runId });
           return {
             name, args,
             result: `${runId} is ${run?.state || 'running'} after ${Math.round(waitMs / 1000)}s.\n${tail || '(no output yet)'}\nUse process_status/process_log for progress or call process_wait again.`,
@@ -1663,7 +1664,7 @@ export async function handleMiscTool(ctx: handleMiscToolContext): Promise<Awaite
         return {
           name,
           args,
-          result: `${runId} [${outcome.label}]\n${capCommandOutput(output, { maxChars: args.maxChars ?? args.max_chars, runId }) || '(no output)'}`,
+          result: `${runId} [${outcome.label}]\n${capCommandOutput(output, { maxChars: args.maxChars ?? args.max_chars, runId }) + ((exit as any).stdoutTruncated || (exit as any).stderrTruncated ? `\n[Capture limited; full log: workspace_run(action:"log", runId:"${runId}", offset_bytes:0)]` : '') || '(no output)'}`,
           error: !outcome.ok,
           extra: {
             runId,

@@ -20,6 +20,10 @@ import { currentTrace } from '../gateway/observability/turn-trace';
 import type { LLMProvider } from '../providers/LLMProvider';
 import type { ModelStreamEvent } from '../providers/LLMProvider';
 export type { LLMProvider };
+
+// Keep native signatures, encrypted items and wire history out of transcripts,
+// prompt manifests, and providers that forward arbitrary message properties.
+const toolRoundReplay = new WeakMap<object, import('../providers/LLMProvider').ProviderReplay>();
 import {
   appendModelUsageEvent,
   estimateMessagesTokens,
@@ -284,7 +288,16 @@ export class OllamaClient {
     const cacheWorkload = (manifest?.runtimeRole && !['main', 'unknown'].includes(manifest.runtimeRole) ? manifest.runtimeRole : undefined)
       || (manifest?.executionMode !== 'interactive' ? manifest?.executionMode : undefined)
       || (/^(?:background_|subagent_|team_|cron_|heartbeat[_:-]|schedule[_:-])/i.test(session) ? 'background' : role);
-    const result = await this.callProviderChatRaw(activeProvider, messages, model, { ...options, cacheWorkload });
+    const providerMessages = messages.map(message => {
+      const replay = toolRoundReplay.get(message);
+      return replay?.provider === activeProvider.id && replay.model === model
+        ? { ...message, providerReplay: replay } : message;
+    });
+    const result = await this.callProviderChatRaw(activeProvider, providerMessages, model, { ...options, cacheWorkload });
+    if (result.message.providerReplay) {
+      toolRoundReplay.set(result.message, result.message.providerReplay);
+      delete result.message.providerReplay;
+    }
     const estimatedMessageInputTokens = estimateMessagesTokens(messages);
     const estimatedSystemPromptTokens = estimateMessagesTokens(messages.filter((message: any) => message?.role === 'system'));
     const estimatedConversationTokens = Math.max(0, estimatedMessageInputTokens - estimatedSystemPromptTokens);

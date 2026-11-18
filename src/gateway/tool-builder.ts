@@ -1307,6 +1307,7 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
           properties: {
             runId: { type: 'string', description: 'Process run id.' },
             maxChars: { type: 'number', description: 'Optional max characters to return.' },
+            offset_bytes: { type: 'number', description: 'Process log byte offset. Start at zero; use the returned next offset.' },
           },
         },
       },

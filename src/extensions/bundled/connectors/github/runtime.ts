@@ -177,10 +177,10 @@ const ext: PrometheusExtensionDefinition = {
     api.registerTool({
       name: 'connector_github_list_issues',
       description: '[GitHub] List issues for a repository.',
-      parameters: { type: 'object', required: ['owner', 'repo'], properties: { owner: { type: 'string', description: 'Repository owner (username or org)' }, repo: { type: 'string', description: 'Repository name' }, state: { type: 'string', enum: ['open', 'closed', 'all'], description: 'Filter by state (default: open)' }, per_page: { type: 'number', description: 'Number of issues (default: 30)' } } },
+      parameters: { type: 'object', required: ['owner', 'repo'], properties: { owner: { type: 'string', description: 'Repository owner (username or org)' }, repo: { type: 'string', description: 'Repository name' }, state: { type: 'string', enum: ['open', 'closed', 'all'], description: 'Filter by state (default: open)' }, per_page: { type: 'number', description: 'Issues per page (default: 30, max: 100)' }, page: { type: 'number', description: 'Page number, starting at 1 (default: 1)' } } },
       connectorId: ID, capability: 'code-hosting',
       execute: (args: any) => withConn(async (c) => {
-        const issues = await c.listIssues(args.owner, args.repo, args.state || 'open', args.per_page || 30);
+        const issues = await c.listIssues(args.owner, args.repo, args.state || 'open', args.per_page || 30, Number(args.page) || 1);
         if (!issues.length) return toolOk('No issues found.');
         return toolOk(issues.map((i: any) => `#${i.number} [${i.state}] ${i.title}\n  by ${i.user?.login} | ${i.created_at?.slice(0, 10)} | labels: ${i.labels?.map((l: any) => l.name).join(', ') || 'none'}`).join('\n'));
       }),
@@ -210,13 +210,13 @@ const ext: PrometheusExtensionDefinition = {
 
     api.registerTool({
       name: 'connector_github_list_prs',
-      description: '[GitHub] List pull requests for a repository.',
-      parameters: { type: 'object', required: ['owner', 'repo'], properties: { owner: { type: 'string', description: 'Repository owner' }, repo: { type: 'string', description: 'Repository name' }, state: { type: 'string', enum: ['open', 'closed', 'all'], description: 'Filter by state (default: open)' }, per_page: { type: 'number', description: 'Number of PRs (default: 30)' } } },
+      description: '[GitHub] List pull requests for a repository, newest first by default. Use page to go further back.',
+      parameters: { type: 'object', required: ['owner', 'repo'], properties: { owner: { type: 'string', description: 'Repository owner' }, repo: { type: 'string', description: 'Repository name' }, state: { type: 'string', enum: ['open', 'closed', 'all'], description: 'Filter by state (default: open)' }, per_page: { type: 'number', description: 'Pull requests per page (default: 30, max: 100)' }, page: { type: 'number', description: 'Page number, starting at 1 (default: 1)' }, sort: { type: 'string', enum: ['created', 'updated', 'popularity', 'long-running'], description: 'Sort field (default: created)' }, direction: { type: 'string', enum: ['asc', 'desc'], description: 'Sort direction (default: desc, newest first)' }, base: { type: 'string', description: 'Only pull requests into this base branch' }, head: { type: 'string', description: 'Only pull requests from this head, as owner:branch' } } },
       connectorId: ID, capability: 'code-hosting',
       execute: (args: any) => withConn(async (c) => {
-        const prs = await c.listPRs(args.owner, args.repo, args.state || 'open', args.per_page || 30);
+        const prs = await c.listPRs(args.owner, args.repo, args.state || 'open', args.per_page || 30, { sort: args.sort, direction: args.direction, page: args.page, base: args.base, head: args.head });
         if (!prs.length) return toolOk('No pull requests found.');
-        return toolOk(prs.map((p: any) => `#${p.number} [${p.state}] ${p.title}\n  by ${p.user?.login} | ${p.created_at?.slice(0, 10)} | ${p.draft ? 'DRAFT' : 'ready'}`).join('\n'));
+        return toolOk(prs.map((p: any) => `#${p.number} [${p.merged_at ? 'merged' : p.state}] ${p.title}\n  by ${p.user?.login} | created ${p.created_at?.slice(0, 10)} | updated ${p.updated_at?.slice(0, 10)} | ${p.head?.ref} -> ${p.base?.ref} | ${p.draft ? 'DRAFT' : 'ready'}`).join('\n'));
       }),
     });
 
@@ -526,10 +526,10 @@ const ext: PrometheusExtensionDefinition = {
     api.registerTool({
       name: 'connector_github_list_commits',
       description: '[GitHub] List recent commits for a repository.',
-      parameters: { type: 'object', required: ['owner', 'repo'], properties: { owner: { type: 'string', description: 'Repository owner' }, repo: { type: 'string', description: 'Repository name' }, per_page: { type: 'number', description: 'Number of commits (default: 20)' } } },
+      parameters: { type: 'object', required: ['owner', 'repo'], properties: { owner: { type: 'string', description: 'Repository owner' }, repo: { type: 'string', description: 'Repository name' }, per_page: { type: 'number', description: 'Commits per page (default: 20, max: 100)' }, page: { type: 'number', description: 'Page number, starting at 1 (default: 1)' } } },
       connectorId: ID, capability: 'code-hosting',
       execute: (args: any) => withConn(async (c) => {
-        const commits = await c.listCommits(args.owner, args.repo, args.per_page || 20);
+        const commits = await c.listCommits(args.owner, args.repo, args.per_page || 20, Number(args.page) || 1);
         if (!commits.length) return toolOk('No commits found.');
         return toolOk(commits.map((item: any) => `${item.sha?.slice(0, 7)} ${item.commit?.message?.split('\n')[0] || ''} (${item.commit?.author?.name || item.author?.login || 'unknown'})`).join('\n'));
       }),

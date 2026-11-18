@@ -26,7 +26,8 @@ assert.equal(capCommandOutput(exact), exact);
 // Long output: keeps the start and the end, one marker with correct total and omitted counts.
 const lines = Array.from({ length: 1500 }, (_, i) => `line-${i + 1}-abcdefghij`);
 const long = `${lines.join('\n')}\nEND-MARKER`;
-const out = capCommandOutput(long, { runId: 'run_abc123' });
+assert.equal(capCommandOutput(long, { runId: 'run_abc123' }), long);
+const out = capCommandOutput(long, { runId: 'run_abc123', maxChars: DEFAULT_COMMAND_OUTPUT_CHARS });
 assert.ok(out.startsWith('line-1-abcdefghij\n'), 'keeps the first characters');
 assert.ok(out.endsWith('END-MARKER'), 'keeps the last characters');
 const m = markerOf(out);
@@ -40,9 +41,8 @@ assert.ok(out.length <= DEFAULT_COMMAND_OUTPUT_CHARS, `length ${out.length} exce
 assert.ok(out.length >= DEFAULT_COMMAND_OUTPUT_CHARS - 50, `length ${out.length} is not close to the limit`);
 
 // Without a run id the marker says so instead of naming one.
-const noId = capCommandOutput(long);
-assert.ok(noId.includes('no run id'), 'marker says there is no run id');
-assert.ok(!noId.includes('workspace_run(action:"log"'), 'marker does not name a log action without a run id');
+assert.equal(capCommandOutput(long), long);
+assert.equal(capCommandOutput(long, { maxChars: 1000 }), long);
 
 // Caller limit 12000 on 30000 characters keeps about 12000.
 const big = `H${'x'.repeat(29_990)}${'T'.repeat(9)}`;
@@ -61,9 +61,9 @@ assert.equal(resolveCommandOutputLimit('not a number'), DEFAULT_COMMAND_OUTPUT_C
 assert.equal(resolveCommandOutputLimit('12000'), 12000);
 assert.equal(resolveCommandOutputLimit(200), MIN_COMMAND_OUTPUT_CHARS);
 assert.equal(resolveCommandOutputLimit(500_000), MAX_COMMAND_OUTPUT_CHARS);
-const floorCut = capCommandOutput('a'.repeat(30_000), { maxChars: 200 });
+const floorCut = capCommandOutput('a'.repeat(30_000), { maxChars: 200, runId: 'run_floor' });
 assert.ok(floorCut.length <= MIN_COMMAND_OUTPUT_CHARS && floorCut.length >= MIN_COMMAND_OUTPUT_CHARS - 50, `floor length ${floorCut.length}`);
 const ceilingCut = capCommandOutput('b'.repeat(150_000), { maxChars: 500_000, runId: 'run_c' });
-assert.ok(ceilingCut.length <= MAX_COMMAND_OUTPUT_CHARS && ceilingCut.length >= MAX_COMMAND_OUTPUT_CHARS - 50, `ceiling length ${ceilingCut.length}`);
+assert.ok(ceilingCut.length === 150_000, `ceiling length ${ceilingCut.length}`);
 
 console.log('command-output-cap regression: all assertions passed');

@@ -105,6 +105,33 @@ async function main(): Promise<void> {
   // Native reasoning (including public summaries) is thinking, never assistant
   // commentary. Only actual output_text belongs to the assistant token lane.
   const sse = (event: any) => `data: ${JSON.stringify(event)}\n\n`;
+  const encrypted = { type: 'reasoning', id: 'rs_native', summary: [], encrypted_content: 'opaque-test-reasoning' };
+  const commentary = { type: 'message', role: 'assistant', phase: 'commentary', content: [{ type: 'output_text', text: 'Looking.' }] };
+  const fn = { type: 'function_call', call_id: 'call_native', name: 'lookup', arguments: '{}' };
+  const codex = new OpenAICodexAdapter(process.cwd());
+  (codex as any).getHeaders = async () => ({ 'ChatGPT-Account-ID': 'first' });
+  const realFetch = globalThis.fetch;
+  const sent: any[] = [];
+  globalThis.fetch = async (_url, init) => {
+    sent.push(JSON.parse(String(init?.body)));
+    return sseResponse([
+      sse({ type: 'response.output_item.done', output_index: 1, item: encrypted }),
+      sse({ type: 'response.completed', response: { output: [commentary, { ...encrypted, encrypted_content: undefined }, fn] } }),
+    ]);
+  };
+  try {
+    const history: any[] = [{ role: 'user', content: 'Lookup' }];
+    const first = await codex.chat(history, 'gpt-5.6-sol');
+    history.push(structuredClone(first.message), { role: 'tool', tool_call_id: fn.call_id, content: 'found' });
+    await codex.chat(history, 'gpt-5.6-sol');
+    assert.deepEqual(sent[1].include, ['reasoning.encrypted_content']);
+    assert.equal(sent[1].store, false);
+    assert.deepEqual(sent[1].input.slice(1), [commentary, encrypted, fn, { type: 'function_call_output', call_id: fn.call_id, output: 'found' }]);
+    (codex as any).getHeaders = async () => ({ 'ChatGPT-Account-ID': 'other' });
+    await codex.chat(history, 'gpt-5.6-sol');
+    assert.ok(!JSON.stringify(sent[2]).includes(encrypted.encrypted_content));
+  } finally { globalThis.fetch = realFetch; }
+
   const reasoningDeltaTypes = [
     'response.reasoning_summary_text.delta',
     'response.reasoning_summary.delta',

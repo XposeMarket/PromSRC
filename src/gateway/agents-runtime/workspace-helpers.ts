@@ -1,5 +1,5 @@
-import { buildToolOutputArtifactPreview } from './../tool-result-model-context';
 import fs from 'fs';
+import { fileReadWindow, describeReadWindow } from '../../tools/file-read-window';
 import os from 'os';
 import path from 'path';
 import { getConfig, getResolvedConfigDir } from './../../config/config';
@@ -203,19 +203,8 @@ export function createWorkspaceHelpers(ctx: WorkspaceHelperContext) {
     }
   }
   function maybeSpoolToolOutput(toolName: string, output: string, inlineLimit: number, opts: { allowInline?: boolean; summary?: string } = {}): string {
-    const text = String(output || '');
-    if (opts.allowInline || text.length <= inlineLimit) return text;
-    const relPath = writeToolResultOverflow(toolName, text);
-    if (!relPath) {
-      return `${opts.summary ? `${opts.summary}\n` : ''}[TOOL_RESULT_TRUNCATED] Output was ${text.length} chars; returning first ${inlineLimit} chars because overflow artifact write failed.\n${text.slice(0, inlineLimit)}`;
-    }
-    return buildToolOutputArtifactPreview({
-      toolName,
-      text,
-      inlineLimit,
-      artifactPath: relPath,
-      summary: opts.summary,
-    });
+    // The gateway owns the single session-scoped size boundary and continuation.
+    return String(output ?? '');
   }
 	  function renderNumberedRead(displayPath: string, allLines: string[], argsObj: any, defaultCap = FILE_TOOL_DEFAULT_READ_LINES): string {
     const exactLine = resolvePositiveLineArg(argsObj.line ?? argsObj.line_number ?? argsObj.lineNumber ?? argsObj.physical_line);
@@ -232,53 +221,13 @@ export function createWorkspaceHelpers(ctx: WorkspaceHelperContext) {
         summary: `${displayPath} exact physical-line read exceeded inline budget. Requested line ${exactLine}.`,
       });
     }
-    const head = argsObj.head ? Number(argsObj.head) : 0;
-    const tail = argsObj.tail ? Number(argsObj.tail) : 0;
-    const aroundLine = argsObj.around_line ?? argsObj.aroundLine ? Math.max(1, Math.floor(Number(argsObj.around_line ?? argsObj.aroundLine))) : 0;
-    const beforeLines = Math.max(0, Math.min(240, Math.floor(Number(argsObj.before) || 40)));
-    const afterLines = Math.max(0, Math.min(240, Math.floor(Number(argsObj.after) || 80)));
-    const startLine = argsObj.start_line ? Math.max(1, Math.floor(Number(argsObj.start_line))) : 0;
-    const numLines = argsObj.num_lines ? Math.max(1, Math.floor(Number(argsObj.num_lines))) : 0;
-    const allowFull = argsObj.full === true || argsObj.full_file === true || argsObj.allow_large === true;
-    const cap = Math.max(1, Math.min(480, Math.floor(Number(argsObj.max_lines) || defaultCap)));
-    let sliced: string[];
-    let firstLineNum: number;
-    let requestedFull = false;
-    if (aroundLine > 0) {
-      const fromLine = Math.max(1, aroundLine - beforeLines);
-      const requested = beforeLines + afterLines + 1;
-      const window = allowFull ? requested : Math.min(requested, cap);
-      sliced = allLines.slice(fromLine - 1, fromLine - 1 + window);
-      firstLineNum = fromLine;
-    } else if (startLine > 0) {
-      const from = startLine - 1;
-      const requested = numLines > 0 ? numLines : (allowFull ? allLines.length : cap);
-      const window = allowFull ? requested : Math.min(requested, cap);
-      const to = from + window;
-      sliced = allLines.slice(from, to);
-      firstLineNum = startLine;
-    } else if (head > 0) {
-      sliced = allLines.slice(0, allowFull ? head : Math.min(head, cap));
-      firstLineNum = 1;
-    } else if (tail > 0) {
-      sliced = allLines.slice(-(allowFull ? tail : Math.min(tail, cap)));
-      firstLineNum = allLines.length - sliced.length + 1;
-    } else {
-      requestedFull = true;
-      sliced = allowFull ? allLines : allLines.slice(0, cap);
-      firstLineNum = 1;
-    }
-    const endLine = firstLineNum + sliced.length - 1;
-    const truncated = sliced.length < allLines.length || (startLine > 0 && endLine < allLines.length);
-    const range = sliced.length ? ` [window ${firstLineNum}-${endLine}${truncated ? ', truncated' : ''}]` : '';
-    const hint = truncated
-      ? `\n[READ_TRUNCATED] Returned ${sliced.length} of ${allLines.length} lines. Use start_line:${endLine + 1}, num_lines:${cap} for the next chunk, or pass full:true only when the whole file is truly needed.`
-      : '';
-    const fullHint = requestedFull && !allowFull && truncated
-      ? `\n[READ_DEFAULT_CAP] Whole-file reads are capped by default to control context usage.`
-      : '';
-    const numbered = sliced.map((line, i) => `${firstLineNum + i}: ${trimReturnedFileLine(line)}`).join('\n');
-    const rendered = `${displayPath} (${allLines.length} lines)${range}:\n${numbered}${fullHint}${hint}`;
+    const window = fileReadWindow(allLines.length, argsObj, defaultCap);
+    const { first: firstLineNum, last: endLine, missing } = window;
+    if (firstLineNum > allLines.length) return `${displayPath} (${allLines.length} lines): requested start ${firstLineNum} is past EOF; no lines returned.`;
+    const sliced = allLines.slice(firstLineNum - 1, endLine);
+    const range = ` [window ${firstLineNum}-${endLine}${missing ? ', truncated' : ''}]`;
+    const numbered = sliced.map((line, i) => `${firstLineNum + i}: ${line}`).join('\n');
+    const rendered = `${displayPath} (${allLines.length} lines)${range}:\n${numbered}${describeReadWindow(window)}`;
     return maybeSpoolToolOutput(name, rendered, resolveResultCharBudget(argsObj, FILE_TOOL_READ_INLINE_LIMIT_CHARS), {
       allowInline: argsObj.inline === true || argsObj.no_spool === true,
       summary: `${displayPath} (${allLines.length} lines) read result exceeded inline budget. Requested window ${firstLineNum}-${endLine}.`,
@@ -749,7 +698,7 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
     return {
       name,
       args,
-      result: `${command} [${outcome.label}]\n${truncateText(output || '(no output)', 12000)}`,
+      result: `${command} [${outcome.label}]\n${output || '(no output)'}`,
       error: !outcome.ok,
       extra: {
         ...(captured.runId ? { runId: captured.runId } : {}),

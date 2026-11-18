@@ -285,22 +285,17 @@ router.get('/api/mobile/commands/stop-targets', (_req, res) => {
 router.post('/api/mobile/commands/stop-now', (req, res) => {
   try {
     const requestedSessionId = String(req.body?.sessionId || '').trim();
-    const sessionId = requestedSessionId ? assertSafeStorageId(requestedSessionId, 'session id') : '';
+    if (!requestedSessionId) { res.status(400).json({ success: false, message: 'Stop requires a chat session.' }); return; }
+    const sessionId = assertSafeStorageId(requestedSessionId, 'session id');
     const runtimeId = String(req.body?.runtimeId || req.body?.id || '').trim();
-    const runtimeById = runtimeId ? getLiveRuntime(runtimeId) : null;
-    const target = (runtimeById?.kind === 'main_chat' || runtimeById?.kind === 'main_chat_goal')
-      && runtimeById.abortable
-      && isLiveRunningRuntime(runtimeById)
-      && (!sessionId || String(runtimeById.sessionId || '') === sessionId)
-      ? runtimeById
-      : listLiveRuntimes()
-        .filter((runtime) =>
-          isLiveRunningRuntime(runtime)
-            && (runtime.kind === 'main_chat' || runtime.kind === 'main_chat_goal')
-            && runtime.abortable
-            && (!sessionId || String(runtime.sessionId || '') === sessionId)
-        )
-        .sort((a, b) => Number(b.startedAt || 0) - Number(a.startedAt || 0))[0];
+    const candidates = listLiveRuntimes().filter((runtime) =>
+      runtime.sessionId === sessionId && runtime.abortable && isLiveRunningRuntime(runtime)
+      && (runtime.kind === 'main_chat' || runtime.kind === 'main_chat_goal')
+      && (!runtimeId || runtime.id === runtimeId));
+    if ((runtimeId && candidates.length !== 1) || candidates.length > 1) {
+      res.status(409).json({ success: false, message: 'The selected turn is no longer an unambiguous stop target.' }); return;
+    }
+    const target = candidates[0];
 
     // Cancel any background_spawn agents launched by this chat session too â€”
     // the user expects "stop" to kill everything running on their behalf.

@@ -93,9 +93,8 @@ export function normalizeDevSourceWrapperTool(name: string, rawArgs: any): { nam
         : (Array.isArray(args.paths) ? args.paths.map((p: any) => ({ file: String(p) })) : []);
       const readArgs = { ...args, files };
       if (!hasProvidedArg(readArgs, 'max_files')) readArgs.max_files = FILE_TOOL_DEFAULT_BATCH_FILES;
-      if (!hasProvidedArg(readArgs, 'max_lines_per_file') && !hasProvidedArg(readArgs, 'num_lines')) {
-        readArgs.max_lines_per_file = FILE_TOOL_DEFAULT_BATCH_LINES;
-      }
+      // No default line cap is injected: the reader already gives unranged files 80 lines,
+      // and an injected cap would also clip a range the caller asked for explicitly.
       return { name: 'read_dev_sources', args: readArgs };
     }
     if (action === 'stats_batch') {
@@ -466,9 +465,8 @@ export function normalizeWorkspaceWrapperTool(name: string, rawArgs: any, worksp
     if (action === 'batch_read') {
       const readArgs = compactWorkspaceBatchReadArgs(args);
       if (!hasProvidedArg(readArgs, 'max_files')) readArgs.max_files = FILE_TOOL_DEFAULT_BATCH_FILES;
-      if (!hasProvidedArg(readArgs, 'max_lines_per_file') && !hasProvidedArg(readArgs, 'num_lines')) {
-        readArgs.max_lines_per_file = FILE_TOOL_DEFAULT_BATCH_LINES;
-      }
+      // No default line cap is injected: the reader already gives unranged files 80 lines,
+      // and an injected cap would also clip a range the caller asked for explicitly.
       return { name: 'read_files_batch', args: readArgs };
     }
     if (action === 'grep') {
@@ -501,6 +499,11 @@ export function normalizeWorkspaceWrapperTool(name: string, rawArgs: any, worksp
   }
 
   if (name === 'workspace_edit') {
+    if (args.dry_run === true || args.check === true) {
+      if (action === 'apply_patch' || action === 'preview_patch') return { name: 'preview_patch', args: { ...args, check: true } };
+      if (!['copy', 'move', 'copy_directory', 'move_directory'].includes(action)) return { name, args, error: `No files changed: ${action} has no dry run. Use preview_patch with a unified diff.` };
+      args.dry_run = true;
+    }
     if (action === 'create') return { name: 'create_file', args: compactWorkspaceEditArgs(args, pathArg, action) };
     if (action === 'write') return { name: 'write_file', args: compactWorkspaceEditArgs(args, pathArg, action) };
     if (action === 'append') return { name: 'append_file', args: compactWorkspaceEditArgs(args, pathArg, action) };

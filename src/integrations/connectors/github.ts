@@ -130,24 +130,24 @@ export class GitHubConnector extends OAuthConnector {
     return this.ghGet(`/repos/${owner}/${repo}`);
   }
 
-  async listIssues(owner: string, repo: string, state: 'open' | 'closed' | 'all' = 'open', perPage = 30): Promise<any[]> {
-    return this.ghGet(`/repos/${owner}/${repo}/issues?state=${state}&per_page=${perPage}&sort=updated`);
+  async listIssues(owner: string, repo: string, state: 'open' | 'closed' | 'all' = 'open', perPage = 30, page = 1): Promise<any[]> {
+    return this.ghGet(`/repos/${owner}/${repo}/issues?state=${state}&per_page=${perPage}&sort=updated${page > 1 ? `&page=${Math.floor(page)}` : ''}`);
   }
 
   async createIssue(owner: string, repo: string, title: string, body = '', labels: string[] = []): Promise<any> {
     return this.ghPost(`/repos/${owner}/${repo}/issues`, { title, body, labels });
   }
 
-  async listPRs(owner: string, repo: string, state: 'open' | 'closed' | 'all' = 'open', perPage = 30): Promise<any[]> {
-    return this.ghGet(`/repos/${owner}/${repo}/pulls?state=${state}&per_page=${perPage}&sort=updated`);
+  async listPRs(owner: string, repo: string, state: 'open' | 'closed' | 'all' = 'open', perPage = 30, options: PullListOptions = {}): Promise<any[]> {
+    return this.ghGet(pullsListPath(owner, repo, state, perPage, options));
   }
 
   async getPR(owner: string, repo: string, prNumber: number): Promise<any> {
     return this.ghGet(`/repos/${owner}/${repo}/pulls/${prNumber}`);
   }
 
-  async listCommits(owner: string, repo: string, perPage = 20): Promise<any[]> {
-    return this.ghGet(`/repos/${owner}/${repo}/commits?per_page=${perPage}`);
+  async listCommits(owner: string, repo: string, perPage = 20, page = 1): Promise<any[]> {
+    return this.ghGet(`/repos/${owner}/${repo}/commits?per_page=${perPage}${page > 1 ? `&page=${Math.floor(page)}` : ''}`);
   }
 
   async listCheckRuns(owner: string, repo: string, ref: string, perPage = 30): Promise<any[]> {
@@ -235,4 +235,31 @@ export class GitHubConnector extends OAuthConnector {
     const content = Buffer.from(data.content, 'base64').toString('utf-8');
     return { content, sha: data.sha };
   }
+}
+
+export interface PullListOptions {
+  sort?: 'created' | 'updated' | 'popularity' | 'long-running';
+  direction?: 'asc' | 'desc';
+  page?: number;
+  base?: string;
+  head?: string;
+}
+
+/**
+ * Path for listing pull requests, newest first unless asked otherwise.
+ * The old path sent `sort=updated` with no direction; GitHub then sorts
+ * ascending, so `state: all` returned the oldest pull requests in the repo.
+ */
+export function pullsListPath(owner: string, repo: string, state: string, perPage: number, options: PullListOptions = {}): string {
+  const params = new URLSearchParams({
+    state,
+    per_page: String(Math.max(1, Math.min(100, Math.floor(Number(perPage) || 30)))),
+    sort: options.sort || 'created',
+    direction: options.direction || 'desc',
+  });
+  const page = Math.floor(Number(options.page) || 1);
+  if (page > 1) params.set('page', String(page));
+  if (options.base) params.set('base', String(options.base));
+  if (options.head) params.set('head', String(options.head));
+  return `/repos/${owner}/${repo}/pulls?${params}`;
 }

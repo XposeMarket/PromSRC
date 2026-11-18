@@ -312,7 +312,16 @@
     color: var(--pm-muted, #8a8f98);
   }
   /* Import-from-catalogs sheet */
-  .pm-import-sheet { max-height: 86dvh; display: flex; flex-direction: column; }
+  .pm-plugin-sheet-backdrop.pm-import-backdrop {
+    box-sizing: border-box;
+    padding-top: max(12dvh, calc(env(safe-area-inset-top, 0px) + 22px));
+  }
+  .pm-import-sheet { box-sizing: border-box; height: 72dvh; max-height: 100%; display: flex; flex-direction: column; overflow: hidden; }
+  .pm-import-sheet > :not(.pm-import-list) { flex-shrink: 0; }
+  .pm-import-sheet .pm-import-list { min-height: 0; overscroll-behavior: contain; }
+  .pm-import-sources { display: flex; gap: 4px; margin-top: 12px; }
+  .pm-import-sources button { flex: 1; border: 0; border-radius: 8px; background: transparent; color: var(--pm-muted); min-height: 36px; font: inherit; font-size: 14px; }
+  .pm-import-sources button[aria-pressed="true"] { background: color-mix(in srgb, currentColor 10%, transparent); color: var(--pm-text); font-weight: 600; }
   .pm-import-title { margin: 4px 0 0; font-size: 20px; text-align: center; }
   .pm-import-search {
     margin-top: 12px; height: 42px; border-radius: 999px; padding: 0 16px;
