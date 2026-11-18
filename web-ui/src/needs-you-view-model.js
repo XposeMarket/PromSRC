@@ -14,6 +14,9 @@ export const NY_KIND_LABEL = {
   team_escalation: 'Team needs you',
   paused_agent_run: 'Paused agent run',
   video_approval: 'Paid video run',
+  secure_access: 'Password needed',
+  secure_login: 'Approve sign-in',
+  connection_setup: 'Connect plugin',
 };
 
 export const NY_PAUSE_REASON = {

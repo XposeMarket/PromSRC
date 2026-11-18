@@ -7,6 +7,8 @@ import { listTaskSummaries } from './tasks/task-store';
 import { listManagedTeams } from './teams/managed-teams';
 import { listVideoApprovalsAcrossWorkspaces } from './video-pending-approvals';
 import { getConfig } from '../config/config';
+import { getSecureAccess, secureAccessCredentials } from '../security/secure-access-runtime';
+import { getConnectionRuntime } from '../connections/runtime';
 
 function safeWorkspace(): string[] {
   try { return [getConfig().getWorkspacePath()]; } catch { return []; }
@@ -38,7 +40,14 @@ export function collectNeedsYouItems(): NeedsYouItem[] {
   // synchronously reading every historical task (including completed tasks).
   const tasks = safe(() => listTaskSummaries({ status: ['paused', 'stalled', 'needs_assistance', 'awaiting_user_input'] as any }) as any[], [] as any[]);
   const videoApprovals = safe(() => listVideoApprovalsAcrossWorkspaces(safeWorkspace()), [] as any[]);
+  // Protected access + plugin setup. Metadata-only lists; the brokers never return secret values here.
+  const secureRequests = safe(() => getSecureAccess().listRequests() as any[], [] as any[]);
+  const secureLogins = safe(() => (secureAccessCredentials() as any[]).filter((c) => c?.pendingLogin === true), [] as any[]);
+  const connectionAttempts = safe(() => getConnectionRuntime().orchestrator.listAttempts(50) as any[], [] as any[]);
   return buildNeedsYouItems({
+    secureRequests,
+    secureLogins,
+    connectionAttempts,
     questions,
     videoApprovals,
     approvals: approvals.filter((record) => record.status === 'pending'),

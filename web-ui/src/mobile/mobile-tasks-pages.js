@@ -36,7 +36,14 @@ import {
   denyMobileApproval,
   loadMobileNeedsYou,
   cancelMobileQuestion,
+  buildMobileAttachmentInlineUrl,
+  mobileGatewayFetch,
 } from './mobile-api.js';
+import { renderTaskActivityStream, onTaskToolStreamReady } from '../features/tasks/task-activity-stream.js';
+import { taskOutputs, renderTaskOutputs } from '../features/tasks/task-outputs.js';
+import { TASK_SECURE_KINDS, taskSecureHostHtml, mountTaskSecureCards } from '../features/tasks/task-secure-cards.js';
+import { composerDraftKey, saveComposerDraft } from '../features/chat/composer-drafts.js';
+import { getActiveGatewayId } from './mobile-gateway-catalog.js';
 
 /* ---------------- TASKS PAGE ---------------- */
 
@@ -342,17 +349,14 @@ function _pmRenderLiveCard(t, { isOpen = false, body = '' } = {}) {
 
 function _pmRenderActivity(rows, taskId) {
   if (!rows.length) return '<div class="pm-card-body">No activity recorded yet.</div>';
-  return `<div class="pm-lr-activity" data-pm-task-journal>${rows.map((row, idx) => {
+  return `<div class="pm-lr-activity" data-pm-task-journal>${renderTaskActivityStream(rows, { scope: String(taskId || 'task'), className: 'task-tool-stream pm-trace-tool-body', renderOther: (row) => {
     const time = row.t ? `<span class="pm-lr-act-time">${escapeHtml(_formatTimeAgo(row.t))}</span>` : '';
     if (row.type === 'hidden') {
       return `<details class="pm-lr-hidden"><summary>Hiding ${row.count} update${row.count === 1 ? '' : 's'} · Show</summary>${row.rows.map(r => `<div class="pm-lr-act is-status">${escapeHtml(String(r.text || r.kind || '').slice(0, 240))}</div>`).join('')}</details>`;
     }
-    if (row.type === 'tool') {
-      return renderTaskTool(row, _renderMobileMarkdown, time, `${taskId}:${idx}`);
-    }
     if (row.type === 'error') return `<div class="pm-lr-act is-error"><div class="pm-lr-act-line"><strong>Error</strong>${row.name ? ` <code>${escapeHtml(row.name)}</code>` : ''}${time}</div><div>${escapeHtml(String(row.text || '').slice(0, 400))}</div></div>`;
     return `<div class="pm-lr-act is-status"><div class="pm-lr-act-line">${escapeHtml(String(row.text || '').slice(0, 300))}${time}</div></div>`;
-  }).join('')}</div>`;
+  } })}</div>`;
 }
 
 function _pmRenderProgressList(progress) {
@@ -380,6 +384,7 @@ function _pmRenderTaskDetail(listTask, detail, detailEvidence, tab) {
       ${recovery ? `<section class="pm-task-recovery-panel"><div class="pm-card-head pm-task-recovery-head">Recovery conversation</div>${_pmRenderTaskRecovery(merged)}</section>` : ''}
       ${brainLabel ? `<div class="pm-lr-brain"><strong>${escapeHtml(brainLabel)}</strong>${merged.brainDate ? ` · ${escapeHtml(String(merged.brainDate))}` : ''}${merged.brainRunId ? `<br><span>Run ${escapeHtml(String(merged.brainRunId))}</span>` : ''}${merged.brainArtifact ? `<br><span>Primary artifact: ${escapeHtml(String(merged.brainArtifact))}</span>` : ''}</div>` : ''}
       ${view.result ? `<section><div class="pm-card-head">Result</div><div class="pm-card-body pm-task-final-response markdown-body pm-task-markdown">${_renderMobileMarkdown(view.result)}</div></section>` : ''}
+      ${renderTaskOutputs(taskOutputs(merged), { urlFor: buildMobileAttachmentInlineUrl, label: 'Files & media', labelClass: 'pm-card-head' })}
       ${view.startedFrom ? `<section class="pm-task-prompt-section"><div class="pm-card-head">Started from</div><div class="pm-card-body pm-lr-origin">${escapeHtml(view.startedFrom.slice(0, 4000))}</div>${view.rawInstructions ? `<details class="pm-task-prompt-disclosure"><summary>Show full agent instructions</summary><div class="pm-card-body pm-task-prompt-body">${escapeHtml(view.rawInstructions)}</div></details>` : ''}</section>` : ''}
       <section><div class="pm-card-head">Progress</div>${_pmRenderProgressList(view.progress)}</section>`;
   }
@@ -600,6 +605,9 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
   });
 
   function nyEntryHtml(entry) {
+    if (TASK_SECURE_KINDS.has(entry.kind)) {
+      return `<article class="pm-card pm-ny-entry" data-ny-entry="${escapeHtml(entry.id)}" data-kind="${escapeHtml(entry.kind)}" style="padding:12px;min-width:0;overflow-wrap:anywhere"><div style="display:flex;align-items:center;gap:8px;margin-bottom:8px"><strong style="flex:1;font-size:13px">${escapeHtml(entry.source)}</strong><span class="pm-pill orange">${escapeHtml(entry.kindLabel)}</span></div>${taskSecureHostHtml(entry, escapeHtml)}${entry.sessionId ? `<div class="pm-ny-footer"><button class="pm-btn ghost" data-ny-open="${escapeHtml(entry.sessionId)}">Open chat</button></div>` : ''}</article>`;
+    }
     const payload = { ...entry.item?.payload, sessionId: entry.sessionId };
     const original = ['question', 'browser_login'].includes(entry.kind) ? taskInteractions?.question(payload)
       : ['tool_approval', 'final_action_approval'].includes(entry.kind) ? taskInteractions?.approval(payload) : '';
@@ -633,6 +641,16 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
   // Every action shows a busy state and surfaces failures; a failure re-enables the buttons.
   function wireNyEntries() {
     taskInteractions?.wire(listEl, needsYouEntries(needsYouItems), () => load({ force: true }));
+    void mountTaskSecureCards(listEl, needsYouEntries(needsYouItems), {
+      fetchJson: (path, opts = {}) => mobileGatewayFetch(path, opts),
+      // Hand the protected-card receipt back to the originating chat as a ready-to-send draft.
+      onContinue: (sessionId, text) => {
+        if (!sessionId) { pmToast('Saved', 'success'); return; }
+        saveComposerDraft(composerDraftKey('mobile', sessionId, getActiveGatewayId() || ''), text);
+        pmToast('Saved. Tap send in chat so Prom continues.', 'success');
+        setTimeout(() => nyOpenThread(sessionId), 900);
+      },
+    });
     const busy = (el, run, okMessage) => el.addEventListener('click', async (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -749,7 +767,10 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
     await load({ force: true });
   }
   refreshTimer = setInterval(() => load({ force: true }).catch(() => {}), 5000);
+  // The chat tool-stream renderer loads lazily; repaint once it is ready.
+  const stopToolStreamReady = onTaskToolStreamReady(() => { if (page.isConnected) { lastPaintSignature = ''; paint(); } }, listEl);
   page._pmCleanup = () => {
+    stopToolStreamReady();
     if (refreshTimer) clearInterval(refreshTimer);
     if (eventRefreshTimer) clearTimeout(eventRefreshTimer);
     taskEventNames.forEach((eventName) => wsEventBus.off(eventName, onTaskEvent));

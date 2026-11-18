@@ -2,6 +2,14 @@ import { renderContentReview } from '../components/ContentReview.js';
 
 import { renderTaskTool, renderTaskEvidence, rememberTaskTools } from '../features/tasks/task-detail-render.js';
 import { preserveRequestCards } from '../features/tasks/preserve-request-cards.js';
+import { renderTaskActivityStream, onTaskToolStreamReady } from '../features/tasks/task-activity-stream.js';
+import { taskOutputs, renderTaskOutputs } from '../features/tasks/task-outputs.js';
+import { TASK_SECURE_KINDS, taskSecureHostHtml, mountTaskSecureCards } from '../features/tasks/task-secure-cards.js';
+import { composerDraftKey, saveComposerDraft } from '../features/chat/composer-drafts.js';
+
+const bgtInlineFileUrl = (p) => `/api/canvas/inline?path=${encodeURIComponent(String(p || ''))}`;
+// Repaint the open task once the shared chat tool-stream renderer has loaded.
+onTaskToolStreamReady(() => { try { if (typeof bgtOpenTaskId !== 'undefined' && bgtOpenTaskId) bgtRefreshOpenPanel(); } catch { /* panel closed */ } });
 
 /**
  * TasksPage.js — F3d Extract
@@ -709,6 +717,16 @@ function renderBgTasks() {
 
   // If no tasks at all
   restoreRequestCards();
+  void mountTaskSecureCards(board, needsYouEntries(bgtNeedsYouItems), {
+    fetchJson: (path, opts = {}) => api(path, opts),
+    // Hand the protected-card receipt to the originating chat as a ready-to-send draft.
+    onContinue: (sessionId, text) => {
+      if (!sessionId) { showToast('Saved', '', 'success'); return; }
+      saveComposerDraft(composerDraftKey('desktop', sessionId), text);
+      showToast('Saved', 'Opening the chat. Press send so Prom continues.', 'success');
+      setTimeout(() => { if (typeof window.openSession === 'function') window.openSession(sessionId); }, 900);
+    },
+  });
   board.querySelectorAll('[data-planned-chat-session]').forEach(button => {
     button.onclick = event => bgtOpenOriginChat(event, button.dataset.plannedChatSession);
   });
@@ -772,7 +790,9 @@ function bgtNeedsYouEntryHTML(entry) {
   const payload = item.payload || {};
   const origin = String(entry.sessionId || '');
   let body;
-  if (entry.kind === 'final_action_approval' || entry.kind === 'tool_approval') {
+  if (TASK_SECURE_KINDS.has(entry.kind)) {
+    body = taskSecureHostHtml(entry, escHtml);
+  } else if (entry.kind === 'final_action_approval' || entry.kind === 'tool_approval') {
     body = renderTaskApprovalCard({ ...payload, sourceSessionId: origin });
   } else if (entry.kind === 'question' || entry.kind === 'browser_login') {
     body = typeof window.renderInlinePrometheusQuestion === 'function' ? window.renderInlinePrometheusQuestion(payload) : '';
@@ -831,12 +851,11 @@ function bgtProgressListHTML(progress) {
 function bgtActivityHTML(rows, taskId) {
   if (!rows.length) return '<div style="color:var(--muted);padding:8px;font-size:12px">No activity recorded yet.</div>';
   const time = (t) => (t ? `<span class="bgt-lr-act-time">${escHtml(new Date(t).toLocaleTimeString())}</span>` : '');
-  return `<div class="bgt-lr-activity">${rows.map((row, idx) => {
+  return `<div class="bgt-lr-activity">${renderTaskActivityStream(rows, { scope: String(taskId || 'task'), renderOther: (row) => {
     if (row.type === 'hidden') return `<details class="bgt-lr-hidden"><summary>Hiding ${row.count} update${row.count === 1 ? '' : 's'} · Show</summary>${row.rows.map(r => `<div class="bgt-lr-act is-status">${escHtml(String(r.text || r.kind || '').slice(0, 240))}</div>`).join('')}</details>`;
-    if (row.type === 'tool') return renderTaskTool(row, renderMd, time(row.t), `${taskId}:${idx}`);
     if (row.type === 'error') return `<div class="bgt-lr-act is-error"><div class="bgt-lr-act-line"><strong>Error</strong>${row.name ? ` <code>${escHtml(row.name)}</code>` : ''}${time(row.t)}</div><div>${escHtml(String(row.text || '').slice(0, 400))}</div></div>`;
     return `<div class="bgt-lr-act is-status"><div class="bgt-lr-act-line">${escHtml(String(row.text || '').slice(0, 300))}${time(row.t)}</div></div>`;
-  }).join('')}</div>`;
+  } })}</div>`;
 }
 
 let bgtPanelTab = 'overview';
@@ -1097,6 +1116,7 @@ async function bgtRefreshOpenPanel() {
       <div class="bgt-lr-label">Result</div>
       ${renderMd(task.finalSummary)}
     </div>` : ''}
+    ${renderTaskOutputs(taskOutputs(task), { urlFor: bgtInlineFileUrl, label: 'Files & media', labelClass: 'bgt-lr-label' })}
 
     ${bgtStartedFromHTML(lrView)}
 

@@ -7,7 +7,13 @@ export type NeedsYouKind =
   | 'needs_user_supervision'
   | 'team_escalation'
   | 'paused_agent_run'
-  | 'video_approval';
+  | 'video_approval'
+  | 'secure_access'
+  | 'secure_login'
+  | 'connection_setup';
+
+/** Connection attempt states that are waiting on the owner (not on Prom or a backend step). */
+export const CONNECTION_USER_STATES = new Set(['awaiting_approval', 'awaiting_secure_input', 'awaiting_oauth', 'awaiting_device_code', 'awaiting_browser_login', 'awaiting_cli_login', 'awaiting_external_admin']);
 
 export interface NeedsYouItem {
   id: string;
@@ -35,8 +41,28 @@ export function buildNeedsYouItems(sources: {
   tasks?: any[];
   proposalsNeedApproval?: any[];
   videoApprovals?: any[];
-}): NeedsYouItem[] {
+  secureRequests?: any[];
+  secureLogins?: any[];
+  connectionAttempts?: any[];
+}, now = Date.now()): NeedsYouItem[] {
   const items: NeedsYouItem[] = [];
+  // Protected cards: metadata only (labels, origins, ids). Secret values never live on these records.
+  for (const record of sources.secureRequests || []) {
+    if (!record?.id || record.status !== 'pending') continue;
+    const expires = Date.parse(String(record.expiresAt || ''));
+    if (Number.isFinite(expires) && expires <= now) continue;
+    items.push({ id: `secure-access:${record.id}`, kind: 'secure_access', source: text(record.label, 'Saved access'), sessionId: text(record.sessionId), createdAt: iso(record.createdAt || now), payload: { ...record } });
+  }
+  for (const cred of sources.secureLogins || []) {
+    if (!cred?.id || cred.pendingLogin !== true) continue;
+    const expires = Date.parse(String(cred.loginExpiresAt || ''));
+    if (Number.isFinite(expires) && expires <= now) continue;
+    items.push({ id: `secure-login:${cred.id}:${cred.loginPreparedAt || ''}`, kind: 'secure_login', source: text(cred.label, 'Saved access'), sessionId: text(cred.loginSessionId), createdAt: iso(cred.loginPreparedAt || now), payload: { id: cred.id, label: cred.label, origin: cred.origin, identifier: cred.identifier, pendingLogin: true, loginOrigin: cred.loginOrigin, loginSessionId: cred.loginSessionId, loginExpiresAt: cred.loginExpiresAt, loginPreparedAt: cred.loginPreparedAt } });
+  }
+  for (const attempt of sources.connectionAttempts || []) {
+    if (!attempt?.id || !attempt.serviceId || !CONNECTION_USER_STATES.has(text(attempt.state))) continue;
+    items.push({ id: `connection:${attempt.id}`, kind: 'connection_setup', source: text(attempt.serviceName, attempt.serviceId), sessionId: text(attempt.metadata?.sessionId || attempt.metadata?.originSessionId), createdAt: iso(attempt.updatedAt || attempt.createdAt), payload: { id: attempt.id, serviceId: attempt.serviceId, serviceName: attempt.serviceName, state: attempt.state, summary: attempt.plan?.summary } });
+  }
   for (const record of sources.videoApprovals || []) {
     if (!record || !record.id || !record.projectId) continue;
     items.push({

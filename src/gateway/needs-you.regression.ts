@@ -22,6 +22,33 @@ const expected = [
   'question:q1', 'question:login1', 'approval:approval1', 'approval:approval2',
   'proposal:proposal1', 'supervision:supervision1', 'team:team1:blocker:blocker1', 'task:task1',
 ];
+// Protected cards: pending + unexpired only, metadata only, owner-waiting connection states only.
+{
+  const now = Date.now();
+  const future = new Date(now + 60_000).toISOString();
+  const past = new Date(now - 60_000).toISOString();
+  const protectedItems = buildNeedsYouItems({
+    secureRequests: [
+      { id: 'r1', sessionId: 'chat-a', status: 'pending', label: 'GitHub', origin: 'https://github.com', expiresAt: future },
+      { id: 'r2', sessionId: 'chat-a', status: 'pending', label: 'Old', origin: 'https://x.com', expiresAt: past },
+      { id: 'r3', sessionId: 'chat-a', status: 'saved', label: 'Done', origin: 'https://y.com', expiresAt: future },
+    ],
+    secureLogins: [
+      { id: 'cred_1', label: 'Bank', origin: 'https://bank.test', pendingLogin: true, loginSessionId: 'chat-b', loginExpiresAt: future, loginPreparedAt: now },
+      { id: 'cred_2', label: 'Idle', origin: 'https://idle.test', pendingLogin: false },
+    ],
+    connectionAttempts: [
+      { id: 'att1', serviceId: 'notion', serviceName: 'Notion', state: 'awaiting_oauth', updatedAt: future },
+      { id: 'att2', serviceId: 'slack', state: 'connected', updatedAt: future },
+      { id: 'att3', serviceId: 'gmail', state: 'testing', updatedAt: future },
+    ],
+  }, now);
+  assert.deepEqual(protectedItems.map((i) => i.kind).sort(), ['connection_setup', 'secure_access', 'secure_login']);
+  const serialized = JSON.stringify(protectedItems);
+  assert.ok(!/secret|password"\s*:/i.test(serialized), 'no secret-bearing fields');
+  assert.equal(protectedItems.find((i) => i.kind === 'secure_login')?.sessionId, 'chat-b');
+}
+
 const first = buildNeedsYouItems(records);
 assert.deepStrictEqual(new Set(first.map((item) => item.id)), new Set(expected));
 assert.deepStrictEqual(new Set(first.map((item) => item.kind)), new Set([
