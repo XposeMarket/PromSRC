@@ -42,6 +42,7 @@ fs.mkdirSync(process.env.PROMETHEUS_WORKSPACE_DIR, { recursive: true });
   assert.equal(store.resolveAllowedProjectDirectory(outside), path.resolve(outside));
   const project = store.createProject('Outside repo', store.resolveAllowedProjectDirectory(outside));
   assert.equal(path.resolve(project.workspacePath || ''), path.resolve(outside));
+  assert.equal(store.usableProjectFolder(project), project.workspacePath, 'an allowed link is usable');
   // Granting twice doesn't duplicate the entry.
   store.grantProjectFolderAccess(outside);
   const entries = ((getConfig().getConfig() as any).tools.permissions.files.allowed_paths as string[])
@@ -52,6 +53,20 @@ fs.mkdirSync(process.env.PROMETHEUS_WORKSPACE_DIR, { recursive: true });
   access = store.revokeProjectFolderAccess(outside);
   assert.equal(access.allowed, false);
   assert.throws(() => store.resolveAllowedProjectDirectory(outside), /Allow access/);
+  // Removing access stops the link from being used; the link itself stays on the project.
+  assert.equal(store.usableProjectFolder(project), '');
+  assert.equal(path.resolve(store.getProject(project.id)!.workspacePath || ''), path.resolve(outside));
+  // Access is decided on the real location: a link inside the workspace that points elsewhere is not allowed.
+  const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), 'prom-elsewhere-'));
+  const link = path.join(process.env.PROMETHEUS_WORKSPACE_DIR!, 'link-out');
+  let linked = false;
+  try { fs.symlinkSync(elsewhere, link, 'junction'); linked = true; } catch { /* links are unavailable on this machine */ }
+  if (linked) {
+    assert.equal(store.describeProjectFolderAccess(link).allowed, false, 'a link that leaves the workspace is not allowed');
+    assert.throws(() => store.resolveAllowedProjectDirectory(link), /Allow access/);
+    fs.rmSync(link, { recursive: true, force: true });
+  }
+  fs.rmSync(elsewhere, { recursive: true, force: true });
   // The workspace itself can never be revoked here.
   assert.throws(() => store.revokeProjectFolderAccess(process.env.PROMETHEUS_WORKSPACE_DIR!), /allowed on its own/);
 
@@ -60,8 +75,12 @@ fs.mkdirSync(process.env.PROMETHEUS_WORKSPACE_DIR, { recursive: true });
   assert.throws(() => store.grantProjectFolderAccess(path.join(outside, 'nope')), /not found/);
   assert.equal(store.describeProjectFolderAccess('relative/dir').grantable, false);
   const cfg = getConfig().getConfig() as any;
-  getConfig().updateConfig({ tools: { ...cfg.tools, permissions: { ...cfg.tools.permissions, files: { ...cfg.tools.permissions.files, blocked_paths: [outside] } } } } as any);
+  getConfig().updateConfig({ tools: { ...cfg.tools, permissions: { ...cfg.tools.permissions, files: { ...cfg.tools.permissions.files, blocked_paths: [outside, inside] } } } } as any);
   assert.throws(() => store.grantProjectFolderAccess(outside), /blocked/);
+  assert.equal(store.describeProjectFolderAccess(inside).allowed, false, 'a blocked folder stays blocked inside an allowed one');
+  // A grant reaches every chat and agent, so the user folder and Prometheus's own data are refused.
+  assert.throws(() => store.grantProjectFolderAccess(os.homedir()), /whole user folder/);
+  assert.throws(() => store.grantProjectFolderAccess(process.env.PROMETHEUS_DATA_DIR!), /own data folder/);
   const systemRoot = process.env.SystemRoot;
   if (process.platform === 'win32' && systemRoot) {
     assert.throws(() => store.grantProjectFolderAccess(path.join(systemRoot, 'System32')), /System folders/);

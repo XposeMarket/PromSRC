@@ -943,11 +943,21 @@ async function loadProjectEditors(projectId) {
   if (instrTA) instrTA.value = project.instructions || '';
   // The second editor is the project notes (CONTEXT.md), which the model keeps.
   if (memTA) {
+    // The editor stays locked until the saved notes are in it, so an empty or half-loaded
+    // box can never be saved over the real notes.
     memTA.value = '';
+    memTA.disabled = true;
     memTA.dataset.projectId = projectId;
+    memTA.dataset.notesLoadedFor = '';
     api(`/api/projects/${encodeURIComponent(projectId)}/context`).then((data) => {
-      if (memTA.dataset.projectId === projectId && document.activeElement !== memTA) memTA.value = String(data?.content || '');
-    }).catch(() => {});
+      if (memTA.dataset.projectId !== projectId) return;
+      memTA.value = String(data?.content || '');
+      memTA.dataset.notesLoadedFor = projectId;
+      memTA.disabled = false;
+    }).catch(() => {
+      if (memTA.dataset.projectId !== projectId) return;
+      showToast('Could not load this project\'s notes. Reopen the project to try again.', 'error');
+    });
   }
   if (workspaceName) workspaceName.textContent = project.name || 'Project';
   if (workspacePath) workspacePath.textContent = project.workspacePath
@@ -969,10 +979,63 @@ window.saveProjectInstructions = async function() {
   }
 };
 
+// Link, change or unlink the project's folder from the desktop project panel.
+// Same shared field the mobile project settings sheet uses (project-folder-field.js).
+window.editProjectFolder = function() {
+  const projectId = document.body.dataset.projectId;
+  const project = _projects.find((p) => p.id === projectId);
+  const host = document.getElementById('project-folder-editor');
+  const field = window.__pmProjectFolder;
+  if (!project || !host || !field) return;
+  const closeEditor = () => { host.hidden = true; host.innerHTML = ''; };
+  if (!host.hidden) { closeEditor(); return; }
+  host.innerHTML = `${field.html('proj-panel', project.workspacePath || '')}
+    <div class="pm-move-new-project-error" role="alert" hidden></div>
+    <div style="display:flex;gap:8px;margin-top:8px">
+      <button type="button" class="project-editor-save-btn" data-folder-save>Save folder</button>
+      <button type="button" class="project-editor-save-btn" data-folder-cancel>Cancel</button>
+    </div>
+    <div style="margin-top:6px;font-size:10px;color:var(--muted);line-height:1.5">Clear the path and save to unlink the folder. Unlinking leaves the folder's access as it is; use Remove access first to take that away too.</div>`;
+  host.hidden = false;
+  field.wire(host);
+  const errorEl = host.querySelector('[role="alert"]');
+  host.querySelector('[data-folder-cancel]').addEventListener('click', closeEditor);
+  host.querySelector('[data-folder-save]').addEventListener('click', async (event) => {
+    const saveBtn = event.currentTarget;
+    saveBtn.disabled = true;
+    errorEl.hidden = true;
+    try {
+      const workspacePath = field.read(host) || '';
+      const data = await api(`/api/projects/${encodeURIComponent(projectId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workspacePath }),
+      });
+      if (data?.error) throw new Error(data.error);
+      project.workspacePath = String(data?.project?.workspacePath ?? workspacePath);
+      const pathEl = document.getElementById('project-workspace-path');
+      if (pathEl && document.body.dataset.projectId === projectId) {
+        pathEl.textContent = project.workspacePath || 'No linked path — project context is stored in Prometheus.';
+      }
+      closeEditor();
+      showToast(project.workspacePath ? 'Folder linked.' : 'Folder unlinked.');
+    } catch (e) {
+      errorEl.textContent = e?.message || 'Could not save the folder.';
+      errorEl.hidden = false;
+      saveBtn.disabled = false;
+    }
+  });
+};
+
 window.saveProjectNotes = async function() {
   const projectId = document.body.dataset.projectId;
   if (!projectId) return;
-  const content = document.getElementById('proj-memory-ta')?.value || '';
+  const notesTA = document.getElementById('proj-memory-ta');
+  if (notesTA?.dataset.notesLoadedFor !== projectId) {
+    showToast('The notes have not loaded yet, so nothing was saved.', 'error');
+    return;
+  }
+  const content = notesTA.value || '';
   try {
     await api(`/api/projects/${encodeURIComponent(projectId)}/context`, {
       method: 'PUT',

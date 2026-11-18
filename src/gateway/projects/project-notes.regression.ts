@@ -60,6 +60,14 @@ fs.mkdirSync(process.env.PROMETHEUS_WORKSPACE_DIR, { recursive: true });
   fs.writeFileSync(path.join(folder, 'CLAUDE.md'), 'Run tests before committing.\n');
   assert.deepEqual(store.readFolderInstructionFiles(folder).map((f) => f.name), ['AGENTS.md', 'CLAUDE.md']);
   assert.deepEqual(store.readFolderInstructionFiles(path.join(root, 'missing')), []);
+  // An instruction file that is a link to somewhere outside the folder is never read.
+  const outsideFile = path.join(root, 'outside-secret.txt');
+  fs.writeFileSync(outsideFile, 'TOP SECRET\n');
+  const linkFolder = path.join(root, 'repo-link');
+  fs.mkdirSync(linkFolder, { recursive: true });
+  let fileLinked = false;
+  try { fs.symlinkSync(outsideFile, path.join(linkFolder, 'AGENTS.md'), 'file'); fileLinked = true; } catch { /* file links need extra rights on Windows */ }
+  if (fileLinked) assert.deepEqual(store.readFolderInstructionFiles(linkFolder), []);
 
   // 3. A real v1 project on disk is cleaned once, with a backup, then the prompt block uses v2.
   const project = store.createProject('Legacy app');
@@ -87,6 +95,7 @@ fs.mkdirSync(process.env.PROMETHEUS_WORKSPACE_DIR, { recursive: true });
   assert.ok(fs.existsSync(path.join(path.dirname(contextPath), 'CONTEXT.v1-backup.md')));
   assert.equal(fs.readFileSync(path.join(path.dirname(contextPath), 'CONTEXT.v1-backup.md'), 'utf-8'), legacy);
   assert.match(fs.readFileSync(contextPath, 'utf-8'), /Old snapshot fact\./);
+  store.grantProjectFolderAccess(folder);
   store.updateProject(project.id, { workspacePath: folder });
   const block = store.buildProjectContextBlock(sid)!;
   assert.match(block, /## Project instructions \(written by the user; follow them\)\nAlways answer in English\./);
@@ -101,6 +110,40 @@ fs.mkdirSync(process.env.PROMETHEUS_WORKSPACE_DIR, { recursive: true });
   assert.equal(fs.readFileSync(contextPath, 'utf-8'), notesBefore);
   assert.ok(store.writeProjectNotes(project.id, '# Legacy app\n\n- edited by user\n'));
   assert.match(store.buildProjectContextBlock(sid)!, /edited by user/);
+  // Removing access stops the folder and its instruction files from reaching the prompt.
+  store.revokeProjectFolderAccess(folder);
+  const revokedBlock = store.buildProjectContextBlock(sid)!;
+  assert.doesNotMatch(revokedBlock, /## AGENTS\.md/);
+  assert.match(revokedBlock, /not allowed to use it right now/);
+  store.grantProjectFolderAccess(folder);
+
+  // 3b. Old projects in awkward states convert without losing the user's text.
+  const makeOld = (name: string, mutate: (record: any) => void, context: string | null): string => {
+    const made = store.createProject(name);
+    const file = findFile(root, `${made.id}.json`);
+    const record = JSON.parse(fs.readFileSync(file, 'utf-8'));
+    delete record.contextVersion;
+    mutate(record);
+    fs.writeFileSync(file, JSON.stringify(record));
+    const target = store.getProjectContextFilePath(made.id);
+    if (context === null) fs.rmSync(target, { force: true }); else fs.writeFileSync(target, context);
+    return made.id;
+  };
+  // Cut short after CONTEXT.md was rewritten but before the project was saved: the backup is the source.
+  const cutId = makeOld('Interrupted app', () => undefined, store.migrateLegacyProjectContext(legacy, 'Interrupted app', '').notes);
+  fs.writeFileSync(path.join(path.dirname(store.getProjectContextFilePath(cutId)), 'CONTEXT.v1-backup.md'), legacy);
+  const recovered = store.getProject(cutId)!;
+  assert.equal(recovered.contextVersion, 2);
+  assert.equal(recovered.instructions, 'Always answer in English.', 'instructions that lived only in the old file survive an interrupted conversion');
+  // Writing notes converts an old project first instead of overwriting the old file.
+  const oldId = makeOld('Old app', () => undefined, legacy);
+  assert.ok(store.writeProjectNotes(oldId, '# Old app\n\n- new note\n'));
+  assert.equal(store.getProject(oldId)!.instructions, 'Always answer in English.');
+  assert.match(fs.readFileSync(store.getProjectContextFilePath(oldId), 'utf-8'), /new note/);
+  // No CONTEXT.md at all: saved memory still lands in the notes.
+  const bareId = makeOld('Bare app', (record) => { record.memorySnapshot = 'Snapshot only fact.'; }, null);
+  assert.equal(store.getProject(bareId)!.contextVersion, 2);
+  assert.match(fs.readFileSync(store.getProjectContextFilePath(bareId), 'utf-8'), /Snapshot only fact\./);
 
   // 4. Unstarted project chats (row created, first message never landed) are pruned after the grace period.
   store.addSessionToProject(project.id, 'sess_projects_v2_ghost');

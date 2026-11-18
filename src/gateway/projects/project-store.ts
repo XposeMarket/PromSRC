@@ -27,6 +27,7 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import os from 'os';
 import { getConfig } from '../../config/config.js';
 import { deleteSession, getSession, listSessionSummaries, sessionExists } from '../session.js';
 import {
@@ -341,9 +342,13 @@ export function readFolderInstructionFiles(folder: string): Array<{ name: string
   const seen = new Set<string>();
   const root = String(folder || '').trim();
   if (!root) return out;
+  let realRoot: string;
+  try { realRoot = fs.realpathSync(root); } catch { return out; }
   for (const name of FOLDER_INSTRUCTION_FILES) {
     try {
-      const file = path.join(root, name);
+      // Resolve links first: a file that points outside the linked folder is never read into the prompt.
+      const file = fs.realpathSync(path.join(root, name));
+      if (!isPathInside(realRoot, file)) continue;
       const stat = fs.statSync(file);
       if (!stat.isFile() || stat.size === 0) continue;
       let text: string;
@@ -361,6 +366,19 @@ export function readFolderInstructionFiles(folder: string): Array<{ name: string
   return out;
 }
 
+/** The real location of a path, with links and junctions resolved. Falls back to the plain path when it does not exist. */
+function canonicalPath(value: string): string {
+  const resolved = path.resolve(value);
+  try { return fs.realpathSync.native(resolved); } catch { return resolved; }
+}
+
+/** Write through a temp file so an interrupted write never leaves a half-written file behind. */
+function writeTextAtomic(file: string, text: string): void {
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, text, 'utf-8');
+  fs.renameSync(tmp, file);
+}
+
 function samePath(a: string, b: string): boolean {
   const norm = (p: string) => {
     const resolved = path.resolve(String(p || '').trim()).replace(/[\\/]+$/, '');
@@ -375,16 +393,20 @@ export function ensureProjectContextV2(project: Project): Project {
   try {
     ensureProjectDirs(project.id);
     const contextPath = getProjectContextFilePath(project.id);
-    if (fs.existsSync(contextPath)) {
-      const original = fs.readFileSync(contextPath, 'utf-8');
-      const backup = path.join(path.dirname(contextPath), 'CONTEXT.v1-backup.md');
-      if (!fs.existsSync(backup)) fs.writeFileSync(backup, original, 'utf-8');
-      const migrated = migrateLegacyProjectContext(original, project.name, project.instructions || '', project.memorySnapshot || '');
-      fs.writeFileSync(contextPath, migrated.notes, 'utf-8');
-      project.instructions = migrated.instructions;
-    } else {
-      fs.writeFileSync(contextPath, notesSeed(project.name), 'utf-8');
-    }
+    const backup = path.join(path.dirname(contextPath), 'CONTEXT.v1-backup.md');
+    // The backup is the source for the conversion. A run that was cut short after CONTEXT.md was
+    // rewritten but before the project was saved converts the same original again, so instructions
+    // that lived only in the old file are never left behind in the backup.
+    const hasBackup = fs.existsSync(backup);
+    const original = hasBackup
+      ? fs.readFileSync(backup, 'utf-8')
+      : (fs.existsSync(contextPath) ? fs.readFileSync(contextPath, 'utf-8') : '');
+    if (!hasBackup && original) writeTextAtomic(backup, original);
+    // A project with no CONTEXT.md still has its saved memory folded into the notes.
+    const migrated = migrateLegacyProjectContext(original, project.name, project.instructions || '', project.memorySnapshot || '');
+    const hasBody = migrated.notes.replace(/^#\s+.*$/m, '').trim().length > 0;
+    writeTextAtomic(contextPath, hasBody ? migrated.notes : notesSeed(project.name));
+    project.instructions = migrated.instructions;
     project.contextVersion = 2;
     saveProject(project);
     if (project.workspacePath && fileHarnessChatsIntoProject(project.id)) return loadProjectFromDisk(project.id) || project;
@@ -396,16 +418,21 @@ export function ensureProjectContextV2(project: Project): Project {
 
 /** Replace the project notes (CONTEXT.md). The user can edit notes from the project panel. */
 export function writeProjectNotes(projectId: string, content: string): boolean {
-  const project = loadProjectFromDisk(projectId);
-  if (!project) return false;
+  const found = loadProjectFromDisk(projectId);
+  if (!found) return false;
+  // Convert an old project first. Its CONTEXT.md can hold the only copy of the user's
+  // instructions, so it is never overwritten before the conversion has saved them.
+  const project = ensureProjectContextV2(found);
+  if (project.contextVersion !== 2) return false;
   ensureProjectDirs(project.id);
-  fs.writeFileSync(getProjectContextFilePath(project.id), String(content || '').replace(/\r\n/g, '\n'), 'utf-8');
+  writeTextAtomic(getProjectContextFilePath(project.id), String(content || '').replace(/\r\n/g, '\n'));
   return true;
 }
 
 export function getProjectContextContent(projectId: string): string | null {
-  const project = loadProjectFromDisk(projectId);
-  if (!project) return null;
+  const found = loadProjectFromDisk(projectId);
+  if (!found) return null;
+  const project = ensureProjectContextV2(found);
   const contextPath = ensureProjectContextFile(project);
   try { return fs.readFileSync(contextPath, 'utf-8'); } catch { return null; }
 }
@@ -743,7 +770,9 @@ export function resolveAllowedProjectDirectory(value: unknown): string {
   const raw = String(value || '').trim();
   if (!raw) return '';
   const selected = path.resolve(raw);
-  if (!folderAccessRoots().allowed.some((root) => isPathInside(root, selected))) {
+  const real = canonicalPath(selected);
+  const roots = folderAccessRoots();
+  if (roots.blocked.some((root) => isPathInside(root, real)) || !roots.allowed.some((root) => isPathInside(root, real))) {
     const error: any = new Error('That folder is outside the folders Prometheus can access. Choose "Allow access" under the folder field first.');
     error.code = 'PROJECT_DIR_NOT_ALLOWED';
     throw error;
@@ -759,12 +788,12 @@ export function resolveAllowedProjectDirectory(value: unknown): string {
 function folderAccessRoots(): { workspace: string; allowed: string[]; blocked: string[] } {
   const cfg = getConfig().getConfig() as any;
   const clean = (list: unknown) => (Array.isArray(list) ? list : [])
-    .map((entry) => String(entry || '').trim()).filter(Boolean).map((entry) => path.resolve(entry));
+    .map((entry) => String(entry || '').trim()).filter(Boolean).map((entry) => canonicalPath(entry));
   const workspace = String(cfg?.workspace?.path || '').trim();
   const files = cfg?.tools?.permissions?.files || {};
   return {
-    workspace: workspace ? path.resolve(workspace) : '',
-    allowed: [...(workspace ? [path.resolve(workspace)] : []), ...clean(files.allowed_paths)],
+    workspace: workspace ? canonicalPath(workspace) : '',
+    allowed: [...(workspace ? [canonicalPath(workspace)] : []), ...clean(files.allowed_paths)],
     blocked: clean(files.blocked_paths),
   };
 }
@@ -779,7 +808,31 @@ function folderGrantRefusal(selected: string, blocked: string[]): string {
     .filter((entry): entry is string => !!entry);
   if (system.some((root) => isPathInside(root, selected))) return 'System folders can\'t be linked.';
   if (blocked.some((root) => isPathInside(root, selected))) return 'That folder is blocked in Settings.';
+  // A grant applies to every Prometheus chat and agent, so folders that hold the whole user
+  // profile or Prometheus's own data (keys, saved sign-ins, every chat) are never granted.
+  if (isPathInside(selected, canonicalPath(os.homedir()))) return 'That folder contains your whole user folder. Pick a project folder inside it.';
+  if (prometheusDataDirs().some((dir) => isPathInside(selected, dir) || isPathInside(dir, selected))) return 'Prometheus\'s own data folder can\'t be linked.';
   return '';
+}
+
+function prometheusDataDirs(): string[] {
+  const dirs: string[] = [];
+  const env = String(process.env.PROMETHEUS_DATA_DIR || '').trim();
+  if (env) dirs.push(canonicalPath(env));
+  try { dirs.push(canonicalPath(getConfig().getConfigDir())); } catch { /* no config folder: nothing more to protect */ }
+  return dirs;
+}
+
+/**
+ * The project's linked folder, only while Prometheus is still allowed to use it.
+ * Removing access (in the folder field or in Settings) stops the link from being used
+ * without deleting it, so allowing access again brings the project back as it was.
+ */
+export function usableProjectFolder(project: Pick<Project, 'workspacePath'> | null | undefined): string {
+  const folder = String(project?.workspacePath || '').trim();
+  if (!folder) return '';
+  const access = describeProjectFolderAccess(folder);
+  return access.exists && access.allowed ? folder : '';
 }
 
 export interface ProjectFolderAccess {
@@ -800,11 +853,15 @@ export function describeProjectFolderAccess(value: unknown): ProjectFolderAccess
   const selected = path.resolve(raw);
   let exists = false;
   try { exists = fs.statSync(selected).isDirectory(); } catch { exists = false; }
+  // Access is decided on the real location, so a link or junction can't reach a folder that was
+  // never allowed, and a blocked folder stays blocked even inside an allowed one.
+  const real = canonicalPath(selected);
   const roots = folderAccessRoots();
-  const allowed = roots.allowed.some((root) => isPathInside(root, selected));
-  const revocable = !(roots.workspace && samePath(roots.workspace, selected))
-    && roots.allowed.some((root) => samePath(root, selected));
-  const refusal = exists ? folderGrantRefusal(selected, roots.blocked) : 'Folder not found on this computer.';
+  const allowed = !roots.blocked.some((root) => isPathInside(root, real))
+    && roots.allowed.some((root) => isPathInside(root, real));
+  const revocable = !(roots.workspace && samePath(roots.workspace, real))
+    && roots.allowed.some((root) => samePath(root, real));
+  const refusal = exists ? folderGrantRefusal(real, roots.blocked) : 'Folder not found on this computer.';
   return { path: selected, exists, allowed, revocable, grantable: !allowed && !refusal, ...(refusal && !allowed ? { reason: refusal } : {}) };
 }
 
@@ -836,7 +893,7 @@ export function revokeProjectFolderAccess(value: unknown): ProjectFolderAccess {
   const files = cfg?.tools?.permissions?.files || {};
   const current = Array.isArray(files.allowed_paths) ? files.allowed_paths.map((p: unknown) => String(p || '')) : [];
   getConfig().updateConfig({
-    tools: { ...(cfg.tools || {}), permissions: { ...(cfg.tools?.permissions || {}), files: { ...files, allowed_paths: current.filter((p: string) => !samePath(p, access.path)) } } },
+    tools: { ...(cfg.tools || {}), permissions: { ...(cfg.tools?.permissions || {}), files: { ...files, allowed_paths: current.filter((p: string) => !samePath(canonicalPath(p), canonicalPath(access.path))) } } },
   } as any);
   return describeProjectFolderAccess(access.path);
 }
@@ -967,7 +1024,13 @@ export function buildProjectContextBlock(sessionId: string): string | null {
     lines.push('');
   }
 
-  const folder = project.workspacePath?.trim() || '';
+  const linked = project.workspacePath?.trim() || '';
+  const folder = usableProjectFolder(project);
+  if (linked && !folder) {
+    lines.push('## Linked folder');
+    lines.push(`${linked} is linked to this project, but Prometheus is not allowed to use it right now (access was removed, or the folder is missing). Do not read or edit it. If the user asks for work there, tell them to allow access again from the project's folder field.`);
+    lines.push('');
+  }
   if (folder) {
     lines.push('## Linked folder');
     lines.push(folder);
