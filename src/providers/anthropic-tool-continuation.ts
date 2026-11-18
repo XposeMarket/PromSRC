@@ -1,5 +1,15 @@
 import { createHash } from 'node:crypto';
 import type { ChatMessage, ProviderReplay } from './LLMProvider';
+import { historyImageKeepFromEnv, isRuntimeUserMessage, PRUNED_IMAGE_TEXT } from './history-image-prune';
+
+/** Stale screenshots (count, base64 chars) tolerated in the stored prefix before it is rewritten. */
+export const CONTINUATION_STALE_IMAGE_SLACK = 8;
+export const CONTINUATION_STALE_IMAGE_SLACK_BYTES = 4_000_000;
+
+function slackFromEnv(name: string, fallback: number): number {
+  const n = Number(String(process.env[name] ?? '').trim() || NaN);
+  return Number.isFinite(n) && n >= 1 ? Math.floor(n) : fallback;
+}
 
 export function checksThinkingPrefix(model: string): boolean {
   return /^claude-(?:(?:opus|sonnet|haiku)-5-5|(?:fable|mythos)-5-[12])(?:-|$)/.test(model);
@@ -29,8 +39,68 @@ function toolDefinitions(tools: any[] = []): Map<string, any> {
   return new Map(tools.map(tool => [tool.name, withoutCacheControl(tool)]));
 }
 
-/** Store each accepted request's new input once. Reassemble the exact prefix
- * in any model worker, even if this round's image pruning or prompt changed. */
+type StoredImage = { block: any; bytes: number };
+
+/** Tool and runtime screenshots in one stored wire message, oldest first. A
+ * person's own attachments are never listed, so they stay for the whole turn. */
+function prunableImages(message: any): StoredImage[] {
+  const found: StoredImage[] = [];
+  if (message?.role !== 'user' || !Array.isArray(message.content)) return found;
+  const runtime = isRuntimeUserMessage(message);
+  const visit = (block: any) => {
+    if (block?.type === 'image') found.push({ block, bytes: String(block.source?.data || '').length });
+  };
+  for (const block of message.content) {
+    if (block?.type === 'tool_result' && Array.isArray(block.content)) block.content.forEach(visit);
+    else if (runtime) visit(block);
+  }
+  return found;
+}
+
+/** How many of the oldest stored screenshots are sent as a text note.
+ *
+ * The stored prefix keeps every image exactly as it was first sent, so without
+ * a bound each browser/desktop round uploads every earlier screenshot again.
+ * Rewriting the prefix is not free either: thinking after the first rewritten
+ * image no longer matches its prefix (the API drops it) and the prompt cache
+ * restarts there. So the cutoff moves in steps. Nothing changes until `slack`
+ * stale images, or `slackBytes` of them, sit behind the newest `keep`; then all
+ * of them go at once. `sizesByRound` is the stored rounds in order, and every
+ * round and every model worker replays the same rounds, so each one computes
+ * the same cutoff and the request stays append-only between steps. */
+export function staleImageCutoff(
+  sizesByRound: number[][], keep: number,
+  slack = CONTINUATION_STALE_IMAGE_SLACK, slackBytes = CONTINUATION_STALE_IMAGE_SLACK_BYTES,
+): number {
+  if (keep <= 0) return 0;
+  const sizes: number[] = [];
+  let cutoff = 0;
+  for (const round of sizesByRound) {
+    sizes.push(...round);
+    const end = sizes.length - keep;
+    if (end <= cutoff) continue;
+    let bytes = 0;
+    for (let i = cutoff; i < end; i += 1) bytes += sizes[i];
+    if (end - cutoff >= slack || bytes >= slackBytes) cutoff = end;
+  }
+  return cutoff;
+}
+
+function withImageNotes(message: any, images: StoredImage[], count: number) {
+  const stale = new Set(images.slice(0, Math.max(0, count)).map(image => image.block));
+  if (!stale.size) return message;
+  const note = (block: any) => stale.has(block) ? { type: 'text', text: PRUNED_IMAGE_TEXT } : block;
+  return {
+    ...message,
+    content: message.content.map((block: any) => block?.type === 'tool_result' && Array.isArray(block.content)
+      ? { ...block, content: block.content.map(note) } : note(block)),
+  };
+}
+
+/** Store each accepted request's new input once. Reassemble the same prefix
+ * in any model worker, even if this round's image pruning or prompt changed.
+ * Stored inputs are never edited; old screenshots are swapped for a note only
+ * in the assembled request (see staleImageCutoff). */
 export function prepareAnthropicContinuation(
   body: any, headers: Record<string, string>, messages: ChatMessage[],
   model: string, provider: string, account: string, volatileHeader: string,
@@ -60,9 +130,19 @@ export function prepareAnthropicContinuation(
     const active = toolDefinitions(root.tools);
     const prefix: any[] = [];
     let usesInlineTools = false;
-    for (const round of rounds) {
-      for (const message of round.anthropic!.input) {
-        prefix.push(message);
+    const stored = rounds.map(round => round.anthropic!.input.map(prunableImages));
+    const cutoff = staleImageCutoff(
+      stored.map(round => round.flat().map(image => image.bytes)),
+      historyImageKeepFromEnv(),
+      slackFromEnv('PROMETHEUS_CONTINUATION_IMAGE_SLACK', CONTINUATION_STALE_IMAGE_SLACK),
+      slackFromEnv('PROMETHEUS_CONTINUATION_IMAGE_SLACK_BYTES', CONTINUATION_STALE_IMAGE_SLACK_BYTES),
+    );
+    let seenImages = 0;
+    for (const [roundIndex, round] of rounds.entries()) {
+      for (const [messageIndex, message] of round.anthropic!.input.entries()) {
+        const images = stored[roundIndex][messageIndex];
+        prefix.push(withImageNotes(message, images, cutoff - seenImages));
+        seenImages += images.length;
         if (message.role !== 'system') continue;
         for (const block of message.content) {
           if (block.type === 'tool_addition') {
