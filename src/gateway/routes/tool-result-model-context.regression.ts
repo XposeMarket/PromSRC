@@ -17,7 +17,7 @@ function main(): void {
   assert.ok(!bounded.includes('MIDDLE_SENTINEL'), 'fixture must prove that the omitted range is real');
 
   const withoutRef = boundToolTextForModelContext(source, 'workspace_read', 12_000);
-  assert.ok(withoutRef.includes('No raw retrieval reference is available'));
+  assert.equal(withoutRef, source, 'never clip the only available copy');
   assert.ok(!withoutRef.includes('full output remains in tool logs/raw storage'));
 
   const small = 'small result';

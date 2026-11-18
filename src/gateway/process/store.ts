@@ -122,6 +122,22 @@ export class ProcessRunStore {
     fs.appendFileSync(this.combinedPath(runId), chunk, 'utf-8');
   }
 
+  readCombinedPage(runId: string, offset: number, limit: number) {
+    const file = this.combinedPath(runId);
+    if (!fs.existsSync(file)) return { text: '', next: null, total: 0 };
+    const fd = fs.openSync(file, 'r');
+    try {
+      const total = fs.fstatSync(fd).size;
+      const from = Math.min(total, Math.max(0, Math.floor(Number(offset) || 0)));
+      const size = Math.min(total - from, Math.max(256, Math.min(100000, Math.floor(Number(limit) || 64000))));
+      const buf = Buffer.alloc(size + 1);
+      const n = fs.readSync(fd, buf, 0, Math.min(total - from, size + 1), from);
+      let end = Math.min(size, n);
+      while (end > 0 && end < n && (buf[end] & 0xc0) === 0x80) end--;
+      return { text: buf.toString('utf8', 0, end), next: from + end < total && end ? from + end : null, total };
+    } finally { fs.closeSync(fd); }
+  }
+
   readLogFile(filePath: string, maxChars = 200_000): { text: string; bytes: number; truncated: boolean } {
     if (!fs.existsSync(filePath)) return { text: '', bytes: 0, truncated: false };
     const stat = fs.statSync(filePath);

@@ -1,4 +1,5 @@
 import fs from 'fs/promises';
+import { fileReadWindow, describeReadWindow } from './file-read-window.js';
 import path from 'path';
 import fsSync from 'fs';
 import os from 'os';
@@ -94,45 +95,14 @@ function formatPostEditContext(
   ].join('\n');
 }
 
-async function writeToolResultOverflow(toolName: string, output: string): Promise<string | null> {
-  try {
-    const safeTool = String(toolName || 'tool')
-      .replace(/[^a-z0-9_-]+/gi, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, 48) || 'tool';
-    const dir = resolveWorkspacePath(path.join('temp', 'tool-results'));
-    await fs.mkdir(dir, { recursive: true });
-    const file = `${Date.now()}-${safeTool}.txt`;
-    const absPath = path.join(dir, file);
-    await fs.writeFile(absPath, output, 'utf-8');
-    const workspaceRoot = resolveWorkspacePath('.');
-    return path.relative(workspaceRoot, absPath).replace(/\\/g, '/');
-  } catch {
-    return null;
-  }
-}
-
 async function maybeSpoolToolStdout(
   toolName: string,
   stdout: string,
   inlineLimit: number,
   opts: { allowInline?: boolean; summary?: string } = {}
 ): Promise<{ stdout: string; artifacts?: any[] }> {
-  const text = String(stdout || '');
-  if (opts.allowInline || text.length <= inlineLimit) return { stdout: text };
-  const relPath = await writeToolResultOverflow(toolName, text);
-  if (!relPath) {
-    return {
-      stdout: `${opts.summary ? `${opts.summary}\n` : ''}[TOOL_RESULT_TRUNCATED] Output was ${text.length} chars; returning first ${inlineLimit} chars because overflow artifact write failed.\n${text.slice(0, inlineLimit)}`,
-    };
-  }
-  return {
-    stdout: [
-      opts.summary || `${toolName} output was ${text.length} chars, which exceeds the ${inlineLimit} char inline budget.`,
-      `[TOOL_RESULT_ARTIFACT] Full output saved to ${relPath}. Read targeted ranges from that artifact only if needed.`,
-    ].join('\n'),
-    artifacts: [{ type: 'text', path: relPath, bytes: Buffer.byteLength(text, 'utf-8') }],
-  };
+  // Preserve requested output for the model envelope. Never transport it via workspace files.
+  return { stdout: String(stdout ?? '') };
 }
 
 // Helper function to check if path is allowed
@@ -334,6 +304,7 @@ async function runGitApply(workspacePath: string, args: string[]): Promise<{ std
 
 // READ TOOL
 export interface ReadToolArgs {
+  full?: boolean;
   path: string;
   start_line?: number;
   num_lines?: number;
@@ -452,23 +423,12 @@ export async function executeRead(args: ReadToolArgs): Promise<ToolResult> {
         ...(spooled.artifacts ? { artifacts: spooled.artifacts } : {}),
       };
     }
-    const mode = getRetrievalMode();
-    const cap = Math.max(1, Math.min(480, Math.floor(Number(args.max_lines) || retrievalMaxLines(mode))));
-    const aroundLine = Math.max(0, Number(args.around_line ?? args.aroundLine) || 0);
-    const before = Math.max(0, Math.min(240, Number(args.before || 40) || 40));
-    const after = Math.max(0, Math.min(240, Number(args.after || 80) || 80));
-    const startLine = aroundLine > 0
-      ? Math.max(1, Math.floor(aroundLine - before))
-      : Math.max(1, Number(args.start_line || 1) || 1);
-    const requested = aroundLine > 0
-      ? before + after + 1
-      : Math.max(1, Number(args.num_lines || cap) || cap);
-    const window = Math.min(requested, cap);
-    const startIdx = Math.max(0, startLine - 1);
-    const selected = allLines.slice(startIdx, startIdx + window);
-    const outContent = selected.map((line, index) => `${startLine + index}: ${trimReturnedFileLine(line)}`).join('\n');
-    const endLine = startLine + selected.length - 1;
-    const truncated = (allLines.length > selected.length) || startLine > 1 || requested > cap;
+    const w = fileReadWindow(allLines.length, args, retrievalMaxLines(getRetrievalMode()));
+    const { first: startLine, last: endLine } = w;
+    if (startLine > allLines.length) return { success: false, error: `Requested start ${startLine} is past EOF (${allLines.length} lines).` };
+    const selected = allLines.slice(startLine - 1, endLine);
+    const outContent = selected.map((line, index) => `${startLine + index}: ${line}`).join('\n');
+    const truncated = !!w.missing;
     const spooled = await maybeSpoolToolStdout('read_file', outContent, resolveResultCharBudget(args, FILE_TOOL_READ_INLINE_LIMIT_CHARS), {
       allowInline: args.inline === true || args.no_spool === true,
       summary: `${args.path} read result exceeded inline budget. Requested window ${startLine}-${endLine}.`,
@@ -483,6 +443,8 @@ export async function executeRead(args: ReadToolArgs): Promise<ToolResult> {
         window: {
           start_line: startLine,
           end_line: endLine,
+          next_start_line: w.missing?.start,
+          next_num_lines: w.missing?.count,
           truncated,
         },
       },
@@ -1348,7 +1310,6 @@ export async function executeReadFilesBatch(args: ReadFilesBatchArgs): Promise<T
       }
       const content = await fs.readFile(absPath, 'utf-8');
       const allLines = splitLinesEolSafe(content);
-      const startLine = Math.max(1, Number(entry.start_line || 1) || 1);
       const allowFull = entry.full === true || entry.allow_large === true || args.full === true || args.allow_large === true;
       // Batch reads return useful, capped content by default. Summary mode is
       // opt-in so callers do not pay a second round trip after discovering
@@ -1363,18 +1324,13 @@ export async function executeReadFilesBatch(args: ReadFilesBatchArgs): Promise<T
         summaryLines.push(`${String(filename)}: summary`);
         continue;
       }
-      const requested = Math.max(1, Number(entry.num_lines || (allowFull ? allLines.length : cap)) || cap);
-      const window = allowFull ? requested : Math.min(requested, cap);
-      const startIdx = Math.max(0, startLine - 1);
-      const selected = allLines.slice(startIdx, startIdx + window);
-      const numbered = selected.map((l, i) => `${startLine + i}: ${trimReturnedFileLine(l)}`).join('\n');
-      const endLine = startLine + selected.length - 1;
-      const truncated = endLine < allLines.length;
-      const header = `--- ${filename} (${allLines.length} lines)` +
-        (startLine > 1 || truncated ? ` [lines ${startLine}-${endLine}${truncated ? ', truncated' : ''}]` : '') + ' ---';
-      metadata.push({ filename: String(filename), line_count: allLines.length, truncated, next_start_line: truncated ? endLine + 1 : undefined });
-      chunks.push(`${header}\n${numbered}${truncated ? `\n[READ_DEFAULT_CAP] Batch reads default to ${cap} lines per file. Use start_line:${endLine + 1}, num_lines:${cap} for the next chunk, or full:true only when needed.` : ''}`);
-      summaryLines.push(`${String(filename)}: lines ${startLine}-${endLine}${truncated ? ' truncated' : ''}`);
+      const w = fileReadWindow(allLines.length, { start_line: entry.start_line, num_lines: entry.num_lines, full: allowFull, max_lines: args.max_lines_per_file != null ? cap : undefined }, cap);
+      if (w.first > allLines.length) throw new Error(`Requested start ${w.first} is past EOF (${allLines.length} lines).`);
+      const numbered = allLines.slice(w.first - 1, w.last).map((l, i) => `${w.first + i}: ${l}`).join('\n');
+      const header = `--- ${filename} (${allLines.length} lines) [lines ${w.first}-${w.last}${w.missing ? ', truncated' : ''}] ---`;
+      metadata.push({ filename: String(filename), line_count: allLines.length, truncated: !!w.missing, next_start_line: w.missing?.start });
+      chunks.push(`${header}\n${numbered}${describeReadWindow(w)}`);
+      summaryLines.push(`${String(filename)}: lines ${w.first}-${w.last}${w.missing ? ' truncated' : ''}`);
     } catch (err: any) {
       metadata.push({ filename: String(filename), error: err.message });
       chunks.push(`--- ${String(filename)} ---\nERROR: ${err.message}`);
@@ -1465,7 +1421,8 @@ export function inferWorkspacePatchOp(edit: any): string | undefined {
   return undefined;
 }
 
-export async function executeApplyWorkspacePatchset(args: ApplyWorkspacePatchsetArgs): Promise<ToolResult> {
+export async function executeApplyWorkspacePatchset(args: ApplyWorkspacePatchsetArgs & { dry_run?: boolean; check?: boolean }): Promise<ToolResult> {
+  if (args.dry_run === true || args.check === true) return { success: false, error: 'No files changed: patchset has no dry run. Use preview_patch with a unified diff.' };
   // Tolerate `edits` sent as a JSON string or a single edit object.
   const rawEdits: unknown = (args as any)?.edits;
   if (typeof rawEdits === 'string') {

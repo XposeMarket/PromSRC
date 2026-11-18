@@ -89,6 +89,21 @@ async function main(): Promise<void> {
   assert.ok(activeContextSized.result.includes('Use tool_result_read'));
   assert.equal(await readRawToolResult(String(activeContextSized.extra?.toolResultEnvelope?.rawRef)), activeContextSizedRaw);
 
+  const unicode = ('a'.repeat(255) + '\u{1F680}' + 'middle').repeat(400);
+  const pages = await envelopeOversizedToolResult({ name: 'workspace_read', args: {}, result: unicode, error: false }, { sessionId: 'unicode' });
+  let offset = 0, recovered = '';
+  do {
+    const page = await readRawToolResultRange({ rawRef: pages.extra!.toolResultEnvelope.rawRef, sessionId: 'unicode', offsetBytes: offset, maxChars: 256 });
+    recovered += page.content; offset = page.nextOffsetBytes ?? -1;
+  } while (offset >= 0);
+  assert.equal(recovered, unicode);
+  const { ProcessRunStore } = await import('./process/store');
+  const store = new ProcessRunStore(path.join(tempRoot, 'processes'));
+  fs.writeFileSync(store.combinedPath('run_fixture'), unicode, 'utf8');
+  offset = 0; recovered = '';
+  do { const page = store.readCombinedPage('run_fixture', offset, 256); recovered += page.text; offset = page.next ?? -1; } while (offset >= 0);
+  assert.equal(recovered, unicode);
+  console.log('PASS: exact UTF-8 round trip through both raw and process-log byte cursors');
   const { getConfig } = await import('../config/config');
   const rawParent = path.join(getConfig().getConfigDir(), 'tool-results');
   fs.rmSync(rawParent, { recursive: true, force: true });

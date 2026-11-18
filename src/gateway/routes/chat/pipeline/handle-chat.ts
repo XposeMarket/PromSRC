@@ -2189,7 +2189,7 @@ export async function handleChatUntraced(
       }
       const instrumentedResult = await envelopeOversizedToolResult(
         attachUniversalToolTelemetry(toolResult, toolName, effectiveToolArgs, startedAt),
-        { sessionId, toolName, maxChars: 12_000 },
+        { sessionId, toolName, maxChars: /^(workspace_|read_|file_|search_files|run_command|process_|git_|show_diff)/.test(toolName) ? 65536 : 12_000 },
       );
       toolPerformance.complete(performanceRecord, instrumentedResult.result, instrumentedResult.error);
       const performanceTelemetry = toolPerformance.snapshot(performanceRecord);

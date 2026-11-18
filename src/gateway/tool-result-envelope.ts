@@ -110,7 +110,7 @@ export async function envelopeOversizedToolResult(
 
   // A skill is not considered loaded if its entrypoint is clipped. Skill bundles
   // already use progressive resource reads, so keep the selected entrypoint intact.
-  if (toolName === 'skill_read' || text.length <= maxChars) return toolResult;
+  if (toolName === 'skill_read' || toolName === 'tool_result_read' || text.length <= maxChars) return toolResult;
 
   const originalBytes = Buffer.byteLength(text, 'utf8');
   const sha256 = crypto.createHash('sha256').update(text, 'utf8').digest('hex');
@@ -234,7 +234,9 @@ export async function readRawToolResultRange(input: {
     await handle.close();
   }
   const decoded = buffer.subarray(0, bytesRead).toString('utf8');
-  const content = decoded.slice(0, maxChars);
+  let content = decoded.slice(0, maxChars);
+  // Never split a surrogate pair: replacement bytes would skip the next UTF-8 character.
+  if (/[\uD800-\uDBFF]$/.test(content)) content = content.slice(0, -1);
   const consumedBytes = Buffer.byteLength(content, 'utf8');
   const nextOffsetBytes = offsetBytes + consumedBytes < stat.size ? offsetBytes + consumedBytes : null;
   return { rawRef: value, offsetBytes, nextOffsetBytes, maxChars, totalBytes: stat.size, content };

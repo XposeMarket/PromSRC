@@ -6977,23 +6977,27 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
   }
 
   async function requestMobileMainChatAbort(sessionId = requestedSession, { showToast = true } = {}) {
-    const sid = String(sessionId || requestedSession || __pmChat.activeSessionId || MOBILE_CHAT_SESSION_ID).trim() || MOBILE_CHAT_SESSION_ID;
+    const sid = String(sessionId || '').trim();
+    if (!sid || sid !== requestedSession || sid !== __pmChat.activeSessionId) {
+      return { success: false, message: 'This chat is no longer selected.' };
+    }
     mobileChatRuntimeAdapter.requestInterruption(sid);
-    const runtimeId = String(
-      __pmChat.activeRuns?.[sid]?.runtimeId ||
-      __pmChat.activeRuns?.[requestedSession]?.runtimeId ||
-      _readMobileActiveRun(sid)?.runtimeId ||
-      ''
-    ).trim();
-    const localAbort =
-      __pmChat.activeRuns?.[sid]?.abort ||
-      __pmChat.activeRuns?.[requestedSession]?.abort ||
-      __pmChat.abort;
-    let localAbortRequested = false;
+    const ownedRun = __pmChat.activeRuns?.[sid];
+    const runtimeId = String(ownedRun?.runtimeId || _readMobileActiveRun(sid)?.runtimeId || '').trim();
+    const localAbort = ownedRun?.abort;
+    // Confirm the precise runtime before marking any row as stopped. A stale tap is a no-op.
+    const direct = await stopMobileMainChat(sid, { runtimeId, source: 'mobile_stop_button' });
+    if (!direct?.success) {
+      if (showToast) pmToast(direct?.message || 'This turn could not be stopped.', 'error');
+      return { success: false, message: direct?.message || 'Turn not stopped.', result: direct };
+    }
+    if (__pmChat.activeSessionId !== sid || requestedSession !== sid || __pmChat.activeRuns?.[sid] !== ownedRun ||
+        (runtimeId && ownedRun?.runtimeId && String(ownedRun.runtimeId) !== runtimeId)) return direct;
+
 
     if (localAbort && typeof localAbort.abort === 'function') {
-      localAbortRequested = true;
-      try { localAbort.abort(); } catch (err) {
+
+      try { localAbort.abort({ backendStopRequested: true }); } catch (err) {
         console.warn('[mobile chat] local abort failed:', err);
       }
     } else {
@@ -7016,40 +7020,8 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       setBusy(false, sid);
     }
 
-    try {
-      const direct = await stopMobileMainChat(sid, { runtimeId, source: 'mobile_stop_button' });
-      if (direct?.success) {
-        if (showToast) pmToast('Stopped.', 'success');
-        return { success: true, message: direct.message || 'Main chat aborted.', localAbortRequested, result: direct };
-      }
-
-      const targetsResult = await loadMobileStopTargets().catch(() => null);
-      const targets = Array.isArray(targetsResult?.targets) ? targetsResult.targets : [];
-      const match = targets.find((target) =>
-        target?.abortable !== false &&
-        ((runtimeId && String(target?.id || '').trim() === runtimeId) || String(target?.sessionId || '').trim() === sid)
-      );
-      if (match?.id) {
-        const fallback = await stopMobileRuntime(match.id, { source: 'mobile_stop_button_fallback' });
-        if (fallback?.success) {
-          if (showToast) pmToast('Stopped.', 'success');
-          return { success: true, message: fallback.message || 'Runtime aborted.', localAbortRequested, result: fallback };
-        }
-        return { success: localAbortRequested, message: fallback?.message || fallback?.error || direct?.message || 'Abort sent.', localAbortRequested, result: fallback };
-      }
-
-      return {
-        success: localAbortRequested,
-        message: localAbortRequested
-          ? 'Local stream stopped.'
-          : (direct?.message || 'No active main chat turn found for this session.'),
-        localAbortRequested,
-        result: direct,
-      };
-    } catch (err) {
-      if (!localAbortRequested) throw err;
-      return { success: true, message: 'Local stream stopped.', localAbortRequested, error: err };
-    }
+    if (showToast) pmToast('Stopped.', 'success');
+    return direct;
   }
 
   function screenshotRootActions() {
@@ -7903,7 +7875,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       },
     });
     let stopSent = false;
-    const abortHandle = { abort: () => {
+    const abortHandle = { abort: ({ backendStopRequested = false } = {}) => {
       if (stopSent) return;
       stopSent = true;
       stoppedByUser = true;
@@ -7913,7 +7885,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       _appendMobileProcess(aiTurn, 'warn', 'Stop requested. Aborting the live runtime now.', runtimeId ? { runtimeId } : undefined);
       _clearMobileActiveRun(actualSessionId);
       _markMobileSessionRunning(actualSessionId, false);
-      stopMobileMainChat(actualSessionId, { runtimeId, source: 'mobile_stop_button' }).catch((err) => {
+      if (!backendStopRequested) stopMobileMainChat(actualSessionId, { runtimeId, source: 'mobile_stop_button' }).catch((err) => {
         _appendMobileProcess(aiTurn, 'error', `Backend abort request failed: ${err?.message || err}`);
         renderThreadNow();
       });
