@@ -23,7 +23,7 @@ import {
   type TurnOrigin,
 } from '../session';
 import { expandHome } from './executable';
-import { buildHarnessProjectContext, fileSessionIntoFolderProject } from '../projects/project-store';
+import { buildHarnessProjectContext, fileSessionIntoFolderProject, HARNESS_PROJECT_CONTEXT_CLEARED } from '../projects/project-store';
 import { createPendingRequest } from './pending-requests';
 import { getExternalAgentAdapter, isExternalAgentUsable, registerLiveExternalTurn } from './registry';
 import type { ExternalAgentBinding, ExternalAgentEvent, ExternalAgentId, ExternalUserRequest } from './types';
@@ -294,13 +294,18 @@ export async function runExternalAgentTurn(params: ExternalTurnRunParams, bindin
   let upstreamText = params.message;
   let contextHash = '';
   try {
-    const block = /^\s*\//.test(params.message) ? null : buildHarnessProjectContext(sessionId);
+    const skipContext = /^\s*\//.test(params.message);
+    // Removing the instructions and notes is a change too: the agent is told to drop what it was given.
+    const block = skipContext ? null : (buildHarnessProjectContext(sessionId)
+      || (binding.upstreamSessionId && binding.projectContextHash ? HARNESS_PROJECT_CONTEXT_CLEARED : null));
     if (block) {
       const hash = crypto.createHash('sha256').update(block).digest('hex').slice(0, 32);
       if (!binding.upstreamSessionId || binding.projectContextHash !== hash) {
         upstreamText = `${block}\n\n${params.message}`;
         contextHash = hash;
-        sendInfo(sendSSE, `This project's instructions and notes were included for ${agentName}.`);
+        sendInfo(sendSSE, block === HARNESS_PROJECT_CONTEXT_CLEARED
+          ? `${agentName} was told this project's instructions and notes were removed.`
+          : `This project's instructions and notes were included for ${agentName}.`);
       }
     }
   } catch { /* project context never blocks the turn */ }
