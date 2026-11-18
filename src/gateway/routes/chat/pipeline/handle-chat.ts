@@ -4355,6 +4355,7 @@ Do not produce prose. Use the canonical thread tool now.` });
         if (err?.code === 'CODEX_INCOMPLETE_STREAM' || err?.providerCode === 'CODEX_INCOMPLETE_STREAM' || err?.name === 'CodexIncompleteStreamError') {
           return {
             type: 'chat',
+            noResultFailure: preservedToolResults ? undefined : 'provider_failure',
             text: preservedToolResults && !abortSignal?.aborted
               ? await finishDegradedTurn('CODEX_INCOMPLETE_STREAM', String(err?.message || '').slice(0, 140), lastPartialText)
               : 'No final response was generated. Please retry.',
@@ -4365,6 +4366,7 @@ Do not produce prose. Use the canonical thread tool now.` });
         }
         return {
           type: 'chat',
+          noResultFailure: preservedToolResults ? undefined : 'provider_failure',
           text: preservedToolResults && !abortSignal?.aborted
             ? await finishDegradedTurn('provider_failure', String(err?.message || err).slice(0, 140), lastPartialText,
               isUsageLimitError(err) || [401, 403, 429].includes(Number(err?.status || err?.statusCode || err?.response?.status))
@@ -4416,6 +4418,7 @@ Do not produce prose. Use the canonical thread tool now.` });
     if (recovery.action === 'exhausted') {
       return {
         type: 'execute',
+        noResultFailure: allToolResults.length ? undefined : 'missing_final',
         text: await finishDegradedTurn(recovery.reason, recovery.cause, response?.content || lastPartialText),
         reasoningSummary: normalizeReasoningSummary(allReasoningSummary),
         toolResults: allToolResults.length ? allToolResults : undefined,
@@ -4835,7 +4838,9 @@ Do not produce prose. Use the canonical thread tool now.` });
       if (isGrokGeneration) {
         finalText = trimGrokRunawayRepetition(finalText);
       }
+      let missingModelFinal = false;
       if (!finalText.trim()) {
+        missingModelFinal = true;
         finalText = 'No final response was generated. The task may still be unfinished; completed tool results have been saved.';
       }
       if (greetingLikeTurn && finalText.length > 220) {
@@ -4844,9 +4849,13 @@ Do not produce prose. Use the canonical thread tool now.` });
       if (grokGreetingLikeTurn && finalText.length > 220) {
         finalText = finalText.split(/\n+/)[0].slice(0, 220).trim();
       }
-      finalText = sanitizeFinalReply(finalText, { preflightReason: preflightReasonForTurn }) || emptyModelFinalFallback;
+      finalText = sanitizeFinalReply(finalText, { preflightReason: preflightReasonForTurn });
       if (isGrokGeneration) {
-        finalText = trimGrokRunawayRepetition(finalText) || emptyModelFinalFallback;
+        finalText = trimGrokRunawayRepetition(finalText);
+      }
+      if (!finalText) {
+        missingModelFinal = true;
+        finalText = emptyModelFinalFallback;
       }
       console.log(`[v2] FINAL: ${finalText.slice(0, 150)}`);
       if (!progressState.manualStepAdvance && progressState.items.length >= 2) {
@@ -5032,6 +5041,7 @@ Do not produce prose. Use the canonical thread tool now.` });
       setImmediate(registerTurnOutputs);
       return {
         type: allToolResults.length > 0 ? 'execute' : 'chat',
+        noResultFailure: !allToolResults.length && missingModelFinal ? 'missing_final' : undefined,
         text: finalTextWithSkillOffer,
         thinking: allThinking || undefined,
         reasoningSummary: normalizeReasoningSummary(allReasoningSummary),
