@@ -535,7 +535,8 @@ export function normalizeWorkspaceWrapperTool(name: string, rawArgs: any, worksp
       if (!searchUsed) delete args.search;
       const emptyArgv = args.argv == null || (Array.isArray(args.argv) && args.argv.length === 0);
       const commandUsed = !blank(args.command);
-      if (emptyArgv && (searchUsed || commandUsed || blank(args.program))) { delete args.program; delete args.argv; }
+      // status/wait/log/kill/submit never take a literal form, so a program with no arguments there is a placeholder too.
+      if (emptyArgv && (searchUsed || commandUsed || blank(args.program) || action !== 'run')) { delete args.program; delete args.argv; }
       if (searchUsed && typeof s === 'object' && !Array.isArray(s)) {
         args.search = { ...s };
         for (const key of ['directory', 'glob']) if (blank(args.search[key])) delete args.search[key];

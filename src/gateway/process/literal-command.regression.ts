@@ -23,6 +23,8 @@ async function main(){
     assert.equal(command({command:'git status --short',program:'git',argv:[],search:ph}),'git status --short');
     assert.equal(command({command:'git status --short',argv:[],program:''}),'git status --short');
     assert.match(command({command:'',program:'rg',argv:[],search:{text:'needle',directory:'',glob:'',regex:false}}),/^rg -n -F -e needle -- \./);
+    for(const action of ['status','wait','log'])assert.ifError(normalize('workspace_run',{action,runId:'run_x',command:'',program:'git',argv:[],search:ph})!.error);
+    assert.ok(normalize('workspace_run',{action:'status',runId:'run_x',program:'git',argv:['status']})!.error);
     // Two real forms in one call still fail closed.
     assert.ok(args({command:'echo hi',program:'git',argv:['status']}).error);
     assert.ok(args({command:'',program:'git',argv:['status'],search:{text:'x'}}).error);
