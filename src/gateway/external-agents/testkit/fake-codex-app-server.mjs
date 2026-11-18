@@ -31,6 +31,7 @@ if (mode === 'crash_on_start') {
 }
 
 const loaded = new Set();
+const resumedReplay = new Set(); // threads that replay stale previous-turn events on the next turn/start
 const waiting = new Map(); // server request id -> resolve
 let serverRequestSeq = 0;
 let turnSeq = 0;
@@ -134,9 +135,18 @@ function handle(message) {
     case 'thread/resume':
       if (String(params.threadId || '').startsWith('missing')) return fail(`thread not found: ${params.threadId}`);
       loaded.add(params.threadId);
+      resumedReplay.add(params.threadId);
       return reply({ thread: { id: params.threadId }, model: 'fake-model', modelProvider: 'openai' });
     case 'turn/start': {
       if (!loaded.has(params.threadId)) return fail('thread not loaded');
+      if (resumedReplay.has(params.threadId)) {
+        // Real Codex 0.163 replays the previous turn's usage after thread/resume, stamped with
+        // the OLD turn id, before answering turn/start. Mirror that (plus a stale completion).
+        resumedReplay.delete(params.threadId);
+        const stale = { threadId: params.threadId, turnId: 'turn-previous' };
+        notify('thread/tokenUsage/updated', { ...stale, tokenUsage: { total: { totalTokens: 1 }, last: { totalTokens: 1, inputTokens: 1 }, modelContextWindow: 1000 } });
+        notify('turn/completed', { threadId: params.threadId, turn: turnObject('turn-previous', 'completed') });
+      }
       turnSeq += 1;
       const turnId = `turn-${turnSeq}`;
       reply({ turn: turnObject(turnId, 'inProgress') });

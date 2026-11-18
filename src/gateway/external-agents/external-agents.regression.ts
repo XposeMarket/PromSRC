@@ -199,6 +199,8 @@ async function main(): Promise<void> {
         emit: (event) => events.push(event), requestUser: async () => ({ optionId: 'cancel' }),
       });
       assert.strictEqual(result.status, 'completed');
+      assert.strictEqual(result.finalText, 'Hello world', 'stale replayed previous-turn events must not hijack the resumed turn');
+      assert.notStrictEqual(result.upstreamTurnId, 'turn-previous');
       const sent = readLog();
       const resume = sent.find((m) => m.method === 'thread/resume');
       assert.deepStrictEqual(resume.params, { threadId, excludeTurns: true });

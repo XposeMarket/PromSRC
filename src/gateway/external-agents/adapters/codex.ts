@@ -225,21 +225,30 @@ export class CodexAdapter implements ExternalAgentAdapter {
     return true;
   }
 
-  private ctxFor(params: any): TurnContext | null {
+  private ctxFor(params: any, method = ''): TurnContext | null {
     const threadId = short(params?.threadId || params?.conversationId, 300);
     const ctx = threadId ? this.turns.get(threadId) : null;
     if (!ctx || ctx.done) return null;
     const turnId = short(params?.turnId || params?.turn?.id, 300);
     if (turnId && !ctx.turnId) {
-      ctx.turnId = turnId;
-      if (ctx.signal.aborted && this.client) this.interrupt(ctx, this.client);
+      // Only `turn/started` (or the turn/start answer) names OUR turn. A resumed thread
+      // replays notifications stamped with the PREVIOUS turn id (e.g. tokenUsage, a late
+      // turn/completed); adopting those would drop every event of the real new turn.
+      if (method !== 'turn/started') return null;
+      this.adoptTurnId(ctx, turnId);
     }
     if (turnId && ctx.turnId && turnId !== ctx.turnId) return null;
     return ctx;
   }
 
+  private adoptTurnId(ctx: TurnContext, turnId: string): void {
+    if (!turnId || ctx.turnId === turnId) return;
+    ctx.turnId = turnId;
+    if (ctx.signal.aborted && this.client) this.interrupt(ctx, this.client);
+  }
+
   private onNotification(method: string, params: any): void {
-    const ctx = this.ctxFor(params);
+    const ctx = this.ctxFor(params, method);
     if (!ctx) return;
     switch (method) {
       case 'turn/started':
@@ -565,8 +574,9 @@ export class CodexAdapter implements ExternalAgentAdapter {
         input.signal.addEventListener('abort', onAbort, { once: true });
         client.request('turn/start', { threadId: boundThreadId, ...(input.model ? { model: input.model } : {}), input: [{ type: 'text', text, text_elements: [] }] }, this.timeoutMs)
           .then((res: any) => {
+            // The turn/start answer is authoritative for which turn is ours.
             const turnId = short(res?.turn?.id, 300);
-            if (turnId && !ctx.turnId) ctx.turnId = turnId;
+            if (turnId && !ctx.done) this.adoptTurnId(ctx, turnId);
             if (input.signal.aborted) this.interrupt(ctx, client);
           })
           .catch((error: any) => ctx.finish(input.signal.aborted ? 'interrupted' : 'failed', short(error?.message || error)));
