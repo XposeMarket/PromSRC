@@ -22,8 +22,25 @@ import {
 import { listPendingRequests, respondToPendingRequest } from '../external-agents/pending-requests';
 import { resolveExternalAgentCwd, bindExternalAgentForRequest, startFreshUpstreamSession } from '../external-agents/turn-runner';
 import { getSessionExternalAgent, listSessionSummaries } from '../session';
+import { DOTS_AGENT_ID, startDotsPoller, syncAllDots } from '../dots/dots-sync';
 
 export const router = Router();
+
+// OpenAI Dots: mirror each dot's one conversation in the background (no-op while Dots is off).
+startDotsPoller();
+
+function syncDotsSoon(id: string): void {
+  if (id === DOTS_AGENT_ID) void syncAllDots(true).catch(() => undefined);
+}
+
+/** Pull new dot messages now (opening a dot chat, pull-to-refresh). */
+router.post('/api/external-agents/openai-dots/sync', async (_req, res) => {
+  try {
+    res.json({ success: true, ...(await syncAllDots(true)) });
+  } catch (error) {
+    res.status(502).json({ success: false, error: errorMessage(error) });
+  }
+});
 
 const IMPORT_SOURCE_AGENT: Record<string, string> = {
   codex: 'codex', 'codex-local': 'codex', openai_codex: 'codex',
@@ -183,7 +200,9 @@ router.post('/api/external-agents/:id/enable', async (req, res) => {
   const id = requireAgentId(req, res);
   if (!id) return;
   try {
-    res.json({ success: true, agent: await enableExternalAgent(id) });
+    const agent = await enableExternalAgent(id);
+    syncDotsSoon(id);
+    res.json({ success: true, agent });
   } catch (error) {
     res.status(500).json({ success: false, error: errorMessage(error) });
   }
@@ -193,7 +212,9 @@ router.post('/api/external-agents/:id/verify', async (req, res) => {
   const id = requireAgentId(req, res);
   if (!id) return;
   try {
-    res.json({ success: true, agent: await verifyExternalAgent(id) });
+    const agent = await verifyExternalAgent(id);
+    syncDotsSoon(id);
+    res.json({ success: true, agent });
   } catch (error) {
     res.status(500).json({ success: false, error: errorMessage(error) });
   }

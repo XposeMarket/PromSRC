@@ -4601,7 +4601,10 @@ function _prioritySessionPageHtml(pageState) {
     .filter((session) => !_isDrawerHiddenRuntimeSession(session) && !_isPinned(session?.id));
   if (!sessions.length && pageState?.loading) return '<div class="pm-session-empty">Loading...</div>';
   if (!sessions.length && pageState?.error) return '<div class="pm-session-empty">Could not load sessions.</div>';
-  const sorted = sessions.slice().sort((a, b) => _drawerSessionTime(b) - _drawerSessionTime(a));
+  // Connected agents (OpenAI dots) sit at the top of Priority mode next to Prometheus chats.
+  // Drawer ids may be gateway-scoped (gw_<gateway>...), so match the dot_<room> suffix.
+  const agentContacts = sessions.filter((session) => /(?:^|[^A-Za-z0-9])dot_[A-Za-z0-9]{8,}$/.test(String(session?.id || '')));
+  const sorted = sessions.filter((session) => !agentContacts.includes(session)).sort((a, b) => _drawerSessionTime(b) - _drawerSessionTime(a));
   const attention = [];
   const rest = [];
   sorted.forEach((session) => (_drawerSessionNeedsAttention(session) ? attention : rest).push(session));
@@ -4623,6 +4626,7 @@ function _prioritySessionPageHtml(pageState) {
     : '<div class="pm-session-empty pm-drawer-priority-empty">Nothing needs you right now.</div>';
   const showLoadMore = pageState?.hasMore === true || Number(pageState?.lastPageSize || 0) >= PM_DRAWER_SESSION_PAGE_SIZE;
   return [
+    agentContacts.length ? section('agents', 'Agents', agentContacts.map((session) => _sessionButtonHtml(session)).join('')) : '',
     section('priority', 'Priority', priorityBody, { count: attention.length, attentionSection: true }),
     ...Array.from(groups.entries()).map(([label, list]) => section(label, label, list.map((session) => _sessionButtonHtml(session)).join(''))),
     pageState?.error ? '<div class="pm-session-empty">Could not load more chats.</div>' : '',

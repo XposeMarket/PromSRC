@@ -71,7 +71,7 @@ function render() {
     host.hidden = false;
     host.innerHTML = `<button type="button" class="ea-switcher-btn" disabled aria-label="This chat runs on ${esc(agentName(binding.agentId))}">
         ${agentLogoHtml(binding.agentId)}<span>${esc(agentName(binding.agentId))}</span></button>
-      <span class="ea-quiet-line">${off ? `${esc(agentName(binding.agentId))} is turned off. Turn it on in Settings &gt; Agents &amp; imports to continue.` : `${esc(agentName(binding.agentId))} runs this chat${binding.cwd ? ` in ${esc(shortPath(binding.cwd))}` : ''}`}</span>`;
+      <span class="ea-quiet-line">${off ? `${esc(agentName(binding.agentId))} is turned off. Turn it on in Settings &gt; Agents &amp; imports to continue.` : (binding.agentId === 'openai-dots' ? 'Your dot\'s ongoing chat, same as in ChatGPT' : `${esc(agentName(binding.agentId))} runs this chat${binding.cwd ? ` in ${esc(shortPath(binding.cwd))}` : ''}`)}</span>`;
     setHarnessModel(binding.agentId);
     return;
   }

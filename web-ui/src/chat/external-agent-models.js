@@ -52,7 +52,7 @@ function stateFrom(data) {
     models,
     efforts,
     effort: efforts.includes(selectedEffort) ? selectedEffort : fallback,
-    unavailableReason: models.length ? '' : (data.unavailableReason || `${agentName(context.id)} has not reported model choices.`),
+    unavailableReason: models.length ? '' : (context.id === 'openai-dots' ? 'OpenAI picks the model for your dot.' : (data.unavailableReason || `${agentName(context.id)} has not reported model choices.`)),
   };
 }
 /** Synchronous view from the cached catalog (null until it is loaded). */

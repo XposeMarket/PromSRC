@@ -1238,6 +1238,7 @@ function _compactMobileThreadCacheMessage(m) {
     workStartedAt: Number(m?.workStartedAt || 0) || undefined,
     workEndedAt: Number(m?.workEndedAt || 0) || undefined,
     workDurationMs: Number.isFinite(Number(m?.workDurationMs)) ? Number(m.workDurationMs) : undefined,
+    suppressWorkTimer: m?.suppressWorkTimer === true || undefined,
     _clientRequestId: String(m?._clientRequestId || '').trim() || undefined,
     source: String(m?.source || '').trim() || undefined,
     channelLabel: String(m?.channelLabel || '').trim() || undefined,
@@ -1919,6 +1920,8 @@ function _mapServerMessageToMobile(m, index = -1) {
     workStartedAt: Number(m?.workStartedAt || 0) || undefined,
     workEndedAt: Number(m?.workEndedAt || 0) || undefined,
     workDurationMs: Number.isFinite(Number(m?.workDurationMs)) ? Number(m.workDurationMs) : undefined,
+    // Server-marked rows with no real work (e.g. messages mirrored from an OpenAI dot).
+    suppressWorkTimer: m?.suppressWorkTimer === true || undefined,
     time: m?.timestamp ? _formatChatTime(m.timestamp) : '',
     body: {
       sender: role === 'user' ? '' : 'Prometheus',

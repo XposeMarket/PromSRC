@@ -1507,6 +1507,7 @@ const PRIORITY_PROVIDER_BRANDS = Object.freeze({
 });
 
 function _prioritySessionProvider(session) {
+  if (/^dot_[A-Za-z0-9]+$/.test(String(session?.id || ''))) return 'openai';
   const route = session?.chatModelRoute && typeof session.chatModelRoute === 'object' ? session.chatModelRoute : null;
   const provider = route?.effective?.providerId || route?.providerId || session?.providerId || session?.provider;
   if (provider) return String(provider).trim().toLowerCase();
@@ -1819,6 +1820,7 @@ function _prioritySessionPreview(session) {
 }
 
 function _prioritySessionModel(session) {
+  if (/^dot_[A-Za-z0-9]+$/.test(String(session?.id || ''))) return 'OpenAI Dots';
   const route = session?.chatModelRoute && typeof session.chatModelRoute === 'object' ? session.chatModelRoute : null;
   return String(route?.model || session?.model || session?.modelName || (String(session?.id || '') === String(window.activeChatSessionId || '') ? window._activeModel : '') || 'Prometheus').trim();
 }
@@ -2049,8 +2051,11 @@ function _renderPriorityPanel(el) {
   if (projectsSection) projectsSection.style.display = 'none';
   if (sessionsSection) sessionsSection.style.display = 'none';
 
+  // Connected agents (OpenAI dots) sit at the top of Priority mode next to Prometheus chats.
+  const isAgentContact = (s) => /^dot_[A-Za-z0-9]+$/.test(String(s?.id || ''));
+  const agentContactSessions = (window.chatSessions || []).filter(isAgentContact);
   const activeSessions = (window.chatSessions || [])
-    .filter(_isPrioritySession)
+    .filter((s) => _isPrioritySession(s) && !isAgentContact(s))
     .sort((a, b) => _prioritySessionActivityTime(b) - _prioritySessionActivityTime(a));
   ensureSidebarBranchMetadata(activeSessions.slice(0, 80));
   // Priority attention is not paginated behind newer ordinary chats. Every
@@ -2093,7 +2098,8 @@ function _renderPriorityPanel(el) {
   const priorityControls = `
     ${hasMorePrioritySessions ? `<button class="sessions-show-more-btn" onclick="showMoreSessions()" style="width:100%;margin-top:8px;padding:8px 12px;background:rgba(249,115,22,0.12);border:1px solid rgba(249,115,22,0.30);color:var(--text);border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;font-family:'Manrope',sans-serif;transition:all 0.15s ease" onmouseover="this.style.background='rgba(249,115,22,0.20)'" onmouseout="this.style.background='rgba(249,115,22,0.12)'">+ Show more (${chronologicalCandidates.length - _sessionShowCount} more)</button>` : ''}
     <button class="sessions-show-more-btn settled-entry-btn" onclick="toggleSettledSessionsView()" style="width:100%;margin-top:8px;padding:8px 12px;background:transparent;border:1px solid var(--line);color:var(--sidebar-muted, var(--muted));border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;font-family:'Manrope',sans-serif;transition:all 0.15s ease" onmouseover="this.style.background='color-mix(in srgb, var(--pm-gold, var(--brand)) 10%, transparent)'" onmouseout="this.style.background='transparent'">Settled</button>`;
-  priorityContent.innerHTML = prioritySection + chronologicalSection + priorityControls;
+  const agentsSection = agentContactSessions.length ? _prioritySection('Agents', agentContactSessions.map((session) => renderChatSessionCard(session, { priority: true })).join('')) : '';
+  priorityContent.innerHTML = agentsSection + prioritySection + chronologicalSection + priorityControls;
   syncPriorityBell();
   void el;
 }

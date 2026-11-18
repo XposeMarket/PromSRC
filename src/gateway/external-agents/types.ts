@@ -6,9 +6,16 @@
  * and sessions. See workspace plans/connected-agents-unified-devices/live/LIVE-CONTRACT.md.
  */
 
-export type ExternalAgentId = 'codex' | 'claude-code' | 'openclaw' | 'hermes' | 'cursor';
+export type ExternalAgentId = 'codex' | 'claude-code' | 'openclaw' | 'hermes' | 'cursor' | 'openai-dots';
 
-export const EXTERNAL_AGENT_IDS: readonly ExternalAgentId[] = ['codex', 'claude-code', 'openclaw', 'hermes', 'cursor'];
+export const EXTERNAL_AGENT_IDS: readonly ExternalAgentId[] = ['codex', 'claude-code', 'openclaw', 'hermes', 'cursor', 'openai-dots'];
+
+/**
+ * harness = an agent you start new chats with (Codex, Claude Code...).
+ * contact = an always-on agent with ONE ongoing conversation (OpenAI Dots); it
+ * never appears in the new-chat picker and its chat is created by its sync.
+ */
+export type ExternalAgentKind = 'harness' | 'contact';
 
 export function isExternalAgentId(value: unknown): value is ExternalAgentId {
   return typeof value === 'string' && (EXTERNAL_AGENT_IDS as readonly string[]).includes(value);
@@ -36,6 +43,7 @@ export interface ExternalAgentSnapshot {
   id: ExternalAgentId;
   name: string;
   tile: string;
+  kind: ExternalAgentKind;
   detected: boolean;
   enabled: boolean;
   status: ExternalAgentStatus;
@@ -130,6 +138,8 @@ export interface ExternalAgentAdapter {
   id: ExternalAgentId;
   name: string;
   tile: string;
+  /** Default 'harness'. */
+  kind?: ExternalAgentKind;
   capabilities: ExternalAgentCapabilities;
   /** Cheap: is a program present? Opens no auth files, starts no session. */
   detect(): Promise<{ found: boolean; executable?: string }>;

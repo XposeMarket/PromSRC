@@ -6,6 +6,7 @@
 import { CodexAdapter } from './adapters/codex';
 import { ClaudeCodeAdapter } from './adapters/claude-code';
 import { AcpAdapter } from './adapters/acp';
+import { OpenAIDotsAdapter } from './adapters/openai-dots';
 import { getExternalAgentEntry, readExternalAgentStore, updateExternalAgentEntry } from './store';
 import { cancelPendingRequests } from './pending-requests';
 import {
@@ -29,6 +30,7 @@ function ensureDefaults(): void {
   if (!adapters.has('codex')) adapters.set('codex', new CodexAdapter());
   if (!adapters.has('claude-code')) adapters.set('claude-code', new ClaudeCodeAdapter());
   for (const id of ['hermes', 'cursor', 'openclaw'] as const) if (!adapters.has(id)) adapters.set(id, new AcpAdapter(id));
+  if (!adapters.has('openai-dots')) adapters.set('openai-dots', new OpenAIDotsAdapter());
 }
 
 /** Tests: replace an adapter (for example one that runs the fake app-server). */
@@ -63,7 +65,9 @@ function snapshotFrom(adapter: ManagedAdapter, found: boolean): ExternalAgentSna
   let statusText = entry.lastStatusText || '';
   if (!found) {
     status = 'not_installed';
-    statusText = "Codex isn't installed on this computer.".replace('Codex', adapter.name);
+    statusText = adapter.kind === 'contact'
+      ? `Sign in to OpenAI in Settings > Models to use ${adapter.name}.`
+      : "Codex isn't installed on this computer.".replace('Codex', adapter.name);
   } else if (!entry.enabled) {
     status = 'found';
     statusText = '';
@@ -71,11 +75,14 @@ function snapshotFrom(adapter: ManagedAdapter, found: boolean): ExternalAgentSna
     status = 'checking';
     statusText = `Checking ${adapter.name}…`;
   }
-  const fixHint = status === 'signed_out' ? `Sign in through your own ${adapter.name} installation, then Check again.` : undefined;
+  const fixHint = status === 'signed_out'
+    ? (adapter.kind === 'contact' ? 'Sign in to OpenAI in Settings > Models, then Check again.' : `Sign in through your own ${adapter.name} installation, then Check again.`)
+    : undefined;
   return {
     id: adapter.id,
     name: adapter.name,
     tile: adapter.tile,
+    kind: adapter.kind || 'harness',
     detected: found,
     enabled: entry.enabled,
     status,

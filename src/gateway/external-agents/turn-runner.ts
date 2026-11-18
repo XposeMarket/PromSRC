@@ -62,7 +62,7 @@ export type BindOutcome =
   | { ok: true; binding: ExternalAgentBinding | null; created: boolean }
   | { ok: false; status: 400 | 409; code: 'agent_locked' | 'agent_unavailable' | 'bad_cwd' | 'imported_chat'; error: string };
 
-const AGENT_NAMES: Record<string, string> = { codex: 'Codex', 'claude-code': 'Claude Code', openclaw: 'OpenClaw', hermes: 'Hermes', cursor: 'Cursor' };
+const AGENT_NAMES: Record<string, string> = { codex: 'Codex', 'claude-code': 'Claude Code', openclaw: 'OpenClaw', hermes: 'Hermes', cursor: 'Cursor', 'openai-dots': 'OpenAI Dots' };
 
 export function externalAgentName(id: string): string {
   return AGENT_NAMES[id] || id;
@@ -128,6 +128,9 @@ export function bindExternalAgentForRequest(sessionId: string, requested: Extern
     return { ok: false, status: 409, code: 'agent_locked', error: 'This chat already runs on Prometheus. The agent can be chosen only for a new chat.' };
   }
   const adapter = getExternalAgentAdapter(wantedId as ExternalAgentId);
+  if (adapter?.kind === 'contact') {
+    return { ok: false, status: 409, code: 'agent_unavailable', error: `${adapter.name} has one ongoing conversation per dot. Open it from the sidebar instead of starting a new chat.` };
+  }
   const usable = adapter ? isExternalAgentUsable(adapter.id) : { ok: false };
   if (!adapter || !usable.ok) {
     return { ok: false, status: 409, code: 'agent_unavailable', error: `${externalAgentName(wantedId)} is not connected. Turn it on in Settings > Agents & imports.` };

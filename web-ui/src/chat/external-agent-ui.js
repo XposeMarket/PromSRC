@@ -12,7 +12,7 @@ import { agentLogoHtml } from './external-agent-logos.js';
 // card go only to that exact upstream request (POST .../respond) and never
 // touch a Prometheus approval or permission.
 
-const AGENT_NAMES = { prometheus: 'Prometheus', codex: 'Codex', 'claude-code': 'Claude Code', openclaw: 'OpenClaw', hermes: 'Hermes', cursor: 'Cursor' };
+const AGENT_NAMES = { prometheus: 'Prometheus', codex: 'Codex', 'claude-code': 'Claude Code', openclaw: 'OpenClaw', hermes: 'Hermes', cursor: 'Cursor', 'openai-dots': 'OpenAI Dots' };
 
 const st = {
   request: null,
@@ -81,8 +81,14 @@ export async function loadExternalAgents(force = false) {
   return st.loading;
 }
 
+/** Agents you can START a new chat with. Contacts (OpenAI Dots) have one ongoing chat each, opened from the sidebar. */
 export function selectableAgents() {
-  return st.agents.filter((agent) => agent && agent.selectable);
+  return st.agents.filter((agent) => agent && agent.selectable && agent.kind !== 'contact');
+}
+
+/** A dot's one ongoing chat (created by the gateway's dots sync). */
+export function isDotSessionId(sessionId) {
+  return /^dot_[A-Za-z0-9]+$/.test(String(sessionId || ''));
 }
 
 export function getAgentChoice() {
@@ -114,6 +120,8 @@ export async function loadAgentFolders(id, { fresh = false } = {}) {
 export async function loadSessionBinding(sessionId, force = false) {
   const sid = String(sessionId || '').trim();
   if (!sid) return null;
+  // Opening a dot's chat pulls anything it posted since the last background sync.
+  if (isDotSessionId(sid)) void call('/api/external-agents/openai-dots/sync', { method: 'POST' }).catch(() => undefined);
   if (!force && st.bindings.get(sid)) return st.bindings.get(sid);
   let binding = null;
   try {
