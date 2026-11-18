@@ -2154,7 +2154,7 @@ router.post('/api/chat', async (req, res) => {
   {
     const rawAgent = req.body?.agent;
     const requestedAgent = rawAgent && typeof rawAgent === 'object'
-      ? { id: String(rawAgent.id || '').trim().toLowerCase(), cwd: typeof rawAgent.cwd === 'string' ? rawAgent.cwd : undefined, model: typeof rawAgent.model === 'string' ? rawAgent.model : undefined }
+      ? { id: String(rawAgent.id || '').trim().toLowerCase(), cwd: typeof rawAgent.cwd === 'string' ? rawAgent.cwd : undefined, model: typeof rawAgent.model === 'string' ? rawAgent.model : undefined, effort: typeof rawAgent.effort === 'string' ? rawAgent.effort : undefined }
       : (typeof rawAgent === 'string' && rawAgent.trim() ? { id: rawAgent.trim().toLowerCase() } : null);
     if (requestedAgent && requestedAgent.id !== 'prometheus' && !isExternalAgentId(requestedAgent.id)) {
       res.status(400).json({ success: false, code: 'unknown_agent', error: 'Unknown agent.' });

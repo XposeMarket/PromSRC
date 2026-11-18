@@ -32,6 +32,12 @@ export interface ExternalAgentRequestInput {
   id: ExternalAgentId | 'prometheus';
   cwd?: string;
   model?: string;
+  effort?: string;
+}
+
+function cleanEffort(value: unknown): string | undefined {
+  const effort = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  return /^[a-z_-]{1,20}$/.test(effort) ? effort : undefined;
 }
 
 export interface ExternalTurnRunParams {
@@ -102,9 +108,12 @@ export function bindExternalAgentForRequest(sessionId: string, requested: Extern
     if (wantedId && wantedId !== existing.agentId) {
       return { ok: false, status: 409, code: 'agent_locked', error: `This chat runs on ${externalAgentName(existing.agentId)}. The agent can't be changed after the first message; start a new chat instead.` };
     }
-    if (requested?.model) {
+    if (requested?.model || requested?.effort !== undefined) {
       if (activeExternalSessions.has(sessionId)) return { ok: false, status: 409, code: 'agent_locked', error: 'Wait for this turn to finish before changing models.' };
-      return { ok: true, binding: setSessionExternalAgent(sessionId, { ...existing, selectedModel: requested.model.slice(0, 200) }) || existing, created: false };
+      const next: ExternalAgentBinding = { ...existing, ...(requested.model ? { selectedModel: requested.model.slice(0, 200) } : {}) };
+      const effort = cleanEffort(requested.effort);
+      if (effort) next.selectedEffort = effort; else if (requested.effort !== undefined || requested.model) delete next.selectedEffort;
+      return { ok: true, binding: setSessionExternalAgent(sessionId, next) || existing, created: false };
     }
     return { ok: true, binding: existing, created: false };
   }
@@ -130,6 +139,7 @@ export function bindExternalAgentForRequest(sessionId: string, requested: Extern
     cwd: cwd.cwd,
     boundAt: new Date().toISOString(),
     ...(requested?.model ? { selectedModel: requested.model.slice(0, 200) } : {}),
+    ...(cleanEffort(requested?.effort) ? { selectedEffort: cleanEffort(requested?.effort) } : {}),
   });
   return { ok: true, binding: binding || null, created: true };
 }
@@ -178,7 +188,9 @@ export async function runExternalAgentTurn(params: ExternalTurnRunParams, bindin
   if (binding.selectedModel && (binding.agentId === 'codex' || binding.agentId === 'claude-code')) {
     try {
       const catalog = await adapter.listModels?.({ cwd: binding.cwd, upstreamSessionId: binding.upstreamSessionId });
-      if (!catalog?.models.some(model => model.id === binding.selectedModel)) return refuse(params, binding, 'That model is not available in this agent. Choose a model from its own list.');
+      const entry = catalog?.models.find(model => model.id === binding.selectedModel);
+      if (!entry) return refuse(params, binding, 'That model is not available in this agent. Choose a model from its own list.');
+      if (binding.selectedEffort && Array.isArray(entry.efforts) && !entry.efforts.includes(binding.selectedEffort)) return refuse(params, binding, 'That reasoning level is not available for this model. Choose another level.');
     } catch { return refuse(params, binding, 'Could not verify this agent model. Check its connection and choose again.'); }
   }
   if (activeExternalSessions.has(sessionId)) return refuse(params, binding, 'This agent is still working on the previous message.');
@@ -273,6 +285,7 @@ export async function runExternalAgentTurn(params: ExternalTurnRunParams, bindin
       cwd: binding.cwd,
       text: params.message,
       ...(binding.selectedModel ? { model: binding.selectedModel } : {}),
+      ...(binding.selectedEffort ? { effort: binding.selectedEffort } : {}),
       signal: controller.signal,
       emit,
       requestUser,

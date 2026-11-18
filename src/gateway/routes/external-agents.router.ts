@@ -42,13 +42,16 @@ router.put('/api/external-agents/sessions/:sessionId/model', async (req, res) =>
   const binding = getSessionExternalAgent(sessionId);
   if (!binding || !isExternalAgentUsable(binding.agentId).ok) { res.status(409).json({ success: false, error: 'No connected agent owns this chat.' }); return; }
   const model = typeof req.body?.model === 'string' ? req.body.model.trim() : '';
+  const effort = typeof req.body?.effort === 'string' ? req.body.effort.trim().toLowerCase() : '';
   try {
     const catalog = await getExternalAgentAdapter(binding.agentId)?.listModels?.({ cwd: binding.cwd, upstreamSessionId: binding.upstreamSessionId });
-    if (!model || !catalog?.models.some(item => item.id === model)) { res.status(400).json({ success: false, error: 'Choose a model reported by this agent.' }); return; }
+    const entry = model ? catalog?.models.find(item => item.id === model) : undefined;
+    if (!entry) { res.status(400).json({ success: false, error: 'Choose a model reported by this agent.' }); return; }
+    if (effort && !(entry.efforts || []).includes(effort)) { res.status(400).json({ success: false, error: 'This model does not offer that reasoning level.' }); return; }
     if (!isExternalAgentUsable(binding.agentId).ok) { res.status(409).json({ success: false, error: 'Agent was disconnected.' }); return; }
-    const result = bindExternalAgentForRequest(sessionId, { id: binding.agentId, model });
+    const result = bindExternalAgentForRequest(sessionId, { id: binding.agentId, model, effort });
     if (!result.ok) { res.status(result.status).json({ success: false, error: result.error }); return; }
-    res.json({ success: true, model });
+    res.json({ success: true, model, ...(effort ? { effort } : {}) });
   } catch { res.status(502).json({ success: false, error: 'Could not validate the agent model.' }); }
 });
 
@@ -115,6 +118,7 @@ router.get('/api/external-agents/sessions/:sessionId', (req, res) => {
           hasUpstream: !!binding.upstreamSessionId,
           currentModel: binding.currentModel,
           selectedModel: binding.selectedModel,
+          selectedEffort: binding.selectedEffort,
           ...(binding.lastTurn?.status ? { lastTurnStatus: binding.lastTurn.status } : {}),
           upstreamMissing: binding.lastTurn?.upstreamMissing === true || (binding.lastTurn?.status === 'failed' && /can't find this session/i.test(String(binding.lastTurn?.error || ''))),
         }

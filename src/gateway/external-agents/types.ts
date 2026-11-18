@@ -95,6 +95,8 @@ export interface ExternalModelCatalog {
 export interface ExternalTurnInput {
   /** Explicit user choice only; omitted preserves the harness's configuration. */
   model?: string;
+  /** Explicit reasoning level reported by the harness for that model; omitted = harness default. */
+  effort?: string;
   sessionId: string;
   upstreamSessionId?: string;
   cwd: string;
@@ -145,6 +147,7 @@ export interface ExternalAgentAdapter {
 export interface ExternalAgentBinding {
   version: 1;
   selectedModel?: string;
+  selectedEffort?: string;
   currentModel?: string;
   agentId: ExternalAgentId;
   cwd: string;
@@ -175,6 +178,7 @@ export function normalizeExternalAgentBinding(input: any): ExternalAgentBinding 
     cwd,
     ...(upstream ? { upstreamSessionId: upstream } : {}),
     ...(typeof input.selectedModel === 'string' && input.selectedModel.trim() ? { selectedModel: input.selectedModel.trim().slice(0, 200) } : {}),
+    ...(typeof input.selectedEffort === 'string' && /^[a-z_-]{1,20}$/.test(input.selectedEffort) ? { selectedEffort: input.selectedEffort } : {}),
     ...(typeof input.currentModel === 'string' && input.currentModel.trim() ? { currentModel: input.currentModel.trim().slice(0, 200) } : {}),
     boundAt: String(input.boundAt || '').trim().slice(0, 40) || new Date().toISOString(),
     ...(lastStatus ? {

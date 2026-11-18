@@ -132,6 +132,7 @@ export class ClaudeCodeAdapter implements ExternalAgentAdapter {
         ...(input.upstreamSessionId ? { resume: sessionId } : { sessionId }),
         includePartialMessages: true, canUseTool,
         ...(input.model ? { model: input.model } : {}),
+        ...(input.effort ? { effort: input.effort as any } : {}),
         systemPrompt: { type: 'preset', preset: 'claude_code' },
         // Select the CLI's own prompt, never Prometheus instructions or an SDK-empty prompt.
         // SDK 0.3.326 loads all filesystem settings when omitted, exactly like the CLI.

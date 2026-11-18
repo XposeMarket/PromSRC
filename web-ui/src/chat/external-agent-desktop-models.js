@@ -1,5 +1,10 @@
-import { setAgentModelContext, hasAgentModelContext, agentModelBadge, loadAgentModelCatalog, agentModelForSend } from './external-agent-models.js';
-import { esc } from './external-agent-ui.js';
+// Desktop: the ORIGINAL model switcher (quick reasoning slider + Advanced)
+// stays in charge. When a connected agent owns the chat it reads this hook
+// instead of Prometheus providers, so only the harness's models/efforts show.
+import {
+  setAgentModelContext, hasAgentModelContext, agentModelBadge, agentModelState, agentModelStateCached,
+  saveAgentModel, saveAgentEffort, agentModelForSend, agentEffortForSend, agentEffortLabel,
+} from './external-agent-models.js';
 const request = async (path, options = {}) => {
   if (window.api) return window.api(path, options);
   return (await fetch(path, { ...options, headers: { 'Content-Type': 'application/json', ...options.headers } })).json();
@@ -7,9 +12,9 @@ const request = async (path, options = {}) => {
 let savedLabel = null;
 let current = null;
 let generation = 0;
-let menu;
 let displayed = '';
 let watched;
+let labels = new Map();
 function paintLabel(text) {
   displayed = text;
   const label = document.getElementById('chat-model-name');
@@ -19,46 +24,54 @@ function paintLabel(text) {
   }
   if (label && text && label.textContent !== text) label.textContent = text;
 }
-function close() { menu?.remove(); menu = null; }
+function repaint() {
+  const stamp = generation;
+  return agentModelBadge(request).then((text) => { if (stamp === generation && current && text) paintLabel(text); }).catch(() => {});
+}
 export function setDesktopAgentModel(context) {
   const label = document.getElementById('chat-model-name');
   const key = context ? `${context.id}|${context.sessionId || ''}|${context.cwd || ''}` : '';
   if (key === (current?.key || '')) return;
-  generation++; close(); current = context ? { ...context, key } : null; displayed = '';
+  generation++; current = context ? { ...context, key } : null; displayed = '';
   if (context && savedLabel === null) savedLabel = label?.textContent || '';
   setAgentModelContext(context);
   if (!context) { if (label && savedLabel !== null) label.textContent = savedLabel; savedLabel = null; return; }
-  const stamp = generation;
-  agentModelBadge(request).then(text => { if (stamp === generation && label && text) paintLabel(text); }).catch(() => {});
+  void repaint();
 }
-document.addEventListener('click', async event => {
-  if (!hasAgentModelContext() || document.body.classList.contains('pm-mobile-active')) return;
-  const button = event.target.closest?.('#model-switcher-btn');
-  if (!button) { if (!menu?.contains(event.target)) close(); return; }
-  event.preventDefault(); event.stopImmediatePropagation();
-  if (menu) { close(); return; }
-  const stamp = generation; const context = current;
-  menu = document.createElement('div'); menu.className = 'ea-menu'; menu.style.bottom = '100%'; menu.textContent = 'Loading models…';
-  button.parentElement.style.position = 'relative'; button.parentElement.appendChild(menu);
-  const target = menu;
-  try {
-    const data = await loadAgentModelCatalog(request);
-    if (stamp !== generation || !target.isConnected) return;
-    target.innerHTML = (data?.models || []).map(model => `<button type="button" class="ea-menu-item" data-ea-model="${esc(model.id)}">${esc(model.label)}</button>`).join('') || `<div class="ea-menu-note">${esc(data?.unavailableReason || 'No model choices reported.')}</div>`;
-    target.querySelectorAll('[data-ea-model]').forEach(row => row.addEventListener('click', async e => {
-      e.stopPropagation(); row.disabled = true;
-      try {
-        const model = row.dataset.eaModel;
-        if (context.sessionId) {
-          const result = await request(`/api/external-agents/sessions/${encodeURIComponent(context.sessionId)}/model`, { method: 'PUT', body: JSON.stringify({ model }) });
-          if (result?.success === false) throw new Error(result.error);
-        }
-        if (stamp !== generation) return;
-        const { selectAgentModel } = await import('./external-agent-models.js'); selectAgentModel(model);
-        paintLabel(row.textContent);
-        close();
-      } catch (error) { row.textContent = error.message; row.disabled = false; }
-    }));
-  } catch (error) { if (target.isConnected) target.textContent = error.message; }
-}, true);
-export { agentModelForSend };
+// Catalog labels ("GPT-6-Luna", "Haiku") instead of Prometheus provider names.
+function installLabelOverride() {
+  const original = window.formatModelDisplayName;
+  if (typeof original !== 'function' || original.__eaAgentLabels) return;
+  const wrapped = (model, provider) => (hasAgentModelContext() && labels.get(model)) || original(model, provider);
+  wrapped.__eaAgentLabels = true;
+  window.formatModelDisplayName = wrapped;
+}
+function switcherState(state) {
+  if (!state) return null;
+  installLabelOverride();
+  labels = new Map(state.models.map((item) => [item.id, item.label]));
+  return {
+    route: null, llm: { provider: state.provider, providers: { [state.provider]: { model: state.model } } },
+    catalog: [{ id: state.provider, name: state.agentName }],
+    credentialed: [state.provider], provider: state.provider, model: state.model,
+    providerConfig: { model: state.model }, reasoningEffort: state.effort, speed: 'standard',
+    agentName: state.agentName, agentModels: state.models, agentEfforts: state.efforts,
+  };
+}
+window.__promAgentModelSwitcher = {
+  active: () => hasAgentModelContext() && !document.body.classList.contains('pm-mobile-active'),
+  cached: () => switcherState(agentModelStateCached()) || switcherState({ provider: 'openai_codex', agentName: 'Agent', models: [], efforts: [], model: '', effort: '' }),
+  load: async () => switcherState(await agentModelState(request)),
+  levels: () => {
+    const state = agentModelStateCached();
+    return state ? state.efforts.map((v) => ({ v, label: agentEffortLabel(v), desc: '' })) : [];
+  },
+  async setRoute(route = {}) {
+    const state = agentModelStateCached();
+    if (route.model && route.model !== state?.model) await saveAgentModel(request, route.model);
+    else if (route.reasoningEffort && route.reasoningEffort !== state?.effort) await saveAgentEffort(request, route.reasoningEffort);
+    await repaint();
+    return { effective: { providerId: state?.provider, model: route.model || state?.model, reasoningEffort: route.reasoningEffort } };
+  },
+};
+export { agentModelForSend, agentEffortForSend };

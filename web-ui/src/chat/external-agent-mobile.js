@@ -6,12 +6,13 @@
 // added to the composer. Hidden unless an agent is selectable.
 import {
   agentFieldForNewChat, agentName, agentStatusFor, esc, getAgentChoice, handleExternalAgentStreamEvent,
-  loadAgentFolders, loadExternalAgents, loadSessionBinding, onExternalAgentsChange, selectableAgents,
+  loadExternalAgents, loadSessionBinding, onExternalAgentsChange, selectableAgents,
   setAgentChoice, setExternalAgentRequest, syncExternalAgentRequests,
 } from './external-agent-ui.js';
 
 import { syncAgentEmptyState, watchAgentEmptyState } from './external-agent-empty-state.js';
-import { setAgentModelContext, agentModelForSend } from './external-agent-models.js';
+import { setAgentModelContext, agentModelForSend, agentEffortForSend } from './external-agent-models.js';
+import { agentLogoHtml } from './external-agent-logos.js';
 
 
 const ui = { row: null, sheet: null, scrim: null, off: null, generation: 0, sessionId: null };
@@ -19,9 +20,8 @@ const ui = { row: null, sheet: null, scrim: null, off: null, generation: 0, sess
 function rowHtml() {
   const choice = getAgentChoice();
   const chosen = choice.id !== 'prometheus' ? agentStatusFor(choice.id) : null;
-  const sub = chosen ? (choice.cwd ? choice.cwd.split(/[\\/]/).filter(Boolean).slice(-2).join('/') : 'Default folder') : 'Agent';
-  return `<span class="pm-new-chat-context-icon" aria-hidden="true"><span class="ea-tile${chosen ? '' : ' ea-tile-prometheus'}">${esc(chosen?.tile || 'Pr')}</span></span>
-    <span class="pm-new-chat-context-value"><strong>${esc(chosen ? chosen.name : 'Prometheus')}</strong><small>${esc(sub)}</small></span>
+  return `<span class="pm-new-chat-context-icon" aria-hidden="true">${agentLogoHtml(chosen ? chosen.id : 'prometheus')}</span>
+    <span class="pm-new-chat-context-value"><strong>${esc(chosen ? chosen.name : 'Prometheus')}</strong><small>Agent</small></span>
     <span class="pm-new-chat-context-chevron" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></span>`;
 }
 
@@ -49,13 +49,12 @@ function closeSheet() {
   ui.row?.setAttribute('aria-expanded', 'false');
 }
 
-async function openSheet() {
+function openSheet() {
   closeSheet();
   const choice = getAgentChoice();
   const agents = selectableAgents();
-  const folders = choice.id !== 'prometheus' ? await loadAgentFolders(choice.id) : [];
-  const item = (id, tile, name, note) => `<button type="button" class="ea-menu-item${choice.id === id ? ' is-active' : ''}" data-ea="pick" data-id="${esc(id)}" aria-pressed="${choice.id === id}">
-      <span class="ea-tile" aria-hidden="true">${esc(tile)}</span><span>${esc(name)}<small>${esc(note)}</small></span></button>`;
+  const item = (id, name) => `<button type="button" class="ea-menu-item${choice.id === id ? ' is-active' : ''}" data-ea="pick" data-id="${esc(id)}" aria-pressed="${choice.id === id}">
+      ${agentLogoHtml(id)}<span>${esc(name)}</span>${choice.id === id ? '<span class="ea-menu-check" aria-hidden="true">✓</span>' : ''}</button>`;
   ui.scrim = document.createElement('button');
   ui.scrim.type = 'button';
   ui.scrim.className = 'ea-sheet-scrim';
@@ -66,32 +65,13 @@ async function openSheet() {
   ui.sheet.setAttribute('role', 'dialog');
   ui.sheet.setAttribute('aria-label', 'Who runs this chat');
   ui.sheet.innerHTML = `<div class="ea-sheet-handle"></div><h3 class="ea-sheet-title">Who runs this chat</h3>
-    ${item('prometheus', 'P', 'Prometheus', 'Prometheus runs the chat')}
-    ${agents.map((a) => item(a.id, a.tile || a.name[0], a.name, `Your own ${a.name}: its login, model and tools`)).join('')}
-    ${choice.id !== 'prometheus' ? `<div class="ea-menu-sep"></div><div class="ea-menu-label">Folder</div>
-      <button type="button" class="ea-menu-item${!choice.cwd ? ' is-active' : ''}" data-ea="folder" data-path="">Default folder<small>The Prometheus workspace</small></button>
-      ${folders.slice(0, 6).map((f) => `<button type="button" class="ea-menu-item${choice.cwd === f.path ? ' is-active' : ''}" data-ea="folder" data-path="${esc(f.path)}">${esc(f.label || f.path)}<small>${esc(f.path)}</small></button>`).join('')}
-      <input class="ea-menu-input" data-ea="path" type="text" placeholder="Or type a folder path" autocomplete="off" enterkeyhint="done">` : ''}`;
-  ui.sheet.addEventListener('click', async (event) => {
-    const el = event.target.closest('[data-ea]');
+    ${item('prometheus', 'Prometheus')}
+    ${agents.map((a) => item(a.id, a.name)).join('')}`;
+  ui.sheet.addEventListener('click', (event) => {
+    const el = event.target.closest('[data-ea="pick"]');
     if (!el) return;
-    const act = el.getAttribute('data-ea');
-    if (act === 'pick') {
-      const id = el.getAttribute('data-id');
-      setAgentChoice(id, '');
-      if (id === 'prometheus') closeSheet(); else openSheet();
-    } else if (act === 'folder') {
-      setAgentChoice(getAgentChoice().id, el.getAttribute('data-path') || '');
-      closeSheet();
-    }
-  });
-  ui.sheet.addEventListener('keydown', (event) => {
-    const el = event.target;
-    if (el?.getAttribute?.('data-ea') === 'path' && event.key === 'Enter') {
-      event.preventDefault();
-      setAgentChoice(getAgentChoice().id, el.value.trim());
-      closeSheet();
-    }
+    setAgentChoice(el.getAttribute('data-id'), '');
+    closeSheet();
   });
   document.body.append(ui.scrim, ui.sheet);
   ui.row?.setAttribute('aria-expanded', 'true');
@@ -128,7 +108,7 @@ export function mobileAgentFieldForSend(sessionId) {
   const field = agentFieldForNewChat();
   ui.sessionId = sessionId;
   closeSheet();
-  return field ? { ...field, ...(agentModelForSend() ? { model: agentModelForSend() } : {}) } : field;
+  return field ? { ...field, ...(agentModelForSend() ? { model: agentModelForSend() } : {}), ...(agentEffortForSend() ? { effort: agentEffortForSend() } : {}) } : field;
 }
 
 export function mobileAgentStreamEvent(event, sessionId, request) {

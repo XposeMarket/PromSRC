@@ -9,14 +9,15 @@
 // - The original model button is scoped to the selected harness's reported models.
 import {
   agentFieldForNewChat, agentName, agentStatusFor, cachedSessionBinding, esc, getAgentChoice,
-  handleExternalAgentStreamEvent, loadAgentFolders, loadExternalAgents, loadSessionBinding,
+  handleExternalAgentStreamEvent, loadExternalAgents, loadSessionBinding,
   onExternalAgentsChange, selectableAgents, setAgentChoice, syncExternalAgentRequests,
 } from './external-agent-ui.js';
 
 import { mountMinimalAgentComposer } from './external-agent-composer.js';
-import { setDesktopAgentModel, agentModelForSend } from './external-agent-desktop-models.js';
+import { setDesktopAgentModel, agentModelForSend, agentEffortForSend } from './external-agent-desktop-models.js';
+import { agentLogoHtml } from './external-agent-logos.js';
 
-const ui = { host: null, menuOpen: false, lastSession: '', lastEmpty: null, folders: [], typed: '' };
+const ui = { host: null, menuOpen: false, lastSession: '', lastEmpty: null };
 
 function chatView() { return document.getElementById('chat-view'); }
 function isEmptyChat() { return !!chatView()?.classList.contains('chat-empty'); }
@@ -68,7 +69,7 @@ function render() {
     const off = snap && !snap.enabled;
     host.hidden = false;
     host.innerHTML = `<button type="button" class="ea-switcher-btn" disabled aria-label="This chat runs on ${esc(agentName(binding.agentId))}">
-        <span class="ea-tile" aria-hidden="true">${esc(snap?.tile || 'Cx')}</span><span>${esc(agentName(binding.agentId))}</span></button>
+        ${agentLogoHtml(binding.agentId)}<span>${esc(agentName(binding.agentId))}</span></button>
       <span class="ea-quiet-line">${off ? `${esc(agentName(binding.agentId))} is turned off. Turn it on in Settings &gt; Agents &amp; imports to continue.` : `${esc(agentName(binding.agentId))} runs this chat${binding.cwd ? ` in ${esc(shortPath(binding.cwd))}` : ''}`}</span>`;
     setHarnessModel(binding.agentId);
     return;
@@ -83,23 +84,19 @@ function render() {
   const chosen = choice.id !== 'prometheus' ? agentStatusFor(choice.id) : null;
   host.hidden = false;
   host.innerHTML = `<button type="button" class="ea-switcher-btn" data-ea="toggle" aria-haspopup="menu" aria-expanded="${ui.menuOpen}" title="Who runs this chat">
-      <span class="ea-tile${chosen ? '' : ' ea-tile-prometheus'}" aria-hidden="true">${esc(chosen?.tile || 'Pr')}</span><span>${esc(chosen ? chosen.name : 'Prometheus')}</span><span class="ea-caret" aria-hidden="true">▾</span></button>
-    ${chosen ? `<span class="ea-switcher-folder" title="${esc(choice.cwd || 'Default folder')}">${esc(choice.cwd ? shortPath(choice.cwd) : 'Default folder')}</span>` : ''}
+      ${agentLogoHtml(chosen ? chosen.id : 'prometheus')}<span>${esc(chosen ? chosen.name : 'Prometheus')}</span><span class="ea-caret" aria-hidden="true">▾</span></button>
     ${ui.menuOpen ? menuHtml(agents, choice) : ''}`;
   setHarnessModel(chosen ? chosen.id : null);
 }
 
+// One line per agent: logo + name. The folder comes from the chat's project
+// (Chat / Project picker), so there is no folder list here.
 function menuHtml(agents, choice) {
-  const item = (id, tile, name, note) => `<button type="button" role="menuitemradio" aria-checked="${choice.id === id}" class="ea-menu-item${choice.id === id ? ' is-active' : ''}" data-ea="pick" data-id="${esc(id)}">
-      <span class="ea-tile" aria-hidden="true">${esc(tile)}</span><span>${esc(name)}<small>${esc(note)}</small></span></button>`;
-  const folderPart = choice.id !== 'prometheus' ? `<div class="ea-menu-sep"></div><div class="ea-menu-label">Folder</div>
-      <button type="button" class="ea-menu-item${!choice.cwd ? ' is-active' : ''}" data-ea="folder" data-path="">Default folder<small>The chat's project folder, or the Prometheus workspace</small></button>
-      ${ui.folders.slice(0, 6).map((f) => `<button type="button" class="ea-menu-item${choice.cwd === f.path ? ' is-active' : ''}" data-ea="folder" data-path="${esc(f.path)}" title="${esc(f.path)}">${esc(f.label || shortPath(f.path))}<small>${esc(shortPath(f.path))}</small></button>`).join('')}
-      <input class="ea-menu-input" data-ea="path" type="text" placeholder="Or type a folder path, then Enter" value="${esc(ui.typed)}" autocomplete="off">` : '';
+  const item = (id, name) => `<button type="button" role="menuitemradio" aria-checked="${choice.id === id}" class="ea-menu-item${choice.id === id ? ' is-active' : ''}" data-ea="pick" data-id="${esc(id)}">
+      ${agentLogoHtml(id)}<span>${esc(name)}</span>${choice.id === id ? '<span class="ea-menu-check" aria-hidden="true">✓</span>' : ''}</button>`;
   return `<div class="ea-menu" role="menu">
-      ${item('prometheus', 'P', 'Prometheus', 'Prometheus runs the chat')}
-      ${agents.map((a) => item(a.id, a.tile || a.name[0], a.name, `Your own ${a.name}: its login, model and tools`)).join('')}
-      ${folderPart}
+      ${item('prometheus', 'Prometheus')}
+      ${agents.map((a) => item(a.id, a.name)).join('')}
     </div>`;
 }
 
@@ -110,23 +107,13 @@ async function onClick(event) {
   const act = el.getAttribute('data-ea');
   if (act === 'toggle') { ui.menuOpen = !ui.menuOpen; render(); return; }
   if (act === 'pick') {
-    const id = el.getAttribute('data-id');
-    setAgentChoice(id, '');
-    ui.typed = '';
-    ui.folders = id !== 'prometheus' ? await loadAgentFolders(id) : [];
-    ui.menuOpen = id !== 'prometheus';
+    setAgentChoice(el.getAttribute('data-id'), '');
+    ui.menuOpen = false;
     render();
-    return;
   }
-  if (act === 'folder') { setAgentChoice(getAgentChoice().id, el.getAttribute('data-path') || ''); ui.menuOpen = false; render(); }
 }
 
 function onKey(event) {
-  const el = event.target;
-  if (el?.getAttribute?.('data-ea') === 'path') {
-    ui.typed = el.value;
-    if (event.key === 'Enter') { event.preventDefault(); setAgentChoice(getAgentChoice().id, ui.typed.trim()); ui.menuOpen = false; render(); }
-  }
   if (event.key === 'Escape' && ui.menuOpen) { ui.menuOpen = false; render(); }
 }
 
@@ -151,7 +138,7 @@ window.__promExternalAgent = {
     if (cachedSessionBinding(sessionId)) return undefined; // already bound: the server knows
     const field = agentFieldForNewChat();
     if (!field) return undefined;
-    return { ...field, ...(agentModelForSend() ? { model: agentModelForSend() } : {}) };
+    return { ...field, ...(agentModelForSend() ? { model: agentModelForSend() } : {}), ...(agentEffortForSend() ? { effort: agentEffortForSend() } : {}) };
   },
   onStreamEvent(event, sessionId) {
     const handled = handleExternalAgentStreamEvent(event, sessionId);

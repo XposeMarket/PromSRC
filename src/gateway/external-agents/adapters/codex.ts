@@ -572,7 +572,7 @@ export class CodexAdapter implements ExternalAgentAdapter {
         };
         this.turns.set(boundThreadId, ctx);
         input.signal.addEventListener('abort', onAbort, { once: true });
-        client.request('turn/start', { threadId: boundThreadId, ...(input.model ? { model: input.model } : {}), input: [{ type: 'text', text, text_elements: [] }] }, this.timeoutMs)
+        client.request('turn/start', { threadId: boundThreadId, ...(input.model ? { model: input.model } : {}), ...(input.effort ? { effort: input.effort } : {}), input: [{ type: 'text', text, text_elements: [] }] }, this.timeoutMs)
           .then((res: any) => {
             // The turn/start answer is authoritative for which turn is ours.
             const turnId = short(res?.turn?.id, 300);

@@ -17,7 +17,7 @@
 // threshold as best-effort. All paths degrade silently.
 
 import { mobileGatewayFetch } from './mobile-api.js';
-import { hasAgentModelContext, agentModelBadge, openAgentModelSheet } from '../chat/external-agent-models.js';
+import { hasAgentModelContext, agentModelBadge, agentModelState, saveAgentModel, saveAgentEffort } from '../chat/external-agent-models.js';
 window.addEventListener('external-agent-model-context', () => { _closeSheet(); refreshMobileModelBadge(true).catch(() => {}); });
 import { groupModelsByFamily } from '../model-family-grouping.js';
 import {
@@ -1047,7 +1047,7 @@ function _refreshPickerData() {
 
 async function _openReasoningSheet() {
   pmHaptic(10);
-  if (await openAgentModelSheet({ request: mobileGatewayFetch, open: _openSheet, close: _closeSheet, refresh: refreshMobileModelBadge })) return;
+  if (hasAgentModelContext()) return _openAgentReasoningSheet();
   // Open instantly from cached data when we have it, then revalidate. Only the
   // very first open (nothing cached yet) shows a loading state.
   const warm = !!(_llmCache && _catalogCache);
@@ -1075,9 +1075,10 @@ async function _openReasoningSheet() {
   if (stillOnSelector && (!warm || _pickerStateKey() !== shownKey)) render();
 }
 
-function _renderReasoningBody(provider, cfg, { onAdvanced = _openSwitchSheet, onSave = null } = {}) {
-  const options = _effortOptions(provider, cfg);
-  const current = _normalizedReasoningEffort(provider, cfg.model, cfg.reasoning_effort);
+function _renderReasoningBody(provider, cfg, { onAdvanced = _openSwitchSheet, onSave = null, agentState = null } = {}) {
+  // A connected agent (Codex, Claude Code...) supplies its own levels and model name.
+  const options = agentState ? (agentState.efforts.length ? agentState.efforts : null) : _effortOptions(provider, cfg);
+  const current = agentState ? agentState.effort : _normalizedReasoningEffort(provider, cfg.model, cfg.reasoning_effort);
   const selectedIndex = Math.max(0, options ? options.indexOf(current) : 0);
   const selectedProgress = options && options.length > 1 ? selectedIndex / (options.length - 1) : 0;
   _setSheetTitle('');
@@ -1093,6 +1094,7 @@ function _renderReasoningBody(provider, cfg, { onAdvanced = _openSwitchSheet, on
     liveLabelId: 'pm-reasoning-live-label',
     advancedId: 'pm-reasoning-advanced',
     includeAdvanced: typeof onAdvanced === 'function',
+    ...(agentState ? { options: options || [], modelLabel: agentState.label } : {}),
   }));
   if (!body) return;
 
@@ -1343,8 +1345,68 @@ function _queueReasoningSave(provider, patch, immediate = false) {
 }
 
 // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Advanced: provider / model / intelligence controls ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
+// Connected-agent chats reuse the same reasoning sheet and Advanced panel;
+// only the model and level lists come from the agent itself.
+async function _agentStateOrMessage() {
+  try { return await agentModelState(mobileGatewayFetch); } catch (err) {
+    _setSheetBody(`<div class="pm-msheet-empty">${_esc(err?.message || 'Could not load this agent\'s models.')}</div>`);
+    return null;
+  }
+}
+async function _openAgentReasoningSheet() {
+  const sheet = _openSheet('', '<div class="pm-msheet-loading">Loading...</div>');
+  sheet?.classList.add('is-reasoning');
+  document.getElementById('pm-msheet-scrim')?.classList.add('is-reasoning');
+  const state = await _agentStateOrMessage();
+  if (!state || !sheet?.isConnected) return;
+  _renderReasoningBody(state.provider, { model: state.model, reasoning_effort: state.effort }, {
+    agentState: state,
+    onAdvanced: _openAgentSwitchSheet,
+    onSave: async (value) => { await saveAgentEffort(mobileGatewayFetch, value); await refreshMobileModelBadge(true); },
+  });
+}
+async function _openAgentSwitchSheet() {
+  const sheet = _openSheet('Advanced <span class="pm-msheet-chev">&rsaquo;</span>', '<div class="pm-msheet-loading">Loading controls...</div>');
+  sheet?.classList.add('is-model-switch');
+  document.getElementById('pm-msheet-scrim')?.classList.add('is-model-switch');
+  sheet?.removeAttribute('style');
+  const state = await _agentStateOrMessage();
+  if (state && sheet?.isConnected) _renderAgentAdvanced(state);
+}
+function _renderAgentAdvanced(state) {
+  _setSheetTitle('Advanced <span class="pm-msheet-chev">&rsaquo;</span>');
+  const rows = [
+    _advancedRow('Agent', state.agentName, 'agent', { disabled: true }),
+    _advancedRow('Model', state.label, 'model'),
+    _advancedRow('Intelligence', state.efforts.length ? _effortLabel(state.effort, state.provider, state.model) : 'Default', 'intelligence', { disabled: !state.efforts.length }),
+  ];
+  const body = _setSheetBody(`<div class="pm-advanced-panel">${rows.join('')}</div>`);
+  body?.querySelector('[data-action="model"]')?.addEventListener('click', () => _renderAgentList(state, 'model'));
+  body?.querySelector('[data-action="intelligence"]')?.addEventListener('click', () => _renderAgentList(state, 'effort'));
+}
+function _renderAgentList(state, kind) {
+  const isModel = kind === 'model';
+  _setSheetTitle(`<button type="button" class="pm-msheet-back" id="pm-msheet-back">&lsaquo;</button> ${isModel ? 'Model' : 'Intelligence'}`);
+  const items = isModel ? state.models.map((m) => [m.id, m.label]) : state.efforts.map((v) => [v, _effortLabel(v, state.provider, state.model)]);
+  const active = isModel ? state.model : state.effort;
+  const rows = items.map(([value, label]) => `<button type="button" class="pm-msheet-row" data-agent-pick="${_esc(value)}"><span class="pm-msheet-row-label">${_esc(label)}</span>${value === active ? '<span class="pm-msheet-check">&#10003;</span>' : ''}</button>`).join('')
+    || `<div class="pm-msheet-empty">${_esc(state.unavailableReason || 'Nothing to choose.')}</div>`;
+  const body = _setSheetBody(`<div class="pm-msheet-rows${isModel ? ' pm-msheet-model-rows' : ''}">${rows}</div>`);
+  document.getElementById('pm-msheet-back')?.addEventListener('click', () => _renderAgentAdvanced(state));
+  body?.querySelectorAll('[data-agent-pick]').forEach((btn) => btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    try {
+      const value = btn.getAttribute('data-agent-pick');
+      if (isModel) await saveAgentModel(mobileGatewayFetch, value); else await saveAgentEffort(mobileGatewayFetch, value);
+      await refreshMobileModelBadge(true);
+      const next = await agentModelState(mobileGatewayFetch);
+      if (next) _renderAgentAdvanced(next);
+    } catch (err) { _toast(err?.message || 'Could not save', 'error'); btn.disabled = false; }
+  }));
+}
+
 async function _openSwitchSheet() {
-  if (await openAgentModelSheet({ request: mobileGatewayFetch, open: _openSheet, close: _closeSheet, refresh: refreshMobileModelBadge })) return;
+  if (hasAgentModelContext()) return _openAgentSwitchSheet();
   const warm = !!(_llmCache && _catalogCache);
   const sheet = _openSheet('Advanced <span class="pm-msheet-chev">&rsaquo;</span>', warm ? '' : '<div class="pm-msheet-loading">Loading controls...</div>');
   sheet?.classList.add('is-model-switch');

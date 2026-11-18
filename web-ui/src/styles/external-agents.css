@@ -180,3 +180,12 @@ body.pm-mobile-active .pm-mobile-empty-chat.ea-empty-state { display: flex; flex
 .ea-empty-suggestions:not([open]) > .pm-mobile-empty-chat-cards { display: none; }
 .ea-empty-suggestions > .pm-mobile-empty-chat-cards { margin-top: 8px; }
 body.pm-mobile-active:has(#pm-new-chat-context-dock.ea-new-chat-context) .pm-mobile-empty-chat.ea-empty-state { min-height: 38dvh; }
+/* Agent brand logos (replace the old two-letter tiles). */
+.ea-logo { width: 18px; height: 18px; flex: none; object-fit: contain; border-radius: 4px; display: inline-block; vertical-align: middle; }
+.ea-logo-codex, .ea-logo-cursor { background: #fff; padding: 2px; box-sizing: border-box; }
+.ea-logo-openclaw { object-fit: cover; object-position: left center; }
+.ea-sheet .ea-logo, .ea-menu .ea-logo { width: 22px; height: 22px; }
+body.pm-mobile-active #pm-new-chat-context-dock.ea-new-chat-context .pm-new-chat-context-icon .ea-logo { width: 20px; height: 20px; }
+.ea-menu-item { align-items: center; }
+.ea-menu-check { margin-left: auto; opacity: .8; font-size: 13px; }
+.ea-card-head .ea-logo { width: 20px; height: 20px; }

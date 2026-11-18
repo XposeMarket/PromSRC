@@ -1,4 +1,5 @@
 // Live connected agents (stage 3: the user's own Codex) — shared UI.
+import { agentLogoHtml } from './external-agent-logos.js';
 //
 // One module for desktop and mobile:
 //   - agent list + the new-chat choice (Prometheus is always first),
@@ -147,7 +148,7 @@ function cardHtml(req) {
     }
   }
   const buttons = (req.options || []).map((o) => `<button type="button" class="ea-card-btn ea-card-btn-${esc(o.kind)}" data-ea-option="${esc(o.id)}">${esc(o.label)}</button>`).join('');
-  return `<div class="ea-card-head"><span class="ea-tile" aria-hidden="true">${esc((agentStatusFor(req.agentId)?.tile) || 'Cx')}</span><strong>${esc(req.title)}</strong></div>
+  return `<div class="ea-card-head">${agentLogoHtml(req.agentId)}<strong>${esc(req.title)}</strong></div>
     ${rows.join('')}
     <div class="ea-card-actions">${buttons}</div>
     <div class="ea-card-note">Your answer goes to ${esc(agentName(req.agentId))} only. Prometheus's own permissions are not changed.</div>
