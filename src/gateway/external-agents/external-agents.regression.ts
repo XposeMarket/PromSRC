@@ -52,7 +52,12 @@ async function main(): Promise<void> {
   const readLog = (): any[] => (fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf8') : '')
     .split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
 
-  const { CodexAdapter, mapCodexServerRequest } = await import('./adapters/codex');
+  const { CodexAdapter, mapCodexServerRequest, plainCodexError } = await import('./adapters/codex');
+  // Real Codex 0.163 hands a provider refusal through as JSON text: the chat shows the message inside it, and what to do.
+  const refusal = JSON.stringify({ type: 'error', status: 400, error: { type: 'invalid_request_error', message: "The 'gpt-x' model is not supported when using Codex with a ChatGPT account.", code: 'model_not_found' } });
+  assert.strictEqual(plainCodexError(refusal), "The 'gpt-x' model is not supported when using Codex with a ChatGPT account. Choose another model for this chat, or update Codex.");
+  assert.strictEqual(plainCodexError('usage limit reached'), 'usage limit reached');
+  assert.strictEqual(plainCodexError('{not json'), '{not json');
   const pending = await import('./pending-requests');
   const types = await import('./types');
   const store = await import('./store');
@@ -237,7 +242,36 @@ async function main(): Promise<void> {
       const interrupt = readLog().find((m) => m.method === 'turn/interrupt');
       assert.ok(interrupt, 'turn/interrupt was sent');
       assert.deepStrictEqual(interrupt.params, { threadId: result.upstreamSessionId, turnId: result.upstreamTurnId });
+      assert.ok(pidAlive(slow.processId()), 'a confirmed stop with nothing running keeps the app-server warm');
       await slow.shutdown();
+    }
+
+    // ── Stop while a command runs: Codex confirms the stop but leaves the command going, so its process tree is ended ──
+    {
+      const runner = makeAdapter('ready');
+      const controller = new AbortController();
+      const events: any[] = [];
+      const running = runner.runTurn({
+        sessionId: 's2r', cwd: workspace, text: 'RUNCMD please', signal: controller.signal,
+        emit: (event) => events.push(event), requestUser: async () => ({ optionId: 'cancel' }),
+      });
+      await waitFor(() => events.some((e) => e.type === 'text_delta'));
+      const commandPid = Number(String(events.find((e) => e.type === 'text_delta').text).replace('child=', ''));
+      const serverPid = runner.processId();
+      assert.ok(pidAlive(commandPid), 'the command is running before Stop');
+      controller.abort('operator_abort');
+      const result = await running;
+      assert.strictEqual(result.status, 'interrupted');
+      const next = await runner.runTurn({
+        sessionId: 's2r', upstreamSessionId: result.upstreamSessionId, cwd: workspace, text: 'hi there', signal: new AbortController().signal,
+        emit: () => undefined, requestUser: async () => ({ optionId: 'cancel' }),
+      });
+      assert.strictEqual(next.status, 'completed', 'the chat carries on in a new app-server');
+      assert.ok(!pidAlive(serverPid), 'the app-server that ran the command is ended');
+      // Ending the commands with it needs a process-tree kill, which exists on Windows only.
+      if (process.platform === 'win32') assert.ok(!pidAlive(commandPid), 'the command Codex started is ended with it');
+      else { try { process.kill(commandPid); } catch { /* already gone */ } }
+      await runner.shutdown();
     }
 
     // ── a stop Codex never confirms: the app-server is ended, not left running behind "Stopped" ──
@@ -256,9 +290,9 @@ async function main(): Promise<void> {
       const result = await running;
       assert.strictEqual(result.status, 'interrupted');
       assert.strictEqual(result.finalText, 'partial answer');
-      // A message sent straight away waits until the old process is confirmed gone, then runs on a fresh one.
+      // The same chat's next message waits until the old process is confirmed gone, then runs on a fresh one.
       const next = await stuck.runTurn({
-        sessionId: 's2c', cwd: workspace, text: 'hi there', signal: new AbortController().signal,
+        sessionId: 's2b', upstreamSessionId: result.upstreamSessionId, cwd: workspace, text: 'hi there', signal: new AbortController().signal,
         emit: () => undefined, requestUser: async () => ({ optionId: 'cancel' }),
       });
       assert.ok(!pidAlive(pid), 'an unconfirmed stop ends the app-server before anything new starts');
@@ -266,6 +300,68 @@ async function main(): Promise<void> {
       assert.notStrictEqual(next.status, 'interrupted');
       await stuck.shutdown();
       assert.strictEqual(stuck.isRunning(), false);
+    }
+
+    // ── Stop on one chat never ends another chat's turn: each running turn has its own app-server ──
+    {
+      const pair = makeAdapter('ready', { interruptGraceMs: 300 });
+      const turn = (sessionId: string, text: string, signal: AbortSignal, events: any[], upstreamSessionId?: string) => pair.runTurn({
+        sessionId, cwd: workspace, text, signal, ...(upstreamSessionId ? { upstreamSessionId } : {}),
+        emit: (event) => events.push(event), requestUser: async () => ({ optionId: 'cancel' }),
+      });
+      const stopStuck = new AbortController();
+      const stuckEvents: any[] = [];
+      const otherEvents: any[] = [];
+      const stuckTurn = turn('iso-a', 'STUCK please', stopStuck.signal, stuckEvents);
+      await waitFor(() => stuckEvents.some((e) => e.type === 'text_delta'));
+      const otherTurn = turn('iso-b', 'LONG please', new AbortController().signal, otherEvents);
+      await waitFor(() => otherEvents.some((e) => e.type === 'text_delta'));
+      const [stuckPid, otherPid] = pair.processIds();
+      assert.ok(stuckPid && otherPid && stuckPid !== otherPid, 'two chats working at once run in two app-servers');
+      stopStuck.abort('operator_abort');
+      const stopped = await stuckTurn;
+      assert.strictEqual(stopped.status, 'interrupted');
+      const other = await otherTurn;
+      assert.strictEqual(other.status, 'completed', 'the other chat finishes its turn');
+      assert.strictEqual(other.finalText, 'finished fine');
+      assert.ok(!other.error);
+      assert.ok(pidAlive(otherPid), 'the other chat keeps its app-server');
+      // The stopped chat's next message runs once its old process is gone, without touching the other one.
+      const again = await turn('iso-a', 'hi there', new AbortController().signal, [], stopped.upstreamSessionId);
+      assert.ok(!pidAlive(stuckPid), 'only the stuck chat lost its app-server');
+      assert.strictEqual(again.status, 'completed');
+      await pair.shutdown();
+      assert.strictEqual(pair.isRunning(), false);
+      assert.ok(!pidAlive(otherPid), 'shutdown ends every app-server');
+    }
+
+    // ── one chat at a time uses one app-server; a chat that moved leaves no out-of-date copy behind ──
+    {
+      const mover = makeAdapter('ready');
+      const run = (sessionId: string, text: string, upstreamSessionId?: string) => mover.runTurn({
+        sessionId, cwd: workspace, text, signal: new AbortController().signal, ...(upstreamSessionId ? { upstreamSessionId } : {}),
+        emit: () => undefined, requestUser: async () => ({ optionId: 'cancel' }),
+      });
+      const b1 = await run('mv-b', 'hello');
+      const first = mover.processIds();
+      assert.strictEqual(first.length, 1);
+      const a1 = await run('mv-a', 'hello');
+      assert.deepStrictEqual(mover.processIds(), first, 'chats taking turns share the one warm app-server');
+      // A is working in that process when B's next message arrives: B moves to a second process.
+      const longEvents: any[] = [];
+      const aLong = mover.runTurn({
+        sessionId: 'mv-a', upstreamSessionId: a1.upstreamSessionId, cwd: workspace, text: 'LONG please', signal: new AbortController().signal,
+        emit: (event) => longEvents.push(event), requestUser: async () => ({ optionId: 'cancel' }),
+      });
+      await waitFor(() => longEvents.some((e) => e.type === 'text_delta'));
+      const b2 = await run('mv-b', 'hello again', b1.upstreamSessionId);
+      assert.strictEqual(b2.status, 'completed');
+      assert.strictEqual((await aLong).status, 'completed');
+      await waitFor(() => !pidAlive(first[0]));
+      const now = mover.processIds();
+      assert.strictEqual(now.length, 1, 'the process holding an out-of-date copy of chat B is closed after its turn');
+      assert.notStrictEqual(now[0], first[0]);
+      await mover.shutdown();
     }
 
     // ── command approval: options = upstream decisions, answer reaches the same JSON-RPC id, no Prometheus grant ──
