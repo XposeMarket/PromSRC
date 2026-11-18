@@ -24,8 +24,17 @@ import {
   buildAuthHeaders, getValidToken, loadTokens,
   ANTHROPIC_API_BASE,
 } from '../auth/anthropic-oauth';
+import type { AnthropicTokens } from '../auth/anthropic-oauth';
 import { contentToString, splitOnCacheMarker } from './content-utils';
 import { getConfig } from '../config/config';
+import {
+  CLAUDE_CODE_PREAMBLE_TEXT,
+  enforceSubscriptionPreamble,
+  isSubscriptionOAuthRequest,
+  classifyAnthropicApiError,
+  recordAnthropicProviderError,
+  describeAnthropicRequestShape,
+} from './anthropic-subscription-gate';
 import { getReasoningCapability, normalizeReasoningEffort, normalizeSpeed, supportsFastSpeed } from './reasoning-capabilities';
 
 // Anthropic ignores cache breakpoints on segments below the minimum cacheable
@@ -544,7 +553,7 @@ export class AnthropicAdapter implements LLMProvider {
   // For OAuth the Claude Code preamble MUST remain the first block (subscription
   // gate) — caching attaches to the stable block that follows it.
   private buildSystemBlocks(systemText: string, includePreamble: boolean): any[] {
-    const preamble = { type: 'text', text: "You are Claude Code, Anthropic's official CLI for Claude." };
+    const preamble = { type: 'text', text: CLAUDE_CODE_PREAMBLE_TEXT };
     const blocks: any[] = [];
     if (includePreamble) blocks.push(preamble);
 
@@ -566,10 +575,10 @@ export class AnthropicAdapter implements LLMProvider {
 
   // Only add interleaved-thinking beta when extended thinking is actually enabled.
   // Adding it unconditionally causes 429s on OAuth tokens.
-  private buildHeaders(model: string, extendedThinkingEnabled = false, fastSpeed = false): Record<string, string> {
+  private buildHeaders(model: string, extendedThinkingEnabled = false, fastSpeed = false, tokens?: AnthropicTokens | null): Record<string, string> {
     const headers = this.directConfig
       ? this.buildDirectHeaders()
-      : buildAuthHeaders(this.configDir!, this.accountId);
+      : buildAuthHeaders(this.configDir!, this.accountId, tokens ?? undefined);
     const isThinkingGeneration = /claude-(sonnet|opus)-4-(6|7|8)/.test(model);
     if (isThinkingGeneration && extendedThinkingEnabled) {
       const existing = headers['anthropic-beta'];
@@ -633,7 +642,15 @@ export class AnthropicAdapter implements LLMProvider {
       && (anthropicCfg.extended_thinking === true || !!options?.think);
 
     const fastSpeed = normalizeSpeed('anthropic', model, options?.speed || anthropicCfg.speed || (anthropicCfg.fast_mode === true ? 'fast' : 'standard')) === 'fast';
-    const headers = this.buildHeaders(model, extendedThinkingEnabled, fastSpeed);
+    // Load the vault credentials ONCE and derive both the auth headers and the
+    // subscription-gate decision from the same object. Previously these were
+    // two independent vault reads; if the second returned null under
+    // contention we sent Bearer auth WITHOUT the Claude Code preamble, which
+    // Anthropic bills as non-subscription traffic ("out of extra usage").
+    const vaultTokens = (!this.directConfig && this.configDir)
+      ? loadTokens(this.configDir, this.accountId)
+      : null;
+    const headers = this.buildHeaders(model, extendedThinkingEnabled, fastSpeed, vaultTokens);
     const { system, messages: anthropicMessages } = this.buildMessages(messages, options?.omitIntradayNotes);
 
     const body: any = {
@@ -651,15 +668,17 @@ export class AnthropicAdapter implements LLMProvider {
     // a 400 "out of extra usage" (the gate masquerades as a quota error). The
     // preamble must be sent on EVERY OAuth request — including subagent calls
     // that may have empty system prompts. API keys don't need this.
-    const isOAuth = !this.directConfig
-      && this.configDir
-      && loadTokens(this.configDir, this.accountId)?.auth_type === 'setup_token';
-    const claudeCodePreamble = { type: 'text', text: "You are Claude Code, Anthropic's official CLI for Claude." };
+    //
+    // Invariant: if the request carries `Authorization: Bearer` (subscription
+    // OAuth), the preamble is ALWAYS block 0. The decision is derived from the
+    // headers actually being sent, never from a separate credential read.
+    const isOAuth = isSubscriptionOAuthRequest(headers, vaultTokens);
+    const claudeCodePreamble = { type: 'text', text: CLAUDE_CODE_PREAMBLE_TEXT };
 
     if (system) {
       const bodyWithoutSystem = JSON.stringify({ ...body, system: undefined });
       const trimmed = this.trimSystemForBudget(system, bodyWithoutSystem);
-      const blocks = this.buildSystemBlocks(trimmed, !!isOAuth);
+      const blocks = this.buildSystemBlocks(trimmed, isOAuth);
       if (blocks.length > 0) {
         body.system = blocks;
       } else if (isOAuth) {
@@ -668,6 +687,7 @@ export class AnthropicAdapter implements LLMProvider {
     } else if (isOAuth) {
       body.system = [claudeCodePreamble];
     }
+    body.system = enforceSubscriptionPreamble(body.system, isOAuth);
 
     // `output_config.effort` only goes to models that accept it natively
     // (nativeEffort). Manual-thinking-only models (Sonnet 4.5, Haiku 4.5,
@@ -703,16 +723,31 @@ export class AnthropicAdapter implements LLMProvider {
     }
 
     // ─── DEBUG: log request shape so we can diff main-chat vs subagent ────────
+    const requestShape = describeAnthropicRequestShape({ model, headers, body, isOAuth, toolCount: tools?.length || 0 });
     try {
-      const sysPreview = Array.isArray(body.system)
-        ? `array(${body.system.length}) first="${String(body.system[0]?.text || '').slice(0, 60)}"`
-        : `string(${String(body.system || '').length})`;
-      const headerKeys = Object.keys(headers).join(',');
-      const betaHdr = (headers as any)['anthropic-beta'] || '(none)';
-      const uaHdr = (headers as any)['user-agent'] || '(none)';
-      const authHdrType = (headers as any)['Authorization'] ? 'Bearer' : (headers as any)['x-api-key'] ? 'x-api-key' : 'none';
-      console.log(`[anthropic-debug] model=${model} isOAuth=${isOAuth} system=${sysPreview} auth=${authHdrType} ua=${uaHdr} beta=${betaHdr} headers=[${headerKeys}] tools=${tools?.length || 0} max_tokens=${body.max_tokens}`);
+      console.log(`[anthropic-debug] ${requestShape.summary}`);
     } catch {}
+
+    const failRequest = async (response: Response): Promise<never> => {
+      const text = await response.text().catch(() => '');
+      const classified = classifyAnthropicApiError(response.status, text);
+      recordAnthropicProviderError({
+        providerId: this.id,
+        configDir: this.configDir,
+        accountId: this.accountId,
+        status: response.status,
+        body: text,
+        classification: classified.kind,
+        requestShape,
+      });
+      const err: any = new Error(classified.message);
+      err.code = classified.code;
+      err.status = response.status;
+      err.providerId = this.id;
+      err.anthropicErrorKind = classified.kind;
+      err.requestShape = requestShape;
+      throw err;
+    };
 
     // If onToken callback provided, use streaming mode
     if (options?.onToken) {
@@ -723,10 +758,7 @@ export class AnthropicAdapter implements LLMProvider {
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(180_000),
       });
-      if (!response.ok) {
-        const text = await response.text().catch(() => '');
-        throw new Error(`${this.id} API error ${response.status}: ${text.slice(0, 500)}`);
-      }
+      if (!response.ok) await failRequest(response);
       return this.parseStreamingResponse(response, model, options);
     }
 
@@ -737,10 +769,7 @@ export class AnthropicAdapter implements LLMProvider {
       signal: AbortSignal.timeout(180_000),
     });
 
-    if (!response.ok) {
-      const text = await response.text().catch(() => '');
-      throw new Error(`${this.id} API error ${response.status}: ${text.slice(0, 500)}`);
-    }
+    if (!response.ok) await failRequest(response);
 
     const data = await response.json() as any;
     return this.parseResponse(data);

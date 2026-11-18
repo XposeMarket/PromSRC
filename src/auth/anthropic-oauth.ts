@@ -179,8 +179,11 @@ export function storeSetupToken(configDir: string, token: string, accountId?: st
  * Build the required headers for Anthropic API requests.
  * Handles the difference between OAuth tokens and API keys.
  */
-export function buildAuthHeaders(configDir: string, accountId?: string): Record<string, string> {
-  const tokens = loadTokens(configDir, accountId);
+export function buildAuthHeaders(configDir: string, accountId?: string, preloadedTokens?: AnthropicTokens | null): Record<string, string> {
+  // Callers that also need to inspect the credential (e.g. the subscription
+  // preamble gate) pass the tokens they already loaded so the auth headers and
+  // the gate decision can never disagree about which credential is in play.
+  const tokens = preloadedTokens ?? loadTokens(configDir, accountId);
   if (!tokens) throw new Error('No Anthropic credentials configured.');
 
   const headers: Record<string, string> = {
