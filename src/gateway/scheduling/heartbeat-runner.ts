@@ -16,6 +16,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import type { HandleChatResult } from '../chat/chat-helpers';
 import { listTaskSummaries } from '../tasks/task-store';
 import { BackgroundTaskRunner } from '../tasks/background-task-runner';
 import { pruneHeartbeatOneOffTasks } from '../teams/managed-teams';
@@ -86,7 +87,7 @@ interface HeartbeatRunnerDeps {
     modelOverride?: string,
     executionMode?: 'interactive' | 'background_task' | 'heartbeat' | 'cron',
     toolFilter?: string[],
-  ) => Promise<{ type: string; text: string; thinking?: string }>;
+  ) => Promise<Pick<HandleChatResult, 'type' | 'text' | 'thinking' | 'noResultFailure'>>;
   getMainSessionId: () => string;
   broadcast?: (data: object) => void;
   deliverChannels?: (text: string) => Promise<void> | void;
@@ -556,6 +557,13 @@ export class SubagentHeartbeatManager {
       );
       if (abortSignal.aborted) {
         entry.lastResult = 'error';
+        return;
+      }
+
+      // A pipeline diagnostic is not an agent update. Keep pending one-offs for the next run.
+      if (result.noResultFailure) {
+        entry.lastResult = 'error';
+        console.warn(`[HeartbeatRunner] No result for "${entry.agentId}": ${result.noResultFailure}`);
         return;
       }
 
