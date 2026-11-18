@@ -20,7 +20,7 @@
 
 import { getConfig } from '../config/config';
 import { assertTokenRefreshAllowed } from '../gateway/runtime/preview-mode';
-import { readModelUsageLifetimeTotals, readRecentModelUsageEvents, type ModelUsageEvent } from './model-usage';
+import { readModelUsageLifetimeTotals, readModelUsageTotalsSince, type ModelUsageEvent } from './model-usage';
 import type { UsageLifetimeTotal } from './model-usage-index';
 
 export interface UsageWindow {
@@ -801,11 +801,19 @@ async function getLive(providerId: string, configDir: string, accountId?: string
 
 // ─── Internal token accounting ───────────────────────────────────────────────
 
-export function internalTokens(providerId: string, events: ModelUsageEvent[], accountId?: string, lifetime: UsageLifetimeTotal[] = []): ProviderTokenTotals {
-  const monthStart = new Date();
+/** Local midnight on the 1st: the start of the "this month" token window. */
+export function usageMonthStartMs(now = new Date()): number {
+  const monthStart = new Date(now);
   monthStart.setDate(1);
   monthStart.setHours(0, 0, 0, 0);
-  const monthMs = monthStart.getTime();
+  return monthStart.getTime();
+}
+
+/** The four fields the month window needs. Rows may be single events or per-account sums. */
+export type MonthUsageRow = Pick<ModelUsageEvent, 'provider' | 'accountId' | 'totalTokens' | 'timestamp'>;
+
+export function internalTokens(providerId: string, events: MonthUsageRow[], accountId?: string, lifetime: UsageLifetimeTotal[] = []): ProviderTokenTotals {
+  const monthMs = usageMonthStartMs();
 
   let total = 0, input = 0, output = 0, calls = 0, monthTotal = 0;
   for (const e of events) {
@@ -949,7 +957,8 @@ export async function getProviderUsageLimits(credentialedIds: string[]): Promise
 
   const budgets = getBudgets();
   const activeMain = getActiveMainModel();
-  const events = await readRecentModelUsageEvents(Date.now() - 35 * 86400000);
+  // Only the month window needs recent rows, and only as sums: never load the rows themselves here.
+  const events = await readModelUsageTotalsSince(usageMonthStartMs());
   const lifetimeTotals = await readModelUsageLifetimeTotals();
   const ids = (Array.isArray(credentialedIds) ? credentialedIds : [])
     .filter((id) => id && (!LOCAL_PROVIDERS.has(id) || Number(budgets[id]?.monthly_token_limit) > 0));
