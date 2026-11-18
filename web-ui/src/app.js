@@ -307,7 +307,9 @@ function updateThemeToggle(themeId, themeBase, themeLabel) {
 
 export function getInitialTheme() {
   try {
-    const saved = localStorage.getItem(THEME_KEY);
+    const saved = typeof window.PROM_READ_SAVED_THEME === 'function'
+      ? window.PROM_READ_SAVED_THEME()
+      : localStorage.getItem(THEME_KEY);
     if (saved === 'custom') return saved;
     if (saved && getThemeList().some((t) => t.id === saved)) return saved;
   } catch {}

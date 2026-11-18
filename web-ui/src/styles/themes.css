@@ -4182,6 +4182,48 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area {
     height: 20px;
   }
 
+  body:not(.pm-mobile-active) .priority-chat-provider-logo {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 15px;
+    width: 15px;
+    height: 15px;
+    overflow: hidden;
+    border-radius: 4px;
+    object-fit: contain;
+  }
+
+  body:not(.pm-mobile-active) .priority-chat-provider-logo--fallback {
+    border: 1px solid color-mix(in srgb, var(--sidebar-muted, var(--muted)) 68%, transparent);
+    border-radius: 50%;
+    color: var(--sidebar-muted, var(--muted));
+  }
+
+  body:not(.pm-mobile-active) .priority-chat-provider-logo--fallback::before {
+    width: 5px;
+    height: 5px;
+    border: 1px solid currentColor;
+    border-radius: 50%;
+    box-shadow: 0 0 0 2px color-mix(in srgb, currentColor 18%, transparent);
+    content: '';
+  }
+
+  body:not(.pm-mobile-active) .priority-chat-provider-logo--prometheus {
+    border-radius: 50%;
+  }
+
+  body:not(.pm-mobile-active) .priority-chat-provider-logo--openai,
+  body:not(.pm-mobile-active) .priority-chat-provider-logo--xai {
+    background: #fff;
+    border-radius: 4px;
+    padding: 2px;
+  }
+
+  body:not(.pm-mobile-active) .priority-chat-provider-logo[hidden] {
+    display: none;
+  }
+
   body:not(.pm-mobile-active) .priority-chat-title {
     min-width: 0;
     overflow: hidden;
@@ -4263,7 +4305,6 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area {
     white-space: nowrap;
   }
 
-  body:not(.pm-mobile-active) .priority-chat-model,
   body:not(.pm-mobile-active) .priority-chat-project {
     min-width: 0;
     overflow: hidden;
