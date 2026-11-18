@@ -302,6 +302,29 @@ async function main(): Promise<void> {
       assert.strictEqual(stuck.isRunning(), false);
     }
 
+    // ── Stop lands just before a command's start is reported: that command still counts as running at Stop ──
+    {
+      const late = makeAdapter('ready');
+      const controller = new AbortController();
+      const events: any[] = [];
+      const running = late.runTurn({
+        sessionId: 's2l', cwd: workspace, text: 'LATECMD please', signal: controller.signal,
+        emit: (event) => events.push(event), requestUser: async () => ({ optionId: 'cancel' }),
+      });
+      await waitFor(() => events.some((e) => e.type === 'text_delta'));
+      const serverPid = late.processId();
+      controller.abort('operator_abort');
+      const result = await running;
+      assert.strictEqual(result.status, 'interrupted');
+      const started = events.find((e) => e.type === 'text_delta' && String(e.text).includes('child='));
+      assert.ok(started, 'the command started after Stop was asked for');
+      const commandPid = Number(String(started.text).replace(/^[\s\S]*child=/, ''));
+      await waitFor(() => !pidAlive(serverPid));
+      if (process.platform === 'win32') await waitFor(() => !pidAlive(commandPid));
+      else { try { process.kill(commandPid); } catch { /* already gone */ } }
+      await late.shutdown();
+    }
+
     // ── Stop on one chat never ends another chat's turn: each running turn has its own app-server ──
     {
       const pair = makeAdapter('ready', { interruptGraceMs: 300 });

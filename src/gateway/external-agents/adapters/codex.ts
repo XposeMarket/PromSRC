@@ -439,7 +439,13 @@ export class CodexAdapter implements ExternalAgentAdapter {
     if (type === 'commandExecution') {
       kind = 'command';
       title = 'Ran a command';
-      if (completed) ctx.runningCommands.delete(itemId); else ctx.runningCommands.add(itemId);
+      if (completed) {
+        ctx.runningCommands.delete(itemId);
+      } else {
+        ctx.runningCommands.add(itemId);
+        // Stop was already asked for when this command's start arrived: it counts as running at Stop.
+        if (ctx.graceTimer) ctx.endAfterStop = true;
+      }
       detail = short(item.command, 2000);
       exitCode = Number.isFinite(Number(item.exitCode)) && item.exitCode !== null ? Number(item.exitCode) : undefined;
       ok = !['failed', 'declined'].includes(String(item.status)) && (exitCode === undefined || exitCode === 0);

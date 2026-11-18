@@ -15,6 +15,7 @@
  *   contains SLOW     -> streams one delta, then waits for turn/interrupt
  *   contains STUCK    -> streams one delta, acknowledges turn/interrupt, never ends the turn
  *   contains LONG     -> streams one delta, works for a moment, then completes on its own
+ *   contains LATECMD  -> like RUNCMD, but the command's start is only reported after turn/interrupt arrived
  *   contains RUNCMD   -> starts a real child process as a command; turn/interrupt is confirmed but the
  *                        child keeps running (what codex-cli 0.163.0 does on Windows)
  *   contains FAIL     -> turn/completed with status failed
@@ -92,6 +93,15 @@ async function runTurn(threadId, turnId, text) {
   if (text.includes('STUCK')) {
     notify('item/agentMessage/delta', { ...base, itemId: 'm1', delta: 'partial answer' });
     await new Promise(() => {});
+  }
+  if (text.includes('LATECMD')) {
+    notify('item/agentMessage/delta', { ...base, itemId: 'm1', delta: 'thinking' });
+    await new Promise((resolve) => { activeTurn = { threadId, turnId, resolveInterrupt: resolve }; });
+    const child = spawn(process.execPath, ['-e', 'setTimeout(()=>{},120000)'], { stdio: 'ignore' });
+    notify('item/started', { ...base, startedAtMs: Date.now(), item: { type: 'commandExecution', id: 'c1', command: 'sleep 120', cwd: '/repo', processId: null, source: 'agent', status: 'inProgress', commandActions: [], aggregatedOutput: null, exitCode: null, durationMs: null, pluginId: null, scriptPath: null } });
+    notify('item/agentMessage/delta', { ...base, itemId: 'm1', delta: `child=${child.pid}` });
+    notify('turn/completed', { threadId, turn: turnObject(turnId, 'interrupted') });
+    return;
   }
   if (text.includes('RUNCMD')) {
     const child = spawn(process.execPath, ['-e', 'setTimeout(()=>{},120000)'], { stdio: 'ignore' });
