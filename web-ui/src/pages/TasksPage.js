@@ -399,7 +399,7 @@ function renderTeamEscalationCard(item) {
   const id = escHtml(String(item.id || ''));
   const teamId = escHtml(String(p.teamId || ''));
   const summary = escHtml(String(p.content || p.message || p.reason || 'Team needs your input.'));
-  return `<div class="chat-approval-card chat-approval-card-low"><div class="chat-approval-title">${summary}</div><form class="bgt-team-reply" onsubmit="event.preventDefault();bgtTeamEscalationReply('${id}', this)"><input type="text" name="reply" placeholder="Reply to the team…" autocomplete="off" aria-label="Reply to the team" /><div class="chat-approval-actions"><button type="submit" class="chat-approval-btn chat-approval-approve">Send reply</button>${teamId ? `<button type="button" class="chat-approval-btn" onclick="window.openTeamBoard&&window.openTeamBoard('${teamId}')">Open team</button>` : ''}</div></form></div>`;
+  return `<div class="chat-approval-card chat-approval-card-low"><div class="bgt-ny-message" role="button" tabindex="0" title="Show full message" onclick="this.classList.toggle('is-expanded')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();this.classList.toggle('is-expanded')}">${summary}</div><form class="bgt-team-reply" onsubmit="event.preventDefault();bgtTeamEscalationReply('${id}', this)"><input type="text" name="reply" placeholder="Reply to the team…" autocomplete="off" aria-label="Reply to the team" /><div class="chat-approval-actions"><button type="submit" class="chat-approval-btn chat-approval-approve">Send reply</button>${teamId ? `<button type="button" class="chat-approval-btn" onclick="window.openTeamBoard&&window.openTeamBoard('${teamId}')">Open team</button>` : ''}</div></form></div>`;
 }
 
 async function bgtVideoApprovalApprove(approvalId) {
@@ -687,7 +687,7 @@ function renderBgTasks() {
     const items = byStatus[col.key];
     if (items.length === 0 && (col.key === 'complete' || col.key === 'failed' || col.key === 'stalled' || col.key === 'needs_assistance' || col.key === 'cancelled')) continue;
     const colEl = document.createElement('div');
-    colEl.style.cssText = 'min-width:240px;max-width:280px;flex:0 0 auto;display:flex;flex-direction:column;gap:0;';
+    colEl.className = 'bgt-col';
     colEl.innerHTML = `
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
         <span style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.06em;color:${col.color}">${col.label}</span>
