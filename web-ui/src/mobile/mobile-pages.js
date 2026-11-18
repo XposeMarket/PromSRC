@@ -8180,6 +8180,8 @@ function _renderMobileVoiceLyrics(text = '', progress = 0, options = {}) {
 // from the mobile route static closure without changing render order.
 let mobileChatRendererRuntime = null;
 let mobileChatRendererRuntimePromise = null;
+const mobileChatRendererPendingCalls = [];
+let mobileChatRendererPendingFlushScheduled = false;
 
 const MOBILE_CHAT_RENDERER_REQUIRED_METHODS = Object.freeze([
   'createMobileStreamReceiptLedger',
@@ -8201,12 +8203,49 @@ function _mobileChatRendererGlobal() {
   return null;
 }
 
+function _flushMobileChatRendererPendingCalls(runtime) {
+  mobileChatRendererPendingFlushScheduled = false;
+  if (!runtime || !mobileChatRendererPendingCalls.length) return;
+  const pending = mobileChatRendererPendingCalls.splice(0);
+  for (const { name, args } of pending) {
+    const method = typeof runtime[name] === 'function' ? runtime[name] : null;
+    if (!method) continue;
+    try { method(...args); } catch (error) { console.error(`[Mobile Chat] deferred renderer call failed for ${name}:`, error); }
+  }
+}
+
+function _queueMobileChatRendererCall(name, args) {
+  mobileChatRendererPendingCalls.push({ name, args });
+  if (mobileChatRendererPendingCalls.length > 240) {
+    mobileChatRendererPendingCalls.splice(0, mobileChatRendererPendingCalls.length - 240);
+  }
+}
+
 function _mobileChatRendererInvoke(name, args = []) {
   const runtime = _mobileChatRendererGlobal();
-  const method = runtime && typeof runtime[name] === "function" ? runtime[name] : null;
+  const method = runtime && typeof runtime[name] === 'function' ? runtime[name] : null;
   if (method) return method(...args);
-  void loadMobileChatRendererRuntime().catch(() => {});
-  return undefined;
+  const deferredMethods = new Set([
+    '_pushMobileBackgroundSpawnEvent',
+    '_completeMobileBackgroundSpawnLane',
+    '_applyMobileBackgroundSpawnStatus',
+  ]);
+  if (deferredMethods.has(name)) _queueMobileChatRendererCall(name, args);
+  const runtimePromise = loadMobileChatRendererRuntime();
+  if (!mobileChatRendererPendingFlushScheduled) {
+    mobileChatRendererPendingFlushScheduled = true;
+    void runtimePromise.then((hydratedRuntime) => {
+      _flushMobileChatRendererPendingCalls(hydratedRuntime);
+      try { window.__pmMobileBackgroundSpawnDockChanged?.(); } catch {}
+      try { window.__pmMobileBackgroundAgentDetailRender?.(); } catch {}
+    }).catch(() => {
+      mobileChatRendererPendingFlushScheduled = false;
+    });
+  }
+  // State-mutating background calls report a synchronous queued acknowledgement so
+  // their event handlers still run the normal dock/detail follow-up. The actual
+  // reducer call is replayed in order once the optional runtime is hydrated.
+  return deferredMethods.has(name) ? true : undefined;
 }
 
 function _renderChatMessageHtml(...args) { return _mobileChatRendererInvoke('_renderChatMessageHtml', args); }

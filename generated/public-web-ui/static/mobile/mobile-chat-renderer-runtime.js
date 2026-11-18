@@ -3806,12 +3806,16 @@ function _mobileBackgroundSpawnWorkRecord(lane) {
 
 function _normalizeMobileBackgroundSpawnEvent(msg = {}) {
   const payload = msg?.data && typeof msg.data === 'object' ? msg.data : {};
+  const nestedEvent = (msg?.event && typeof msg.event === 'object')
+    ? msg.event
+    : (payload?.event && typeof payload.event === 'object' ? payload.event : {});
   const wrapperType = typeof msg.type === 'string' && msg.type !== 'bg_agent_event' ? msg.type : '';
   const eventType = String(
     msg.eventType
       || msg.eventName
       || payload.eventType
       || payload.eventName
+      || nestedEvent.type
       || wrapperType
       || '',
   ).trim();
@@ -3819,13 +3823,14 @@ function _normalizeMobileBackgroundSpawnEvent(msg = {}) {
   const source = { ...payload, ...msg };
   return {
     ...source,
+    ...nestedEvent,
     type: eventType,
-    streamId: String(source.streamId || '').trim(),
-    seq: Math.max(0, Math.floor(Number(source.seq || 0)) || 0),
-    at: Number(source.at || 0) || undefined,
-    action: source.action || source.name || source.toolName || '',
-    name: source.name || source.action || source.toolName || '',
-    actor: source.actor || 'Background Agent',
+    streamId: String(source.streamId || nestedEvent.streamId || '').trim(),
+    seq: Math.max(0, Math.floor(Number(source.seq || nestedEvent.seq || 0)) || 0),
+    at: Number(source.at || nestedEvent.at || 0) || undefined,
+    action: source.action || source.name || source.toolName || nestedEvent.action || nestedEvent.name || nestedEvent.toolName || '',
+    name: source.name || source.action || source.toolName || nestedEvent.name || nestedEvent.action || nestedEvent.toolName || '',
+    actor: source.actor || nestedEvent.actor || 'Background Agent',
   };
 }
 
@@ -4273,7 +4278,16 @@ function _applyMobileAgentStreamEvent(message, evt, fallbackName = 'Agent') {
       beginFinalResponse(message);
       return true;
     case 'token': {
-      const chunk = String(evt.text || '');
+      const chunk = String(
+        evt.text
+          ?? evt.delta
+          ?? evt.content
+          ?? evt.reply
+          ?? evt.data?.text
+          ?? evt.data?.delta
+          ?? evt.data?.content
+          ?? ''
+      );
       if (!chunk) return false;
       beginFinalResponse(message);
       const previous = String(message.body?.text || message.content || message.text || '');
@@ -4432,7 +4446,16 @@ function _applyMobileAgentStreamEvent(message, evt, fallbackName = 'Agent') {
       return true;
     }
     case 'final': {
-      const text = String(evt.text || evt.reply || '');
+      const text = String(
+        evt.text
+          ?? evt.reply
+          ?? evt.content
+          ?? evt.result
+          ?? evt.output
+          ?? evt.data?.text
+          ?? evt.data?.content
+          ?? ''
+      );
       applyCompletedTurnPresentation();
       try { _collectMediaFromToolEvent(message, evt); } catch {}
       if (evt.fileChanges) message.fileChanges = evt.fileChanges;
@@ -4446,7 +4469,17 @@ function _applyMobileAgentStreamEvent(message, evt, fallbackName = 'Agent') {
       return true;
     }
     case 'done': {
-      const text = String(evt.reply || evt.text || '');
+      const text = String(
+        evt.reply
+          ?? evt.text
+          ?? evt.content
+          ?? evt.result
+          ?? evt.output
+          ?? evt.data?.reply
+          ?? evt.data?.text
+          ?? evt.data?.content
+          ?? ''
+      );
       applyCompletedTurnPresentation();
       try { _collectMediaFromToolEvent(message, evt); } catch {}
       if (evt.fileChanges) message.fileChanges = evt.fileChanges;

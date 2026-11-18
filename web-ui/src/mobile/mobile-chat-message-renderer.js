@@ -51,7 +51,7 @@ export function createMobileChatMessageRenderer(resolveContext = () => ({})) {
     const revealTime = m.time ? `<span class="pm-reveal-time" aria-hidden="true">${escapeHtml(m.time)}</span>` : '';
     if (m.role === 'user') {
       const isWorkerHandoff = _isMobileVoiceAgentWorkerHandoff(m);
-      const isEditing = __pmChat.editingMessageIndex === msgIndex;
+      const isEditing = msgIndex >= 0 && __pmChat.editingMessageIndex === msgIndex;
       const userText = String(m.body?.text || '').trim();
       const isAttachmentOnlyPlaceholder = attachments.length > 0
         && /^(attached file\(s\)|please review the attached file\(s\)\.)$/i.test(userText);
