@@ -8,6 +8,7 @@
 
 import { mobileGatewayFetch } from './mobile-api.js';
 import { escapeHtml } from './mobile-shell.js';
+import { resolveContextWindowHeadlineTokens } from '../context-window-value.js';
 
 let _open = false;
 let _expanded = false;
@@ -272,7 +273,13 @@ function _renderContext(data) {
     return;
   }
   const currentState = data.currentState || {};
-  const current = Math.max(0, Number(data.currentStateTokens || currentState.currentStateTokens || data.currentInputTokens || 0));
+  const hasThreadTotal = data.totalThreadTokens !== null
+    && data.totalThreadTokens !== undefined
+    && Number.isFinite(Number(data.totalThreadTokens));
+  const current = resolveContextWindowHeadlineTokens({
+    totalThreadTokens: hasThreadTotal ? data.totalThreadTokens : undefined,
+    fallbackTokens: data.currentStateTokens ?? currentState.currentStateTokens ?? data.currentInputTokens,
+  });
   const windowTokens = _displayLimit(data, currentState);
   const percent = windowTokens > 0 ? Math.min(100, Math.max(0, (current / windowTokens) * 100)) : 0;
   if (ring) ring.style.setProperty('--pm-ctx-deg', `${Math.round(percent * 3.6)}deg`);

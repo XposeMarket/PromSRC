@@ -29,7 +29,7 @@ import { normalizeRecoveredTraceEntries, normalizeRecoveredTraceEntry } from '..
 import { createQueuedPromptTools } from '../features/chat/runtime/queued-prompt.js';
 import { allocateTimelinePaneBudgets } from '../features/chat/timeline/weighted-timeline.js';
 import { createDesktopTimelineView } from '../features/chat/timeline/desktop-timeline-view.js';
-import { resolveActiveContextTokens } from '../context-window-value.js';
+import { resolveContextWindowHeadlineTokens } from '../context-window-value.js';
 import {
   captureKeyedScrollState,
   reconcileKeyedTimelinePanes,
@@ -1429,12 +1429,12 @@ function renderChatContextWindow(data, target = null) {
   if (data === undefined) data = state.data;
   data = applyChatContextWindowLiveOverlay(data);
   const currentState = data?.currentState || {};
-  const rawCurrentStateTokens = data?.currentStateTokens ?? currentState.currentStateTokens;
-  const hasCurrentState = !!data
+  const rawThreadTotalTokens = data?.totalThreadTokens ?? currentState.totalThreadTokens;
+  const hasThreadTotal = !!data
     && data.success !== false
-    && rawCurrentStateTokens !== null
-    && rawCurrentStateTokens !== undefined
-    && Number.isFinite(Number(rawCurrentStateTokens));
+    && rawThreadTotalTokens !== null
+    && rawThreadTotalTokens !== undefined
+    && Number.isFinite(Number(rawThreadTotalTokens));
   const pressure = state.pressureSessionId === sessionId && state.pressureData?.success !== false
     ? state.pressureData
     : null;
@@ -1458,12 +1458,12 @@ function renderChatContextWindow(data, target = null) {
     return;
   }
 
-  const current = resolveActiveContextTokens({
-    currentStateTokens: hasCurrentState ? rawCurrentStateTokens : undefined,
+  const current = resolveContextWindowHeadlineTokens({
+    totalThreadTokens: hasThreadTotal ? rawThreadTotalTokens : undefined,
     pressureTokens: hasActivePressure ? pressure.pressureTokens : undefined,
-    fallbackTokens: data?.currentInputTokens,
+    fallbackTokens: data?.currentStateTokens ?? currentState.currentStateTokens ?? data?.currentInputTokens,
   });
-  const windowTokens = hasCurrentState
+  const windowTokens = hasThreadTotal
     ? getChatContextWindowDisplayLimit(data, currentState)
     : hasActivePressure
       ? Math.max(0, Number(pressure.contextWindowTokens))
@@ -1471,7 +1471,7 @@ function renderChatContextWindow(data, target = null) {
   const usage = getChatContextWindowUsage(
     current,
     windowTokens,
-    hasCurrentState ? data.contextUsage || currentState.contextUsage : pressure?.usage || data.contextUsage || currentState.contextUsage,
+    hasThreadTotal ? null : pressure?.usage || data.contextUsage || currentState.contextUsage,
   );
   const usageLabel = formatChatContextWindowUsage(usage);
   btn.style.setProperty('--chat-context-window-deg', `${Math.round(usage.progressPercent * 3.6)}deg`);
@@ -1483,10 +1483,9 @@ function renderChatContextWindow(data, target = null) {
   if (total) {
     total.textContent = usageLabel;
   }
-  // The rows describe the current model-call composition. Keep their own
-  // hard-window denominator while the gauge above uses the full active-thread
-  // pressure, so a bounded recent-message slice cannot replace the retained
-  // context total.
+  // The rows describe the current model-call composition. The headline above
+  // intentionally uses the persisted full thread total, so a bounded recent-
+  // message slice cannot replace the retained thread footprint.
   renderChatContextRows(currentState.rows, getChatContextWindowDisplayLimit(data, currentState) || windowTokens, target);
 }
 

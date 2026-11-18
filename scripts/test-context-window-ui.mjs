@@ -16,10 +16,20 @@ const live = read('web-ui/src/context-window-live-tracking.js');
 const generatedLive = read('generated/public-web-ui/static/context-window-live-tracking.js');
 const contextWindowValue = read('web-ui/src/context-window-value.js');
 const generatedContextWindowValue = read('generated/public-web-ui/static/context-window-value.js');
+const mobileContext = read('web-ui/src/mobile/mobile-context-window.js');
+const generatedMobileContext = read('generated/public-web-ui/static/mobile/mobile-context-window.js');
 
-// The visible meter is thread-level active context pressure. It is deliberately
-// sourced from the same persisted estimate / rolling-summary boundary used by
-// session compaction, not from a per-turn or fixed recent-message slice.
+// The visible headline is the persisted stored-thread total. The detailed
+// rows remain a separate current model-call composition estimate.
+assert.match(chatRouter, /totalThreadTokens: currentState\.totalThreadTokens/, 'the context-window API must expose the stored thread total explicitly');
+assert.match(desktopChat, /totalThreadTokens/, 'desktop context UI must read the stored thread total');
+assert.match(mobileContext, /totalThreadTokens/, 'mobile context UI must read the stored thread total');
+assert.match(contextWindowValue, /totalThreadTokens/, 'shared context selector must prefer the stored thread total');
+assert.match(live, /must never repaint a current-state estimate/, 'live tracker must not repaint the stored thread headline');
+assert.match(generatedContextWindowValue, /totalThreadTokens/, 'generated shared selector must match source');
+assert.match(generatedMobileContext, /totalThreadTokens/, 'generated mobile context UI must match source');
+
+// The pressure endpoint remains a separate compaction-pressure diagnostic.
 assert.match(pressureRouter, /router\.get\('\/api\/sessions\/:id\/context-pressure'/, 'the thread-context pressure endpoint must exist');
 assert.match(pressureRouter, /contextTokenEstimate: session\.contextTokenEstimate/, 'thread pressure must use the persisted session active-context estimate');
 assert.match(pressureRouter, /latestContextSummary: session\.latestContextSummary/, 'thread pressure must honor the rolling compaction summary');
@@ -49,32 +59,36 @@ assert.match(pressureModel, /if \(Number\.isFinite\(persistedEstimate\) && persi
 // separate detail views, but neither can overwrite the active state total.
 assert.match(desktopChat, /context-pressure`/, 'desktop must read full active-thread pressure');
 assert.match(desktopChat, /pressureData/, 'desktop must retain the pressure snapshot per session');
-assert.match(desktopChat, /hasCurrentState/, 'desktop must detect the active context-state snapshot');
-assert.match(desktopChat, /resolveActiveContextTokens/, 'desktop gauge must use the shared active-state precedence');
+assert.match(desktopChat, /hasThreadTotal/, 'desktop must detect the stored thread total');
+assert.match(desktopChat, /resolveContextWindowHeadlineTokens/, 'desktop gauge must use the shared stored-thread selector');
 assert.match(desktopChat, /current model-call composition/, 'current-call detail rows must be identified separately from active pressure');
-assert.match(live, /resolveActiveContextTokens/, 'live tracker must use the shared active-state precedence');
-assert.match(live, /currentStateKnown/, 'live tracker must retain whether the active state snapshot is known');
+assert.match(live, /must never repaint a current-state estimate/, 'live tracker must not repaint the stored thread headline');
+assert.doesNotMatch(live, /resolveContextWindowHeadlineTokens/, 'live tracker must not calculate or repaint a competing headline');
 
-// Exact regression from the broken meter: the pressure endpoint reported 471
-// while the current context-window snapshot reported 26,430. The visible
-// total must remain the active context state, not the smaller pressure value.
+// Exact regression from the broken meter: the UI showed the current-call
+// estimate even when the persisted stored-thread total was different.
 assert.equal(generatedContextWindowValue, contextWindowValue, 'context-value source/generated mirrors must stay byte-identical');
 const contextWindowValueModule = await import(`data:text/javascript,${encodeURIComponent(contextWindowValue)}`);
 const regressionSnapshot = {
-  currentStateTokens: 26_430,
+  totalThreadTokens: 188_000,
+  currentStateTokens: 38_600,
   pressureTokens: 471,
 };
 assert.equal(
-  contextWindowValueModule.resolveActiveContextTokens(regressionSnapshot),
-  26_430,
-  'currentStateTokens must win over pressureTokens for the 471 versus 26,430 regression',
+  contextWindowValueModule.resolveContextWindowHeadlineTokens(regressionSnapshot),
+  188_000,
+  'totalThreadTokens must win over currentStateTokens and pressureTokens',
 );
 assert.equal(
-  contextWindowValueModule.resolveActiveContextTokens({ pressureTokens: 471 }),
-  471,
-  'pressureTokens remains a fallback while the active state snapshot is unavailable',
+  contextWindowValueModule.resolveContextWindowHeadlineTokens({ currentStateTokens: 38_600, pressureTokens: 471 }),
+  38_600,
+  'currentStateTokens remains the compatibility fallback when totalThreadTokens is unavailable',
 );
-
+assert.equal(
+  contextWindowValueModule.resolveContextWindowHeadlineTokens({ pressureTokens: 471 }),
+  471,
+  'pressureTokens remains a fallback while the context snapshot is unavailable',
+);
 // performance.js is shared by desktop and mobile. The browser-level
 // performance-foundation test exercises both effects: mobile never requests
 // this owner, while desktop Chat activation does. Keep only the feature-owner
@@ -90,20 +104,14 @@ assert.match(live, /const SEMANTIC_LABEL = 'Context window';/, 'the visible gaug
 assert.doesNotMatch(live, /Effective context pressure/, 'the obsolete effective-pressure annotation must not be rendered');
 assert.doesNotMatch(live, /className = 'context-window-semantic-note'/, 'the live tracker must not inject a second visible annotation row');
 assert.match(live, /\/context-pressure`/, 'desktop and mobile must refresh persisted thread pressure');
-assert.match(live, /hasPressureSnapshot/, 'the live tracker must distinguish a pressure snapshot from the bounded model slice');
-assert.match(live, /currentStateTokens: state\.currentStateKnown \? state\.currentStateTokens : undefined/, 'the live tracker must pass current state before pressure to the selector');
-assert.match(live, /Math\.max\(authoritativePressure, liveProjection\)/, 'unpersisted current-turn tool pressure must layer on top of the thread baseline');
-assert.match(live, /compaction at \$\{formatTokens\(state\.pressureTriggerTokens\)\}/, 'the tooltip must expose the compaction trigger');
+assert.match(live, /\/context-pressure`/, 'the live tracker must refresh the separate pressure diagnostic');
+assert.match(live, /must never repaint a current-state estimate/, 'the live tracker must not repaint a competing current-state headline');
+assert.doesNotMatch(live, /Math\.max\(authoritativePressure, liveProjection\)/, 'live tool telemetry must not repaint the stored thread headline');
+assert.match(live, /requestAuthoritativeRefresh/, 'live events must request an authoritative context-window refresh');
 
 // Starting or settling a new turn may reset only per-turn telemetry. The thread
 // pressure itself must persist until an authoritative session refresh or real
 // context compaction changes it.
-const newTurnBlock = live.match(/else if \(startsNewTurn\) \{([\s\S]*?)\n  \} else if \(requestId/);
-assert.ok(newTurnBlock, 'the new-turn state transition must remain explicit');
-assert.match(newTurnBlock[1], /state\.baselineTokens = 0;/, 'new turns should clear the old per-turn baseline');
-assert.match(newTurnBlock[1], /state\.liveToolTokens = 0;/, 'new turns should clear only unpersisted live tool tokens');
-assert.doesNotMatch(newTurnBlock[1], /pressureTokens\s*=\s*0|pressureWindowTokens\s*=\s*0|pressureTriggerTokens\s*=\s*0/, 'new turns must never reset thread-level pressure');
-
 const settleBlock = live.match(/function settleLive\([\s\S]*?\n\}/)?.[0] || '';
 assert.match(settleBlock, /state\.liveToolTokens = 0;/, 'turn settle should clear per-turn live telemetry');
 assert.doesNotMatch(settleBlock, /pressureTokens\s*=\s*0|pressureWindowTokens\s*=\s*0|pressureTriggerTokens\s*=\s*0/, 'turn settle must never reset thread-level pressure');

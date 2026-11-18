@@ -1,5 +1,4 @@
 const PERF_EVENT = 'prometheus:client-performance-mark';
-import { resolveActiveContextTokens } from './context-window-value.js';
 
 const SEMANTIC_LABEL = 'Context window';
 const SETTLE_REFRESH_DELAYS_MS = [120, 900];
@@ -135,19 +134,13 @@ function makeState(sessionId, surface, clientRequestId = '') {
     surface,
     clientRequestId: String(clientRequestId || '').trim(),
     active: false,
-    baselineTokens: 0,
-    authoritativeTokens: 0,
-    currentStateKnown: false,
-    currentStateTokens: 0,
     windowTokens: 0,
-    liveToolTokens: 0,
     pressureTokens: 0,
     pressureWindowTokens: 0,
     pressureTriggerTokens: 0,
     pressureFetchedAt: 0,
     pressurePromise: null,
     pendingCompaction: false,
-    lastRenderedText: '',
     seenToolResults: new Set(),
   };
 }
@@ -166,19 +159,6 @@ function ensureSurfaceState(surface) {
     liveBySession.set(key, state);
   }
   return state;
-}
-
-function captureAuthoritative(state, elements = surfaceElements(state.surface)) {
-  if (!elements.total) return;
-  const text = String(elements.total.textContent || '').trim();
-  if (!text || text === state.lastRenderedText) return;
-  const usage = parseUsageLabel(text);
-  if (!usage) return;
-  state.currentStateKnown = true;
-  state.currentStateTokens = usage.current;
-  state.authoritativeTokens = usage.current;
-  state.windowTokens = usage.limit;
-  if (state.baselineTokens <= 0) state.baselineTokens = usage.current;
 }
 
 async function fetchPressure(surface, sessionId) {
@@ -218,9 +198,6 @@ function refreshPressure(state, force = false) {
 
 function copyPressureState(target, source) {
   if (!source) return;
-  target.authoritativeTokens = source.authoritativeTokens;
-  target.currentStateKnown = source.currentStateKnown;
-  target.currentStateTokens = source.currentStateTokens;
   target.windowTokens = source.windowTokens;
   target.pressureTokens = source.pressureTokens;
   target.pressureWindowTokens = source.pressureWindowTokens;
@@ -253,8 +230,6 @@ function startLive(sessionId, surface, clientRequestId = '') {
     // result events during the same active request must accumulate rather than
     // replacing this object on every result.
     state.clientRequestId = requestId;
-    state.baselineTokens = 0;
-    state.liveToolTokens = 0;
     state.seenToolResults.clear();
   } else if (requestId && !state.clientRequestId) {
     state.clientRequestId = requestId;
@@ -262,7 +237,6 @@ function startLive(sessionId, surface, clientRequestId = '') {
 
   const beganTurn = !state.active;
   state.active = true;
-  captureAuthoritative(state);
   if (beganTurn || conflictingRequest) void refreshPressure(state, true);
   return state;
 }
@@ -284,7 +258,6 @@ function recordToolTokens(sessionId, surface, details = {}, explicitTokens = 0) 
   const dedupe = resultDedupeKey(details, tokens);
   if (dedupe && state.seenToolResults.has(dedupe)) return;
   if (dedupe) state.seenToolResults.add(dedupe);
-  state.liveToolTokens += tokens;
   renderLiveEstimate(state);
 }
 
@@ -305,12 +278,7 @@ function recordCompactionEvent(sessionId, surface, evt = {}) {
     // The compaction result is a real reset of the active context baseline.
     // Clear the pre-compaction model slice and live projection at the same
     // time so a late desktop refresh cannot repaint the old peak.
-    state.authoritativeTokens = after;
-    state.currentStateKnown = true;
-    state.currentStateTokens = after;
-    state.baselineTokens = after;
-    state.liveToolTokens = 0;
-  }
+    }
   if (trigger > 0) state.pressureTriggerTokens = trigger;
   state.pendingCompaction = phase === 'start' || (!after && evt?.type === 'tool_call');
   renderLiveEstimate(state);
@@ -325,42 +293,12 @@ function stateIsVisible(state) {
 function renderLiveEstimate(state) {
   if (!state || !stateIsVisible(state)) return;
   const elements = surfaceElements(state.surface);
-  if (!elements.root || !elements.total) return;
-  captureAuthoritative(state, elements);
-
-  const hasPressureSnapshot = state.pressureFetchedAt > 0 && state.pressureWindowTokens > 0;
-  const windowTokens = numeric(hasPressureSnapshot ? state.pressureWindowTokens : state.windowTokens);
-  if (windowTokens <= 0) return;
-  const liveProjection = state.active && state.baselineTokens > 0
-    ? state.baselineTokens + state.liveToolTokens
-    : 0;
-  // The visible current-state snapshot is authoritative. Pressure is only a
-  // fallback while that snapshot is unavailable, and the live projection can
-  // add unpersisted tool observations on top during an active turn.
-  const authoritativePressure = resolveActiveContextTokens({
-    currentStateTokens: state.currentStateKnown ? state.currentStateTokens : undefined,
-    pressureTokens: hasPressureSnapshot ? state.pressureTokens : undefined,
-    fallbackTokens: state.authoritativeTokens,
-  });
-  const estimatedTokens = Math.max(authoritativePressure, liveProjection);
-  if (estimatedTokens <= 0) return;
-
-  const unreflectedTokens = Math.max(0, liveProjection - authoritativePressure);
-  const percent = Math.max(0, Math.min(100, (estimatedTokens / windowTokens) * 100));
-  const isLiveEstimate = unreflectedTokens > 0;
-  const label = `${isLiveEstimate ? '~' : ''}${formatTokens(estimatedTokens)} / ${formatTokens(windowTokens)} (${Math.round((estimatedTokens / windowTokens) * 100)}%)`;
-  state.lastRenderedText = label;
-  elements.total.textContent = label;
-  if (elements.fill) elements.fill.style.width = `${percent.toFixed(1)}%`;
-  if (state.surface === 'mobile') elements.ring?.style.setProperty('--pm-ctx-deg', `${Math.round(percent * 3.6)}deg`);
-  else elements.ring?.style.setProperty('--chat-context-window-deg', `${Math.round(percent * 3.6)}deg`);
-
-  const titleParts = [`Context window: ${formatTokens(estimatedTokens)} / ${formatTokens(windowTokens)} tokens`];
-  if (state.pressureTriggerTokens > 0) titleParts.push(`compaction at ${formatTokens(state.pressureTriggerTokens)}`);
-  if (isLiveEstimate) titleParts.push('live estimate');
-  if (elements.button) elements.button.title = titleParts.join(' · ');
-
-  removeSemanticNote(elements);
+  if (!elements.root) return;
+  // Desktop/mobile renderers own the headline because they have the full
+  // context-window API snapshot, including totalThreadTokens. This module
+  // observes live events and requests a fresh authoritative snapshot; it
+  // must never repaint a current-state estimate or speculative projection
+  // over the stored thread total.
   setSurfaceAccessibilityLabel(elements);
 }
 
@@ -373,7 +311,6 @@ function semanticPass() {
     removeSemanticNote(elements);
     setSurfaceAccessibilityLabel(elements);
     if (state) {
-      captureAuthoritative(state, elements);
       void refreshPressure(state);
       renderLiveEstimate(state);
     }

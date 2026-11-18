@@ -4,11 +4,17 @@ function nonNegativeFinite(value) {
 }
 
 /**
- * Select the active context total for a visible meter. The context-window
- * snapshot is the authoritative current state; pressure is only a fallback
- * for the short period where that snapshot is unavailable.
+ * Select the stored thread total for the visible context-window headline.
+ *
+ * The detail rows are a current-call composition estimate, but the headline
+ * is explicitly the persisted thread footprint returned as totalThreadTokens.
+ * Keep current-state/pressure values as compatibility fallbacks for older
+ * responses so a missing new field cannot make the control disappear.
  */
-export function resolveActiveContextTokens({ currentStateTokens, pressureTokens, fallbackTokens } = {}) {
+export function resolveContextWindowHeadlineTokens({ totalThreadTokens, currentStateTokens, pressureTokens, fallbackTokens } = {}) {
+  if (totalThreadTokens !== null && totalThreadTokens !== undefined && Number.isFinite(Number(totalThreadTokens))) {
+    return nonNegativeFinite(totalThreadTokens);
+  }
   if (currentStateTokens !== null && currentStateTokens !== undefined && Number.isFinite(Number(currentStateTokens))) {
     return nonNegativeFinite(currentStateTokens);
   }
