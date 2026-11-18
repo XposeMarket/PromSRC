@@ -1,3 +1,5 @@
+import fs from 'fs';
+import path from 'path';
 import { RuntimeWorkerBroker, type RuntimeWorkerBrokerStatus } from '../process/runtime-worker-broker.js';
 import type { BuildActivityPackageOptions, BuiltActivityPackage } from './activity-package.js';
 
@@ -25,6 +27,39 @@ const broker = new RuntimeWorkerBroker({
   startupTimeoutMs,
   defaultJobTimeoutMs: timeoutMs,
 });
+
+interface ActivityPackageResultReference {
+  kind: 'activity_package_reference';
+  packagePath?: string;
+  resultPath?: string;
+  continuationPaths: string[];
+  metricsPath?: string;
+}
+
+async function readWorkerResult(reference: ActivityPackageResultReference): Promise<BuiltActivityPackage> {
+  if (!reference || reference.kind !== 'activity_package_reference') {
+    throw new Error('Brain activity worker returned an invalid package reference.');
+  }
+  if (reference.packagePath) {
+    const packageText = await fs.promises.readFile(reference.packagePath, 'utf8');
+    return {
+      package: JSON.parse(packageText),
+      packagePath: reference.packagePath,
+      continuationPaths: reference.continuationPaths,
+      metricsPath: reference.metricsPath,
+    };
+  }
+  if (reference.resultPath) {
+    const resultText = await fs.promises.readFile(reference.resultPath, 'utf8');
+    try {
+      return JSON.parse(resultText) as BuiltActivityPackage;
+    } finally {
+      try { await fs.promises.rm(reference.resultPath, { force: true }); } catch { /* best effort */ }
+      try { await fs.promises.rm(path.dirname(reference.resultPath), { recursive: true, force: true }); } catch { /* best effort */ }
+    }
+  }
+  throw new Error('Brain activity worker returned no package reference path.');
+}
 let shuttingDown = false;
 
 function workerDisabledError(): Error {
@@ -51,7 +86,7 @@ export async function buildThoughtActivityPackageIsolated(
     abortPoll.unref?.();
   }
   try {
-    const result = await broker.run<BuiltActivityPackage>(
+    const reference = await broker.run<ActivityPackageResultReference>(
       'build_thought_activity_package',
       options,
       timeoutMs,
@@ -61,11 +96,12 @@ export async function buildThoughtActivityPackageIsolated(
       error.name = 'AbortError';
       throw error;
     }
-    return result;
+    return await readWorkerResult(reference);
   } finally {
     if (abortPoll) clearInterval(abortPoll);
   }
 }
+
 
 export async function warmBrainActivityWorker(): Promise<void> {
   if (!enabled || shuttingDown) return;

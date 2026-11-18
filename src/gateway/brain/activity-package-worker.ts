@@ -1,3 +1,6 @@
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import {
   RUNTIME_WORKER_PROTOCOL_VERSION,
   boundedRuntimeWorkerError,
@@ -17,6 +20,15 @@ const MAX_RESULT_BYTES = Math.max(
 );
 const workerName = String(process.env.PROMETHEUS_RUNTIME_WORKER_NAME || 'brain-activity');
 let activeRequestId = '';
+
+interface ActivityPackageResultReference {
+  kind: 'activity_package_reference';
+  packagePath?: string;
+  resultPath?: string;
+  continuationPaths: string[];
+  metricsPath?: string;
+}
+
 
 function send(message: RuntimeWorkerChildMessage): void {
   if (!process.send || !process.connected) return;
@@ -40,9 +52,26 @@ function shutdown(): void {
   process.exit(0);
 }
 
-async function execute(payload: BuildActivityPackageOptions) {
+async function execute(payload: BuildActivityPackageOptions): Promise<ActivityPackageResultReference> {
   if (!payload || typeof payload !== 'object') throw new Error('Brain activity package payload is required.');
-  return buildThoughtActivityPackage(payload);
+  const built = await buildThoughtActivityPackage(payload);
+  if (built.packagePath) {
+    return {
+      kind: 'activity_package_reference',
+      packagePath: built.packagePath,
+      continuationPaths: built.continuationPaths,
+      metricsPath: built.metricsPath,
+    };
+  }
+  const handoffDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prometheus-brain-activity-'));
+  const resultPath = path.join(handoffDir, 'built-package.json');
+  fs.writeFileSync(resultPath, `${JSON.stringify(built)}\n`, 'utf8');
+  return {
+    kind: 'activity_package_reference',
+    resultPath,
+    continuationPaths: built.continuationPaths,
+    metricsPath: built.metricsPath,
+  };
 }
 
 process.on('disconnect', () => process.exit(0));
