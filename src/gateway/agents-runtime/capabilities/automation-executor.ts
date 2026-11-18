@@ -130,13 +130,12 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
         const bgId = String(args.background_id || args.id || '').trim();
         if (!bgId) {
           // No id: list this session's background agents instead of failing.
-          const mine = listBackgroundStatuses()
-            .filter((s) => !s.spawnerSessionId || s.spawnerSessionId === sessionId)
+          const mine = listBackgroundStatuses(sessionId)
             .slice(0, 20)
             .map((s) => ({ id: s.id, state: s.state, tags: s.tags, model: s.model, startedAt: s.startedAt, promptPreview: s.promptPreview }));
           return { name, args, result: JSON.stringify({ note: 'No background_id given; listing background agents for this session (newest first).', agents: mine }), error: false };
         }
-        const status = backgroundProgress(bgId);
+        const status = backgroundProgress(bgId, sessionId);
         if (!status) return { name, args, result: `No background agent found with id: ${bgId}`, error: true };
         return { name, args, result: JSON.stringify(compactBackgroundToolPayload(status)), error: false };
       }
@@ -146,7 +145,7 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
         const message = String(args.message || '').trim();
         if (!bgId) return { name, args, result: 'background_id is required', error: true };
         if (!message) return { name, args, result: 'message is required', error: true };
-        const result = backgroundSteer(bgId, message, { source: `background_ops_steer:${sessionId}` });
+        const result = backgroundSteer(bgId, message, { source: `background_ops_steer:${sessionId}`, ownerSessionId: sessionId });
         return { name, args, result: JSON.stringify(result), error: !result.queued };
       }
 
@@ -174,6 +173,7 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
           if (!bgId) return { name, args, result: 'background_id is required', error: true };
           const result = await backgroundJoin({
             backgroundId: bgId,
+            spawnerSessionId: sessionId,
             joinPolicy: args.join_policy,
             timeoutMs: args.timeout_ms,
           });

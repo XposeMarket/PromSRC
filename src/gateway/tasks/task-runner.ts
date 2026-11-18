@@ -11,7 +11,7 @@
  */
 
 import crypto from 'crypto';
-import { persistBackgroundSpawnReceipt } from './background-spawn-continuity';
+import { persistBackgroundSpawnReceipt, readBackgroundSpawnReceipts } from './background-spawn-continuity';
 import { getOllamaClient } from '../../agents/ollama-client';
 import { inferProviderForBareModel, normalizeProviderModel, parseProviderModelRef } from '../../agents/model-routing.js';
 import { getConfig } from '../../config/config';
@@ -221,6 +221,38 @@ export function normalizeBackgroundSpawnToolCategories(raw: unknown): string[] {
   return out;
 }
 const _ephemeralBackgroundRuns = new Map<string, EphemeralBackgroundRecord>();
+let backgroundRegistryLoaded = false;
+
+/** Restore inspection-only records. Never recreate execution, abort handles or live runtime registration. */
+export function reloadBackgroundRegistry(): void {
+  backgroundRegistryLoaded = true;
+  for (const receipt of readBackgroundSpawnReceipts()) {
+    if (_ephemeralBackgroundRuns.has(receipt.id)) continue; // Do not interrupt live workers.
+    const interrupted = receipt.state === 'queued' || receipt.state === 'in_progress';
+    const completedAt = interrupted ? Date.now() : (receipt.completedAt || receipt.startedAt);
+    const stream = createBackgroundAgentStream(receipt.startedAt);
+    finishBackgroundAgentStream(stream, completedAt);
+    const record: EphemeralBackgroundRecord = {
+      ...receipt,
+      state: interrupted ? 'failed' : receipt.state as EphemeralBackgroundState,
+      joinPolicy: receipt.joinPolicy || 'wait_all', timeoutMs: receipt.timeoutMs || DEFAULT_BACKGROUND_TIMEOUT_MS,
+      completedAt, error: interrupted ? 'Interrupted by gateway restart; execution was not resumed.' : receipt.error,
+      promise: Promise.resolve(), backgroundStream: stream,
+    };
+    _ephemeralBackgroundRuns.set(record.id, record);
+    if (interrupted) persistBackgroundReceipt(record);
+  }
+}
+
+function ensureBackgroundRegistryLoaded(): void {
+  if (!backgroundRegistryLoaded) reloadBackgroundRegistry();
+}
+
+function scopedBackgroundRecord(id: string, ownerSessionId?: string): EphemeralBackgroundRecord | undefined {
+  ensureBackgroundRegistryLoaded();
+  const record = _ephemeralBackgroundRuns.get(String(id || '').trim());
+  return ownerSessionId !== undefined && record?.spawnerSessionId !== ownerSessionId ? undefined : record;
+}
 
 function backgroundVoiceWorkgroupId(record: Pick<EphemeralBackgroundStatus, 'tags'>): string {
   const tag = (Array.isArray(record.tags) ? record.tags : [])
@@ -264,6 +296,9 @@ function persistBackgroundReceipt(record: EphemeralBackgroundRecord): void {
     promptPreview: record.promptPreview,
     result: record.result,
     error: record.error,
+    joinPolicy: record.joinPolicy, timeoutMs: record.timeoutMs,
+    providerId: record.providerId, model: record.model, modelSource: record.modelSource,
+    reasoningEffort: record.reasoningEffort, mergedAt: record.mergedAt,
   });
 }
 
@@ -850,6 +885,7 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
 }
 
 export function backgroundSpawn(input: EphemeralBackgroundSpawnInput): EphemeralBackgroundStatus {
+  ensureBackgroundRegistryLoaded();
   const prompt = String(input?.prompt || '').trim();
   if (!prompt) {
     throw new Error('background_spawn requires prompt');
@@ -923,8 +959,8 @@ export function backgroundSpawn(input: EphemeralBackgroundSpawnInput): Ephemeral
   };
 }
 
-export function backgroundStatus(backgroundId: string): EphemeralBackgroundStatus | null {
-  const rec = _ephemeralBackgroundRuns.get(String(backgroundId || '').trim());
+export function backgroundStatus(backgroundId: string, ownerSessionId?: string): EphemeralBackgroundStatus | null {
+  const rec = scopedBackgroundRecord(backgroundId, ownerSessionId);
   if (!rec) return null;
   return {
     id: rec.id,
@@ -997,13 +1033,13 @@ export function compactBackgroundToolPayload<T>(payload: T): T {
   return value;
 }
 
-export function backgroundAgentStreamReplay(backgroundId: string, after = 0): {
+export function backgroundAgentStreamReplay(backgroundId: string, after = 0, ownerSessionId?: string): {
   id: string;
   state: EphemeralBackgroundState;
   stream: Record<string, any> | null;
   events: BackgroundAgentStreamFrame[];
 } | null {
-  const rec = _ephemeralBackgroundRuns.get(String(backgroundId || '').trim());
+  const rec = scopedBackgroundRecord(backgroundId, ownerSessionId);
   if (!rec) return null;
   return {
     id: rec.id,
@@ -1013,8 +1049,10 @@ export function backgroundAgentStreamReplay(backgroundId: string, after = 0): {
   };
 }
 
-export function listBackgroundStatuses(): EphemeralBackgroundStatus[] {
+export function listBackgroundStatuses(ownerSessionId?: string): EphemeralBackgroundStatus[] {
+  ensureBackgroundRegistryLoaded();
   return Array.from(_ephemeralBackgroundRuns.values())
+    .filter((record) => ownerSessionId === undefined || record.spawnerSessionId === ownerSessionId)
     .map(statusFromRecord)
     .sort((a, b) => b.startedAt - a.startedAt);
 }
@@ -1026,9 +1064,10 @@ export function listBackgroundStatuses(): EphemeralBackgroundStatus[] {
  */
 export function backgroundSteer(backgroundId: string, message: string, options: {
   source?: string;
+  ownerSessionId?: string;
   kind?: 'correction' | 'question' | 'constraint' | 'cancel' | 'pause' | 'continue' | 'clarification';
 } = {}): EphemeralBackgroundSteerResult {
-  const rec = _ephemeralBackgroundRuns.get(String(backgroundId || '').trim());
+  const rec = scopedBackgroundRecord(backgroundId, options.ownerSessionId);
   if (!rec) return { id: String(backgroundId || '').trim(), state: 'failed', queued: false, error: 'Background agent not found.' };
   if (isBackgroundTerminal(rec)) {
     return { id: rec.id, state: rec.state, queued: false, error: `Background agent is already ${rec.state}.` };
@@ -1107,8 +1146,8 @@ export function backgroundSteer(backgroundId: string, message: string, options: 
   };
 }
 
-export function backgroundAbort(backgroundId: string): { ok: boolean; status?: EphemeralBackgroundStatus; error?: string } {
-  const rec = _ephemeralBackgroundRuns.get(String(backgroundId || '').trim());
+export function backgroundAbort(backgroundId: string, ownerSessionId?: string): { ok: boolean; status?: EphemeralBackgroundStatus; error?: string } {
+  const rec = scopedBackgroundRecord(backgroundId, ownerSessionId);
   if (!rec) return { ok: false, error: 'Background agent not found.' };
   if (isBackgroundTerminal(rec)) {
     return { ok: false, status: statusFromRecord(rec), error: `Background agent is already ${rec.state}.` };
@@ -1134,6 +1173,7 @@ function isBackgroundTerminal(rec: EphemeralBackgroundRecord): boolean {
 // chat session — used so the main chat abort/stop-now can cancel everything it
 // spawned, not just the foreground turn.
 export function listActiveBackgroundIdsForSession(spawnerSessionId: string): string[] {
+  ensureBackgroundRegistryLoaded();
   const sid = String(spawnerSessionId || '').trim();
   if (!sid) return [];
   return Array.from(_ephemeralBackgroundRuns.values())
@@ -1146,13 +1186,14 @@ function listBackgroundRecordsForWait(input: {
   backgroundIds?: string[];
   spawnerSessionId?: string;
 }): EphemeralBackgroundRecord[] {
+  ensureBackgroundRegistryLoaded();
   const explicitIds = [
     String(input?.backgroundId || '').trim(),
     ...(Array.isArray(input?.backgroundIds) ? input.backgroundIds.map((id) => String(id || '').trim()) : []),
   ].filter(Boolean);
   if (explicitIds.length > 0) {
     return Array.from(new Set(explicitIds))
-      .map((id) => _ephemeralBackgroundRuns.get(id))
+      .map((id) => scopedBackgroundRecord(id, input.spawnerSessionId))
       .filter(Boolean) as EphemeralBackgroundRecord[];
   }
   const spawnerSessionId = String(input?.spawnerSessionId || '').trim();
@@ -1234,10 +1275,11 @@ async function waitForBackgroundWithTimeout(rec: EphemeralBackgroundRecord, time
 
 export async function backgroundJoin(input: {
   backgroundId: string;
+  spawnerSessionId?: string;
   joinPolicy?: BackgroundJoinPolicy;
   timeoutMs?: number;
 }): Promise<EphemeralBackgroundJoinResult | null> {
-  const rec = _ephemeralBackgroundRuns.get(String(input?.backgroundId || '').trim());
+  const rec = scopedBackgroundRecord(String(input?.backgroundId || '').trim(), input.spawnerSessionId);
   if (!rec) return null;
 
   const policy: BackgroundJoinPolicy =
@@ -1262,6 +1304,7 @@ export async function backgroundJoin(input: {
   const canMerge = terminal && !rec.mergedAt;
   if (canMerge) {
     rec.mergedAt = Date.now();
+    persistBackgroundReceipt(rec);
   }
   console.log(`[Background Agent] join ${rec.id}: state=${rec.state} merged=${canMerge} timedOut=${timedOut}`);
 

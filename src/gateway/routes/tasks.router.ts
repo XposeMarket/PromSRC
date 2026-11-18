@@ -567,14 +567,14 @@ router.get('/api/background', (req, res) => {
 
 router.get('/api/background/:id/status', (req, res) => {
   const { backgroundStatus } = getTaskRunnerRuntime();
-  const status = backgroundStatus(String(req.params.id || ''));
+  const status = backgroundStatus(String(req.params.id || ''), req.query.sessionId ? String(req.query.sessionId) : undefined);
   if (!status) { res.status(404).json({ success: false, error: 'Background task not found' }); return; }
   res.json({ success: true, status });
 });
 
 router.get('/api/background/:id/progress', (req, res) => {
   const { backgroundProgress } = getTaskRunnerRuntime();
-  const status = backgroundProgress(String(req.params.id || ''));
+  const status = backgroundProgress(String(req.params.id || ''), req.query.sessionId ? String(req.query.sessionId) : undefined);
   if (!status) { res.status(404).json({ success: false, error: 'Background task not found' }); return; }
   res.json({ success: true, status });
 });
@@ -582,7 +582,7 @@ router.get('/api/background/:id/progress', (req, res) => {
 router.get('/api/background/:id/stream', (req, res) => {
   const { backgroundAgentStreamReplay } = getTaskRunnerRuntime();
   const after = Math.max(0, Math.floor(Number(req.query.after || 0)) || 0);
-  const replay = backgroundAgentStreamReplay(String(req.params.id || ''), after);
+  const replay = backgroundAgentStreamReplay(String(req.params.id || ''), after, req.query.sessionId ? String(req.query.sessionId) : undefined);
   if (!replay) { res.status(404).json({ success: false, error: 'Background task not found' }); return; }
   res.json({ success: true, ...replay });
 });
@@ -593,6 +593,7 @@ router.post('/api/background/:id/join', async (req, res) => {
   const timeoutRaw = Number(req.body?.timeout_ms ?? req.body?.timeoutMs);
   const joined = await backgroundJoin({
     backgroundId: String(req.params.id || ''),
+    spawnerSessionId: req.body?.sessionId ? String(req.body.sessionId) : undefined,
     joinPolicy: (joinPolicy === 'wait_all' || joinPolicy === 'wait_until_timeout' || joinPolicy === 'best_effort_merge')
       ? (joinPolicy as any)
       : undefined,

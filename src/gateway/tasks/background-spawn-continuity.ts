@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { getConfig } from '../../config/config';
+import { redactResourceText } from '../resources/resource-store';
 
 export interface BackgroundSpawnReceipt {
   id: string;
@@ -11,6 +12,13 @@ export interface BackgroundSpawnReceipt {
   promptPreview?: string;
   result?: string;
   error?: string;
+  joinPolicy?: 'wait_all' | 'wait_until_timeout' | 'best_effort_merge';
+  timeoutMs?: number;
+  providerId?: string;
+  model?: string;
+  modelSource?: string;
+  reasoningEffort?: string;
+  mergedAt?: number;
 }
 
 const MAX_RECEIPTS = 500;
@@ -20,26 +28,41 @@ function receiptPath(): string {
   return path.join(getConfig().getConfigDir(), 'background-spawn-continuity.json');
 }
 
+function normalizeReceipt(item: any): BackgroundSpawnReceipt | null {
+  if (!item || typeof item.id !== 'string' || typeof item.spawnerSessionId !== 'string'
+    || !item.id.trim() || !item.spawnerSessionId.trim() || item.id.length > 200 || item.spawnerSessionId.length > 200 || !Number.isFinite(item.startedAt)
+    || item.startedAt < Date.now() - RETENTION_MS
+    || !['queued', 'in_progress', 'completed', 'failed', 'timed_out'].includes(item.state)) return null;
+  const text = (value: unknown, max: number) => redactResourceText(value).slice(0, max) || undefined;
+  return {
+    id: item.id.slice(0, 200), spawnerSessionId: item.spawnerSessionId.slice(0, 200),
+    state: item.state, startedAt: item.startedAt,
+    completedAt: Number.isFinite(item.completedAt) ? item.completedAt : undefined,
+    mergedAt: Number.isFinite(item.mergedAt) ? item.mergedAt : undefined,
+    promptPreview: text(item.promptPreview, 160), result: text(item.result, 8000), error: text(item.error, 4000),
+    joinPolicy: ['wait_all', 'wait_until_timeout', 'best_effort_merge'].includes(item.joinPolicy) ? item.joinPolicy : 'wait_all',
+    timeoutMs: Number.isFinite(item.timeoutMs) ? Math.max(1, Math.min(1_800_000, item.timeoutMs)) : 120_000,
+    providerId: text(item.providerId, 120), model: text(item.model, 200),
+    modelSource: text(item.modelSource, 120), reasoningEffort: text(item.reasoningEffort, 40),
+  };
+}
+
 export function readBackgroundSpawnReceipts(): BackgroundSpawnReceipt[] {
   try {
     const parsed = JSON.parse(fs.readFileSync(receiptPath(), 'utf8'));
-    return Array.isArray(parsed) ? parsed.filter((item) => item?.id && item?.spawnerSessionId) : [];
+    return Array.isArray(parsed) ? parsed.slice(-MAX_RECEIPTS).map(normalizeReceipt).filter((item): item is BackgroundSpawnReceipt => !!item) : [];
   } catch { return []; }
 }
 
 export function persistBackgroundSpawnReceipt(receipt: BackgroundSpawnReceipt): void {
-  if (!receipt.spawnerSessionId) return;
+  const normalized = normalizeReceipt(receipt);
+  if (!normalized) return;
   const target = receiptPath();
   try {
     fs.mkdirSync(path.dirname(target), { recursive: true });
     const cutoff = Date.now() - RETENTION_MS;
     const previous = readBackgroundSpawnReceipts().filter((item) => item.id !== receipt.id && item.startedAt >= cutoff);
-    const next = [...previous, {
-      ...receipt,
-      promptPreview: String(receipt.promptPreview || '').slice(0, 160),
-      result: String(receipt.result || '').slice(0, 8000) || undefined,
-      error: String(receipt.error || '').slice(0, 4000) || undefined,
-    }].slice(-MAX_RECEIPTS);
+    const next = [...previous, normalized].slice(-MAX_RECEIPTS);
     const temp = `${target}.${process.pid}.tmp`;
     fs.writeFileSync(temp, JSON.stringify(next), 'utf8');
     try { fs.renameSync(temp, target); }
