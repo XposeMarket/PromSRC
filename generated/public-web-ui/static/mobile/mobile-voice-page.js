@@ -28,7 +28,7 @@ export async function renderVoicePage(baseContext, page, ctx) {
     context.bindMobileSessionTarget(voiceGatewaySessionId, routedVoiceTarget.gatewayId, { started: true });
   }
   if (initialVoiceGateway) context.setMobileActiveGatewayTarget(initialVoiceGateway);
-  if (!inlineMode) {
+  if (!inlineMode && context.__pmVoice.settings.voiceMode !== 'canonical') {
     if (voiceGatewaySessionId.startsWith('voice_room_')) {
       await context._loadDurableMobileVoiceRoom(voiceGatewaySessionId).catch((error) => {
         console.warn('[mobile voice] could not load Voice Room session:', error);
@@ -201,14 +201,14 @@ export async function renderVoicePage(baseContext, page, ctx) {
                 <label style="font-size:11px;font-weight:800;color:var(--pm-muted);text-transform:uppercase;">Input
                   <select id="pm-voice-input-provider" style="margin-top:4px;width:100%;border:1px solid var(--pm-border);border-radius:8px;padding:7px;background:var(--pm-surface-strong);color:var(--pm-text);color-scheme:light dark;">
                     <option value="browser">Browser</option>
-                    <option value="openai_realtime">OpenAI Realtime</option>
+                    <option value="openai">OpenAI audio</option>
                     <option value="xai">xAI / Grok</option>
                   </select>
                 </label>
                 <label style="font-size:11px;font-weight:800;color:var(--pm-muted);text-transform:uppercase;">Output
                   <select id="pm-voice-output-provider" style="margin-top:4px;width:100%;border:1px solid var(--pm-border);border-radius:8px;padding:7px;background:var(--pm-surface-strong);color:var(--pm-text);color-scheme:light dark;">
                     <option value="browser">Browser</option>
-                    <option value="openai_realtime">OpenAI Realtime</option>
+                    <option value="openai">OpenAI audio</option>
                     <option value="xai">xAI / Grok</option>
                   </select>
                 </label>
@@ -2751,7 +2751,7 @@ void main() {
   function _syncVoicePresetFromRouting() {
     const sttProvider = String(context.__pmVoice.settings?.sttProvider || 'browser');
     const ttsProvider = String(context.__pmVoice.settings?.ttsProvider || 'browser');
-    const preset = context._voicePresetForProviders(sttProvider, ttsProvider);
+    const preset = context.__pmVoice.settings.voiceMode === 'canonical' ? 'canonical' : context._voicePresetForProviders(sttProvider, ttsProvider);
     context._saveVoiceSettings({ voiceMode: preset });
     return preset;
   }
@@ -2762,20 +2762,22 @@ void main() {
     const ttsProviders = Array.isArray(context.__pmVoice.voiceStatus?.ttsProviders) ? context.__pmVoice.voiceStatus.ttsProviders : [];
     const realtimeReady = context._isRealtimeConnected(context.__pmVoice.lastVoiceStatus);
     const xaiReady = sttProviders.some(p => p?.configured && p?.id === 'xai') && ttsProviders.some(p => p?.configured && p?.id === 'xai');
-    const selectedMode = settings.voiceMode === 'xai' ? 'xai' : 'openai_realtime';
-    const outputProvider = selectedMode === 'xai' ? 'xai' : 'openai_realtime';
+    const selectedMode = settings.voiceMode || 'canonical';
+    const outputProvider = selectedMode === 'canonical' ? (settings.ttsProvider === 'realtime' ? 'browser' : settings.ttsProvider || 'browser') : selectedMode === 'xai' ? 'xai' : 'openai_realtime';
     if (listenModeSelect) listenModeSelect.value = _voiceListenMode();
     settings.voiceAgentRealtimeAgent = selectedMode === 'openai_realtime';
+    if (selectedMode === 'canonical') settings.ttsProvider = outputProvider;
     settings.voiceAgentXaiRealtime = selectedMode === 'xai';
     voiceModeSelect.innerHTML = [
-      _providerOptionHtml('openai_realtime', `${context._mobileRealtimeProviderLabel()}${realtimeReady ? '' : ' (not connected)'}`, selectedMode),
-      _providerOptionHtml('xai', `xAI / Grok${xaiReady ? '' : ' (not connected)'}`, selectedMode),
+      _providerOptionHtml('canonical', 'Voice — normal Prometheus chat', selectedMode),
+      _providerOptionHtml('openai_realtime', `Legacy ${context._mobileRealtimeProviderLabel()}${realtimeReady ? '' : ' (not connected)'}`, selectedMode),
+      _providerOptionHtml('xai', `Legacy xAI / Grok realtime${xaiReady ? '' : ' (not connected)'}`, selectedMode),
     ].join('');
     if (inputProviderSelect) inputProviderSelect.value = String(settings.sttProvider || context._inputProviderForMode(selectedMode));
     if (outputProviderSelect) outputProviderSelect.value = outputProvider;
-    if (advancedToggle) advancedToggle.style.display = 'none';
+    if (advancedToggle) advancedToggle.style.display = selectedMode === 'canonical' ? '' : 'none';
     if (advancedPanel) advancedPanel.style.display = 'none';
-    const selectedServerTts = outputProvider === 'xai' && _routingProviderReady('xai', 'output') ? 'xai' : '';
+    const selectedServerTts = ['xai', 'openai'].includes(outputProvider) && _routingProviderReady(outputProvider, 'output') ? outputProvider : '';
     const realtimeVoiceOptions = context._mobileRealtimeVoiceOptions(context.__pmVoice.lastVoiceStatus);
     const selectedRealtimeVoice = context._mobileRealtimeVoice(settings.realtimeVoice, context.__pmVoice.lastVoiceStatus);
     realtimeVoiceSelect.innerHTML = realtimeVoiceOptions
@@ -2891,12 +2893,13 @@ void main() {
     if (willOpen) setTimeout(() => document.addEventListener('pointerdown', _voiceSettingsOutsideHandler, true), 0);
   });
   voiceModeSelect.addEventListener('change', () => {
-    const mode = voiceModeSelect.value === 'xai' ? 'xai' : 'openai_realtime';
+    const mode = voiceModeSelect.value || 'canonical';
     const wasListening = context.__pmVoice.listening;
     context._saveVoiceSettings({
       voiceMode: mode,
+      legacyRealtime: mode !== 'canonical',
       sttProvider: 'auto',
-      ttsProvider: 'realtime',
+      ttsProvider: mode === 'canonical' ? 'browser' : 'realtime',
       serverVoice: mode === 'xai' ? (context.__pmVoice.settings?.serverVoice || 'eve') : '',
       sttProviderLocked: true,
       autoProviderDefault: '',
@@ -2962,7 +2965,7 @@ void main() {
     const previousOutput = String(context.__pmVoice.settings?.ttsProvider || 'browser');
     const sttProvider = String(inputProviderSelect?.value || 'browser');
     const ttsProvider = String(outputProviderSelect?.value || 'browser');
-    const preset = context._voicePresetForProviders(sttProvider, ttsProvider);
+    const preset = context.__pmVoice.settings.voiceMode === 'canonical' ? 'canonical' : context._voicePresetForProviders(sttProvider, ttsProvider);
     context._saveVoiceSettings({
       sttProvider,
       ttsProvider,
@@ -3265,7 +3268,7 @@ void main() {
       context.pmToast('Attachments are only available from the chat voice view.', 'info');
       return;
     }
-    if (!(context.__pmRealtimeAgent.conn || context.__pmRealtimeAgent.connecting) && !context._isMobileRealtimeAgentMode()) {
+    if (context.__pmVoice.settings.voiceMode !== 'canonical' && !(context.__pmRealtimeAgent.conn || context.__pmRealtimeAgent.connecting) && !context._isMobileRealtimeAgentMode()) {
       context.pmToast('Start realtime voice first, then attach a photo.', 'info');
       return;
     }
@@ -4493,7 +4496,7 @@ void main() {
       targetSessionId = await context._ensureDurableMobileVoiceSession({ title: voiceTitle, source: 'mobile_voice_session_created' });
       _paintVoiceTarget?.();
     }
-    context._prewarmMobileVoiceWorkerContext({ sessionId: targetSessionId, source: 'mobile_submit_speech_start', originalUserPrompt: finalText, force: true });
+    if (context.__pmVoice.settings.voiceMode !== 'canonical') context._prewarmMobileVoiceWorkerContext({ sessionId: targetSessionId, source: 'mobile_submit_speech_start', originalUserPrompt: finalText, force: true });
     const hadPendingInterruption = !!context.__pmVoice.pendingInterruptContext;
     if (hadPendingInterruption) {
       context.__pmVoice.pendingInterruptContext = null;
@@ -4508,7 +4511,7 @@ void main() {
       }
       context.__pmVoice.activeVoiceRuntime = null;
     }
-    const interruptionCallerContext = await context._finalizeVoiceInterruptionForTranscript(finalText, targetSessionId);
+    const interruptionCallerContext = context.__pmVoice.settings.voiceMode === 'canonical' ? '' : await context._finalizeVoiceInterruptionForTranscript(finalText, targetSessionId);
     const interruptionResult = hadPendingInterruption ? context.__pmVoice.lastInterruptionEvent : null;
     if (interruptionResult?.classification) {
       context._applyVoiceInterruptionToMobileChat(targetSessionId, interruptionResult, finalText);
@@ -4526,7 +4529,7 @@ void main() {
         return;
       }
     }
-    if (!hadPendingInterruption && !interruptionResult?.classification && options.skipVoiceAgentHandoff !== true) {
+    if (context.__pmVoice.settings.voiceMode !== 'canonical' && !hadPendingInterruption && !interruptionResult?.classification && options.skipVoiceAgentHandoff !== true) {
       const voiceAgentHandoff = await context._prepareVoiceAgentHandoff(targetSessionId, finalText);
       if (!voiceAgentHandoff.shouldContinueToWorker) {
         _setOrbState(null);
@@ -4742,9 +4745,7 @@ void main() {
         '[/VOICE_AGENT_HANDOFF]',
       ].filter(Boolean).join('\n')
       : '');
-    const callerContext = [interruptionCallerContext || context._consumeVoicePlaybackInterruptContext(targetSessionId), handoffContext, realtimeAgentDispatchContext, realtimeAgentChatHandoffContext]
-      .filter(Boolean)
-      .join('\n\n');
+    const callerContext = context.__pmVoice.settings.voiceMode === 'canonical' ? '' : [interruptionCallerContext || context._consumeVoicePlaybackInterruptContext(targetSessionId), handoffContext, realtimeAgentDispatchContext, realtimeAgentChatHandoffContext].filter(Boolean).join('\n\n');
     const voiceWorkerHandoffStartedAt = Date.now();
     let voiceWorkerFirstPreflightLogged = false;
     let voiceWorkerFirstTokenLogged = false;
@@ -4822,7 +4823,9 @@ void main() {
     };
     if (!context.__pmChat.sentClientRequestIds || typeof context.__pmChat.sentClientRequestIds !== 'object') context.__pmChat.sentClientRequestIds = {};
     context.__pmChat.sentClientRequestIds[targetSessionId] = workerClientRequestId;
-    const stream = context.streamChat({ message: finalText, sessionId: targetSessionId, callerContext, clientRequestId: workerClientRequestId }, {
+    const pendingFiles = context.__pmChat.attachments?.[targetSessionId] || [];
+    const uploadedFiles = pendingFiles.length ? await context._uploadMobileChatAttachments(pendingFiles) : [];
+    const stream = context.streamChat({ message: finalText, sessionId: targetSessionId, callerContext, clientRequestId: workerClientRequestId, attachments: uploadedFiles.map((item) => item.attachment || item), selectedSkillIds: context.__pmChat.selectedSkillIds, excludedSkillIds: context.__pmChat.excludedSkillIds }, {
       onInfo: (m) => {
         cmd.status = 'streaming';
         _updateToolFlip(cmd, String(m).slice(0, 80));
@@ -4913,7 +4916,7 @@ void main() {
         context._applyMobileToolActivity(chatAiTurn, 'call', evt);
         context._notifyMobileChatVoiceUpdate(targetSessionId, { reason: 'voice_tool_call', force: true });
         if (!realtimeAgentDispatch) {
-          context._speakVoiceLiveStatus(context._voiceLiveToolStatus(evt, 'start'), { minGapMs: 650, staleMs: 3200 });
+          if (context.__pmVoice.settings.voiceMode !== 'canonical') context._speakVoiceLiveStatus(context._voiceLiveToolStatus(evt, 'start'), { minGapMs: 650, staleMs: 3200 });
         }
         _updateToolFlip(cmd, label.slice(0, 80));
         cmd.toolStream.push(`⚙ ${text}`);
@@ -4958,7 +4961,7 @@ void main() {
         context._applyMobileToolActivity(chatAiTurn, 'progress', evt);
         context._notifyMobileChatVoiceUpdate(targetSessionId, { reason: 'voice_tool_progress', force: true });
         if (!realtimeAgentDispatch) {
-          context._speakVoiceLiveStatus(context._voiceLiveToolStatus(evt, 'progress'), { minGapMs: 1200, staleMs: 2600 });
+          if (context.__pmVoice.settings.voiceMode !== 'canonical') context._speakVoiceLiveStatus(context._voiceLiveToolStatus(evt, 'progress'), { minGapMs: 1200, staleMs: 2600 });
         }
         cmd.toolStream.push(`… ${progressText}`);
         if (cmd.expanded) _renderRecent();
@@ -5135,6 +5138,18 @@ void main() {
     // Full Realtime voice agent path — OpenAI Realtime handles STT + reasoning
     // + TTS in a single session. No transcript posting, no gateway voice agent
     // decision call. Bypasses the entire split flow when active.
+    if (context.__pmVoice.settings.voiceMode === 'canonical') {
+      // Audio transport only; submitSpeech below owns normal /api/chat SSE.
+      const active = context.__pmVoice.activeVoiceRuntime;
+      if (active?.isStreamActive) {
+        active.abort?.();
+        await context.stopMobileMainChat(active.sessionId, { source: 'canonical_voice_barge_in' });
+      }
+      const input = context.__pmVoice.settings.sttProvider || 'auto';
+      if (['browser', 'auto'].includes(input) && (window.SpeechRecognition || window.webkitSpeechRecognition)) _startBrowserListening();
+      else await _startBackendListening(input === 'browser' ? 'auto' : input);
+      return;
+    }
     if (context._isMobileRealtimeAgentMode()) {
       _setVoiceConnectionPill?.('starting');
       let sid = String(context.__pmVoice.targetSessionId || context.__pmChat.activeSessionId || context.MOBILE_CHAT_SESSION_ID).trim() || context.MOBILE_CHAT_SESSION_ID;
@@ -5301,7 +5316,7 @@ void main() {
       }
       if (context.__pmVoice.listening) _stopListening(false);
     };
-    context._prewarmMobileVoiceWorkerContext({ sessionId: context.__pmVoice.targetSessionId || context.__pmChat.activeSessionId, source: 'browser_stt_started' });
+    if (context.__pmVoice.settings.voiceMode !== 'canonical') context._prewarmMobileVoiceWorkerContext({ sessionId: context.__pmVoice.targetSessionId || context.__pmChat.activeSessionId, source: 'browser_stt_started' });
     try { rec.start(); } catch (err) {
       context.pmToast('Could not start mic. Check permissions.', 'error');
       _stopListening(true);
@@ -5389,6 +5404,7 @@ void main() {
           });
           const audioBase64 = await context._blobToBase64(blob);
           const uploadStartedAt = Date.now();
+          const sttRenderToken = context.__pmVoice.activeVoiceRenderToken;
           const data = await context.transcribeVoiceAudio({
             provider,
             audioBase64,
@@ -5401,7 +5417,7 @@ void main() {
             textLen: String(data?.text || '').length,
             uploadAndTranscribeMs: Date.now() - uploadStartedAt,
           });
-          await _submitSpeech(data?.text || '');
+          if (_isActiveVoiceRender() && sttRenderToken === context.__pmVoice.activeVoiceRenderToken) await _submitSpeech(data?.text || '');
         } catch (err) {
           context.pmToast(err.message || 'Transcription failed', 'error');
           _setOrbState(null);

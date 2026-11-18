@@ -228,12 +228,13 @@ export function createMobileVoiceRuntime(context = {}) {
   function _loadVoiceSettings() {
     try {
       const saved = JSON.parse(localStorage.getItem(PM_VOICE_SETTINGS_KEY) || '{}');
-      const voiceMode = saved.voiceMode === 'xai' ? 'xai' : 'openai_realtime';
+      const voiceMode = saved.legacyRealtime === true ? (saved.voiceMode === 'xai' ? 'xai' : 'openai_realtime') : 'canonical';
       const listenMode = ['push_to_speak', 'always_listening'].includes(saved.listenMode) ? saved.listenMode : 'push_to_speak';
       return {
         voiceMode,
-        sttProvider: 'auto',
-        ttsProvider: 'realtime',
+        legacyRealtime: saved.legacyRealtime === true,
+        sttProvider: ['browser', 'openai', 'xai'].includes(saved.sttProvider) ? saved.sttProvider : 'auto',
+        ttsProvider: voiceMode === 'canonical' ? (saved.ttsProvider === 'realtime' ? 'browser' : saved.ttsProvider || 'browser') : 'realtime',
         realtimeVoice: saved.realtimeVoice || 'marin',
         realtimeSpeed: Number(saved.realtimeSpeed || 1.05),
         serverVoice: saved.serverVoice || '',
@@ -248,7 +249,7 @@ export function createMobileVoiceRuntime(context = {}) {
         voiceAgentXaiRealtime: voiceMode === 'xai',
       };
     } catch {
-      return { voiceMode: 'openai_realtime', sttProvider: 'auto', ttsProvider: 'realtime', realtimeVoice: 'marin', realtimeSpeed: 1.05, serverVoice: '', xaiSpeed: 1.0, dictation: 'quiet', listenMode: 'push_to_speak', wakePhrase: '', wakeGateActive: false, sttProviderLocked: true, autoProviderDefault: '', voiceAgentRealtimeAgent: true, voiceAgentXaiRealtime: false };
+      return { voiceMode: 'canonical', sttProvider: 'auto', ttsProvider: 'browser', realtimeVoice: 'marin', realtimeSpeed: 1.05, serverVoice: '', xaiSpeed: 1.0, dictation: 'quiet', listenMode: 'push_to_speak', wakePhrase: '', wakeGateActive: false, sttProviderLocked: true, autoProviderDefault: '', voiceAgentRealtimeAgent: true, voiceAgentXaiRealtime: false };
     }
   }
 
@@ -485,6 +486,7 @@ export function createMobileVoiceRuntime(context = {}) {
   }
 
   function _applyMobileVoiceProviderDefaults(status) {
+    if (__pmVoice.settings?.voiceMode === 'canonical') return false;
     const provider = _mobileVoiceDefaultProviderFromStatus(status);
     if (provider === 'default') return false;
     const settings = __pmVoice.settings || {};
@@ -4281,8 +4283,8 @@ export function createMobileVoiceRuntime(context = {}) {
   }
 
   async function _ttsSpeak(text) {
-    // Legacy TTS is retired. OpenAI/xAI realtime owns all spoken output.
-    return;
+    // Canonical voice speaks only text returned by normal chat.
+    if (__pmVoice.settings?.voiceMode !== 'canonical') return;
     text = _cleanVoiceSpeechText(text);
     if (!text) return;
     __pmVoice.currentSpokenSegment = String(text || '').replace(/\s+/g, ' ').trim().slice(0, 1200);
@@ -4417,7 +4419,6 @@ export function createMobileVoiceRuntime(context = {}) {
   }
 
   function _ttsStop() {
-    return;
     try { window.speechSynthesis?.cancel(); } catch {}
     if (__pmVoice.lyricRaf) {
       cancelAnimationFrame(__pmVoice.lyricRaf);
@@ -4461,6 +4462,7 @@ export function createMobileVoiceRuntime(context = {}) {
   }
 
   function _captureVoicePlaybackInterrupt(reason = 'barge_in') {
+    if (__pmVoice.settings?.voiceMode === 'canonical') return null;
     const now = Date.now();
     const realtimeActive = !!__pmVoice.realtimeSpeechActiveResponse;
     const currentSpokenSegment = String(__pmVoice.currentSpokenSegment || '').replace(/\s+/g, ' ').trim().slice(0, 1200);
@@ -4876,6 +4878,7 @@ export function createMobileVoiceRuntime(context = {}) {
   }
 
   async function _trySubmitVoiceAsLiveSteer(sessionId, transcript = '') {
+    if (__pmVoice.settings?.voiceMode === 'canonical') return false;
     const sid = String(sessionId || '').trim();
     const text = String(transcript || '').trim();
     if (!sid || !text) return false;

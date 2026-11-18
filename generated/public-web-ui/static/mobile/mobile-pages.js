@@ -10687,13 +10687,14 @@ export async function renderChatPage(page, { navigate, sessionId = null, voiceRo
 function _mobileVoiceBootstrapSettings() {
   try {
     const saved = JSON.parse(localStorage.getItem('pm_voice_settings_v1') || '{}');
-    const voiceMode = saved.voiceMode === 'xai' ? 'xai' : 'openai_realtime';
+    const voiceMode = saved.legacyRealtime === true ? (saved.voiceMode === 'xai' ? 'xai' : 'openai_realtime') : 'canonical';
     const listenMode = ['push_to_speak', 'always_listening'].includes(saved.listenMode) ? saved.listenMode : 'push_to_speak';
     const wakePhrase = String(saved.wakePhrase || '').replace(/\s+/g, ' ').trim();
     return {
       voiceMode,
-      sttProvider: 'auto',
-      ttsProvider: 'realtime',
+      legacyRealtime: saved.legacyRealtime === true,
+      sttProvider: ['browser', 'openai', 'xai'].includes(saved.sttProvider) ? saved.sttProvider : 'auto',
+      ttsProvider: voiceMode === 'canonical' ? (saved.ttsProvider === 'realtime' ? 'browser' : saved.ttsProvider || 'browser') : 'realtime',
       realtimeVoice: saved.realtimeVoice || 'marin',
       realtimeSpeed: Number(saved.realtimeSpeed || 1.05),
       serverVoice: saved.serverVoice || '',
@@ -10709,9 +10710,9 @@ function _mobileVoiceBootstrapSettings() {
     };
   } catch {
     return {
-      voiceMode: 'openai_realtime',
+      voiceMode: 'canonical',
       sttProvider: 'auto',
-      ttsProvider: 'realtime',
+      ttsProvider: 'browser',
       realtimeVoice: 'marin',
       realtimeSpeed: 1.05,
       serverVoice: '',
@@ -10774,9 +10775,9 @@ const __pmVoice = (window.__pmVoice = window.__pmVoice || {
 __pmVoice.settings = { ..._mobileVoiceBootstrapSettings(), ...(__pmVoice.settings || {}) };
 if (!(__pmVoice.activeVoiceToolCalls instanceof Set)) __pmVoice.activeVoiceToolCalls = new Set();
 if (!Number.isFinite(Number(__pmVoice.thinkingOrbAudioPulse))) __pmVoice.thinkingOrbAudioPulse = 0;
-if (!['openai_realtime', 'xai'].includes(__pmVoice.settings.voiceMode)) __pmVoice.settings.voiceMode = 'openai_realtime';
-__pmVoice.settings.sttProvider = 'auto';
-__pmVoice.settings.ttsProvider = 'realtime';
+if (!['canonical', 'openai_realtime', 'xai'].includes(__pmVoice.settings.voiceMode)) __pmVoice.settings.voiceMode = 'canonical';
+if (!['auto', 'browser', 'openai', 'xai'].includes(__pmVoice.settings.sttProvider)) __pmVoice.settings.sttProvider = 'auto';
+__pmVoice.settings.ttsProvider = __pmVoice.settings.voiceMode === 'canonical' ? (['browser', 'openai', 'xai'].includes(__pmVoice.settings.ttsProvider) ? __pmVoice.settings.ttsProvider : 'browser') : 'realtime';
 __pmVoice.settings.voiceAgentRealtimeAgent = __pmVoice.settings.voiceMode === 'openai_realtime';
 __pmVoice.settings.voiceAgentXaiRealtime = __pmVoice.settings.voiceMode === 'xai';
 __pmVoice.dictation = __pmVoice.settings.dictation || __pmVoice.dictation || 'quiet';
