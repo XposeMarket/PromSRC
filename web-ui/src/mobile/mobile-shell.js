@@ -13,7 +13,8 @@ let drawerMorphModule;
 const loadDrawerMorph = () => drawerMorphModule ||= import('./mobile-drawer-search-morph.js').catch(error => { drawerMorphModule = null; throw error; });
 import { resolveDrawerActiveRun } from './mobile-turn-lifecycle.js';
 import { initMobileModelBadge, mobileModelBadgeSeedLabel, attachMobileButtonHaptic, attachMobileHapticGestureSurface, disposeMobileHapticGestureSurfaces, pmHaptic } from './mobile-model-badge.js';
-import { mobileGatewayFetch, buildWorkspaceCanvasUrl, attachMobileSessionToProject, detachMobileSessionFromProject } from './mobile-api.js';
+import { mobileGatewayFetch, buildWorkspaceCanvasUrl, attachMobileSessionToProject, detachMobileSessionFromProject, createMobileProject, updateMobileProject } from './mobile-api.js';
+import { mountMoveNewProjectForm, projectFolderFieldHtml, wireProjectFolderField, readProjectFolder } from '../chat/project-folder-field.js';
 import { initHarnessSidebar, harnessProjectsHtml, harnessFilterButtonHtml, isSessionVisibleForHarnessFilter, isHarnessVisible } from '../chat/external-agent-sidebar.js';
 import {
   getGateway,
@@ -2889,7 +2890,7 @@ function _openSessionContextSheet(sessionId, sessionTitle, callbacks, anchor = n
           '<span class="pm-sess-action-icon pm-i">' + settleIconSvg + '</span>' +
           '<span class="pm-msheet-row-label">' + (settled ? 'Unsettle chat' : 'Settle chat') + '</span>' +
         '</button>' +
-        (isProject ? '' : '<button type="button" class="pm-msheet-row pm-sess-action-row" data-sess-action="move-project"><span class="pm-msheet-row-label">Move to project\u2026</span></button>') +
+        (isProject ? '<button type="button" class="pm-msheet-row pm-sess-action-row" data-sess-action="project-settings"><span class="pm-msheet-row-label">Instructions & folder\u2026</span></button>' : '<button type="button" class="pm-msheet-row pm-sess-action-row" data-sess-action="move-project"><span class="pm-msheet-row-label">Move to project\u2026</span></button>') +
         (owningProject ? '<button type="button" class="pm-msheet-row pm-sess-action-row" data-sess-action="remove-project"><span class="pm-msheet-row-label">Remove from project</span></button>' : '') +
         '<button type="button" class="pm-msheet-row pm-sess-action-row pm-sess-action-delete" data-sess-action="delete">' +
           '<span class="pm-sess-action-icon pm-i">' + trashIconSvg + '</span>' +
@@ -2916,6 +2917,12 @@ function _openSessionContextSheet(sessionId, sessionTitle, callbacks, anchor = n
     pmHaptic(10);
     _closeSessionSheetImmediate();
     _openSessionRenameSheet(sessionId, sessionTitle, cb, itemType);
+  });
+
+  var projectSettingsBtn = sheet.querySelector('[data-sess-action="project-settings"]');
+  if (projectSettingsBtn) projectSettingsBtn.addEventListener('click', function() {
+    pmHaptic(10);
+    _openProjectSettingsSheet(project || { id: sessionId, name: sessionTitle });
   });
 
   var pinBtn = sheet.querySelector('[data-sess-action="pin"]');
@@ -3146,6 +3153,69 @@ function _openSessionRenameSheet(sessionId, currentTitle, callbacks, itemType = 
   });
 }
 
+// Project Instructions + linked folder (mobile parity with the desktop project panel).
+function _openProjectSettingsSheet(project) {
+  _closeSessionSheetImmediate();
+  var scrim = document.createElement('div');
+  scrim.id = 'pm-sess-sheet-scrim';
+  scrim.className = 'pm-msheet-scrim';
+  var sheet = document.createElement('div');
+  sheet.id = 'pm-sess-sheet';
+  sheet.className = 'pm-msheet pm-project-settings-sheet';
+  sheet.setAttribute('role', 'dialog');
+  sheet.setAttribute('aria-modal', 'true');
+  sheet.innerHTML =
+    '<div class="pm-msheet-handle"></div>' +
+    '<div class="pm-msheet-head">' +
+      '<div class="pm-msheet-title">' + escapeHtml(project.name || 'Project') + '</div>' +
+      '<button type="button" class="pm-msheet-close" aria-label="Close">&times;</button>' +
+    '</div>' +
+    '<div class="pm-msheet-body" id="pm-sess-sheet-body">' +
+      '<form class="pm-move-new-project pm-project-settings-form" novalidate>' +
+        '<label class="pm-project-folder-label" for="pm-project-instructions">Instructions</label>' +
+        '<textarea id="pm-project-instructions" class="pm-project-folder-input pm-project-instructions-input" rows="6" placeholder="Rules every chat in this project follows. Prometheus never edits these.">' + escapeHtml(project.instructions || '') + '</textarea>' +
+        projectFolderFieldHtml('pm-settings', project.workspacePath || '') +
+        '<div class="pm-move-new-project-error" role="alert" hidden></div>' +
+        '<div class="pm-move-new-project-actions">' +
+          '<button type="button" class="pm-move-btn" data-settings-cancel>Cancel</button>' +
+          '<button type="submit" class="pm-move-btn pm-move-btn-primary">Save</button>' +
+        '</div>' +
+      '</form>' +
+    '</div>';
+  document.body.appendChild(scrim);
+  document.body.appendChild(sheet);
+  requestAnimationFrame(function() { scrim.classList.add('open'); sheet.classList.add('open'); });
+  var close = function() { _closeSessionSheet(); };
+  scrim.addEventListener('click', close);
+  sheet.querySelector('.pm-msheet-close').addEventListener('click', close);
+  sheet.querySelector('[data-settings-cancel]').addEventListener('click', close);
+  wireProjectFolderField(sheet);
+  var form = sheet.querySelector('form');
+  var errorEl = sheet.querySelector('.pm-move-new-project-error');
+  form.addEventListener('submit', async function(event) {
+    event.preventDefault();
+    var save = form.querySelector('[type="submit"]');
+    save.disabled = true;
+    errorEl.hidden = true;
+    try {
+      await updateMobileProject(project.id, {
+        instructions: String(sheet.querySelector('#pm-project-instructions').value || ''),
+        workspacePath: readProjectFolder(sheet) || '',
+      });
+      close();
+      if (_drawerEl && _drawerCallbacks) {
+        _resetDrawerPageState();
+        _renderDrawerSessions(_drawerCallbacks).catch(function() {});
+      }
+      try { if (window.pmToast) window.pmToast('Project saved', 'success'); } catch(e) {}
+    } catch (err) {
+      save.disabled = false;
+      errorEl.textContent = (err && err.message) || 'Could not save project';
+      errorEl.hidden = false;
+    }
+  });
+}
+
 // Project picker for "Move to project…". Reuses the session action sheet markup.
 async function _openProjectPickerSheet(sessionId, sessionTitle) {
   _closeSessionSheetImmediate();
@@ -3162,11 +3232,10 @@ async function _openProjectPickerSheet(sessionId, sessionTitle) {
   sheet.setAttribute('aria-modal', 'true');
 
   var titleSafe = escapeHtml(sessionTitle || 'This chat');
-  var rows = projects.length
-    ? projects.map(function(project) {
-        return '<button type="button" class="pm-msheet-row pm-sess-action-row" data-project-id="' + escapeHtml(String(project.id)) + '"><span class="pm-msheet-row-label">' + escapeHtml(project.name || 'Untitled project') + '</span></button>';
-      }).join('')
-    : '<p class="pm-sess-delete-msg">No projects yet. Create one first.</p>';
+  var rows = '<button type="button" class="pm-msheet-row pm-sess-action-row pm-move-new-row" data-move-new-project><span class="pm-msheet-row-label">+ New project</span></button>' +
+    projects.map(function(project) {
+      return '<button type="button" class="pm-msheet-row pm-sess-action-row" data-project-id="' + escapeHtml(String(project.id)) + '"><span class="pm-msheet-row-label">' + escapeHtml(project.name || 'Untitled project') + '</span></button>';
+    }).join('');
   sheet.innerHTML =
     '<div class="pm-msheet-handle"></div>' +
     '<div class="pm-msheet-head">' +
@@ -3186,6 +3255,33 @@ async function _openProjectPickerSheet(sessionId, sessionTitle) {
   scrim.addEventListener('click', close);
   var closeBtn = sheet.querySelector('.pm-msheet-close');
   if (closeBtn) closeBtn.addEventListener('click', close);
+
+  var refreshAfterMove = function() {
+    if (_drawerEl && _drawerCallbacks) {
+      _resetDrawerPageState();
+      _renderDrawerSessions(_drawerCallbacks).catch(function() {});
+    }
+    try { if (window.pmToast) window.pmToast('Chat moved to project', 'success'); } catch(e) {}
+  };
+  var newBtn = sheet.querySelector('[data-move-new-project]');
+  if (newBtn) newBtn.addEventListener('click', function() {
+    pmHaptic(10);
+    var title = sheet.querySelector('.pm-msheet-title');
+    if (title) title.textContent = 'New project';
+    var body = sheet.querySelector('#pm-sess-sheet-body');
+    mountMoveNewProjectForm(body, {
+      prefix: 'pm-move',
+      onCancel: function() { _openProjectPickerSheet(sessionId, sessionTitle); },
+      create: async function(input) {
+        var created = await createMobileProject(input.name, input.workspacePath);
+        var project = (created && created.project) || created;
+        if (!project || !project.id) throw new Error('Prometheus did not return the new project.');
+        await attachMobileSessionToProject(project.id, sessionId);
+        close();
+        refreshAfterMove();
+      },
+    });
+  });
 
   sheet.querySelectorAll('[data-project-id]').forEach(function(btn) {
     btn.addEventListener('click', async function() {

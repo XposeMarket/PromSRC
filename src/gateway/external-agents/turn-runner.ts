@@ -22,6 +22,7 @@ import {
   type TurnOrigin,
 } from '../session';
 import { expandHome } from './executable';
+import { fileSessionIntoFolderProject } from '../projects/project-store';
 import { createPendingRequest } from './pending-requests';
 import { getExternalAgentAdapter, isExternalAgentUsable, registerLiveExternalTurn } from './registry';
 import type { ExternalAgentBinding, ExternalAgentEvent, ExternalAgentId, ExternalUserRequest } from './types';
@@ -276,6 +277,9 @@ export async function runExternalAgentTurn(params: ExternalTurnRunParams, bindin
         broadcastWS({ type: 'external_agent_request_resolved', ...data });
       },
     });
+
+  // One project, any agent: a harness chat in a project's linked folder is filed into that project.
+  try { fileSessionIntoFolderProject(sessionId, binding.cwd || ''); } catch { /* filing never blocks the turn */ }
 
   let result;
   try {

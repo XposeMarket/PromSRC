@@ -5,10 +5,14 @@
  *   .prometheus/projects/<id>.json
  *
  * Each project owns:
- *   - Metadata (name, instructions, memorySnapshot)
+ *   - Metadata (name, optional linked folder, Instructions)
  *   - A list of session IDs scoped to this project
  *   - A knowledge folder: workspace/projects/<id>/knowledge/
- *   - A CONTEXT.md seed file: workspace/projects/<id>/CONTEXT.md
+ *   - Notes: workspace/projects/<id>/CONTEXT.md, short notes the model keeps
+ *
+ * Instructions are the user's and are always injected in full; the model never
+ * edits them. Notes are the model's. A linked folder's AGENTS.md / CLAUDE.md is
+ * injected too, so every agent working in that folder follows the same rules.
  *
  * Sessions are regular Prometheus sessions (keyed by UUID in .prometheus/sessions/).
  * The project record just tracks which session IDs belong to it.
@@ -16,7 +20,7 @@
  * File layout:
  *   .prometheus/projects/<id>.json          ← project metadata
  *   workspace/projects/<id>/                ← project workspace folder
- *   workspace/projects/<id>/CONTEXT.md      ← living context/knowledge seed
+ *   workspace/projects/<id>/CONTEXT.md      ← project notes (model-maintained)
  *   workspace/projects/<id>/knowledge/      ← uploaded knowledge files
  */
 
@@ -24,7 +28,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { getConfig } from '../../config/config.js';
-import { deleteSession, getSession, sessionExists } from '../session.js';
+import { deleteSession, getSession, listSessionSummaries, sessionExists } from '../session.js';
 import {
   assertSafeStorageId,
   isSafeStorageId,
@@ -70,8 +74,12 @@ export interface Project {
   name: string;
   /** Optional user-selected directory that scopes this project's work. */
   workspacePath?: string;
+  /** The user's project instructions. Injected in full; the model never edits them. */
   instructions: string;
+  /** Legacy field, kept for old clients. Folded into the notes by the v2 cleanup. */
   memorySnapshot: string;
+  /** 2 = instructions/notes split done (CONTEXT.md is notes only). */
+  contextVersion?: number;
   sessions: ProjectSession[];
   knowledge: ProjectKnowledgeFile[];
   externalImport?: ProjectExternalImportBinding;
@@ -224,49 +232,175 @@ function estimateTokens(content: string): number {
   return Math.ceil(content.length / 4);
 }
 
-function contextSeed(name: string): string {
-  return [
-    `# ${name}`,
-    '',
-    '> This file is the living context for this project. Keep durable project facts, decisions, and status current.',
-    '',
-    '## Overview',
-    '',
-    '*(Prometheus will fill this in after your first substantive conversation.)*',
-    '',
-    '## Project Instructions',
-    '',
-    '## Project Memory',
-    '',
-    '## Status Updates',
-    '',
-    '## Goals',
-    '',
-    '## Key People & Entities',
-    '',
-    '## Tech Stack & Tools',
-    '',
-    '## Timeline & Milestones',
-    '',
-    '## Notes',
-    '',
-  ].join('\n');
+export const NOTES_REVIEW_HEADING = 'Auto-captured (review)';
+const NOTES_PROMPT_MAX_LINES = 200;
+const NOTES_PROMPT_MAX_CHARS = 8000;
+const INSTRUCTIONS_PROMPT_MAX_CHARS = 12000;
+const FOLDER_FILE_PROMPT_MAX_CHARS = 6000;
+const FOLDER_INSTRUCTION_FILES = ['AGENTS.md', 'CLAUDE.md'];
+/** Lines the old keyword learner appended end with a date comment. */
+const LEGACY_AUTO_LINE = /\s*<!--\s*\d{4}-\d{2}-\d{2}\s*-->\s*$/;
+const LEGACY_NOISE_LINE = /^(\*\(Prometheus will fill this in[^)]*\)\*|>\s*This file is the living context.*|>\s*Last updated:.*)$/i;
+
+function notesSeed(name: string): string {
+  return `# ${name}\n\n<!-- Project notes. Prometheus keeps short notes here: decisions, status, key facts. Your Instructions are separate and are never edited here. -->\n`;
 }
 
-function replaceContextSection(content: string, heading: string, value: string, aliases: string[] = []): string {
-  const section = `## ${heading}\n\n${value.trim()}\n`;
-  for (const candidate of [heading, ...aliases]) {
-    const escaped = candidate.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const pattern = new RegExp(`^##\\s+${escaped}\\s*$[\\s\\S]*?(?=^##\\s|$(?![\\s\\S]))`, 'm');
-    if (pattern.test(content)) return content.replace(pattern, section);
-  }
-  return `${content.trimEnd()}\n\n${section}`;
+function clipText(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max).trimEnd()}\n... (truncated)` : text;
 }
 
 function ensureProjectContextFile(project: Project): string {
   const contextPath = getProjectContextFilePath(project.id);
-  if (!fs.existsSync(contextPath)) fs.writeFileSync(contextPath, contextSeed(project.name), 'utf-8');
+  if (!fs.existsSync(contextPath)) fs.writeFileSync(contextPath, notesSeed(project.name), 'utf-8');
   return contextPath;
+}
+
+/**
+ * One-time cleanup of a v1 CONTEXT.md (instructions, memory, notes and keyword-learner
+ * output all mixed in one file). Pure: returns the new notes and instructions.
+ * - "Project Instructions" section -> Instructions (appended if not already there)
+ * - keyword-learner lines ("<!-- YYYY-MM-DD -->") -> a review section the model never sees
+ * - template placeholders and empty sections are dropped; everything else is kept as notes
+ */
+export function migrateLegacyProjectContext(
+  content: string,
+  projectName: string,
+  instructions: string,
+  memorySnapshot = '',
+): { notes: string; instructions: string; reviewLines: number } {
+  let title = projectName;
+  const preamble: string[] = [];
+  const sections: Array<{ heading: string; lines: string[] }> = [];
+  for (const line of String(content || '').replace(/\r\n/g, '\n').split('\n')) {
+    const h1 = /^#\s+(.+?)\s*$/.exec(line);
+    const h2 = /^##\s+(.+?)\s*$/.exec(line);
+    if (h1 && !sections.length && !preamble.some((l) => l.trim())) { title = h1[1]; continue; }
+    if (h2) { sections.push({ heading: h2[1], lines: [] }); continue; }
+    (sections.length ? sections[sections.length - 1].lines : preamble).push(line);
+  }
+  const clean = (lines: string[]) => {
+    const kept = lines.filter((l) => !LEGACY_NOISE_LINE.test(l.trim()));
+    while (kept.length && !kept[0].trim()) kept.shift();
+    while (kept.length && !kept[kept.length - 1].trim()) kept.pop();
+    return kept;
+  };
+  let nextInstructions = String(instructions || '').trim();
+  const out: string[] = [`# ${title}`, ''];
+  const pre = clean(preamble);
+  if (pre.length) out.push(...pre, '');
+  const review: string[] = [];
+  for (const section of sections) {
+    const heading = section.heading.trim();
+    if (/^project instructions$/i.test(heading)) {
+      const text = clean(section.lines).join('\n').trim();
+      if (text && !nextInstructions.includes(text)) nextInstructions = nextInstructions ? `${nextInstructions}\n\n${text}` : text;
+      continue;
+    }
+    if (heading.toLowerCase() === NOTES_REVIEW_HEADING.toLowerCase()) {
+      review.push(...clean(section.lines).filter((l) => l.trim() && !/^<!--/.test(l.trim())));
+      continue;
+    }
+    const keep: string[] = [];
+    for (const line of section.lines) {
+      if (LEGACY_AUTO_LINE.test(line)) {
+        const text = line.replace(LEGACY_AUTO_LINE, '').replace(/^\s*[-*]\s*/, '').trim();
+        if (text) review.push(`- ${text} _(was under ${heading})_`);
+      } else keep.push(line);
+    }
+    const body = clean(keep);
+    if (body.some((l) => l.trim())) out.push(`## ${/^project memory$|^memory snapshot$/i.test(heading) ? 'Memory' : heading}`, '', ...body, '');
+  }
+  const memory = String(memorySnapshot || '').trim();
+  if (memory && !out.join('\n').includes(memory)) out.push('## Memory', '', memory, '');
+  if (review.length) {
+    out.push(
+      `## ${NOTES_REVIEW_HEADING}`,
+      '<!-- Saved by the old automatic learner, which often grabbed sentence fragments. Prometheus does not read this section. Move anything useful above, then delete the rest. -->',
+      ...review,
+      '',
+    );
+  }
+  return { notes: `${out.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd()}\n`, instructions: nextInstructions, reviewLines: review.length };
+}
+
+/** Notes as the model sees them: no review section, no HTML comments, first 200 lines / 8k chars. */
+export function projectNotesForPrompt(content: string): string {
+  let text = String(content || '').replace(/\r\n/g, '\n');
+  const review = new RegExp(`^##\\s+${NOTES_REVIEW_HEADING.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$[\\s\\S]*?(?=^##\\s|(?![\\s\\S]))`, 'mi');
+  text = text.replace(review, '').replace(/<!--[\s\S]*?-->/g, '').replace(/\n{3,}/g, '\n\n').trim();
+  if (!text.replace(/^#\s+.*$/m, '').trim()) return '';
+  const lines = text.split('\n');
+  const clipped = lines.length > NOTES_PROMPT_MAX_LINES ? `${lines.slice(0, NOTES_PROMPT_MAX_LINES).join('\n')}\n... (truncated: keep notes under ${NOTES_PROMPT_MAX_LINES} lines)` : text;
+  return clipText(clipped, NOTES_PROMPT_MAX_CHARS);
+}
+
+/** AGENTS.md / CLAUDE.md in a linked folder (same files Codex and Claude Code read). */
+export function readFolderInstructionFiles(folder: string): Array<{ name: string; content: string }> {
+  const out: Array<{ name: string; content: string }> = [];
+  const seen = new Set<string>();
+  const root = String(folder || '').trim();
+  if (!root) return out;
+  for (const name of FOLDER_INSTRUCTION_FILES) {
+    try {
+      const file = path.join(root, name);
+      const stat = fs.statSync(file);
+      if (!stat.isFile() || stat.size === 0) continue;
+      let text: string;
+      if (stat.size > 256 * 1024) {
+        const fd = fs.openSync(file, 'r');
+        try { const buf = Buffer.alloc(64 * 1024); text = buf.subarray(0, fs.readSync(fd, buf, 0, buf.length, 0)).toString('utf-8'); } finally { fs.closeSync(fd); }
+      } else text = fs.readFileSync(file, 'utf-8');
+      text = text.trim();
+      const key = text.replace(/\s+/g, ' ');
+      if (!text || seen.has(key)) continue;
+      seen.add(key);
+      out.push({ name, content: clipText(text, FOLDER_FILE_PROMPT_MAX_CHARS) });
+    } catch { /* missing or unreadable: skip */ }
+  }
+  return out;
+}
+
+function samePath(a: string, b: string): boolean {
+  const norm = (p: string) => {
+    const resolved = path.resolve(String(p || '').trim()).replace(/[\\/]+$/, '');
+    return process.platform === 'win32' || process.platform === 'darwin' ? resolved.toLowerCase() : resolved;
+  };
+  return !!String(a || '').trim() && !!String(b || '').trim() && norm(a) === norm(b);
+}
+
+/** Run the v1 -> v2 instructions/notes split once per project. Keeps a backup of the old file. */
+export function ensureProjectContextV2(project: Project): Project {
+  if (project.contextVersion === 2) return project;
+  try {
+    ensureProjectDirs(project.id);
+    const contextPath = getProjectContextFilePath(project.id);
+    if (fs.existsSync(contextPath)) {
+      const original = fs.readFileSync(contextPath, 'utf-8');
+      const backup = path.join(path.dirname(contextPath), 'CONTEXT.v1-backup.md');
+      if (!fs.existsSync(backup)) fs.writeFileSync(backup, original, 'utf-8');
+      const migrated = migrateLegacyProjectContext(original, project.name, project.instructions || '', project.memorySnapshot || '');
+      fs.writeFileSync(contextPath, migrated.notes, 'utf-8');
+      project.instructions = migrated.instructions;
+    } else {
+      fs.writeFileSync(contextPath, notesSeed(project.name), 'utf-8');
+    }
+    project.contextVersion = 2;
+    saveProject(project);
+    if (project.workspacePath && fileHarnessChatsIntoProject(project.id)) return loadProjectFromDisk(project.id) || project;
+  } catch (e: any) {
+    console.warn(`[ProjectStore] notes cleanup failed for ${project.id}:`, e?.message);
+  }
+  return project;
+}
+
+/** Replace the project notes (CONTEXT.md). The user can edit notes from the project panel. */
+export function writeProjectNotes(projectId: string, content: string): boolean {
+  const project = loadProjectFromDisk(projectId);
+  if (!project) return false;
+  ensureProjectDirs(project.id);
+  fs.writeFileSync(getProjectContextFilePath(project.id), String(content || '').replace(/\r\n/g, '\n'), 'utf-8');
+  return true;
 }
 
 export function getProjectContextContent(projectId: string): string | null {
@@ -342,13 +476,75 @@ export function listProjects(): Project[] {
     const id = file.slice(0, -5);
     if (!isSafeStorageId(id)) continue;
     const p = loadProjectFromDisk(id);
-    if (p) projects.push(p);
+    if (p) projects.push(ensureProjectContextV2(p));
   }
   return projects.sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
 export function getProject(id: string): Project | null {
-  return loadProjectFromDisk(id);
+  const project = loadProjectFromDisk(id);
+  return project ? ensureProjectContextV2(project) : null;
+}
+
+/** The project linked to this folder, if any. */
+export function findProjectByFolder(folder: string): Project | null {
+  if (!String(folder || '').trim()) return null;
+  return listProjects().find((p) => p.workspacePath && samePath(p.workspacePath, folder)) || null;
+}
+
+/**
+ * One project, any agent: harness chats (Codex, Claude Code, ...) running in a
+ * project's linked folder belong to that project. Chats already in a project stay put.
+ */
+export function fileHarnessChatsIntoProject(projectId: string): number {
+  const project = loadProjectFromDisk(projectId);
+  if (!project?.workspacePath) return 0;
+  let added = 0;
+  let summaries: any[] = [];
+  try { summaries = listSessionSummaries() as any[]; } catch { return 0; }
+  for (const s of summaries) {
+    const cwd = String(s?.externalAgent?.cwd || '').trim();
+    if (!cwd || !isSafeStorageId(s?.id) || !samePath(cwd, project.workspacePath)) continue;
+    if (project.sessions.some((sess) => sess.id === s.id) || findProjectBySessionId(s.id)) continue;
+    const at = Number(s.lastMessageAt || s.updatedAt || s.createdAt || Date.now()) || Date.now();
+    project.sessions.push({ id: s.id, title: String(s.title || 'New chat'), createdAt: Number(s.createdAt) || at, updatedAt: at });
+    added += 1;
+  }
+  if (added) {
+    project.sessions.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    project.updatedAt = Date.now();
+    saveProject(project);
+  }
+  return added;
+}
+
+/** File a harness chat into the project linked to its folder (no-op if none or already filed). */
+export function fileSessionIntoFolderProject(sessionId: string, folder: string): Project | null {
+  if (!isSafeStorageId(sessionId) || !String(folder || '').trim() || findProjectBySessionId(sessionId)) return null;
+  const project = findProjectByFolder(folder);
+  if (!project) return null;
+  let title = 'New chat';
+  try { title = String(getSession(sessionId)?.title || '').trim() || title; } catch { /* new chat */ }
+  return addSessionToProject(project.id, sessionId, title);
+}
+
+const UNSTARTED_CHAT_GRACE_MS = 2 * 60_000;
+
+/**
+ * A project chat row is created right before the first message is sent. If that
+ * send never lands (failed request, closed app), no chat exists: drop the row.
+ */
+export function pruneUnstartedProjectChats<T extends { id: string; sessions?: ProjectSession[] }>(project: T, now = Date.now()): T {
+  const sessions = Array.isArray(project?.sessions) ? project.sessions : [];
+  const kept = sessions.filter((s) => sessionExists(s.id) || now - Number(s.createdAt || 0) < UNSTARTED_CHAT_GRACE_MS);
+  if (kept.length === sessions.length) return project;
+  const stored = loadProjectFromDisk(project.id);
+  if (stored) {
+    const keepIds = new Set(kept.map((s) => s.id));
+    stored.sessions = stored.sessions.filter((s) => keepIds.has(s.id) || !sessions.some((old) => old.id === s.id));
+    saveProject(stored);
+  }
+  return { ...project, sessions: kept };
 }
 
 export function createProject(name: string, workspacePath = ''): Project {
@@ -361,6 +557,7 @@ export function createProject(name: string, workspacePath = ''): Project {
     ...(workspacePath ? { workspacePath: path.resolve(workspacePath) } : {}),
     instructions: '',
     memorySnapshot: '',
+    contextVersion: 2,
     sessions: [],
     knowledge: [],
     createdAt: now,
@@ -369,6 +566,7 @@ export function createProject(name: string, workspacePath = ''): Project {
   ensureProjectContextFile(project);
   saveProject(project);
   console.log(`[ProjectStore] Created project "${name}" (${id})`);
+  if (project.workspacePath && fileHarnessChatsIntoProject(project.id)) return loadProjectFromDisk(project.id) || project;
   return project;
 }
 
@@ -403,24 +601,13 @@ export function updateProject(
   if (updates.instructions !== undefined) project.instructions = updates.instructions;
   if (updates.memorySnapshot !== undefined) project.memorySnapshot = updates.memorySnapshot;
   if (updates.pinnedAt !== undefined) project.pinnedAt = updates.pinnedAt ? Number(updates.pinnedAt) : undefined;
-  if (updates.instructions !== undefined || updates.memorySnapshot !== undefined) {
-    try {
-      const contextPath = ensureProjectContextFile(project);
-      let content = fs.readFileSync(contextPath, 'utf-8');
-      if (updates.instructions !== undefined) {
-        content = replaceContextSection(content, 'Project Instructions', project.instructions);
-      }
-      if (updates.memorySnapshot !== undefined) {
-        content = replaceContextSection(content, 'Project Memory', project.memorySnapshot, ['Memory Snapshot']);
-      }
-      fs.writeFileSync(contextPath, content, 'utf-8');
-    } catch (e: any) {
-      console.warn(`[ProjectStore] CONTEXT.md update failed for ${id}:`, e?.message);
-    }
-  }
+  // Instructions live only on the project record now; they are no longer copied into CONTEXT.md (notes).
 
   project.updatedAt = Date.now();
   saveProject(project);
+  if (updates.workspacePath && project.workspacePath && fileHarnessChatsIntoProject(project.id)) {
+    return loadProjectFromDisk(project.id) || project;
+  }
   return project;
 }
 
@@ -564,7 +751,9 @@ export function resolveAllowedProjectDirectory(value: unknown): string {
     .filter(Boolean)
     .map((entry) => path.resolve(entry));
   if (!allowedRoots.some((root) => isPathInside(root, selected))) {
-    throw new Error('Project directory is outside the configured workspace paths. Add it to Settings before linking it.');
+    const error: any = new Error('Project directory is outside the configured workspace paths. Add it to Settings before linking it.');
+    error.code = 'PROJECT_DIR_NOT_ALLOWED';
+    throw error;
   }
   return selected;
 }
@@ -682,26 +871,38 @@ export function getKnowledgeFileContent(projectId: string, fileId: string): stri
  * Returns null if sessionId doesn't belong to any project.
  */
 export function buildProjectContextBlock(sessionId: string): string | null {
-  const project = findProjectBySessionId(sessionId);
-  if (!project) return null;
+  const found = findProjectBySessionId(sessionId);
+  if (!found) return null;
+  const project = ensureProjectContextV2(found);
 
   const lines: string[] = [`[PROJECT: ${project.name}]`, ''];
 
-  if (project.workspacePath?.trim()) {
-    lines.push('## Linked Project Directory');
-    lines.push(project.workspacePath.trim());
-    lines.push('Use this directory as the project workspace. Keep file reads, edits, and commands scoped to it unless the user explicitly asks otherwise.');
+  const instructions = String(project.instructions || '').trim();
+  if (instructions) {
+    lines.push('## Project instructions (written by the user; follow them)');
+    lines.push(clipText(instructions, INSTRUCTIONS_PROMPT_MAX_CHARS));
     lines.push('');
   }
 
-  // CONTEXT.md is the single source of truth for project instructions, memory,
-  // durable facts, and status. Do not inject the metadata fields separately.
+  const folder = project.workspacePath?.trim() || '';
+  if (folder) {
+    lines.push('## Linked folder');
+    lines.push(folder);
+    lines.push('Use this folder as the project workspace. Keep file reads, edits, and commands scoped to it unless the user explicitly asks otherwise.');
+    lines.push('');
+    for (const file of readFolderInstructionFiles(folder)) {
+      lines.push(`## ${file.name} (from the linked folder; follow it like Codex and Claude Code do)`);
+      lines.push(file.content);
+      lines.push('');
+    }
+  }
+
   const contextPath = getProjectContextFilePath(project.id);
   try {
-    const content = getProjectContextContent(project.id)?.trim() || '';
-    if (content) {
-      lines.push('## Project Context');
-      lines.push(content.length > 2000 ? content.slice(0, 2000) + '\n... (truncated)' : content);
+    const notes = projectNotesForPrompt(getProjectContextContent(project.id) || '');
+    if (notes) {
+      lines.push(`## Project notes (${contextPath})`);
+      lines.push(notes);
       lines.push('');
     }
   } catch {}
@@ -718,14 +919,8 @@ export function buildProjectContextBlock(sessionId: string): string | null {
     lines.push('');
   }
 
-  // ── Project context maintenance guidance ──────────────────────────────────
-  // Keep this targeted: CONTEXT.md is for durable project state, not a transcript.
-  const isFirstSession = project.sessions.length <= 1;
-  lines.unshift('');
-  lines.unshift(`PROJECT CONTEXT MAINTENANCE: Keep ${contextPath} current only when a meaningful project change occurs: a durable goal or fact, decision, scope/boundary, plan or milestone, work started, completed, blocked, or materially changed. Update the relevant section (including Status Updates) in the same turn when it matters. Skip casual conversation, routine questions, transient details, and turns with no durable project change. Revise existing entries instead of duplicating them; CONTEXT.md is a concise living record, not a turn-by-turn transcript.`);
-  if (isFirstSession) {
-    lines.unshift('This is the FIRST session for this project. The user has not described it yet. Your first message must ask what the project is about.');
-  }
+  // Notes maintenance: the model owns the notes file, never the Instructions.
+  lines.push(`PROJECT NOTES: ${contextPath} holds short notes you keep for this project (decisions, current status, key facts). Update it in the same turn only when something durable changes; revise existing entries instead of appending duplicates, and keep it under about ${NOTES_PROMPT_MAX_LINES} lines. Never copy the user's instructions into it and never edit the project instructions. Leave the "${NOTES_REVIEW_HEADING}" section alone unless the user asks.`);
 
   return lines.join('\n');
 }

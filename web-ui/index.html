@@ -3428,20 +3428,20 @@
     <div class="project-editors-wrap">
       <div id="project-instructions-editor" class="project-editor-block">
         <button class="project-editor-label" type="button" onclick="toggleProjectEditor('project-instructions-editor')">
-          <span>Project instructions</span><span class="project-editor-chevron">⌄</span>
+          <span>Instructions</span><span class="project-editor-chevron">⌄</span>
         </button>
         <div class="project-editor-body">
-          <textarea id="proj-instructions-ta" class="project-editor-textarea" placeholder="Instructions that should guide every chat in this project..."></textarea>
+          <textarea id="proj-instructions-ta" class="project-editor-textarea" placeholder="Rules every chat in this project follows. Prometheus never edits these."></textarea>
           <button class="project-editor-save-btn" type="button" onclick="saveProjectInstructions()">Save instructions</button>
         </div>
       </div>
       <div id="project-memory-editor" class="project-editor-block">
         <button class="project-editor-label" type="button" onclick="toggleProjectEditor('project-memory-editor')">
-          <span>Project memory</span><span class="project-editor-chevron">⌄</span>
+          <span>Notes</span><span class="project-editor-chevron">⌄</span>
         </button>
         <div class="project-editor-body">
-          <textarea id="proj-memory-ta" class="project-editor-textarea" placeholder="Keep durable facts, decisions, and useful context for this project..."></textarea>
-          <button class="project-editor-save-btn" type="button" onclick="saveProjectMemorySnapshot()">Save memory</button>
+          <textarea id="proj-memory-ta" class="project-editor-textarea" placeholder="Short notes Prometheus keeps for this project: decisions, status, key facts. You can edit them too."></textarea>
+          <button class="project-editor-save-btn" type="button" onclick="saveProjectNotes()">Save notes</button>
         </div>
       </div>
     </div>

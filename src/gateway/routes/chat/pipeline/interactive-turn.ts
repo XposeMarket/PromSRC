@@ -40,7 +40,6 @@ interface InteractiveTurnDependencies {
   startMainChatGoalRunner: typeof import('./goal-runner').startMainChatGoalRunner;
   CONTEXT_COMPACTION_TOOL_NAME: typeof import('../../chat.router').CONTEXT_COMPACTION_TOOL_NAME;
   handleChat: typeof import('./handle-chat').handleChat;
-  maybeRefreshProjectLearning: typeof import('./text-guards').maybeRefreshProjectLearning;
   shouldCheckBlockedTaskFollowup: typeof import('./text-guards').shouldCheckBlockedTaskFollowup;
   formatTurnOriginContext: typeof import('../../chat.router').formatTurnOriginContext;
   collectTurnFileChanges: typeof import('../../chat.router').collectTurnFileChanges;
@@ -63,7 +62,6 @@ let broadcastMainChatGoalState: InteractiveTurnDependencies['broadcastMainChatGo
 let startMainChatGoalRunner: InteractiveTurnDependencies['startMainChatGoalRunner'];
 let CONTEXT_COMPACTION_TOOL_NAME: InteractiveTurnDependencies['CONTEXT_COMPACTION_TOOL_NAME'];
 let handleChat: InteractiveTurnDependencies['handleChat'];
-let maybeRefreshProjectLearning: InteractiveTurnDependencies['maybeRefreshProjectLearning'];
 let shouldCheckBlockedTaskFollowup: InteractiveTurnDependencies['shouldCheckBlockedTaskFollowup'];
 let formatTurnOriginContext: InteractiveTurnDependencies['formatTurnOriginContext'];
 let collectTurnFileChanges: InteractiveTurnDependencies['collectTurnFileChanges'];
@@ -74,7 +72,7 @@ let isPlannedRestartToolName: InteractiveTurnDependencies['isPlannedRestartToolN
 let maybeAutoNameChatSession: InteractiveTurnDependencies['maybeAutoNameChatSession'];
 let finishMainChatStream: InteractiveTurnDependencies['finishMainChatStream'];
 export function configureInteractiveTurnDependencies(deps: InteractiveTurnDependencies): void {
-  ({ normalizeTurnOrigin, persistTurnOriginChannelHint, getMainChatStream, beginMainChatStream, findSessionMainChatRuntime, announceRestartContinuityResumed, normalizeClientRequestId, appendMainChatStreamEvent, broadcastMainChatGoalState, startMainChatGoalRunner, CONTEXT_COMPACTION_TOOL_NAME, handleChat, maybeRefreshProjectLearning, shouldCheckBlockedTaskFollowup, formatTurnOriginContext, collectTurnFileChanges, buildDurableToolStreamTrace, describeTurnAbortCause, editRerunAbortResetSessions, isPlannedRestartToolName, maybeAutoNameChatSession, finishMainChatStream } = deps);
+  ({ normalizeTurnOrigin, persistTurnOriginChannelHint, getMainChatStream, beginMainChatStream, findSessionMainChatRuntime, announceRestartContinuityResumed, normalizeClientRequestId, appendMainChatStreamEvent, broadcastMainChatGoalState, startMainChatGoalRunner, CONTEXT_COMPACTION_TOOL_NAME, handleChat, shouldCheckBlockedTaskFollowup, formatTurnOriginContext, collectTurnFileChanges, buildDurableToolStreamTrace, describeTurnAbortCause, editRerunAbortResetSessions, isPlannedRestartToolName, maybeAutoNameChatSession, finishMainChatStream } = deps);
 }
 
 
@@ -514,7 +512,6 @@ export async function runInteractiveTurn(
           { role: 'assistant', content: compactResult.text, timestamp: Date.now() },
           { disableMemoryFlushCheck: true, disableCompactionCheck: true },
         );
-        await maybeRefreshProjectLearning(sessionId, [compactResult.text]);
         sendSSE('tool_result', {
           action: CONTEXT_COMPACTION_TOOL_NAME,
           result: 'Thread compacted before continuing.',
@@ -621,7 +618,6 @@ export async function runInteractiveTurn(
   if (followupHandled) {
     if (!abortSignal?.aborted) {
       addMessage(sessionId, { role: 'assistant', ...assistantRequestIdentity, content: followupHandled, timestamp: Date.now() });
-      await maybeRefreshProjectLearning(sessionId);
     }
     const followupResult = { type: 'chat' as const, text: followupHandled };
     completeLocalMainChatStream(followupResult);
@@ -1016,21 +1012,6 @@ export async function runInteractiveTurn(
       turnTiming.mark('tool_log_persisted', { durationMs: Date.now() - toolLogPersistStartedAt });
     }
     }
-    if (!isSubagentChatSession && !isSyntheticThreadSupervisionReview) {
-      enqueuePostTurnJob({
-        sessionId,
-        label: 'interrupted_project_learning',
-        run: async () => {
-          const projectLearningStartedAt = Date.now();
-          await maybeRefreshProjectLearning(sessionId, [visibleCheckpointText, checkpointPacket]);
-          turnTiming.mark('project_learning_done', {
-            durationMs: Date.now() - projectLearningStartedAt,
-            deferred: true,
-          });
-        },
-      });
-      turnTiming.mark('post_turn_work_enqueued', { kind: 'interrupted_project_learning' });
-    }
   } else {
     if (!isSilentSupervisionLoop) {
     const assistantPersistStartedAt = Date.now();
@@ -1080,15 +1061,8 @@ export async function runInteractiveTurn(
     if (!isSubagentChatSession && !isSyntheticThreadSupervisionReview) {
       enqueuePostTurnJob({
         sessionId,
-        label: 'project_learning_and_auto_title',
+        label: 'auto_title',
         run: async () => {
-          const projectLearningStartedAt = Date.now();
-          await maybeRefreshProjectLearning(sessionId);
-          turnTiming.mark('project_learning_done', {
-            durationMs: Date.now() - projectLearningStartedAt,
-            deferred: true,
-          });
-
           const autoTitleStartedAt = Date.now();
           const generatedSessionTitle = await maybeAutoNameChatSession(sessionId);
           turnTiming.mark('auto_title_done', {
@@ -1106,7 +1080,7 @@ export async function runInteractiveTurn(
           }
         },
       });
-      turnTiming.mark('post_turn_work_enqueued', { kind: 'project_learning_and_auto_title' });
+      turnTiming.mark('post_turn_work_enqueued', { kind: 'auto_title' });
     }
   }
 

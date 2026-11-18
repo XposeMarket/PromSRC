@@ -1795,13 +1795,21 @@ export async function createMobileChatSession(sessionId, { title = 'New Chat' } 
   });
 }
 
-export async function createMobileProject(name) {
+export async function createMobileProject(name, workspacePath = '') {
   const projectName = String(name || '').trim();
   if (!projectName) throw new Error('Project name required');
+  const folder = String(workspacePath || '').trim();
   return mfetch('/api/projects', {
     method: 'POST',
-    body: JSON.stringify({ name: projectName }),
+    body: JSON.stringify({ name: projectName, ...(folder ? { workspacePath: folder } : {}) }),
   });
+}
+
+/** Update a project's Instructions and/or linked folder (folder '' unlinks). */
+export async function updateMobileProject(projectId, updates = {}) {
+  const pid = String(projectId || '').trim();
+  if (!pid) throw new Error('Project id required');
+  return mfetch(`/api/projects/${encodeURIComponent(pid)}`, { method: 'PATCH', body: JSON.stringify(updates) });
 }
 
 export async function createMobileProjectChatSession(projectId, { title = 'New Chat' } = {}) {

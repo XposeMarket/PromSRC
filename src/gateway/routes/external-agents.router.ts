@@ -7,6 +7,7 @@ import { Router } from 'express';
 
 import { listAgentGroups } from '../imports/import-agents';
 import { isPickableAgentFolder } from '../external-agents/scratch-folders';
+import { findProjectBySessionId, listProjects } from '../projects/project-store';
 import { getConfig } from '../../config/config';
 import {
   getExternalAgentAdapter,
@@ -38,19 +39,26 @@ const IMPORT_SOURCE_AGENT: Record<string, string> = {
  * before /api/external-agents/:id so the literal path wins.
  */
 router.get('/api/external-agents/session-map', (_req, res) => {
-  const sessions: Record<string, { agentId: string; cwd?: string; title: string; at: number; imported?: boolean }> = {};
+  const sessions: Record<string, { agentId: string; cwd?: string; title: string; at: number; imported?: boolean; projectId?: string }> = {};
   try {
     for (const s of listSessionSummaries() as any[]) {
       if (!s?.id) continue;
       const at = Number(s.lastMessageAt || s.lastActiveAt || s.updatedAt || s.createdAt || 0) || 0;
       const title = String(s.title || 'New chat').slice(0, 200);
       if (s.externalAgent?.agentId) {
-        sessions[s.id] = { agentId: String(s.externalAgent.agentId), cwd: String(s.externalAgent.cwd || ''), title, at };
+        // Chats filed in a Prometheus project show there, not in the harness section.
+        let projectId = '';
+        try { projectId = findProjectBySessionId(s.id)?.id || ''; } catch { projectId = ''; }
+        sessions[s.id] = { agentId: String(s.externalAgent.agentId), cwd: String(s.externalAgent.cwd || ''), title, at, ...(projectId ? { projectId } : {}) };
         continue;
       }
       const src = s.externalImport?.source || {};
       const key = [src.adapter, src.provider].map((v: any) => String(v || '').trim().toLowerCase()).find((v: string) => IMPORT_SOURCE_AGENT[v]);
-      if (key) sessions[s.id] = { agentId: IMPORT_SOURCE_AGENT[key], title, at, imported: true };
+      if (key) {
+        let projectId = '';
+        try { projectId = findProjectBySessionId(s.id)?.id || ''; } catch { projectId = ''; }
+        sessions[s.id] = { agentId: IMPORT_SOURCE_AGENT[key], title, at, imported: true, ...(projectId ? { projectId } : {}) };
+      }
     }
   } catch {
     /* an unreadable index means an empty map, never a failed sidebar */
@@ -207,6 +215,10 @@ router.get('/api/external-agents/:id', async (req, res) => {
   res.json({ success: true, agent: await getExternalAgentSnapshot(id) });
 });
 
+// A cold scan blocks ~2s per harness on a big history, so rescans stay rare.
+const FOLDER_SCAN_TTL_MS = 5 * 60_000;
+const folderScanCache = new Map<string, { at: number; groups: ReturnType<typeof listAgentGroups>['groups'] }>();
+
 /** Recent folders for the cwd picker, from the agent's own chat groups (import discovery). */
 router.get('/api/external-agents/:id/folders', (req, res) => {
   const id = requireAgentId(req, res);
@@ -214,12 +226,35 @@ router.get('/api/external-agents/:id/folders', (req, res) => {
   try {
     let workspacePath = '';
     try { workspacePath = getConfig().getWorkspacePath(); } catch { /* picker still filters OS temp */ }
-    const groups = listAgentGroups(id === 'claude-code' ? 'claude' : id).groups
-      .filter((group) => group.path && isPickableAgentFolder(group.path, { workspacePath }))
-      .sort((a, b) => b.updatedAt - a.updatedAt)
-      .slice(0, 20)
-      .map((group) => ({ path: group.path, label: group.label, chatCount: group.chatCount, updatedAt: group.updatedAt }));
-    res.json({ success: true, folders: groups });
+    const norm = (p: string) => String(p || '').trim().replace(/[\\/]+$/, '').replace(/\\/g, '/').toLowerCase();
+    // Scanning a harness's history is synchronous and slow for big histories (Codex: 1000+
+    // chats). Pickers and sidebars poll this, so reuse the scan for a minute; project links
+    // below are computed fresh every time (cheap).
+    const scanKey = id === 'claude-code' ? 'claude' : id;
+    let cached = folderScanCache.get(scanKey);
+    if (!cached || Date.now() - cached.at > FOLDER_SCAN_TTL_MS) {
+      cached = { at: Date.now(), groups: listAgentGroups(scanKey).groups };
+      folderScanCache.set(scanKey, cached);
+    }
+    const folders: Array<{ path: string; label: string; chatCount?: number; updatedAt?: number; projectId?: string; projectName?: string }> =
+      cached.groups
+        .filter((group) => group.path && isPickableAgentFolder(group.path, { workspacePath }))
+        .sort((a, b) => b.updatedAt - a.updatedAt)
+        .slice(0, 20)
+        .map((group) => ({ path: group.path as string, label: group.label, chatCount: group.chatCount, updatedAt: group.updatedAt }));
+    // One project, any agent: Prometheus projects with a linked folder are offered first,
+    // whether or not this harness has worked there before.
+    const linked: typeof folders = [];
+    try {
+      for (const project of listProjects()) {
+        const folder = String(project.workspacePath || '').trim();
+        if (!folder || !isPickableAgentFolder(folder, { workspacePath: '' })) continue;
+        const hit = folders.findIndex((f) => norm(f.path) === norm(folder));
+        const base = hit >= 0 ? folders.splice(hit, 1)[0] : { path: folder, label: folder };
+        linked.push({ ...base, projectId: project.id, projectName: project.name });
+      }
+    } catch { /* projects unavailable: harness folders only */ }
+    res.json({ success: true, folders: [...linked, ...folders] });
   } catch {
     res.json({ success: true, folders: [] });
   }

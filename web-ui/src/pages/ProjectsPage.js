@@ -941,7 +941,14 @@ async function loadProjectEditors(projectId) {
   const workspacePath = document.getElementById('project-workspace-path');
 
   if (instrTA) instrTA.value = project.instructions || '';
-  if (memTA) memTA.value = project.memorySnapshot || '';
+  // The second editor is the project notes (CONTEXT.md), which the model keeps.
+  if (memTA) {
+    memTA.value = '';
+    memTA.dataset.projectId = projectId;
+    api(`/api/projects/${encodeURIComponent(projectId)}/context`).then((data) => {
+      if (memTA.dataset.projectId === projectId && document.activeElement !== memTA) memTA.value = String(data?.content || '');
+    }).catch(() => {});
+  }
   if (workspaceName) workspaceName.textContent = project.name || 'Project';
   if (workspacePath) workspacePath.textContent = project.workspacePath
     || (project.externalImport?.sourcePath ? `Source path detected (permission required to link): ${project.externalImport.sourcePath}` : 'No linked path — project context is stored in Prometheus.');
@@ -957,6 +964,22 @@ window.saveProjectInstructions = async function() {
     // Update local cache
     const p = _projects.find(p => p.id === projectId);
     if (p) p.instructions = val;
+  } catch (e) {
+    showToast('Save failed.', 'error');
+  }
+};
+
+window.saveProjectNotes = async function() {
+  const projectId = document.body.dataset.projectId;
+  if (!projectId) return;
+  const content = document.getElementById('proj-memory-ta')?.value || '';
+  try {
+    await api(`/api/projects/${encodeURIComponent(projectId)}/context`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content }),
+    });
+    showToast('Notes saved.');
   } catch (e) {
     showToast('Save failed.', 'error');
   }

@@ -509,8 +509,10 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
   // declarations before page.innerHTML is evaluated; otherwise the template
   // touches targetProjectLabel while its let binding is still in the TDZ.
   let pendingGatewayId = gatewayTarget?.gatewayId || getActiveGatewayId();
-  let targetProjectId = String(rememberedChatContext.projectId || '').trim();
-  let targetProjectLabel = String(rememberedChatContext.projectName || '').trim();
+  // A plain New chat is always a regular chat (same as desktop). Existing chats
+  // restore their project when they load; projects are picked explicitly.
+  let targetProjectId = '';
+  let targetProjectLabel = '';
   let targetWorkspaceLabel = gatewayTarget?.workspaceName || '';
   let nativeTargetPicker = null;
   let nativeProjectPicker = null;
@@ -1587,6 +1589,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
       <form class="pm-new-project-form">
         <label class="pm-new-project-label" for="pm-new-project-name">Project name</label>
         <input id="pm-new-project-name" class="pm-new-project-input" type="text" maxlength="120" autocomplete="off" placeholder="e.g. Mobile app" />
+        ${window.__pmProjectFolder?.html('pm') || ''}
         <div class="pm-new-project-error" role="alert" hidden></div>
         <div class="pm-new-project-actions">
           <button type="button" class="pm-new-project-button pm-new-project-cancel" data-project-create-action="cancel">Cancel</button>
@@ -1615,6 +1618,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
     const errorEl = wrapper.querySelector('.pm-new-project-error');
     const confirmButton = wrapper.querySelector('.pm-new-project-confirm');
     const formEl = wrapper.querySelector('.pm-new-project-form');
+    window.__pmProjectFolder?.wire(wrapper);
     let submitting = false;
     const close = () => {
       popoverGuard.cleanup();
@@ -1659,7 +1663,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
       if (confirmButton) confirmButton.disabled = true;
       setError('');
       try {
-        const created = await createMobileProject(name);
+        const created = await createMobileProject(name, window.__pmProjectFolder?.read(wrapper));
         const project = created?.project || created;
         const projectId = String(project?.id || '').trim();
         if (!projectId) throw new Error('Prometheus did not return the new project.');
