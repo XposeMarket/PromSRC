@@ -114,6 +114,8 @@ export function mountAgentsImports(container, options = {}) {
     } finally {
       st.loading = false;
     }
+    mergeRuntimeRows();
+    if (!live.loaded) void loadLiveAgents();
     if (st.openId && !agentById(st.openId)) st.openId = '';
     render();
     loadJobs();
@@ -325,6 +327,16 @@ export function mountAgentsImports(container, options = {}) {
   // first and stops the click from also opening the row.
   const live = { loaded: false, loading: false, agents: new Map(), busy: new Set(), wired: false };
 
+  function mergeRuntimeRows() {
+    st.agents = st.agents.filter((agent) => !agent.runtimeOnly);
+    for (const snap of live.agents.values()) {
+      if (!snap.detected && !snap.enabled) continue;
+      const importId = snap.id === 'claude-code' ? 'claude' : snap.id;
+      if (st.agents.some((agent) => agent.id === importId)) continue;
+      st.agents.push({ id: importId, name: snap.name, letter: snap.tile, chatCount: 0, bytes: 0, runtimeOnly: true, importOnly: false, conversationSources: [], setupSources: [] });
+    }
+  }
+
   async function loadLiveAgents() {
     if (live.loading) return;
     live.loading = true;
@@ -336,6 +348,7 @@ export function mountAgentsImports(container, options = {}) {
     } finally {
       live.loaded = true;
       live.loading = false;
+      mergeRuntimeRows();
     }
     render();
   }
@@ -384,16 +397,17 @@ export function mountAgentsImports(container, options = {}) {
   function renderLiveConnect(agent) {
     wireLiveConnect();
     if (!live.loaded) { loadLiveAgents(); return ''; }
-    const snap = live.agents.get(agent.id);
+    const runtimeId = agent.id === 'claude' ? 'claude-code' : agent.id;
+    const snap = live.agents.get(runtimeId);
     if (!snap) return '';
-    const busy = live.busy.has(agent.id);
+    const busy = live.busy.has(runtimeId);
     const tone = !snap.enabled ? 'off' : snap.status === 'ready' ? 'ok' : (snap.status === 'checking' ? 'busy' : 'warn');
     const canToggle = snap.detected || snap.enabled;
     const retry = snap.enabled && !busy && !['ready', 'checking'].includes(snap.status)
-      ? `<span class="aip-link ea-connect-retry" role="button" tabindex="0" data-ea-act="verify" data-ea-agent="${esc(agent.id)}">Check again</span>` : '';
+      ? `<span class="aip-link ea-connect-retry" role="button" tabindex="0" data-ea-act="verify" data-ea-agent="${esc(runtimeId)}">Check again</span>` : '';
     return `<span class="ea-connect ea-connect-${tone}">
         <span class="ea-connect-status" title="${esc(liveStatusLine(snap))}">${esc(liveStatusLine(snap))}</span>${retry}
-        ${canToggle ? `<span class="ea-switch${snap.enabled ? ' is-on' : ''}${busy ? ' is-busy' : ''}" role="switch" tabindex="0" aria-checked="${snap.enabled ? 'true' : 'false'}" aria-label="Run new chats with ${esc(snap.name)}" data-ea-act="toggle" data-ea-agent="${esc(agent.id)}"></span>` : ''}
+        ${canToggle ? `<span class="ea-switch${snap.enabled ? ' is-on' : ''}${busy ? ' is-busy' : ''}" role="switch" tabindex="0" aria-checked="${snap.enabled ? 'true' : 'false'}" aria-label="Run new chats with ${esc(snap.name)}" data-ea-act="toggle" data-ea-agent="${esc(runtimeId)}"></span>` : ''}
       </span>`;
   }
 
@@ -506,7 +520,7 @@ export function mountAgentsImports(container, options = {}) {
   }
 
   function renderOpened(agent) {
-    let chats = '';
+    let chats = agent.runtimeOnly ? '<div class="aip-note">No saved conversations found. Turn on this agent to use it in a new chat.</div>' : '';
     if (agent.browsable) {
       const info = st.groups.get(agent.id);
       const tabs = `<div class="aip-tabs" role="tablist">

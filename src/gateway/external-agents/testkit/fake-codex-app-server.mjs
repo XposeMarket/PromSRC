@@ -66,6 +66,13 @@ async function runTurn(threadId, turnId, text) {
     notify('turn/completed', { threadId, turn: turnObject(turnId, 'completed') });
     return;
   }
+  if (text.includes('PENDING_END') || text.includes('PENDING_CRASH')) {
+    void ask('item/commandExecution/requestApproval', { kind: 'command', ...base, itemId: 'c1', command: 'npm test', cwd: '/repo' });
+    await sleep(30);
+    if (text.includes('PENDING_CRASH')) process.exit(3);
+    notify('turn/completed', { threadId, turn: turnObject(turnId, 'completed') });
+    return;
+  }
   if (text.includes('APPROVAL')) {
     const answer = await ask('item/commandExecution/requestApproval', {
       kind: 'command', ...base, itemId: 'c1', startedAtMs: Date.now(), environmentId: null,

@@ -94,6 +94,8 @@ export interface ExternalTurnInput {
   images?: Array<{ path: string }>;
   signal: AbortSignal;
   emit: (event: ExternalAgentEvent) => void;
+  /** Persist identity before sending the first upstream prompt (crash-safe resume). */
+  onSessionBound?: (upstreamSessionId: string) => void;
   /** Request card id factory input: the adapter builds everything except requestId/agentId/sessionId. */
   requestUser: (
     req: Omit<ExternalUserRequest, 'requestId' | 'agentId' | 'sessionId'>,

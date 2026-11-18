@@ -105,7 +105,6 @@ export function mountMobileAgentRow(dock, { request } = {}) {
   }
   ui.row = row;
   if (!ui.off) ui.off = onExternalAgentsChange(renderRow);
-  setAgentChoice('prometheus');
   renderRow();
   loadExternalAgents(true).then(renderRow).catch(() => {});
 }
@@ -114,7 +113,6 @@ export function mountMobileAgentRow(dock, { request } = {}) {
 export function mobileAgentFieldForSend(sessionId) {
   const field = agentFieldForNewChat();
   closeSheet();
-  if (field) { setAgentChoice('prometheus'); loadSessionBinding(sessionId, true).catch(() => {}); }
   return field;
 }
 

@@ -154,8 +154,6 @@ window.__promExternalAgent = {
     if (cachedSessionBinding(sessionId)) return undefined; // already bound: the server knows
     const field = agentFieldForNewChat();
     if (!field) return undefined;
-    setAgentChoice('prometheus');
-    loadSessionBinding(sessionId, true).then(() => render()).catch(() => {});
     return field;
   },
   onStreamEvent(event, sessionId) {

@@ -110,7 +110,7 @@ export async function loadAgentFolders(id) {
 export async function loadSessionBinding(sessionId, force = false) {
   const sid = String(sessionId || '').trim();
   if (!sid) return null;
-  if (!force && st.bindings.has(sid)) return st.bindings.get(sid);
+  if (!force && st.bindings.get(sid)) return st.bindings.get(sid);
   let binding = null;
   try {
     const data = await call(`/api/external-agents/sessions/${encodeURIComponent(sid)}`);
@@ -225,6 +225,27 @@ export async function syncExternalAgentRequests(sessionId) {
   } catch { /* keep what is shown */ }
 }
 
+function showMissingSession(sessionId) {
+  const id = `ea-missing-${sessionId}`;
+  if (document.getElementById(id)) return;
+  const section = document.createElement('section');
+  section.id = id;
+  section.className = 'ea-card';
+  section.innerHTML = '<p>The original agent session could not be found. Your chat history is still here.</p><button type="button">Start a new agent session in this chat</button><p role="status"></p>';
+  section.querySelector('button').addEventListener('click', async (event) => {
+    event.target.disabled = true;
+    try {
+      const data = await call(`/api/external-agents/sessions/${encodeURIComponent(sessionId)}/new-upstream`, { method: 'POST', body: {} });
+      if (data?.success === false) throw new Error(data.error || 'Could not start fresh.');
+      st.bindings.delete(String(sessionId));
+      section.remove();
+      await loadSessionBinding(sessionId, true);
+      notify();
+    } catch (error) { section.querySelector('[role=status]').textContent = error.message; event.target.disabled = false; }
+  });
+  cardHost().appendChild(section);
+}
+
 /** Stream hook: returns true when the event was an external-agent event. */
 export function handleExternalAgentStreamEvent(event, sessionId) {
   if (!event || typeof event !== 'object') return false;
@@ -237,7 +258,13 @@ export function handleExternalAgentStreamEvent(event, sessionId) {
     removeExternalAgentRequest(event.requestId);
     return true;
   }
-  if (event.type === 'external_agent_state') return true;
+  if (event.type === 'external_agent_state') {
+    // The backend emits this only after binding. Do not clear selection on a failed send.
+    setAgentChoice('prometheus');
+    loadSessionBinding(sessionId, true).then(() => { notify(); }).catch(() => {});
+    if (event.phase === 'upstream_missing') showMissingSession(sessionId);
+    return true;
+  }
   if (event.type === 'done' || event.type === 'error') {
     for (const [id, entry] of st.cards) if (entry.request.sessionId === sessionId) removeExternalAgentRequest(id);
   }
