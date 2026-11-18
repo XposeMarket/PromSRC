@@ -1,29 +1,31 @@
-# OAuth pending action and phone completion repair
-Tier: 1; explicit live-fix authorization and separate review waiver in this incident.
-Surface: both
-Parity: shared module: web-ui/src/features/connectors/connect-flow.js:92 shared controller and backend; mobile uses existing secure browser viewer, desktop retains external-browser flow. Real Chromium tests at desktop1440/mobile390.
-Size justification: one bounded end-to-end authorization repair requires shared controller, existing viewer, route helper, two regression tests and docs.
-## Problem
-Saved credentials lost pending action after poll. After that fix, mobile still suppresses loopback authorization and sends user to PC.
-## Chosen approach
-Retain/recover pending action; wire mobile loopback connector OAuth to the existing in-house login handoff with paired/native-owner checks and server-derived browser identity/URL. Recheck exact attempt on viewer return, keep secrets DOM-only. No public callback or redirect config changes.
-## Files
-- src/connections/runtime.ts
-- scripts/test-connection-runtime-identity.cjs
-- .pr/SPEC.md
-- src/connections/adapters/connector-oauth.ts
-- src/connections/oauth-phone-handoff.ts
-- src/gateway/routes/connections-v2.router.ts
-- web-ui/src/features/connectors/connect-flow.js
-- web-ui/src/mobile/mobile-login-handoff.js
-- scripts/test-plugin-quick-connect.cjs
-- scripts/test-oauth-phone-handoff.cjs
-- workspace/self/12-connectors-mcp-integrations.md
-## Acceptance
-Test: node --import tsx scripts/test-connection-runtime-identity.cjs && node scripts/test-oauth-phone-handoff.cjs && node scripts/test-plugin-quick-connect.cjs
-Actual shared form -> save -> pending polls -> phone viewer -> provider callback -> connected; close/reopen without key reentry; desktop unchanged. Reject unpaired/spoofed/expired/terminal/wrong-adapter handoffs; no caller URL/session override. Build/UI checks plus live browser readiness. Synthetic test provider is not real X consent.
-## Risks
-OAuth user consent still required by X; do not claim account connection until live status says connected. In-house Electron bridge required, fail clearly if unavailable. Preserve existing user approval and callback state/PKCE validation. Rollback only this branch's changed files, preserving other live hotfixes.
+# SPEC: video approval fails closed when no content review was recorded
 
-## Scope notes
-Folded PR860 runtime identity hotfix already on live into this branch to eliminate docs/spec collision. Runtime code unchanged from deployed version. Both previous repairs remain available as standalone PRs; no merge performed.
+Tier: 1 + one opposite-model review (fix inside a sensitive area: approvals)
+Surface: backend
+Parity: n/a (the approve route is shared by desktop and mobile Needs You)
+Test: npx tsx src/gateway/video-approval-review.regression.ts
+
+## Problem
+- src/gateway/video-pending-approvals.ts:65 swallows a failed `videoContentReview`, leaving `record.contentReview` undefined.
+- src/gateway/routes/video-project.routes.ts:208 only compared when `record.contentReview` existed, then ran `executeVideoProject(approved:true)`.
+- A failed check defaulted to allow. Found by the Opus 5.5 review of PR #862 (finding 3) and confirmed at f3b4bd1f7.
+
+## Chosen approach
+A pure function `decideVideoApproval(recorded, recompute)` returns allow or refuse-with-reason. The approve route returns 409 before the executor is loaded unless a review was recorded at quote time and the recomputed review is identical. A refused record stays in Needs You so it can be dismissed. No video approval kind has nothing to review (only `run` and `generate`, both require a project id), so no separate state was added.
+
+## Acceptance
+- Recorded review + unchanged project: approve executes as before.
+- Recorded review + project changed after the quote: 409, not executed.
+- No recorded review: 409 asking for a new generation approval, not executed.
+- Review cannot be recomputed at approve time: 409, not executed.
+- Regression test asserts the decision in both directions.
+
+## Files
+- src/gateway/video-content-review.ts
+- src/gateway/routes/video-project.routes.ts
+- src/gateway/video-pending-approvals.ts
+- src/gateway/video-approval-review.regression.ts
+
+## Risks
+- A quote recorded while its project was unreadable can no longer be approved; the user must re-quote. Noticed as a 409 with that message. Rollback: revert this commit.
+- Not covered here: the agent-side `video_project` call with `approved:true` does not pass through this route; reference image contents are not hashed; the project can change between the check and execution.
