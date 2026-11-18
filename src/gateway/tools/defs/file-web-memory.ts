@@ -56,7 +56,7 @@ export function getFileWebMemoryTools(): any[] {
             max_lines: { type: 'number' },
             full: { type: 'boolean' },
             max_files: { type: 'number', description: 'For batch_read. Default 2, hard cap 8.' },
-            max_lines_per_file: { type: 'number', description: 'For batch_read. Default 80, hard cap 240 unless full:true is used intentionally.' },
+            max_lines_per_file: { type: 'number', description: 'For batch_read: line cap for files read without a range (default 80, max 240). Leave it out when a file entry has start_line + num_lines; that range then returns whole, up to 480 lines.' },
             content: { type: 'boolean', description: 'For batch_read. Omitted/true returns capped content; false returns metadata/read hints.' },
             mode: { type: 'string', enum: ['summary', 'content'], description: 'For batch_read. content is the default and returns capped content; summary returns metadata/read hints.' },
             inline: { type: 'boolean', description: 'Allow large results to remain inline instead of being saved to a temp artifact. Use sparingly.' },
@@ -473,7 +473,7 @@ export function getFileWebMemoryTools(): any[] {
       type: 'function',
       function: {
         name: 'read_files_batch',
-        description: 'Read multiple files cheaply. Returns capped content by default; use mode:"summary" or content:false for metadata/read hints. Defaults to first 80 lines per file and first 2 files. Requested ranges return inline; oversized results include a same-session continuation. Use full:true only when truly needed. Also accepts src/... and web-ui/... paths.',
+        description: 'Read multiple files cheaply. Returns capped content by default; use mode:"summary" or content:false for metadata/read hints. Without a range each file returns its first 80 lines, and only the first 2 files are read unless max_files is set (max 8). A file entry with start_line + num_lines returns that whole range, up to 480 lines, with an exact continuation for anything left. Use full:true only when truly needed. Also accepts src/... and web-ui/... paths.',
 
         parameters: {
           type: 'object', required: ['files'],
@@ -493,7 +493,7 @@ export function getFileWebMemoryTools(): any[] {
               },
             },
             max_files: { type: 'number', description: 'Maximum files to read in this call. Default 2, max 8.' },
-            max_lines_per_file: { type: 'number', description: 'Default per-file content line cap. Default 80, max 240.' },
+            max_lines_per_file: { type: 'number', description: 'Line cap for files read without a range (default 80, max 240). Leave it out when a file entry has start_line + num_lines; that range then returns whole, up to 480 lines.' },
             query: { type: 'string', description: 'Optional query used in summary mode to include likely matching lines and suggested read windows.' },
             content: { type: 'boolean', description: 'Return capped content for entries without explicit line windows. Default true when omitted; set false for summary-only output.' },
             mode: { type: 'string', enum: ['summary', 'content'], description: 'summary returns metadata/read hints; content returns capped content (the default).' },
@@ -632,7 +632,7 @@ export function getFileWebMemoryTools(): any[] {
             num_lines: { type: 'number' },
             max_lines: { type: 'number' },
             max_files: { type: 'number', description: 'For batch_read. Default 2, hard cap 8.' },
-            max_lines_per_file: { type: 'number', description: 'For batch_read content mode. Default 80, hard cap 240.' },
+            max_lines_per_file: { type: 'number', description: 'For batch_read content mode: line cap for files read without a range (default 80, max 240). Leave it out when a file entry has start_line + num_lines; that range then returns whole, up to 480 lines.' },
             content: { type: 'boolean', description: 'For batch_read. Omitted/true returns capped content; false returns metadata/read hints.' },
             mode: { type: 'string', enum: ['summary', 'content'], description: 'For batch_read. content returns capped content (the default); summary returns metadata/read hints.' },
             inline: { type: 'boolean', description: 'Allow large results to remain inline instead of being saved to a temp artifact. Use sparingly.' },
@@ -739,7 +739,7 @@ export function getFileWebMemoryTools(): any[] {
         name: 'read_dev_sources',
         description:
           'Read multiple Prometheus dev source files cheaply. Returns capped content by default; use mode:"summary" or content:false for metadata/read hints. ' +
-          'Defaults to first 80 lines per file and first 2 files. Requested ranges return inline; oversized results include a same-session continuation. Accepts src/..., web-ui/..., or src-relative paths, and supports line windows plus around/anchor matching. Use full:true per file only when truly needed.',
+          'Without a range each file returns its first 80 lines, and only the first 2 files are read unless max_files is set (max 8). A file entry with start_line + num_lines returns that whole range, up to 480 lines, with an exact continuation for anything left. Accepts src/..., web-ui/..., or src-relative paths, and supports line windows plus around/anchor matching. Use full:true per file only when truly needed.',
         parameters: {
           type: 'object', required: ['files'],
           properties: {
@@ -763,7 +763,7 @@ export function getFileWebMemoryTools(): any[] {
               },
             },
             max_files: { type: 'number', description: 'Maximum files to read in this call. Default 2, max 8.' },
-            max_lines_per_file: { type: 'number', description: 'Default per-file content line cap. Default 80, max 240.' },
+            max_lines_per_file: { type: 'number', description: 'Line cap for files read without a range (default 80, max 240). Leave it out when a file entry has start_line + num_lines; that range then returns whole, up to 480 lines.' },
             query: { type: 'string', description: 'Optional query used in summary mode to include likely matching lines and suggested read windows.' },
             content: { type: 'boolean', description: 'Return capped content for entries without explicit line windows. Default true when omitted; set false for summary-only output.' },
             mode: { type: 'string', enum: ['summary', 'content'], description: 'summary returns metadata/read hints; content returns capped content (the default).' },

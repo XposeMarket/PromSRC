@@ -93,9 +93,8 @@ export function normalizeDevSourceWrapperTool(name: string, rawArgs: any): { nam
         : (Array.isArray(args.paths) ? args.paths.map((p: any) => ({ file: String(p) })) : []);
       const readArgs = { ...args, files };
       if (!hasProvidedArg(readArgs, 'max_files')) readArgs.max_files = FILE_TOOL_DEFAULT_BATCH_FILES;
-      if (!hasProvidedArg(readArgs, 'max_lines_per_file') && !hasProvidedArg(readArgs, 'num_lines')) {
-        readArgs.max_lines_per_file = FILE_TOOL_DEFAULT_BATCH_LINES;
-      }
+      // No default line cap is injected: the reader already gives unranged files 80 lines,
+      // and an injected cap would also clip a range the caller asked for explicitly.
       return { name: 'read_dev_sources', args: readArgs };
     }
     if (action === 'stats_batch') {
@@ -466,9 +465,8 @@ export function normalizeWorkspaceWrapperTool(name: string, rawArgs: any, worksp
     if (action === 'batch_read') {
       const readArgs = compactWorkspaceBatchReadArgs(args);
       if (!hasProvidedArg(readArgs, 'max_files')) readArgs.max_files = FILE_TOOL_DEFAULT_BATCH_FILES;
-      if (!hasProvidedArg(readArgs, 'max_lines_per_file') && !hasProvidedArg(readArgs, 'num_lines')) {
-        readArgs.max_lines_per_file = FILE_TOOL_DEFAULT_BATCH_LINES;
-      }
+      // No default line cap is injected: the reader already gives unranged files 80 lines,
+      // and an injected cap would also clip a range the caller asked for explicitly.
       return { name: 'read_files_batch', args: readArgs };
     }
     if (action === 'grep') {

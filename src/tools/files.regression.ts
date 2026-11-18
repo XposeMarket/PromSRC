@@ -64,6 +64,14 @@ async function main() {
     const rest = await read({ start_line: 5, num_lines: 5 }); assert.equal(rest.window.truncated, false); assert.match(rest.content, /9: line-9$/);
     const capped = await executeReadFilesBatch({ files: [{ filename: 'fixture.txt', start_line: 2, num_lines: 8 }], max_lines_per_file: 3 });
     assert.match(capped.stdout || '', /READ_TRUNCATED.*start_line:5, num_lines:5/);
+    // The workspace_read wrapper must not turn "no cap given" into an explicit 80-line cap.
+    const wrapped = normalizeWorkspaceWrapperTool('workspace_read', { action: 'batch_read', files: [{ filename: 'large.txt', start_line: 1, num_lines: 350 }] });
+    assert.equal(wrapped?.name, 'read_files_batch');
+    assert.equal(wrapped?.args.max_lines_per_file, undefined);
+    const viaWrapper = await executeReadFilesBatch(wrapped!.args);
+    assert.ok((viaWrapper.stdout || '').includes('350: ' + rows[349]), 'a requested range survives the workspace_read wrapper');
+    const wrappedDefault = await executeReadFilesBatch(normalizeWorkspaceWrapperTool('workspace_read', { action: 'batch_read', files: [{ filename: 'large.txt' }] })!.args);
+    assert.ok(!(wrappedDefault.stdout || '').includes('81: '), 'unranged files still default to 80 lines');
     assert.equal(((await executeRead({ path: 'large.txt', full: true })).data as any).content.split('\n').length, 799);
     const tail = await read({ tail: 8, max_lines: 3 }); assert.equal(tail.window.start_line, 98); assert.equal(tail.window.next_start_line, 93); assert.equal(tail.window.next_num_lines, 5);
     assert.equal((await executeRead({ path: 'fixture.txt', start_line: 101 })).success, false);
