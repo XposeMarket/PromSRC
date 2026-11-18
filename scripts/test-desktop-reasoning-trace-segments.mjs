@@ -75,17 +75,8 @@ const renderContext = {
     for (const entry of Array.isArray(entries) ? entries : []) {
       if (entry?.activity) {
         if (!activeToolGroup) {
-          const previous = groups.at(-1);
-          const pendingSummary = previous?.kind === 'thought-summary'
-            && previous.entries.length > 0
-            && previous.entries.every((candidate) => String(candidate?.extra?.source || '').toLowerCase() === 'agent_progress');
-          if (pendingSummary) {
-            activeToolGroup = { kind: 'tools', entries: [entry, ...previous.entries] };
-            groups[groups.length - 1] = activeToolGroup;
-          } else {
-            activeToolGroup = { kind: 'tools', entries: [entry] };
-            groups.push(activeToolGroup);
-          }
+          activeToolGroup = { kind: 'tools', entries: [entry] };
+          groups.push(activeToolGroup);
         } else {
           activeToolGroup.entries.push(entry);
         }
@@ -136,7 +127,7 @@ const renderedThoughtBeforeTool = renderContext.renderLiveTurnTrace([
 ], { streaming: true });
 assert.match(renderedThoughtBeforeTool, /Planning the next step/, 'a tool event must not erase the preceding thought group');
 assert.match(renderedThoughtBeforeTool, /Session in browser/, 'the tool group must remain rendered after a thought');
-assert.equal((renderedThoughtBeforeTool.match(/data-live-trace-group=/g) || []).length, 1, 'a pre-tool mutable summary must move into the tool group');
+assert.equal((renderedThoughtBeforeTool.match(/data-live-trace-group=/g) || []).length, 2, 'a pre-tool mutable summary must remain a separate group from the tool');
 
 const renderedDurableThoughtAndLiveSummary = renderContext.renderLiveTurnTrace([
   {
@@ -194,10 +185,30 @@ const similarSummaryAndThought = visibleContext.visibleLiveTraceEntries([
 assert.equal(similarSummaryAndThought.length, 2,
   'a full thought that resembles the preceding summary must not be deduped away');
 
+const transientContext = {};
+vm.runInNewContext(
+  `${extractFunction(desktop, 'isDesktopTransientReasoningTraceEntry')}`
+    + '\nthis.isDesktopTransientReasoningTraceEntry = isDesktopTransientReasoningTraceEntry;',
+  transientContext,
+);
+assert.equal(transientContext.isDesktopTransientReasoningTraceEntry({
+  type: 'preamble',
+  text: 'The durable thought streamed before the tool.',
+  extra: { visibility: 'user', source: 'reasoning_summary' },
+}), true, 'the old summary metadata must remain transient for provider summaries');
+assert.equal(transientContext.isDesktopTransientReasoningTraceEntry({
+  type: 'preamble',
+  text: 'The durable thought streamed before the tool.',
+  extra: { visibility: 'user', source: 'agent_thought', reasoningKind: 'full_thought' },
+}), false, 'moved pre-tool prose must survive transient-summary cleanup');
+
 assert.match(desktop, /case 'agent_thought':\s*\{[\s\S]{0,100}event\.thinking \|\| event\.text/);
+assert.match(desktop, /appendLiveTrace\(sawToolActivityThisTurn \? 'think' : 'preamble', text, \{\s*extra: \{ visibility: 'user', source: 'agent_thought', reasoningKind: 'full_thought' \}/);
+assert.match(desktop, /appendTrace\(streamState\.toolActivityStarted \? 'think' : 'preamble', text, \{\s*extra: \{ visibility: 'user', source: 'agent_thought', reasoningKind: 'full_thought' \}/);
 assert.match(desktop, /const hideMutableProgress = isSummaryThought && isLiveThought && Boolean\(progressSummary\)/);
 assert.match(desktop, /const isMutableProgress = isDesktopMutableProgressTraceEntry\(entry\)/);
-assert.match(desktop, /const pendingSummary = previous\?\.kind === 'thought-summary'/);
+assert.doesNotMatch(desktop, /const pendingSummary = previous\?\.kind === 'thought-summary'/,
+  'the first tool event must not absorb and erase a preceding thought group');
 assert.match(desktop, /const progressSummary = desktopTraceProgressSummary\(group\.entries\)/);
 assert.match(desktop, /const toolBodyEntries = visibleEntries\.filter\(\(entry\) => !isDesktopMutableProgressTraceEntry\(entry\)\)/);
 assert.doesNotMatch(desktop, /if \(duplicatesVisibleReasoning\) return 'Reasoning';/);
