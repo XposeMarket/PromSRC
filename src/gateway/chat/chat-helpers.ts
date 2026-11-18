@@ -1354,6 +1354,8 @@ export function evaluateBrowserSnapshotQuality(snapshot: string, snapshotElement
 }
 
 export interface HandleChatResult {
+  /** Diagnostic-only reply: no model final or completed tool results to report. */
+  noResultFailure?: 'provider_failure' | 'missing_final';
   type: 'chat' | 'execute';
   text: string;
   thinking?: string;

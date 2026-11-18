@@ -61,6 +61,15 @@ async function main(): Promise<void> {
     'a stream that closes before response.completed must be retryable failure, not a partial final',
   );
 
+  for (const [frame, reason, retryable] of [
+    [{ type: 'response.failed', response: { error: { code: 'server_error' } } }, 'server_error', true],
+    [{ type: 'response.incomplete', response: { incomplete_details: { reason: 'max_output_tokens' } } }, 'max_output_tokens', false],
+    [{ type: 'error', code: 'rate_limit_exceeded' }, 'rate_limit_exceeded', false],
+    [{ type: 'error', error: { code: 'private_input', message: 'never echo' } }, 'unspecified', false],
+  ] as const) {
+    await assert.rejects(() => parse([`data:${JSON.stringify(frame)}\n\n`]), (err: any) =>
+      err.code === 'CODEX_TERMINAL_EVENT' && err.message === `openai_codex reported ${frame.type}: ${reason}.` && err.retryable === retryable);
+  }
   const emptyProviderEvents: any[] = [];
   await assert.rejects(
     () => parse(['data: {"type":"response.completed","response":{"output":[]}}\n\n'], {
