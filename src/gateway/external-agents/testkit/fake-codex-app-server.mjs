@@ -18,6 +18,8 @@
  *   contains LATECMD  -> like RUNCMD, but the command's start is only reported after turn/interrupt arrived
  *   contains RUNCMD   -> starts a real child process as a command; turn/interrupt is confirmed but the
  *                        child keeps running (what codex-cli 0.163.0 does on Windows)
+ *   contains BADMODEL -> without a turn/start model, or with 'refused-model', fails as a refused model;
+ *                        with any other model answers 'ok with <model>'
  *   contains FAIL     -> turn/completed with status failed
  *   otherwise         -> command item, reasoning, two deltas, completed
  */
@@ -64,7 +66,7 @@ function turnObject(id, status, items = [], error = null) {
   return { id, items, itemsView: 'full', status, error, startedAt: null, completedAt: null, durationMs: null };
 }
 
-async function runTurn(threadId, turnId, text) {
+async function runTurn(threadId, turnId, text, model) {
   const base = { threadId, turnId };
   notify('turn/started', { threadId, turn: turnObject(turnId, 'inProgress') });
   if (text.includes('UNKNOWN')) {
@@ -122,6 +124,18 @@ async function runTurn(threadId, turnId, text) {
     notify('item/agentMessage/delta', { ...base, itemId: 'm1', delta: 'partial answer' });
     await new Promise((resolve) => { activeTurn = { threadId, turnId, resolveInterrupt: resolve }; });
     notify('turn/completed', { threadId, turn: turnObject(turnId, 'interrupted') });
+    return;
+  }
+  if (text.includes('BADMODEL')) {
+    // Codex's configured model is refused unless the request names a model that is not 'refused-model'.
+    if (!model || model === 'refused-model') {
+      const error = { message: "The 'cfg-model' model is not supported when using Codex with a ChatGPT account.", codexErrorInfo: null, additionalDetails: null, misalignment: null };
+      notify('error', { error, willRetry: false, ...base });
+      notify('turn/completed', { threadId, turn: turnObject(turnId, 'failed', [], error) });
+      return;
+    }
+    notify('item/completed', { ...base, item: { type: 'agentMessage', id: 'm1', text: `ok with ${model}`, phase: null, memoryCitation: null, delivery: null, questions: null } });
+    notify('turn/completed', { threadId, turn: turnObject(turnId, 'completed') });
     return;
   }
   if (text.includes('FAIL')) {
@@ -185,7 +199,7 @@ function handle(message) {
       const turnId = `turn-${turnSeq}`;
       reply({ turn: turnObject(turnId, 'inProgress') });
       const text = (params.input || []).map((part) => part.text || '').join('');
-      void runTurn(params.threadId, turnId, text);
+      void runTurn(params.threadId, turnId, text, params.model);
       return undefined;
     }
     case 'turn/interrupt':
