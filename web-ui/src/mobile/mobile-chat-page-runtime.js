@@ -1113,7 +1113,10 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
     const value = targetChip.querySelector('.pm-new-chat-context-value');
     if (value) value.querySelector('strong').textContent = target?.name || 'Gateway unavailable';
     else targetChip.innerHTML = `<strong>${escapeHtml(target?.name || 'Gateway unavailable')}</strong>`;
-    targetChip.disabled = false;
+    // Only offer a computer choice when there is another computer to choose.
+    const onlyOne = loadGatewayCatalog().length <= 1;
+    targetChip.hidden = onlyOne;
+    targetChip.disabled = onlyOne;
     targetChip.setAttribute('aria-expanded', String(!!targetPopover && targetPopover.dataset?.popoverType === 'target'));
     targetChip.setAttribute('aria-label', target ? `Current gateway: ${target.name}` : 'Gateway target unavailable');
     return target;
@@ -1357,7 +1360,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
   }
 
   function openChatTargetPopover() {
-    if (requestedSession !== MOBILE_CHAT_SESSION_ID || !targetChip) return;
+    if (requestedSession !== MOBILE_CHAT_SESSION_ID || !targetChip || targetChip.hidden) return;
     if (targetPopover?.dataset?.popoverType === 'target') {
       closeTargetPopover();
       return;
