@@ -25,6 +25,13 @@ async function main(){
     assert.match(command({command:'',program:'rg',argv:[],search:{text:'needle',directory:'',glob:'',regex:false}}),/^rg -n -F -e needle -- \./);
     for(const action of ['status','wait','log'])assert.ifError(normalize('workspace_run',{action,runId:'run_x',command:'',program:'git',argv:[],search:ph})!.error);
     assert.ok(normalize('workspace_run',{action:'status',runId:'run_x',program:'git',argv:['status']})!.error);
+    // Seen live from gpt-6.1-sol, 2026-11-18: the same command in both forms means one thing, so the literal form runs.
+    const both={command:'git rev-parse --short HEAD',program:'git',argv:['rev-parse','--short','HEAD'],search:ph};
+    assert.equal(command(both),command({program:'git',argv:['rev-parse','--short','HEAD']}));
+    assert.equal(command({...both,command:'  git rev-parse --short HEAD '}),command({program:'git',argv:['rev-parse','--short','HEAD']}));
+    // Different commands in the two forms fail closed, and the error says how to fix the call.
+    assert.match(String(args({...both,argv:['log','-1','--format=%h %s']}).error),/Send one form only/);
+    assert.match(String(args({...both,command:'git rev-parse --short HEAD; echo x'}).error),/Send one form only/);
     // Two real forms in one call still fail closed.
     assert.ok(args({command:'echo hi',program:'git',argv:['status']}).error);
     assert.ok(args({command:'',program:'git',argv:['status'],search:{text:'x'}}).error);

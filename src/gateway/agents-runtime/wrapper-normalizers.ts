@@ -542,9 +542,14 @@ export function normalizeWorkspaceWrapperTool(name: string, rawArgs: any, worksp
         for (const key of ['directory', 'glob']) if (blank(args.search[key])) delete args.search[key];
       }
       if (!commandUsed && (args.program != null || args.search != null)) delete args.command;
+      // The same command written in both forms (command === program + argv) means one thing: run the literal form,
+      // which passes each argument exactly and still goes through the same deny and approval checks.
+      if (commandUsed && args.search == null && typeof args.program === 'string' && Array.isArray(args.argv) && args.argv.length
+        && args.argv.every((a: unknown) => typeof a === 'string') && String(args.command).trim() === [args.program, ...args.argv].join(' ')) delete args.command;
     }
 
     if (args.program != null || args.argv != null || args.search != null) {
+      if (action === 'run' && args.command) return { name, args, error: 'command and program/argv (or search) were both given and they differ. Send one form only: command:"" with program/argv or search, or argv:[] and search.text:"" with command.' };
       if (action !== 'run' || args.command || args.elevated || args.visible || args.pty || args.stdin || (args.shell && args.shell !== 'auto') || process.platform !== 'win32') return { name, args, error: 'Literal arguments require a captured Windows run without command, explicit shell, elevation or PTY.' };
       try { args.command = literalCommand(args) + ARGV_SUFFIX; } catch (e) { return {name,args,error:String(e)}; }
       delete args.program; delete args.argv; delete args.search;
