@@ -212,9 +212,13 @@ export class JsonRpcStdioClient {
         last = setTimeout(() => done(this.exited), 2000);
       }, timeoutMs);
       child.once('exit', () => done(true));
-      try { child.stdin.end(); } catch { /* ignore */ }
-      const plainKill = () => { try { child.kill(); } catch { /* ignore */ } };
+      const plainKill = () => {
+        try { child.stdin.end(); } catch { /* ignore */ }
+        try { child.kill(); } catch { /* ignore */ }
+      };
       if (opts.tree && process.platform === 'win32' && child.pid) {
+        // The tree is ended while it is still whole. Closing stdin first lets the program exit on its
+        // own and leave the commands it started behind, where a tree kill can no longer find them.
         try {
           spawn('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }).on('error', plainKill);
         } catch { plainKill(); }

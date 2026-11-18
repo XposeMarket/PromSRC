@@ -14,10 +14,14 @@
  *   contains UNKNOWN  -> sends an unknown server request first
  *   contains SLOW     -> streams one delta, then waits for turn/interrupt
  *   contains STUCK    -> streams one delta, acknowledges turn/interrupt, never ends the turn
+ *   contains LONG     -> streams one delta, works for a moment, then completes on its own
+ *   contains RUNCMD   -> starts a real child process as a command; turn/interrupt is confirmed but the
+ *                        child keeps running (what codex-cli 0.163.0 does on Windows)
  *   contains FAIL     -> turn/completed with status failed
  *   otherwise         -> command item, reasoning, two deltas, completed
  */
 import fs from 'fs';
+import { spawn } from 'child_process';
 
 const args = process.argv.slice(2);
 if (args.includes('--version')) {
@@ -88,6 +92,21 @@ async function runTurn(threadId, turnId, text) {
   if (text.includes('STUCK')) {
     notify('item/agentMessage/delta', { ...base, itemId: 'm1', delta: 'partial answer' });
     await new Promise(() => {});
+  }
+  if (text.includes('RUNCMD')) {
+    const child = spawn(process.execPath, ['-e', 'setTimeout(()=>{},120000)'], { stdio: 'ignore' });
+    notify('item/started', { ...base, startedAtMs: Date.now(), item: { type: 'commandExecution', id: 'c1', command: 'sleep 120', cwd: '/repo', processId: null, source: 'agent', status: 'inProgress', commandActions: [], aggregatedOutput: null, exitCode: null, durationMs: null, pluginId: null, scriptPath: null } });
+    notify('item/agentMessage/delta', { ...base, itemId: 'm1', delta: `child=${child.pid}` });
+    await new Promise((resolve) => { activeTurn = { threadId, turnId, resolveInterrupt: resolve }; });
+    notify('turn/completed', { threadId, turn: turnObject(turnId, 'interrupted') });
+    return;
+  }
+  if (text.includes('LONG')) {
+    notify('item/agentMessage/delta', { ...base, itemId: 'm1', delta: 'working' });
+    await sleep(900);
+    notify('item/completed', { ...base, item: { type: 'agentMessage', id: 'm1', text: 'finished fine', phase: null, memoryCitation: null, delivery: null, questions: null } });
+    notify('turn/completed', { threadId, turn: turnObject(turnId, 'completed') });
+    return;
   }
   if (text.includes('SLOW')) {
     notify('item/agentMessage/delta', { ...base, itemId: 'm1', delta: 'partial answer' });

@@ -60,8 +60,21 @@ export interface CodexAdapterOptions {
 
 type RequestUser = ExternalTurnInput['requestUser'];
 
+/** One `codex app-server` process. It runs one turn at a time, so ending it can only end that turn. */
+interface Runtime {
+  client: JsonRpcStdioClient;
+  /** Threads loaded in this process's memory. */
+  threads: Set<string>;
+  /** Claimed by a turn, from setup until it finishes. */
+  reserved: boolean;
+  /** A thread loaded here has since run in another process, so this copy is out of date: closed once its turn ends. */
+  retire: boolean;
+}
+
 interface TurnContext {
   threadId: string;
+  /** The process running this turn. */
+  runtime: Runtime;
   turnId: string;
   emit: (event: ExternalAgentEvent) => void;
   requestUser: RequestUser;
@@ -71,6 +84,10 @@ interface TurnContext {
   outputTail: Map<string, string>;
   fileChangePaths: Map<string, string[]>;
   startedItems: Set<string>;
+  /** Commands Codex started that have not finished. */
+  runningCommands: Set<string>;
+  /** Stop arrived while a command was running: the process is ended once Codex has recorded the stop. */
+  endAfterStop: boolean;
   planCount: number;
   lastError: string;
   done: boolean;
@@ -90,6 +107,23 @@ function readAppVersion(): string {
 
 function short(value: unknown, max = 300): string {
   return String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
+}
+
+/**
+ * Codex passes a provider's JSON error through as text. Show its message, not the JSON. A refused model
+ * (Codex's own config can name one this Codex build may not use) also says what to do about it.
+ */
+export function plainCodexError(value: unknown): string {
+  let text = String(value ?? '').trim();
+  if (text.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(text);
+      const inner = parsed?.error?.message ?? parsed?.message;
+      if (typeof inner === 'string' && inner.trim()) text = inner;
+    } catch { /* not JSON after all */ }
+  }
+  text = short(text);
+  return /\bmodel\b.*\bnot supported\b/i.test(text) ? `${text} Choose another model for this chat, or update Codex.` : text;
 }
 
 function tail(value: unknown, max = 400): string {
@@ -114,13 +148,16 @@ export class CodexAdapter implements ExternalAgentAdapter {
   readonly tile = 'Cx';
   readonly capabilities = CODEX_CAPABILITIES;
 
-  private client: JsonRpcStdioClient | null = null;
-  private starting: Promise<JsonRpcStdioClient> | null = null;
-  /** A forced stop in progress; nothing new starts until it settles. */
-  private stopping: Promise<boolean> | null = null;
-  /** An app-server whose forced stop could not be confirmed. */
-  private stuck: JsonRpcStdioClient | null = null;
-  private loadedThreads = new Set<string>();
+  /**
+   * Live app-server processes. Each runs one turn at a time: two chats working at once are in two
+   * processes, so a forced stop of one never ends the other. One idle process is kept warm.
+   */
+  private runtimes = new Set<Runtime>();
+  private starting: Promise<Runtime> | null = null;
+  /** Forced stops in progress, by thread: that chat's next message waits until its old process is gone. */
+  private stopping = new Map<string, Promise<boolean>>();
+  /** App-servers whose forced stop could not be confirmed, by thread. */
+  private stuck = new Map<string, JsonRpcStdioClient>();
   private turns = new Map<string, TurnContext>();
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
   /** Turns still in setup (thread/start, thread/resume): no idle shutdown meanwhile. */
@@ -140,12 +177,17 @@ export class CodexAdapter implements ExternalAgentAdapter {
   }
 
   isRunning(): boolean {
-    return !!this.client?.alive;
+    return [...this.runtimes].some((runtime) => runtime.client.alive);
   }
 
-  /** Tests: pid of the app-server child (to prove no orphan after shutdown). */
+  /** Tests: pid of an app-server child (to prove no orphan after shutdown). */
   processId(): number | undefined {
-    return this.client?.alive ? this.client.pid : undefined;
+    return this.processIds()[0];
+  }
+
+  /** Tests: pid of every live app-server child, oldest first. */
+  processIds(): number[] {
+    return [...this.runtimes].filter((runtime) => runtime.client.alive).map((runtime) => runtime.client.pid).filter((pid): pid is number => typeof pid === 'number');
   }
 
   activeTurnCount(): number {
@@ -157,60 +199,95 @@ export class CodexAdapter implements ExternalAgentAdapter {
     return cmd ? { found: true, executable: cmd.source } : { found: false };
   }
 
-  private async ensureClient(): Promise<JsonRpcStdioClient> {
-    this.clearIdle();
-    if (this.client?.alive) return this.client;
-    // A forced stop is still ending the old app-server: nothing new starts until it is confirmed gone.
-    if (this.stopping) await this.stopping;
-    if (this.stuck) {
-      const gone = await this.stuck.stop(3000, { tree: true }).catch(() => false);
-      if (!gone) throw new Error('Codex did not stop when asked, so Prometheus will not start another one beside it. End the Codex process on this computer or restart Prometheus, then send the message again.');
-      this.stuck = null;
-    }
-    if (this.client?.alive) return this.client;
-    if (this.starting) return this.starting;
-    this.starting = (async () => {
-      const cmd = this.resolve();
-      if (!cmd) throw new Error("Codex isn't installed on this computer.");
-      const client: JsonRpcStdioClient = new JsonRpcStdioClient({
-        command: cmd.command,
-        args: [...cmd.args, 'app-server'],
-        env: this.options.env || process.env,
-        label: 'Codex',
-        onNotification: (method, params) => this.onNotification(method, params),
-        onServerRequest: (request) => { void this.onServerRequest(client, request); },
-        onExit: (info) => this.onExit(client, info.stderrTail),
-        onOutgoing: this.options.onOutgoing,
-      });
-      try {
-        await client.start();
-        await client.request('initialize', {
-          clientInfo: { name: 'prometheus', title: 'Prometheus', version: this.options.clientVersion || readAppVersion() },
-          capabilities: { experimentalApi: false },
-        }, this.timeoutMs);
-        client.notify('initialized');
-      } catch (error) {
-        await client.stop().catch(() => undefined);
-        throw error;
-      }
-      this.client = client;
-      this.loadedThreads.clear();
-      return client;
-    })();
+  /** Start one app-server and finish the handshake. */
+  private async spawn(reserved: boolean): Promise<Runtime> {
+    const cmd = this.resolve();
+    if (!cmd) throw new Error("Codex isn't installed on this computer.");
+    const client: JsonRpcStdioClient = new JsonRpcStdioClient({
+      command: cmd.command,
+      args: [...cmd.args, 'app-server'],
+      env: this.options.env || process.env,
+      label: 'Codex',
+      onNotification: (method, params) => this.onNotification(runtime, method, params),
+      onServerRequest: (request) => { void this.onServerRequest(runtime, request); },
+      onExit: (info) => this.onExit(runtime, info.stderrTail),
+      onOutgoing: this.options.onOutgoing,
+    });
+    const runtime: Runtime = { client, threads: new Set(), reserved, retire: false };
     try {
-      return await this.starting;
-    } finally {
-      this.starting = null;
+      await client.start();
+      await client.request('initialize', {
+        clientInfo: { name: 'prometheus', title: 'Prometheus', version: this.options.clientVersion || readAppVersion() },
+        capabilities: { experimentalApi: false },
+      }, this.timeoutMs);
+      client.notify('initialized');
+    } catch (error) {
+      await client.stop(3000, { tree: true }).catch(() => undefined);
+      throw error;
     }
+    this.runtimes.add(runtime);
+    return runtime;
   }
 
-  private onExit(client: JsonRpcStdioClient, stderrTail: string): void {
-    if (this.client !== client) return;
-    this.client = null;
-    this.loadedThreads.clear();
+  /** A process for account, model and config questions: any live one, started when there is none. */
+  private async controlClient(): Promise<JsonRpcStdioClient> {
+    this.clearIdle();
+    const live = [...this.runtimes].find((runtime) => runtime.client.alive && !runtime.retire);
+    if (live) return live.client;
+    if (!this.starting) this.starting = this.spawn(false).finally(() => { this.starting = null; });
+    return (await this.starting).client;
+  }
+
+  /**
+   * Claim a process for one turn: the chat's own when it is free, else another free one, else a new one.
+   * A process never runs two turns, so ending one (a forced Stop) cannot reach another chat's work.
+   */
+  private async acquire(threadId: string): Promise<Runtime> {
+    this.clearIdle();
+    if (threadId) await this.waitForStop(threadId);
+    const usable = (runtime: Runtime): boolean => runtime.client.alive && !runtime.retire;
+    const home = threadId ? [...this.runtimes].find((runtime) => usable(runtime) && runtime.threads.has(threadId)) : undefined;
+    let runtime = home && !home.reserved ? home : [...this.runtimes].find((candidate) => usable(candidate) && !candidate.reserved);
+    if (runtime) runtime.reserved = true;
+    else runtime = await this.spawn(true);
+    // The chat moves on in another process, so the copy of it in its old one goes out of date.
+    if (home && home !== runtime) home.retire = true;
+    return runtime;
+  }
+
+  /** A forced stop of this chat's old process is still landing: nothing new starts for the chat until it is gone. */
+  private async waitForStop(threadId: string): Promise<void> {
+    const stopping = this.stopping.get(threadId);
+    if (stopping) await stopping;
+    const stuck = this.stuck.get(threadId);
+    if (!stuck) return;
+    const gone = await stuck.stop(3000, { tree: true }).catch(() => false);
+    if (!gone) throw new Error('Codex did not stop when asked, so Prometheus will not start another one beside it. End the Codex process on this computer or restart Prometheus, then send the message again.');
+    this.stuck.delete(threadId);
+  }
+
+  /** The turn is over: an out-of-date process closes, and so do spare idle ones. One idle process stays warm. */
+  private release(runtime: Runtime): void {
+    runtime.reserved = false;
+    if (!this.runtimes.has(runtime)) return;
+    if (runtime.retire || !runtime.client.alive) return this.close(runtime);
+    // While something else is starting or asking a question, spare processes are left for it.
+    if (this.busy > 0) return;
+    for (const other of [...this.runtimes]) if (other !== runtime && !other.reserved) this.close(other);
+  }
+
+  /** Always the whole tree: a plain kill leaves the commands and helpers Codex started running. */
+  private close(runtime: Runtime): void {
+    this.runtimes.delete(runtime);
+    void runtime.client.stop(3000, { tree: true }).catch(() => undefined);
+  }
+
+  private onExit(runtime: Runtime, stderrTail: string): void {
+    // Closed or force-stopped on purpose: already taken out, and its turn already has its answer.
+    if (!this.runtimes.delete(runtime)) return;
     const lines = String(stderrTail || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
     const reason = short(lines[lines.length - 1] || 'Codex stopped unexpectedly.', 300);
-    for (const ctx of [...this.turns.values()]) ctx.finish('failed', reason);
+    for (const ctx of [...this.turns.values()]) if (ctx.runtime === runtime) ctx.finish('failed', reason);
   }
 
   private clearIdle(): void {
@@ -220,20 +297,19 @@ export class CodexAdapter implements ExternalAgentAdapter {
 
   private scheduleIdle(): void {
     this.clearIdle();
-    if (this.activeTurnCount() > 0 || !this.client) return;
+    if (this.activeTurnCount() > 0 || !this.runtimes.size) return;
     const idleMs = this.options.idleMs ?? CODEX_IDLE_SHUTDOWN_MS;
     this.idleTimer = setTimeout(() => { void this.closeIdle(); }, idleMs);
     this.idleTimer.unref?.();
   }
 
-  /** Stop the process when no turn is running. Returns true when it stopped (or was not running). */
+  /** Stop every process when no turn is running. Returns true when they stopped (or none was running). */
   async closeIdle(): Promise<boolean> {
     if (this.activeTurnCount() > 0) return false;
     this.clearIdle();
-    const client = this.client;
-    this.client = null;
-    this.loadedThreads.clear();
-    if (client) await client.stop().catch(() => undefined);
+    const all = [...this.runtimes];
+    this.runtimes.clear();
+    await Promise.all(all.map((runtime) => runtime.client.stop(3000, { tree: true }).catch(() => undefined)));
     return true;
   }
 
@@ -256,12 +332,13 @@ export class CodexAdapter implements ExternalAgentAdapter {
   private adoptTurnId(ctx: TurnContext, turnId: string): void {
     if (!turnId || ctx.turnId === turnId) return;
     ctx.turnId = turnId;
-    if (ctx.signal.aborted && this.client) this.interrupt(ctx, this.client);
+    if (ctx.signal.aborted) this.interrupt(ctx);
   }
 
-  private onNotification(method: string, params: any): void {
+  private onNotification(runtime: Runtime, method: string, params: any): void {
     const ctx = this.ctxFor(params, method);
-    if (!ctx) return;
+    // Only the process running a turn speaks for it.
+    if (!ctx || ctx.runtime !== runtime) return;
     switch (method) {
       case 'turn/started':
         return;
@@ -312,7 +389,7 @@ export class CodexAdapter implements ExternalAgentAdapter {
         return;
       }
       case 'error': {
-        const message = short(params?.error?.message || 'Codex reported an error.');
+        const message = plainCodexError(params?.error?.message || 'Codex reported an error.');
         ctx.lastError = message;
         if (params?.willRetry) ctx.emit({ type: 'notice', text: `Codex: ${message} (retrying)` });
         return;
@@ -324,8 +401,9 @@ export class CodexAdapter implements ExternalAgentAdapter {
         for (const item of Array.isArray(turn.items) ? turn.items : []) {
           if (item?.type === 'agentMessage' && typeof item.text === 'string') this.recordMessage(ctx, item);
         }
-        if (status === 'interrupted') ctx.finish('interrupted');
-        else if (status === 'failed') ctx.finish('failed', short(turn.error?.message || ctx.lastError || 'Codex could not finish this turn.'));
+        // Codex 0.163 on Windows confirms a stop while the command it started keeps running, so its process tree is ended too.
+        if (status === 'interrupted') { if (ctx.endAfterStop) this.forceStop(ctx); else ctx.finish('interrupted'); }
+        else if (status === 'failed') ctx.finish('failed', plainCodexError(turn.error?.message || ctx.lastError || 'Codex could not finish this turn.'));
         else ctx.finish('completed');
         return;
       }
@@ -360,6 +438,7 @@ export class CodexAdapter implements ExternalAgentAdapter {
     if (type === 'commandExecution') {
       kind = 'command';
       title = 'Ran a command';
+      if (completed) ctx.runningCommands.delete(itemId); else ctx.runningCommands.add(itemId);
       detail = short(item.command, 2000);
       exitCode = Number.isFinite(Number(item.exitCode)) && item.exitCode !== null ? Number(item.exitCode) : undefined;
       ok = !['failed', 'declined'].includes(String(item.status)) && (exitCode === undefined || exitCode === 0);
@@ -405,10 +484,11 @@ export class CodexAdapter implements ExternalAgentAdapter {
   }
 
   /** Codex's own approval/question requests. The answer goes back to THIS JSON-RPC id only. */
-  private async onServerRequest(client: JsonRpcStdioClient, request: JsonRpcServerRequest): Promise<void> {
+  private async onServerRequest(runtime: Runtime, request: JsonRpcServerRequest): Promise<void> {
+    const client = runtime.client;
     const params = request.params || {};
     const ctx = this.ctxFor(params);
-    if (!ctx) {
+    if (!ctx || ctx.runtime !== runtime) {
       // No live turn owns it (stale or foreign): never leave Codex hanging.
       client.respondError(request.id, -32601, 'Prometheus has no open turn for this request.');
       return;
@@ -455,7 +535,7 @@ export class CodexAdapter implements ExternalAgentAdapter {
     }
     this.busy += 1;
     try {
-      const client = await this.ensureClient();
+      const client = await this.controlClient();
       const res: any = await client.request('account/read', { refreshToken: false }, this.timeoutMs);
       const account = res?.account && typeof res.account === 'object' ? res.account : null;
       if (!account && res?.requiresOpenaiAuth !== false) {
@@ -495,7 +575,7 @@ export class CodexAdapter implements ExternalAgentAdapter {
   async listModels(context: { cwd: string }) {
     this.busy += 1;
     try {
-      const client = await this.ensureClient();
+      const client = await this.controlClient();
       const models: Array<{ id: string; label: string; efforts: string[] }> = [];
       let cursor: string | undefined;
       for (let page = 0; page < 10; page++) {
@@ -513,11 +593,14 @@ export class CodexAdapter implements ExternalAgentAdapter {
     this.busy += 1;
     let threadId = String(input.upstreamSessionId || '').trim();
     let model: string | undefined = input.model;
+    let runtime: Runtime | undefined;
     try {
       if (threadId && this.turns.has(threadId)) {
         return { upstreamSessionId: threadId, status: 'failed', finalText: '', error: 'Codex is still working on the previous message.' };
       }
-      const client = await this.ensureClient();
+      const held = await this.acquire(threadId);
+      runtime = held;
+      const client = held.client;
       if (input.signal.aborted) return { upstreamSessionId: threadId, status: 'interrupted', finalText: '' };
       if (!threadId) {
         input.emit({ type: 'state', phase: 'starting' });
@@ -526,13 +609,13 @@ export class CodexAdapter implements ExternalAgentAdapter {
         threadId = short(res?.thread?.id, 300);
         if (!threadId) throw new Error('Codex did not return a session id.');
         model = input.model || short(res?.model, 120) || undefined;
-        this.loadedThreads.add(threadId);
-      } else if (!this.loadedThreads.has(threadId)) {
+        held.threads.add(threadId);
+      } else if (!held.threads.has(threadId)) {
         input.emit({ type: 'state', phase: 'resuming' });
         try {
           const res: any = await client.request('thread/resume', { threadId, excludeTurns: true }, this.timeoutMs);
           model = input.model || short(res?.model, 120) || undefined;
-          this.loadedThreads.add(threadId);
+          held.threads.add(threadId);
         } catch (error: any) {
           const message = short(error?.message || error);
           if (looksLikeMissingThread(message)) {
@@ -548,9 +631,10 @@ export class CodexAdapter implements ExternalAgentAdapter {
       const boundThreadId = threadId;
       return await new Promise<ExternalTurnResult>((resolve) => {
         const requestLifetime = new AbortController();
-        const onAbort = () => { requestLifetime.abort(); this.interrupt(ctx, client); };
+        const onAbort = () => { requestLifetime.abort(); this.interrupt(ctx); };
         const ctx: TurnContext = {
           threadId: boundThreadId,
+          runtime: held,
           turnId: '',
           emit: input.emit,
           requestUser: input.requestUser,
@@ -560,6 +644,8 @@ export class CodexAdapter implements ExternalAgentAdapter {
           outputTail: new Map(),
           fileChangePaths: new Map(),
           startedItems: new Set(),
+          runningCommands: new Set(),
+          endAfterStop: false,
           planCount: 0,
           lastError: '',
           done: false,
@@ -589,7 +675,7 @@ export class CodexAdapter implements ExternalAgentAdapter {
             // The turn/start answer is authoritative for which turn is ours.
             const turnId = short(res?.turn?.id, 300);
             if (turnId && !ctx.done) this.adoptTurnId(ctx, turnId);
-            if (input.signal.aborted) this.interrupt(ctx, client);
+            if (input.signal.aborted) this.interrupt(ctx);
           })
           .catch((error: any) => ctx.finish(input.signal.aborted ? 'interrupted' : 'failed', short(error?.message || error)));
         if (input.signal.aborted) onAbort();
@@ -604,6 +690,7 @@ export class CodexAdapter implements ExternalAgentAdapter {
       };
     } finally {
       this.busy -= 1;
+      if (runtime) this.release(runtime);
       this.scheduleIdle();
     }
   }
@@ -613,46 +700,48 @@ export class CodexAdapter implements ExternalAgentAdapter {
    * Stop has to mean stopped. If Codex refuses the interrupt or never confirms it, the app-server may
    * still be running commands, so the process is ended instead of only marking the turn as stopped.
    */
-  private interrupt(ctx: TurnContext, client: JsonRpcStdioClient): void {
+  private interrupt(ctx: TurnContext): void {
     if (ctx.done) return;
+    if (ctx.runningCommands.size) ctx.endAfterStop = true;
     if (!ctx.graceTimer) {
-      ctx.graceTimer = setTimeout(() => this.forceStop(ctx, client), this.options.interruptGraceMs ?? 5_000);
+      ctx.graceTimer = setTimeout(() => this.forceStop(ctx), this.options.interruptGraceMs ?? 5_000);
     }
     if (ctx.interruptSent || !ctx.turnId) return; // turnId arrives with the turn/start answer; retried there.
     ctx.interruptSent = true;
-    client.request('turn/interrupt', { threadId: ctx.threadId, turnId: ctx.turnId }, 10_000).catch(() => this.forceStop(ctx, client));
+    ctx.runtime.client.request('turn/interrupt', { threadId: ctx.threadId, turnId: ctx.turnId }, 10_000).catch(() => this.forceStop(ctx));
   }
 
-  /** Codex did not confirm the stop: end the app-server so nothing keeps running behind a chat that says "Stopped". */
-  private forceStop(ctx: TurnContext, client: JsonRpcStdioClient): void {
+  /**
+   * Codex did not confirm the stop, or confirmed it with a command still running: end this chat's app-server
+   * and everything it started, so nothing keeps running behind a chat that says "Stopped". No other chat's
+   * turn runs in that process, so only the stopped chat is affected. Its thread is on disk and resumes in a new one.
+   */
+  private forceStop(ctx: TurnContext): void {
     if (ctx.done) return;
-    ctx.finish('interrupted');
-    if (this.client === client) {
-      this.client = null;
-      this.loadedThreads.clear();
-      // Other chats share this app-server. Their turns end with a plain reason instead of hanging.
-      for (const other of [...this.turns.values()]) other.finish('failed', 'Codex did not confirm a stop request, so Prometheus restarted it. Send the message again.');
-    }
-    // The commands Codex started go with it, and the next message waits until the old process is confirmed gone.
+    const client = ctx.runtime.client;
+    const threadId = ctx.threadId;
+    // Taken out first: nothing else is ever started on a process that is being ended.
+    this.runtimes.delete(ctx.runtime);
+    // The commands Codex started go with it, and this chat's next message waits until the old process is confirmed gone.
     const stopping: Promise<boolean> = client.stop(3000, { tree: true }).catch(() => false).then((gone) => {
-      if (!gone) this.stuck = client;
-      if (this.stopping === stopping) this.stopping = null;
+      if (!gone) this.stuck.set(threadId, client);
+      if (this.stopping.get(threadId) === stopping) this.stopping.delete(threadId);
       return gone;
     });
-    this.stopping = stopping;
+    this.stopping.set(threadId, stopping);
+    ctx.finish('interrupted');
   }
 
   private finalText(ctx: TurnContext): string {
-    return ctx.messageOrder.map((id) => ctx.messageText.get(id) || '').filter((text) => text.trim()).join('\n\n');
+    return ctx.messageOrder.map((id) => (ctx.messageText.get(id) || '').trim()).filter(Boolean).join('\n\n');
   }
 
   async shutdown(): Promise<void> {
     this.clearIdle();
     for (const ctx of [...this.turns.values()]) ctx.finish('interrupted', 'Prometheus is shutting down.');
-    const client = this.client;
-    this.client = null;
-    this.loadedThreads.clear();
-    if (client) await client.stop().catch(() => undefined);
+    const all = [...this.runtimes];
+    this.runtimes.clear();
+    await Promise.all(all.map((runtime) => runtime.client.stop(3000, { tree: true }).catch(() => undefined)));
   }
 }
 
