@@ -152,6 +152,7 @@ function writeCodexModelRuntimeStatus(status: {
   configuredModel: string;
   requestedModel: string;
   actualModel?: string;
+  replayedReasoningItems?: number;
   fallbackFrom?: string;
   fallbackReason?: string;
   ok: boolean;
@@ -337,10 +338,33 @@ export class OpenAICodexAdapter implements LLMProvider {
     return headers;
   }
 
+  private buildContentParts(content: ContentPart[]): any[] {
+    return content.map((part: ContentPart | any) => {
+      if (part?.type === 'text') return { type: 'input_text', text: String(part.text ?? '') };
+      if (part?.type === 'image_url') {
+        const url = String(part.image_url?.url || '');
+        // Codex endpoint accepts image_url as a string (data URL or HTTPS URL).
+        if (url) return { type: 'input_image', image_url: url };
+      }
+      // Legacy Anthropic-shaped image block ({type:'image', source:{type:'base64'}}).
+      // Older producers emitted this when the global provider was Anthropic; the
+      // Codex route must still see the pixels instead of an empty string.
+      if (part?.type === 'image' && part.source?.type === 'base64' && part.source?.data) {
+        const mediaType = String(part.source.media_type || 'image/png');
+        return { type: 'input_image', image_url: `data:${mediaType};base64,${part.source.data}` };
+      }
+      if (part?.type === 'image' && typeof part.source?.url === 'string' && part.source.url) {
+        return { type: 'input_image', image_url: part.source.url };
+      }
+      console.warn(`[openai-codex] dropped unsupported content part type=${String(part?.type || 'unknown')}`);
+      return { type: 'input_text', text: `[attachment omitted: unsupported content part ${String(part?.type || 'unknown')}]` };
+    });
+  }
+
   // Convert Prometheus ChatMessage[] -> Codex input[] format.
   // Handles both plain string content and ContentPart[] (multimodal vision calls).
   // Guarantees non-empty function call IDs for both function_call and function_call_output.
-  private buildInput(messages: ChatMessage[]): any[] {
+  private buildInput(messages: ChatMessage[], model?: string, account = ''): any[] {
     const input: any[] = [];
     const pendingCallIds: string[] = [];
     const knownCallIds = new Set<string>();
@@ -361,6 +385,17 @@ export class OpenAICodexAdapter implements LLMProvider {
       if (m.role === 'system') continue; // system handled separately as instructions
 
       if (m.role === 'assistant' && m.tool_calls?.length) {
+        const replay = m.providerReplay;
+        if (replay?.provider === this.id && replay.model === model && replay.account === account) {
+          for (const item of replay.blocks) {
+            input.push(item);
+            if (item.type === 'function_call') {
+              pendingCallIds.push(item.call_id);
+              knownCallIds.add(item.call_id);
+            }
+          }
+          continue;
+        }
         const assistantText = typeof m.content === 'string' ? m.content.trim() : '';
         if (assistantText) {
           input.push({
@@ -402,7 +437,7 @@ export class OpenAICodexAdapter implements LLMProvider {
           const content = typeof m.content === 'string' ? m.content : '';
           input.push({
             role: 'assistant',
-            content: `[tool-note:${toolName}] ${content}`.slice(0, 12000),
+            content: `[tool-note:${toolName}] ${content}`,
           });
           continue;
         }
@@ -413,7 +448,7 @@ export class OpenAICodexAdapter implements LLMProvider {
           const content = typeof m.content === 'string' ? m.content : '';
           input.push({
             role: 'assistant',
-            content: `[tool-note:${toolName}] ${content}`.slice(0, 12000),
+            content: `[tool-note:${toolName}] ${content}`,
           });
           continue;
         }
@@ -421,7 +456,7 @@ export class OpenAICodexAdapter implements LLMProvider {
         input.push({
           type: 'function_call_output',
           call_id: callId,
-          output: typeof m.content === 'string' ? m.content : '',
+          output: Array.isArray(m.content) ? this.buildContentParts(m.content) : m.content || '',
         });
         continue;
       }
@@ -430,26 +465,7 @@ export class OpenAICodexAdapter implements LLMProvider {
       // The Codex endpoint accepts input_image with image_url as a string —
       // either an HTTPS URL or a data URL (data:image/...;base64,...).
       if (Array.isArray(m.content)) {
-        const parts: any[] = m.content.map((part: ContentPart | any) => {
-          if (part?.type === 'text') return { type: 'input_text', text: String(part.text ?? '') };
-          if (part?.type === 'image_url') {
-            const url = String(part.image_url?.url || '');
-            // Codex endpoint accepts image_url as a string (data URL or HTTPS URL).
-            if (url) return { type: 'input_image', image_url: url };
-          }
-          // Legacy Anthropic-shaped image block ({type:'image', source:{type:'base64'}}).
-          // Older producers emitted this when the global provider was Anthropic; the
-          // Codex route must still see the pixels instead of an empty string.
-          if (part?.type === 'image' && part.source?.type === 'base64' && part.source?.data) {
-            const mediaType = String(part.source.media_type || 'image/png');
-            return { type: 'input_image', image_url: `data:${mediaType};base64,${part.source.data}` };
-          }
-          if (part?.type === 'image' && typeof part.source?.url === 'string' && part.source.url) {
-            return { type: 'input_image', image_url: part.source.url };
-          }
-          console.warn(`[openai-codex] dropped unsupported content part type=${String(part?.type || 'unknown')}`);
-          return { type: 'input_text', text: `[attachment omitted: unsupported content part ${String(part?.type || 'unknown')}]` };
-        });
+        const parts = this.buildContentParts(m.content);
         input.push({ role: m.role, content: parts });
         continue;
       }
@@ -475,20 +491,13 @@ export class OpenAICodexAdapter implements LLMProvider {
     const systemMsg = messages.find(m => m.role === 'system');
     const systemText = systemMsg ? contentToString(systemMsg.content) : '';
     const { stable, volatile } = splitOnCacheMarker(systemText);
-    let instructions = stripCacheMarker(systemText).trim() || DEFAULT_CODEX_INSTRUCTIONS;
+    const defaultInstructions = stripCacheMarker(systemText).trim() || DEFAULT_CODEX_INSTRUCTIONS;
 
     const hasTools = Array.isArray(options?.tools) && options!.tools!.length > 0;
     const _cfgRootCodex = getConfig().getConfig() as any;
     const _codexToolChoiceCfg = String(_cfgRootCodex?.llm?.providers?.openai_codex?.tool_choice || '').trim();
     const toolChoice = hasTools ? (_codexToolChoiceCfg === 'required' ? 'required' : 'auto') : 'auto';
-    const input = this.buildInput(pruneHistoryImages(messages).messages);
-    const latestUser = input.map(item => item.role).lastIndexOf('user');
-    if (stable.trim() && volatile.trim() && latestUser >= 0) {
-      instructions = stripCacheMarker(stable).trim();
-      // Developer priority preserves the system tail's authority. Put it by the
-      // current user turn so instructions + preceding conversation stay stable.
-      input.splice(latestUser, 0, { role: 'developer', content: stripCacheMarker(volatile).trim() });
-    }
+    const prunedMessages = pruneHistoryImages(messages).messages;
 
     const configuredModel = String(model || '').trim();
     // Account indexes for which a forced token refresh has already been
@@ -546,9 +555,18 @@ export class OpenAICodexAdapter implements LLMProvider {
       }, CODEX_REQUEST_TIMEOUT_MS);
       resetIdleTimer();
 
+      const account = headers['ChatGPT-Account-ID'] || headers['ChatGPT-Account-Id'] || activeAccountId || '';
+      let instructions = defaultInstructions;
+      const input = this.buildInput(prunedMessages, requestedModel, account);
+      const latestUser = input.map(item => item.role).lastIndexOf('user');
+      if (stable.trim() && volatile.trim() && latestUser >= 0) {
+        instructions = stripCacheMarker(stable).trim();
+        input.splice(latestUser, 0, { role: 'developer', content: stripCacheMarker(volatile).trim() });
+      }
       const body: any = {
         model: requestedModel,
         store: false,
+        include: ['reasoning.encrypted_content'],
         input,
         stream: true,
         tool_choice: toolChoice,
@@ -651,7 +669,7 @@ export class OpenAICodexAdapter implements LLMProvider {
           throw providerError;
         }
 
-        const result = await this.parseSSEStream(response, requestedModel, options, resetIdleTimer);
+        const result = await this.parseSSEStream(response, requestedModel, options, resetIdleTimer, account);
         result.usage = {
           ...(result.usage || {}),
           requestedModel: configuredModel,
@@ -666,6 +684,7 @@ export class OpenAICodexAdapter implements LLMProvider {
           actualModel: requestedModel,
           fallbackFrom,
           fallbackReason,
+          replayedReasoningItems: input.filter(item => item.type === 'reasoning' && item.encrypted_content).length,
           ok: true,
         });
         return result;
@@ -722,6 +741,7 @@ export class OpenAICodexAdapter implements LLMProvider {
 	    model: string,
 	    options?: ChatOptions,
 	    onActivity?: () => void,
+      account = '',
 	  ): Promise<ChatResult> {
     const reader = response.body?.getReader();
     if (!reader) throw new Error('No response body from Codex endpoint');
@@ -730,6 +750,7 @@ export class OpenAICodexAdapter implements LLMProvider {
 		    let buffer = '';
 		    let finalContent = '';
 		    let thinking = '';
+    const completedItems = new Map<number, any>();
 	    let toolCalls: any[] = [];
 	    let assistantPhase: 'commentary' | 'final_answer' | undefined;
 	    let assistantItemId = '';
@@ -807,6 +828,9 @@ export class OpenAICodexAdapter implements LLMProvider {
             const type = event.type as string;
             if (type && eventTypes.length < 40 && !eventTypes.includes(type)) eventTypes.push(type);
 
+            if (type === 'response.output_item.done' && typeof event.output_index === 'number' && event.item) {
+              completedItems.set(event.output_index, event.item);
+            }
             if (type === 'response.output_item.added' && event.item?.type === 'message') {
               assistantPhase = event.item.phase === 'commentary' || event.item.phase === 'final_answer'
                 ? event.item.phase
@@ -924,6 +948,12 @@ export class OpenAICodexAdapter implements LLMProvider {
               sawCompleted = true;
               usage = parseUsage(event.response?.usage);
               const outputs = Array.isArray(event.response?.output) ? event.response.output : [];
+              outputs.forEach((item: any, index: number) => {
+                const streamed = completedItems.get(index);
+                if (item.type === 'reasoning' && !item.encrypted_content && streamed?.encrypted_content && streamed.id === item.id) {
+                  completedItems.set(index, { ...item, encrypted_content: streamed.encrypted_content });
+                } else completedItems.set(index, item);
+              });
               outputItemCount = outputs.length;
               outputItemTypes = outputs
                 .slice(0, 24)
@@ -1018,8 +1048,20 @@ export class OpenAICodexAdapter implements LLMProvider {
       });
     }
 
+    for (const [index, call] of toolCallByOutputIndex) {
+      if (!completedItems.has(index)) completedItems.set(index, {
+        type: 'function_call', call_id: call.id, name: call.function.name, arguments: call.function.arguments,
+      });
+    }
+    const blocks = [...completedItems.entries()].sort(([a], [b]) => a - b).map(([, item]) => item)
+      .filter(item => item.type === 'message' || item.type === 'function_call' || (item.type === 'reasoning' && item.encrypted_content));
+    const nativeCalls = blocks.filter(item => item.type === 'function_call');
+    const replayable = toolCalls.length > 0 && nativeCalls.length === toolCalls.length
+      && nativeCalls.every((item, index) => item.call_id === toolCalls[index].id)
+      && blocks.some(item => item.type === 'reasoning');
     const message: ChatMessage = {
       role: 'assistant',
+      ...(replayable ? { providerReplay: { provider: this.id, model, account, blocks } } : {}),
       content: finalContent || null,
       tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
       ...(assistantPhase ? { phase: assistantPhase } : {}),

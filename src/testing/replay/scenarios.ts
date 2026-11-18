@@ -68,7 +68,7 @@ export const scenarios: ReplayScenario[] = [
     kind: 'contract',
     contract: 'A tool call executes once and its result goes back to the model under the same tool_call_id.',
     input: {
-      message: 'List coding skills',
+      message: 'Run the read-only skill_list tool to inspect the coding skills.',
       script: [{ toolCalls: [{ id: 'call_rt', name: 'skill_list', args: { query: 'coding' } }] }, { text: 'Listed.' }],
     },
     check(run) {

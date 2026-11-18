@@ -501,6 +501,11 @@ export function normalizeWorkspaceWrapperTool(name: string, rawArgs: any, worksp
   }
 
   if (name === 'workspace_edit') {
+    if (args.dry_run === true || args.check === true) {
+      if (action === 'apply_patch' || action === 'preview_patch') return { name: 'preview_patch', args: { ...args, check: true } };
+      if (!['copy', 'move', 'copy_directory', 'move_directory'].includes(action)) return { name, args, error: `No files changed: ${action} has no dry run. Use preview_patch with a unified diff.` };
+      args.dry_run = true;
+    }
     if (action === 'create') return { name: 'create_file', args: compactWorkspaceEditArgs(args, pathArg, action) };
     if (action === 'write') return { name: 'write_file', args: compactWorkspaceEditArgs(args, pathArg, action) };
     if (action === 'append') return { name: 'append_file', args: compactWorkspaceEditArgs(args, pathArg, action) };

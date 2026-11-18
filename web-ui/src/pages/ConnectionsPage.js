@@ -2139,7 +2139,9 @@ function renderImportTab() {
     <div class="pim">
       <input id="pim-query" class="pam-input" placeholder="Search, or paste a GitHub repo or folder" autocomplete="off"/>
       <div class="pim-seg">
-        <button class="pim-src active" data-pim-action="src" data-pim-src="catalog">Catalogs</button>
+        <button class="pim-src active" data-pim-action="src" data-pim-src="claude-official">Claude</button>
+        <button class="pim-src" data-pim-action="src" data-pim-src="openai-official">Codex</button>
+        <button class="pim-src" data-pim-action="src" data-pim-src="codex-personal">Codex personal</button>
         <button class="pim-src" data-pim-action="src" data-pim-src="local">On this PC</button>
         <button class="pim-src" data-pim-action="src" data-pim-src="skills">Skills</button>
       </div>
@@ -2151,7 +2153,8 @@ function renderImportTab() {
 }
 
 function pimEsc(v) { return escapeHtml(String(v ?? '')); }
-window.pimSource = window.pimSource || 'catalog';
+window.pimSource = window.pimSource && window.pimSource !== 'catalog' ? window.pimSource : 'claude-official';
+let pimGeneration = 0;
 let pimQueryTimer = null;
 
 // A pasted folder path, owner/repo(#subdir) or GitHub URL imports directly instead of searching.
@@ -2193,6 +2196,8 @@ function renderPimImported(imported) {
 async function loadPluginImportScan() {
   const listEl = document.getElementById('pim-list');
   if (!listEl) return;
+  const generation = ++pimGeneration;
+  listEl.innerHTML = '<div class="pim-empty">Loading…</div>';
   const src = window.pimSource;
   const q = String(document.getElementById('pim-query')?.value || '').trim();
   document.querySelectorAll('.pim-src').forEach((b) => b.classList.toggle('active', b.dataset.pimSrc === src));
@@ -2201,6 +2206,7 @@ async function loadPluginImportScan() {
   const cantRun = '<span class="pim-done">Can\'t run here</span>';
   try {
     const scan = await api(`/api/plugins/import/scan?${new URLSearchParams({ q })}`);
+    if (generation !== pimGeneration) return;
     renderPimImported(scan?.imported || []);
     if (q && pimLooksLikeSource(q)) {
       listEl.innerHTML = pimRow(pimEsc(q), 'Import from this folder or GitHub repo', importBtn(`data-pim-source="${pimEsc(q)}"`));
@@ -2217,13 +2223,15 @@ async function loadPluginImportScan() {
     }
     if (src === 'skills') {
       const res = await api('/api/plugins/import/skills', { method: 'POST', body: JSON.stringify({ query: q, limit: 200 }) });
+      if (generation !== pimGeneration) return;
       const rows = res?.data || [];
       listEl.innerHTML = rows.length
         ? rows.map((p) => pimRow(pimEsc(p.name || p.id), pimEsc(p.description || p.harness), p.installedAs ? added : importBtn(`data-pim-source="${pimEsc(p.root)}"`))).join('')
         : '<div class="pim-empty">No skill folders found on this computer.</div>';
       return;
     }
-    const res = await api('/api/plugins/import/catalog', { method: 'POST', body: JSON.stringify({ query: q, limit: 120, refresh: window.pimRefreshCatalog === true }) });
+    const res = await api('/api/plugins/import/catalog', { method: 'POST', body: JSON.stringify({ catalog: src, query: q, limit: 120, refresh: window.pimRefreshCatalog === true }) });
+    if (generation !== pimGeneration) return;
     window.pimRefreshCatalog = false;
     const data = res?.data || {};
     const entries = data.entries || [];

@@ -138,6 +138,7 @@ export async function handleWorkspaceTool(ctx: handleWorkspaceToolContext): Prom
             let bContent: string;
             let bDisplay: string;
             const entryFull = entry.full === true || entry.allow_large === true || args.full === true || args.allow_large === true;
+            const readArgs = { start_line: entry.start_line, num_lines: entry.num_lines, max_lines: args.max_lines_per_file != null || entry.num_lines == null ? batchCap : undefined, full: entryFull };
             const summaryOnly = forceSummary;
             if (bNorm.startsWith('src/')) {
               if (summaryOnly) {
@@ -150,7 +151,7 @@ export async function handleWorkspaceTool(ctx: handleWorkspaceToolContext): Prom
                 batchSummaryLines.push(`${bNorm}: summary`);
                 continue;
               }
-              const r = await executeTool('read_source', { file: bNorm, start_line: entry.start_line, num_lines: entry.num_lines ?? batchCap, max_lines: batchCap, full: entry.full ?? args.full, allow_large: entry.allow_large ?? args.allow_large }, workspacePath, deps, sessionId);
+              const r = await executeTool('read_source', { file: bNorm, ...readArgs }, workspacePath, deps, sessionId);
               resultChunks.push(`--- ${bFilename} ---\n${r.result}`);
               batchSummaryLines.push(`${bFilename}: content`);
               continue;
@@ -166,7 +167,7 @@ export async function handleWorkspaceTool(ctx: handleWorkspaceToolContext): Prom
                 batchSummaryLines.push(`${bNorm}: summary`);
                 continue;
               }
-              const r = await executeTool('read_webui_source', { file: bNorm.slice('web-ui/'.length), start_line: entry.start_line, num_lines: entry.num_lines ?? batchCap, max_lines: batchCap, full: entry.full ?? args.full, allow_large: entry.allow_large ?? args.allow_large }, workspacePath, deps, sessionId);
+              const r = await executeTool('read_webui_source', { file: bNorm.slice('web-ui/'.length), ...readArgs }, workspacePath, deps, sessionId);
               resultChunks.push(`--- ${bFilename} ---\n${r.result}`);
               batchSummaryLines.push(`${bFilename}: content`);
               continue;
@@ -179,25 +180,8 @@ export async function handleWorkspaceTool(ctx: handleWorkspaceToolContext): Prom
               continue;
             }
             bContent = fs.readFileSync(bResolved.absPath, 'utf-8');
-            const bAllLines = splitLinesEolSafe(bContent);
-            if (entry.start_line !== undefined || entry.num_lines !== undefined) {
-              const bStart = Math.max(1, Math.floor(Number(entry.start_line) || 1));
-              const requested = Math.max(1, Math.floor(Number(entry.num_lines) || batchCap));
-              const bNum = entryFull ? requested : Math.min(requested, batchCap);
-              const bIdx = bStart - 1;
-              const bWindow = bAllLines.slice(bIdx, bIdx + bNum);
-              const bNumbered = bWindow.map((l, i) => `${bStart + i}: ${trimReturnedFileLine(l)}`).join('\n');
-              const bEnd = bStart + bWindow.length - 1;
-              const truncated = bEnd < bAllLines.length;
-              resultChunks.push(`${bDisplay} (${bAllLines.length} lines) [window ${bStart}-${bEnd}${truncated ? ', truncated' : ''}]:\n${bNumbered}${truncated ? `\n[READ_TRUNCATED] Use start_line:${bEnd + 1}, num_lines:${batchCap} for the next chunk, or full:true only when needed.` : ''}`);
-              batchSummaryLines.push(`${bDisplay}: lines ${bStart}-${bEnd}${truncated ? ' truncated' : ''}`);
-            } else {
-              const bWindow = entryFull ? bAllLines : bAllLines.slice(0, batchCap);
-              const bNumbered = bWindow.map((l, i) => `${i + 1}: ${trimReturnedFileLine(l)}`).join('\n');
-              const truncated = bWindow.length < bAllLines.length;
-              resultChunks.push(`${bDisplay} (${bAllLines.length} lines) [window 1-${bWindow.length}${truncated ? ', truncated' : ''}]:\n${bNumbered}${truncated ? `\n[READ_DEFAULT_CAP] Batch reads default to ${batchCap} lines per file. Use start_line:${bWindow.length + 1}, num_lines:${batchCap} for the next chunk, or full:true only when needed.` : ''}`);
-              batchSummaryLines.push(`${bDisplay}: lines 1-${bWindow.length}${truncated ? ' truncated' : ''}`);
-            }
+            resultChunks.push(renderNumberedRead(bDisplay, splitLinesEolSafe(bContent), readArgs, batchCap));
+            batchSummaryLines.push(`${bDisplay}: content`);
           } catch (err: any) {
             resultChunks.push(`--- ${String(bFilename)} ---\nERROR: ${err?.message || String(err)}`);
             batchSummaryLines.push(`${String(bFilename)}: error`);
@@ -588,7 +572,6 @@ export async function handleWorkspaceTool(ctx: handleWorkspaceToolContext): Prom
       case 'show_diff':
       case 'git_diff': {
         try {
-          const maxChars = Math.max(1000, Math.min(100000, Number(args.max_chars || 12000)));
           const parts = ['git diff'];
           if (args.staged === true) parts.push('--cached');
           if (args.stat === true) parts.push('--stat');
@@ -597,7 +580,7 @@ export async function handleWorkspaceTool(ctx: handleWorkspaceToolContext): Prom
             parts.push('--', quoteArg(resolved.displayPath));
           }
           const result = await runCapturedToolCommand(parts.join(' '), workspacePath, 120000);
-          result.result = truncateText(result.result, maxChars);
+          // Size-limit only after the gateway can offer the complete diff.
           return result;
         } catch (err: any) {
           return { name, args, result: `ERROR: ${err?.message || String(err)}`, error: true };
@@ -616,7 +599,7 @@ export async function handleWorkspaceTool(ctx: handleWorkspaceToolContext): Prom
             const check = await deps.runCommandCaptured(`git apply --check --whitespace=nowarn ${quoteArg(tmpPath)}`, workspacePath, 120000);
             const checkOutput = [check.stdout, check.stderr].filter(Boolean).join('\n').trim();
             if (check.code !== 0 || check.timedOut) {
-              return { name, args, result: `Patch check failed:\n${truncateText(checkOutput || `exit ${check.code}`, 8000)}`, error: true };
+              return { name, args, result: `Patch check failed:\n${checkOutput || `exit ${check.code}`}`, error: true };
             }
             if (name === 'preview_patch' || args.check === true) {
               return { name, args, result: JSON.stringify({ checked_only: true, files: targets, file_count: targets.length }, null, 2), error: false };
@@ -627,7 +610,7 @@ export async function handleWorkspaceTool(ctx: handleWorkspaceToolContext): Prom
             });
             const applied = await deps.runCommandCaptured(`git apply --whitespace=nowarn ${quoteArg(tmpPath)}`, workspacePath, 120000);
             const appliedOutput = [applied.stdout, applied.stderr].filter(Boolean).join('\n').trim();
-            return withWorkspaceSnapshots({ name, args, result: applied.code === 0 ? `Patch applied to ${targets.length} file(s).` : `Patch apply failed:\n${truncateText(appliedOutput, 8000)}`, error: applied.code !== 0 }, applied.code === 0 ? snapshots : []);
+            return withWorkspaceSnapshots({ name, args, result: applied.code === 0 ? `Patch applied to ${targets.length} file(s).` : `Patch apply failed:\n${appliedOutput}`, error: applied.code !== 0 }, applied.code === 0 ? snapshots : []);
           } finally {
             try { fs.unlinkSync(tmpPath); } catch {}
           }
@@ -1947,7 +1930,7 @@ export async function handleWorkspaceTool(ctx: handleWorkspaceToolContext): Prom
               const outcome = classifyCommandTermination(captured);
               return {
                 name, args,
-                result: `${normalizedCmd} [${outcome.label}] run=${captured.runId || 'n/a'} cwd=${commandCwd.displayCwd}\n${capCommandOutput(output, { maxChars: args.maxChars ?? args.max_chars, runId: captured.runId }) || '(no output)'}`,
+                result: `${normalizedCmd} [${outcome.label}] run=${captured.runId || 'n/a'} cwd=${commandCwd.displayCwd}\n${capCommandOutput(output, { maxChars: args.maxChars ?? args.max_chars, runId: captured.runId }) + (captured.runId && ((captured as any).stdoutTruncated || (captured as any).stderrTruncated) ? `\n[Capture limited; full log: workspace_run(action:"log", runId:"${captured.runId}", offset_bytes:0)]` : '') || '(no output)'}`,
                 error: !outcome.ok,
                 extra: {
                   ...(captured.runId ? { runId: captured.runId } : {}),
@@ -1997,7 +1980,7 @@ export async function handleWorkspaceTool(ctx: handleWorkspaceToolContext): Prom
               const outcome = classifyCommandTermination(captured);
               return {
                 name, args,
-                result: `${normalizedCmd} [${outcome.label}] run=${captured.runId || 'n/a'} cwd=${commandCwd.displayCwd}\n${capCommandOutput(output, { maxChars: args.maxChars ?? args.max_chars, runId: captured.runId }) || '(no output)'}`,
+                result: `${normalizedCmd} [${outcome.label}] run=${captured.runId || 'n/a'} cwd=${commandCwd.displayCwd}\n${capCommandOutput(output, { maxChars: args.maxChars ?? args.max_chars, runId: captured.runId }) + (captured.runId && ((captured as any).stdoutTruncated || (captured as any).stderrTruncated) ? `\n[Capture limited; full log: workspace_run(action:"log", runId:"${captured.runId}", offset_bytes:0)]` : '') || '(no output)'}`,
                 error: !outcome.ok,
                 extra: {
                   ...(captured.runId ? { runId: captured.runId } : {}),

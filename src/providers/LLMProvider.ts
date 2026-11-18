@@ -25,7 +25,22 @@ export type ContentPart =
  */
 export const PROMPT_CACHE_MARKER = '\n␞<<<PROMETHEUS_PROMPT_CACHE_BREAKPOINT>>>␞\n';
 
+/** Native continuation data passed through model-worker IPC only on its originating route. */
+export interface ProviderReplay {
+  provider: string;
+  model: string;
+  account: string;
+  blocks: Array<Record<string, any>>;
+  anthropic?: {
+    base?: { system?: any[]; tools?: any[] };
+    input: any[];
+    systemHash: string;
+    volatileHash: string;
+  };
+}
+
 export interface ChatMessage {
+  providerReplay?: ProviderReplay;
   role: 'system' | 'user' | 'assistant' | 'tool';
   /**
    * Plain string for all primary (small) model calls.

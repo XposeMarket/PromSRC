@@ -172,7 +172,7 @@
     "test:teams-gauntlet-fixes": "tsx src/gateway/agents-runtime/teams-gauntlet-fixes.regression.ts",
     "test:recovery-claims": "tsx src/gateway/runtime/recovery-claims.regression.ts",
     "test:tool-category-manifest": "tsx src/runtime/tool-category-manifest.regression.ts",
-    "test:tool-result-elision": "tsx src/gateway/routes/tool-result-elision.regression.ts",
+    "test:tool-result-elision": "tsx src/gateway/routes/tool-result-elision.regression.ts && tsx src/testing/replay/tool-history.regression.ts",
     "test:tool-category-routing": "tsx src/runtime/tool-category-routing.regression.ts",
     "test:tool-category-provisioning": "tsx src/gateway/tool-category-provisioning.regression.ts",
     "test:background-spawn-tool-surface": "tsx src/gateway/tasks/background-spawn-tool-surface.regression.ts",

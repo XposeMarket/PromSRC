@@ -17,6 +17,7 @@
  */
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { addAnthropicBeta, checksThinkingPrefix, logInputTransformations, prepareAnthropicContinuation } from './anthropic-tool-continuation';
 import { classifyToolFromManifest } from '../runtime/tool-category-manifest';
 import { canonicalAnthropicToolValue } from './anthropic-tool-cache';
 
@@ -491,7 +492,7 @@ export class AnthropicAdapter implements LLMProvider {
     const content = this.normalizeToolMessageContent(message) || '[no tool output captured]';
     return {
       role: 'user',
-      content: `[tool-note:${toolName}] ${content}`.slice(0, 12000),
+      content: `[tool-note:${toolName}] ${content}`,
     };
   }
 
@@ -591,7 +592,7 @@ export class AnthropicAdapter implements LLMProvider {
 
   // --- Convert Prometheus ChatMessage[] ? Anthropic messages format ------------
 
-  private async buildMessages(messages: ChatMessage[], omitIntradayNotes?: boolean): Promise<{ system: string; messages: any[]; turnUserIndex: number }> {
+  private async buildMessages(messages: ChatMessage[], omitIntradayNotes?: boolean, model?: string): Promise<{ system: string; messages: any[]; turnUserIndex: number }> {
     let systemPrompt = '';
     let turnUserIndex = -1;
     const sourceUsers = new Set(messages.filter((message) => message.role === 'user'));
@@ -647,7 +648,9 @@ export class AnthropicAdapter implements LLMProvider {
           });
         }
 
-        anthropicMessages.push({ role: 'assistant', content });
+        const replay = m.providerReplay;
+        const native = replay && replay.provider === this.id && replay.model === model && replay.account === (this.accountId || '');
+        anthropicMessages.push({ role: 'assistant', content: native ? replay.blocks : content });
         continue;
       }
 
@@ -693,13 +696,9 @@ export class AnthropicAdapter implements LLMProvider {
 
         // Fallback: if no ID could be resolved, treat as a note message
         const toolName = String((m as any).tool_name || (m as any).name || 'tool').trim() || 'tool';
-        const maxNoteLength = 4000;
-        const noteContent = toolContent.length > maxNoteLength
-          ? `${toolContent.slice(0, maxNoteLength)}�`
-          : toolContent;
         anthropicMessages.push({
           role: 'assistant',
-          content: `[tool-note:${toolName}] ${noteContent}`,
+          content: `[tool-note:${toolName}] ${toolContent}`,
         });
         continue;
       }
@@ -953,7 +952,7 @@ export class AnthropicAdapter implements LLMProvider {
       ? loadTokens(this.configDir, this.accountId)
       : null;
     const headers = this.buildHeaders(model, extendedThinkingEnabled, fastSpeed, vaultTokens);
-    const { system, messages: anthropicMessages, turnUserIndex } = await this.buildMessages(pruneHistoryImages(messages).messages, options?.omitIntradayNotes);
+    const { system, messages: anthropicMessages, turnUserIndex } = await this.buildMessages(pruneHistoryImages(messages).messages, options?.omitIntradayNotes, model);
 
     const body: any = {
       model,
@@ -1046,6 +1045,29 @@ export class AnthropicAdapter implements LLMProvider {
       }
     }
 
+    const binding = body.thinking && checksThinkingPrefix(model);
+    if (binding) {
+      addAnthropicBeta(headers, 'thinking-binding-controls-2026-08-01');
+      body.thinking.block_binding = { prefix_mismatch_behavior: 'drop_block' };
+    }
+    if (checksThinkingPrefix(model) && tools?.length && process.env.PROMETHEUS_TOOL_RESULT_ELISION !== '0'
+      && raw.context?.tool_result_elision !== false) {
+      const window = options?.num_ctx || anthropicContextWindowTokens(model);
+      addAnthropicBeta(headers, 'context-management-2025-06-27');
+      body.context_management = { edits: [{
+        type: 'clear_tool_uses_20250919',
+        trigger: { type: 'input_tokens', value: Math.max(50_000, Math.floor(window * 0.45)) },
+        keep: { type: 'tool_uses', value: 12 },
+        exclude_tools: ['skill_read', 'skill_resource_read', 'memory_read_record', 'tool_result_read'],
+      }] };
+    }
+    const requestedSystem = body.system;
+    const checkpoint = binding && prepareAnthropicContinuation(body, headers, messages, model, this.id, this.accountId || '', VOLATILE_TURN_CONTEXT_HEADER);
+    const accept = (result: ChatResult) => {
+      if (result.message.providerReplay && checkpoint) result.message.providerReplay.anthropic = checkpoint();
+      return result;
+    };
+
     // --- DEBUG: log request shape so we can diff main-chat vs subagent --------
     try {
       const sysPreview = Array.isArray(body.system)
@@ -1085,6 +1107,10 @@ export class AnthropicAdapter implements LLMProvider {
       systemBlocks: Array.isArray(body.system) ? body.system.length : 0,
       systemChars: Array.isArray(body.system) ? body.system.reduce((sum: number, block: any) => sum + String(block?.text || '').length, 0) : 0,
       messageCount: body.messages.length,
+      replayedThinkingBlocks: body.messages.reduce((count: number, m: any) => count + (
+        m.role === 'assistant' && Array.isArray(m.content)
+          ? m.content.filter((b: any) => b.type === 'thinking' || b.type === 'redacted_thinking').length : 0
+      ), 0),
       // Count what is actually sent: an extra-usage retry replaces body.tools,
       // and logging the pre-slim list hid that (2026-09-25 logged 130, sent ~20).
       toolCount: Array.isArray(body.tools) ? body.tools.length : 0,
@@ -1258,6 +1284,10 @@ export class AnthropicAdapter implements LLMProvider {
           );
           if (result) {
             console.warn(`[anthropic] ${model}: retry ${attempt + 1} after extra-usage rejection with ${result.tools.length}/${originalTools.length} tools (dropped categories: ${result.droppedCategories.join(', ') || 'none'}; wrapper duplicates: ${result.droppedDirectDuplicates})`);
+            // The reduced tool surface starts a new prefix. Historical inline
+            // removals could reference tools no longer declared in this retry.
+            body.messages = anthropicMessages;
+            body.system = requestedSystem;
             body.tools = result.tools;
             applyAnthropicStableCacheTtl(body, options?.cacheWorkload);
             const notice = buildSlimRetryNotice(result);
@@ -1299,7 +1329,7 @@ export class AnthropicAdapter implements LLMProvider {
             : undefined,
         };
         try {
-          return await this.parseStreamingResponse(response, model, tracked);
+          return accept(await this.parseStreamingResponse(response, model, tracked));
         } catch (err: any) {
           const message = String(err?.message || err || '');
           if (committed || streamRetry >= ANTHROPIC_OVERLOAD_MAX_RETRIES
@@ -1316,7 +1346,7 @@ export class AnthropicAdapter implements LLMProvider {
 
 
     const data = await response.json() as any;
-    return this.parseResponse(data);
+    return accept(this.parseResponse(data, model));
   }
 
   // --- Parse Anthropic streaming SSE response ----------------------------------
@@ -1397,6 +1427,8 @@ export class AnthropicAdapter implements LLMProvider {
             if (type === 'error') {
               throw new Error(`${this.id} stream error: ${String(event.error?.type || 'unknown')}: ${String(event.error?.message || 'Provider stream failed').slice(0, 500)}`);
             }
+            if (type === 'message_start') logInputTransformations(event.message?.input_transformations);
+            if (type === 'message_delta') logInputTransformations(event.delta?.input_transformations || event.input_transformations);
             if (type === 'message_stop') messageStopped = true;
 
             if (type === 'message_start' && event.message?.usage) {
@@ -1420,6 +1452,7 @@ export class AnthropicAdapter implements LLMProvider {
               const idx = event.index ?? 0;
               const block = event.content_block || {};
               blocks[idx] = {
+                native: { ...block },
                 type: block.type,
                 id:   block.id,
                 name: block.name ? fromAnthropicWireToolName(block.name) : block.name,
@@ -1435,7 +1468,12 @@ export class AnthropicAdapter implements LLMProvider {
             if (type === 'content_block_delta') {
               const idx = event.index ?? 0;
               const delta = event.delta || {};
+              const native = blocks[idx]?.native;
+              if (native && delta.type === 'signature_delta') native.signature = (native.signature || '') + (delta.signature || '');
+              if (native && delta.type === 'thinking_delta') native.thinking = (native.thinking || '') + (delta.thinking || '');
+              if (native && delta.type === 'citations_delta') (native.citations ??= []).push(delta.citation);
               if (delta.type === 'text_delta') {
+                if (native) native.text = (native.text || '') + (delta.text || '');
                 textContent += delta.text || '';
                 options.onToken?.(delta.text || '');
                 if (delta.text) options.onModelEvent?.({ type: 'assistant_delta', text: delta.text, nativeType: 'content_block_delta.text_delta', provider: this.id, model });
@@ -1478,6 +1516,7 @@ export class AnthropicAdapter implements LLMProvider {
                   invalidToolDetail = { name: String(block.name || ''), length: raw.length, head: raw.slice(0, 200), tail: raw.slice(-200) };
                   continue;
                 }
+                block.native.input = parsedInput;
                 toolCalls.push({
                   id:   block.id || `call_${Date.now()}`,
                   type: 'function',
@@ -1535,6 +1574,9 @@ export class AnthropicAdapter implements LLMProvider {
     }
 
     const message: ChatMessage = {
+      ...(toolCalls.length ? { providerReplay: {
+        provider: this.id, model, account: this.accountId || '', blocks: Object.values(blocks).map(b => b.native),
+      } } : {}),
       role:       'assistant',
       content:    textContent || refusal || null,
       tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
@@ -1594,7 +1636,8 @@ export class AnthropicAdapter implements LLMProvider {
 
   // --- Parse Anthropic response ? ChatResult ----------------------------------
 
-  private parseResponse(data: any): ChatResult {
+  private parseResponse(data: any, model: string): ChatResult {
+    logInputTransformations(data.input_transformations);
     let textContent = '';
     let thinking = '';
     const toolCalls: any[] = [];
@@ -1619,6 +1662,9 @@ export class AnthropicAdapter implements LLMProvider {
     const refusal = this.refusalText(data.stop_reason, data.stop_details);
 
     const message: ChatMessage = {
+      ...(toolCalls.length ? { providerReplay: {
+        provider: this.id, model, account: this.accountId || '', blocks: data.content,
+      } } : {}),
       role:       'assistant',
       content:    textContent || refusal || null,
       tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
