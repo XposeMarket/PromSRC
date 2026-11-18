@@ -1006,6 +1006,31 @@ export function getKnowledgeFileContent(projectId: string, fileId: string): stri
 // ─── Context Injection ────────────────────────────────────────────────────────
 
 /**
+ * Project context for a chat run by an outside agent (Codex, Claude Code, ACP runtimes).
+ * Only what the user wrote plus the project notes. The agent reads AGENTS.md / CLAUDE.md from
+ * the folder itself and has no Prometheus tools, so nothing here asks it to use any.
+ * Returns null when the chat is in no project or the project has nothing to send.
+ */
+export function buildHarnessProjectContext(sessionId: string): string | null {
+  const found = findProjectBySessionId(sessionId);
+  if (!found) return null;
+  const project = ensureProjectContextV2(found);
+  const instructions = clipText(String(project.instructions || '').trim(), INSTRUCTIONS_PROMPT_MAX_CHARS);
+  let notes = '';
+  try { notes = projectNotesForPrompt(getProjectContextContent(project.id) || ''); } catch { /* notes are optional */ }
+  if (!instructions && !notes) return null;
+  const lines = [
+    `[Project context from Prometheus: ${project.name}]`,
+    'This chat belongs to a project. The user keeps the following for every chat in it.',
+    '',
+  ];
+  if (instructions) lines.push('## Project instructions (written by the user; follow them)', instructions, '');
+  if (notes) lines.push('## Project notes (background from earlier chats in this project; you cannot edit them from here)', notes, '');
+  lines.push("[End of project context. The user's message follows.]");
+  return lines.join('\n');
+}
+
+/**
  * Build the project context block injected into every session prompt for this project.
  * Called from prompt-context.ts → buildPersonalityContext().
  * Returns null if sessionId doesn't belong to any project.
