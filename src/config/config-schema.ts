@@ -13,23 +13,10 @@
 
 import { z } from 'zod';
 
-const PUBLIC_REASONING_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'] as const;
-
-function normalizeStoredReasoningEffort(value: unknown): unknown {
-  if (typeof value !== 'string') return value;
-  const effort = value.trim().toLowerCase();
-  if (!effort) return undefined;
-  // Older settings used these as disabled/minimal levels. Preserve those
-  // settings without allowing either legacy spelling into the public schema.
-  return effort === 'none' || effort === 'minimal' ? 'low' : effort;
-}
-
-const ReasoningEffortSchema = z.preprocess(
-  normalizeStoredReasoningEffort,
-  z.enum(PUBLIC_REASONING_EFFORTS).optional(),
+const OptionalReasoningEffortSchema = z.preprocess(
+  (value) => typeof value === 'string' && value.trim() === '' ? undefined : value,
+  z.enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']).optional(),
 );
-
-const OptionalReasoningEffortSchema = ReasoningEffortSchema;
 
 // ─── Primitives ──────────────────────────────────────────────────────────────
 
@@ -57,6 +44,8 @@ const LMStudioProviderSchema = z.object({
 // Accepted reasoning effort levels for providers that expose one.
 // Anthropic additionally accepts "max"; providers that do not support it must
 // clamp or reject it at their adapter/UI boundary.
+const ReasoningEffortSchema = z.enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']).optional();
+
 const OpenAIProviderSchema = z.object({
   api_key: z.string(),   // may be "vault:<key>" or "env:VAR"
   model: z.string(),
@@ -186,7 +175,7 @@ const AgentDefinitionSchema = z.object({
   marketplaceProfile: z.record(z.unknown()).optional(),
   skillIds:    z.array(z.string()).optional(),
   model:       z.string().optional(),
-  reasoning_effort: ReasoningEffortSchema,
+  reasoning_effort: z.enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']).optional(),
   tools:       AgentToolPolicySchema.optional(),
   default:     z.boolean().optional(),
   isTeamManager: z.boolean().optional(),
@@ -333,7 +322,7 @@ export const PrometheusConfigSchema = z.object({
     coordinator:                   z.string().optional(),
   }).optional(),
 
-  agent_model_default_reasoning: z.record(ReasoningEffortSchema).optional(),
+  agent_model_default_reasoning: z.record(z.enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'])).optional(),
   agent_model_default_speed: z.record(z.enum(['standard', 'fast'])).optional(),
   agent_model_default_accounts: z.record(z.string()).optional(),
 
@@ -360,7 +349,7 @@ export const PrometheusConfigSchema = z.object({
       switch_model_medium:           z.string().optional(),
       coordinator:                   z.string().optional(),
     }).optional().default({}),
-    reasoning: z.record(ReasoningEffortSchema).optional().default({}),
+    reasoning: z.record(z.enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'])).optional().default({}),
     speed: z.record(z.enum(['standard', 'fast'])).optional().default({}),
     accounts: z.record(z.string()).optional().default({}),
     created_at: z.string().optional(),

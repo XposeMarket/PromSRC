@@ -8,8 +8,7 @@ function titleWord(value) {
 }
 
 export function formatReasoningDisplayName(effort) {
-  const raw = String(effort || '').trim().toLowerCase();
-  const value = raw === 'none' || raw === 'minimal' ? 'low' : raw;
+  const value = String(effort || '').trim().toLowerCase();
   if (!value || value === 'default' || value === 'provider_default') return '';
   if (value === 'xhigh' || value === 'extra_high') return 'Extra High';
   return titleWord(value);
@@ -58,8 +57,7 @@ export function formatModelWithReasoning(model, provider = '', effort = '') {
   const rawModel = String(model || '').trim();
   const slash = rawModel.indexOf('/');
   const providerId = String(provider || (slash > 0 ? rawModel.slice(0, slash) : '')).trim().toLowerCase();
-  const rawEffort = String(effort || '').trim().toLowerCase().replace(/^extra[-_ ]high$/, 'xhigh');
-  const normalizedEffort = rawEffort === 'none' || rawEffort === 'minimal' ? 'low' : rawEffort;
+  const normalizedEffort = String(effort || '').trim().toLowerCase().replace(/^extra[-_ ]high$/, 'xhigh');
   const safeEffort = !normalizedEffort || normalizedEffort === 'default' || normalizedEffort === 'provider_default'
     ? normalizedEffort
     : hasReasoningCapabilityPolicy(providerId) && !validEffort(providerId, model, normalizedEffort)
@@ -67,14 +65,6 @@ export function formatModelWithReasoning(model, provider = '', effort = '') {
       : normalizedEffort;
   const reasoningLabel = formatReasoningDisplayName(safeEffort);
   return reasoningLabel ? `${modelLabel} ${reasoningLabel}` : modelLabel;
-}
-
-export function formatMainChatDefaultLabel(state = {}) {
-  const llm = state?.llm || {};
-  const provider = String(llm.provider || state?.provider || '').trim();
-  const config = llm.providers?.[provider] || {};
-  const model = String(config.model || llm.model || '').trim();
-  return model ? formatModelWithReasoning(model, provider, config.reasoning_effort || '') : 'Main chat model';
 }
 
 export function relabelModelSelect(select, provider = '') {

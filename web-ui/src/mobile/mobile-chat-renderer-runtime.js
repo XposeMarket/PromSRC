@@ -5,7 +5,6 @@ import {
   toolActivitySummary,
 } from '../features/chat/optional/tool-activity-runtime.js';
 import { createMobileStreamReceiptLedger } from '../features/chat/runtime/mobile-stream-receipts.js';
-import { animateThinkingTextSwap, renderThinkingState } from '../utils.js';
 
 function _compactMobileThreadCacheFileChanges(value) {
   if (!value || typeof value !== 'object') return undefined;
@@ -92,40 +91,13 @@ function _imageGenerationEntryAction(entry) {
   return _imageGenerationToolName(
     activity.action
     || activity.toolName
-    || activity.tool_name
-    || activity.name
     || extra.action
     || extra.toolName
-    || extra.tool_name
-    || extra.name
     || entry?.action
     || entry?.toolName
-    || entry?.tool_name
-    || entry?.name,
+    || entry?.name
+    || entry,
   );
-}
-
-function _imageGenerationEntryPresentationMode(entry) {
-  const activity = entry?.activity && typeof entry.activity === 'object' ? entry.activity : {};
-  const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
-  const args = activity.args && typeof activity.args === 'object'
-    ? activity.args
-    : extra.args && typeof extra.args === 'object'
-      ? extra.args
-      : entry?.args && typeof entry.args === 'object'
-        ? entry.args
-        : {};
-  return String(
-    args.presentation_mode
-    || args.presentationMode
-    || activity.presentation_mode
-    || activity.presentationMode
-    || extra.presentation_mode
-    || extra.presentationMode
-    || entry?.presentation_mode
-    || entry?.presentationMode
-    || '',
-  ).trim().toLowerCase();
 }
 
 function _imageGenerationEntryKey(entry, action) {
@@ -146,6 +118,12 @@ function _imageGenerationEntryKey(entry, action) {
     || extra.eventKey
     || `${action || 'image'}:anonymous`,
   ).trim();
+}
+
+function _isImageGenerationTerminalText(text) {
+  const value = String(text || '');
+  return /\b(?:generate[_ ]image|generating[_ ]image|generated[_ ]image|image[_ ](?:gen|generation)|imagegen)\b[\s\S]*\b(?:complete|completed|failed|failure|error|succeeded|success)\b/i.test(value)
+    || /\b(?:failed|error)\b[\s\S]*\b(?:generate[_ ]image|image[_ ](?:gen|generation)|imagegen)\b/i.test(value);
 }
 
 function _hasPendingImageGeneration(message) {
@@ -179,37 +157,27 @@ function _hasPendingImageGeneration(message) {
     const type = String(entry?.type || '').toLowerCase();
     const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
     const activity = entry?.activity && typeof entry.activity === 'object' ? entry.activity : {};
+    const presentationMode = String(extra.presentation_mode || extra.presentationMode || activity.presentation_mode || activity.presentationMode || entry?.presentation_mode || '').trim().toLowerCase();
+    if (presentationMode === 'background') return;
+    const text = String(entry?.text || entry?.content || entry?.message || '').replace(/\s+/g, ' ').trim();
     const action = _imageGenerationEntryAction(entry);
-    if (!_isImageGenerationToolName(action)) return;
-    const presentationMode = _imageGenerationEntryPresentationMode(entry);
+    const lowerText = text.toLowerCase();
+    const isImageActivity = _isImageGenerationToolName(action)
+      || /\b(generate_image|image_gen|imagegen|generate image|generating image|generated image|image generation)\b/.test(lowerText);
+    if (!isImageActivity) return;
+    observedImageActivity = true;
     const key = _imageGenerationEntryKey(entry, action);
-    const hasIdentity = !!(
-      entry?.callId
-      || entry?.eventKey
-      || extra.callId
-      || extra.call_id
-      || extra.toolCallId
-      || extra.tool_call_id
-      || extra.eventKey
-      || activity.callId
-      || activity.activityId
-    );
-    if (type === 'result' || type === 'error' || type === 'tool_result') {
-      if (presentationMode === 'background') return;
+    const terminalText = _isImageGenerationTerminalText(text);
+    if (type === 'result' || type === 'error' || type === 'tool_result' || terminalText) {
       if (entry?.callId || entry?.eventKey || extra.callId || extra.call_id || extra.toolCallId || extra.tool_call_id || extra.eventKey || activity.callId || activity.activityId) activeImageCalls.delete(key);
       else activeImageCalls.clear();
       return;
     }
-    if (type === 'tool' || type === 'call' || type === 'tool_call') {
-      if (presentationMode !== 'foreground') return;
-      observedImageActivity = true;
+    if (type === 'tool' || type === 'call') {
       activeImageCalls.add(key);
       return;
     }
-    // Progress/preparation rows can describe an image call, but must never
-    // create the foreground loader by themselves. If they belong to an
-    // already-identified foreground call, let the call remain pending.
-    if (presentationMode === 'background' || !hasIdentity || !activeImageCalls.has(key)) return;
+    if (activeImageCalls.size === 0) activeImageCalls.add(key);
   });
   return observedImageActivity && activeImageCalls.size > 0;
 }
@@ -392,28 +360,6 @@ export function createMobileChatRendererRuntime(context = {}) {
     </details>`;
   }
 
-  function _isMobileTransientReasoningTraceEntry(entry) {
-    if (!entry || typeof entry !== 'object') return false;
-    const type = String(entry.type || entry.kind || '').trim().toLowerCase();
-    const extra = entry.extra && typeof entry.extra === 'object' ? entry.extra : {};
-    const event = String(entry.event || extra.event || extra.eventType || '').trim().toLowerCase();
-    const source = String(entry.source || extra.source || '').trim().toLowerCase();
-    const visibility = String(entry.visibility || extra.visibility || '').trim().toLowerCase();
-    const reasoningKind = String(entry.reasoningKind || extra.reasoningKind || extra.presentationKind || '').trim().toLowerCase();
-    return source === 'agent_progress'
-      || source === 'reasoning_summary'
-      || type === 'reasoning_summary'
-      || ['reasoning_summary', 'reasoning_summary_delta', 'reasoning_delta'].includes(type)
-      || ['reasoning_summary', 'reasoning_summary_delta', 'reasoning_delta'].includes(event)
-      || reasoningKind === 'summary'
-      || (visibility === 'summary' && ['think', 'thinking', 'agent_thought'].includes(type));
-  }
-
-  function _isMobileMutableProgressTraceEntry(entry) {
-    const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
-    return String(entry?.source || extra.source || '').trim().toLowerCase() === 'agent_progress';
-  }
-
   function _mobileTracePresentationEntries(entries) {
     return (Array.isArray(entries) ? entries : []).map((entry) => {
       if (!entry || entry.activity) return entry;
@@ -421,12 +367,10 @@ export function createMobileChatRendererRuntime(context = {}) {
       const text = String(entry.text || entry.content || entry.message || '').trim();
       const extra = entry.extra && typeof entry.extra === 'object' ? entry.extra : {};
       const action = String(extra.action || extra.toolName || entry.action || entry.toolName || '').trim();
-      // An explicitly tagged legacy progress row can still use the live
-      // summary presentation. Untagged info text is ordinary process output;
-      // classifying it by its first verb is what let stale summaries leak into
-      // the regular thought stream after recovery.
-      if (['info', 'progress'].includes(type) && !action
-        && String(extra.source || entry.source || '').toLowerCase() === 'agent_progress') {
+      // Older mobile turns stored agent narration as generic process/info rows.
+      // Reclassify only action-less progress prose so it can use the same muted,
+      // collapsible thought treatment as live reasoning.
+      if (['info', 'progress'].includes(type) && !action && _isMobileProgressNarration(text)) {
         return {
           ...entry,
           type: 'think',
@@ -437,12 +381,8 @@ export function createMobileChatRendererRuntime(context = {}) {
           },
         };
       }
-      // Reasoning summaries are transient. The one mutable agent_progress row
-      // is retained only long enough to render the current collapsed summary;
-      // old summary packets must never become standalone thought cards.
-      if (_isMobileTransientReasoningTraceEntry(entry) && !_isMobileMutableProgressTraceEntry(entry)) return null;
       return entry;
-    }).filter(Boolean);
+    });
   }
 
   function _mobileTraceEntryTime(entry, key) {
@@ -473,27 +413,13 @@ export function createMobileChatRendererRuntime(context = {}) {
 
   function _isMobilePreparedTraceEntry(entry) {
     const type = String(entry?.type || '').toLowerCase();
-    const text = String(entry?.text || entry?.content || entry?.message || '').replace(/\s+/g, ' ').trim();
+    const text = String(entry?.text || '').replace(/\s+/g, ' ').trim();
     return type === 'tool' && /^Prepared\b/i.test(text);
-  }
-
-  function _isMobileInternalToolProtocolTraceEntry(entry) {
-    if (!entry || entry.activity) return false;
-    const text = String(entry?.text || entry?.content || entry?.message || '')
-      .replace(/\s+/g, ' ')
-      .trim();
-    return /^(?:latency:\s*provider_[a-z0-9_]+(?:\s+at\b.*)?|processing\.{0,3})$/i.test(text)
-      || /^prepared\s+(?:skill|request|tool|provider)\b/i.test(text);
   }
 
   function _mobileVisibleTraceEntries(entries) {
     const thoughtTexts = [];
-    // Filter protocol diagnostics before the optional activity coalescer. Its
-    // cold-start fallback intentionally turns every structured batch into a
-    // compact "Preparing tool" card, which would otherwise resurrect a raw
-    // provider latency row under a different label.
-    const sourceEntries = _mobileTracePresentationEntries(entries)
-      .filter((entry) => !_isMobilePreparedTraceEntry(entry) && !_isMobileInternalToolProtocolTraceEntry(entry));
+    const sourceEntries = _mobileTracePresentationEntries(entries);
     const replaceableProgressTexts = sourceEntries
       .filter((entry) => String(entry?.extra?.source || '').toLowerCase() === 'agent_progress')
       .map((entry) => String(entry?.text || entry?.content || '').trim())
@@ -501,10 +427,8 @@ export function createMobileChatRendererRuntime(context = {}) {
     return coalesceToolActivityEntries(sourceEntries).filter((entry) => {
       if (_isMobileImageGenerationStreamEntry(entry)) return false;
       if (_isMobilePreparedTraceEntry(entry)) return false;
-      if (_isMobileInternalToolProtocolTraceEntry(entry)) return false;
       if (_isMobileVisionInjectionStatusText(entry?.text)) return false;
       if (_isMobileBareThinkingTraceText(entry?.text)) return false;
-      if (_isMobileTransientReasoningTraceEntry(entry) && !_isMobileMutableProgressTraceEntry(entry)) return false;
       const hasContent = String(entry?.text || '').trim() || String(entry?.preview?.dataUrl || entry?.dataUrl || '').trim();
       if (!hasContent) return false;
       const type = String(entry?.type || '').toLowerCase();
@@ -537,9 +461,9 @@ export function createMobileChatRendererRuntime(context = {}) {
 
   function _mobileTraceProgressSummary(entries) {
     const source = Array.isArray(entries) ? entries : [];
-    // Prefer it over the durable reasoning-summary journal. The mutable slot
-    // is the only summary owner; there is intentionally no fallback, so a
-    // reconnect cannot resurrect an older summary as a second label.
+    // `agent_progress` is the single mutable live slot. Prefer it over the
+    // durable reasoning-summary journal so an active tool cannot resurrect an
+    // older summary as a second label after a reconnect.
     for (let index = source.length - 1; index >= 0; index -= 1) {
       const entry = source[index];
       const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
@@ -548,6 +472,19 @@ export function createMobileChatRendererRuntime(context = {}) {
         .replace(/\s+/g, ' ')
         .trim();
       if (text) return text.slice(0, 220);
+    }
+    for (let index = source.length - 1; index >= 0; index -= 1) {
+      const entry = source[index];
+      const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
+      if (String(extra.source || '').toLowerCase() !== 'reasoning_summary'
+        && String(entry?.type || '').toLowerCase() !== 'reasoning_summary') continue;
+      const text = _dedupeMobileTraceProseText(entry?.text || entry?.content || '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (!text) continue;
+      // The progress slot is the source of truth for the collapsed label. Keep
+      // its actual text instead of falling back to a generic "Reasoning" label.
+      return text.slice(0, 220);
     }
     return '';
   }
@@ -957,15 +894,11 @@ export function createMobileChatRendererRuntime(context = {}) {
         const progressSummary = isSummaryThought && isLiveThought ? _mobileTraceProgressSummary(group.entries) : '';
         const durationMs = _mobileTraceGroupDurationMs(group.entries, { live: isLiveThought });
         const summaryMarkup = progressSummary
-          ? `<div class="pm-trace-thought-summary" aria-live="polite"><strong class="t-think" data-pm-trace-summary-key="${escapeHtml(_mobileTraceSummaryKey(progressSummary))}">${renderThinkingState(progressSummary)}</strong></div>`
+          ? `<div class="pm-trace-thought-summary" aria-live="polite"><strong data-pm-trace-summary-key="${escapeHtml(_mobileTraceSummaryKey(progressSummary))}">${escapeHtml(progressSummary)}</strong></div>`
           : '';
-        const bodyEntries = group.entries.filter((entry) => !_isMobileMutableProgressTraceEntry(entry));
-        const bodyHtml = bodyEntries.length
-          ? `<div class="pm-trace-thought-body"><div class="pm-live-trace">${bodyEntries.map(_renderMobileLiveTraceEntry).join('')}</div></div>`
-          : '';
-        return `<div class="pm-trace-thought-group"${isLiveThought && progressSummary ? ' data-pm-trace-live-current="1"' : ''} data-pm-trace-group="${escapeHtml(group.id)}" data-thought-duration-ms="${durationMs}">
+        return `<div class="pm-trace-thought-group" data-pm-trace-group="${escapeHtml(group.id)}" data-thought-duration-ms="${durationMs}">
           ${summaryMarkup}
-          ${bodyHtml}
+          <div class="pm-trace-thought-body"><div class="pm-live-trace">${group.entries.map(_renderMobileLiveTraceEntry).join('')}</div></div>
         </div>`;
       }
       if (group.kind === 'compaction') {
@@ -987,7 +920,7 @@ export function createMobileChatRendererRuntime(context = {}) {
       return `<details class="pm-trace-tool-group"${openAttr}${isLiveCurrent ? ' data-pm-trace-live-current="1"' : ''} data-pm-trace-group="${escapeHtml(group.id)}">
         <summary class="pm-trace-tool-summary">
           <span class="pm-trace-tool-icon${isLiveCurrent ? ' is-live' : ''}" aria-hidden="true">${isLiveCurrent ? '' : renderToolActivityIcon({ family: 'tool', key: 'tool.summary' }, escapeHtml)}</span>
-          <strong class="t-think" data-pm-trace-summary-key="${escapeHtml(summaryKey)}">${renderThinkingState(summary)}</strong>
+          <strong data-pm-trace-summary-key="${escapeHtml(summaryKey)}">${escapeHtml(summary)}</strong>
           <span class="pm-trace-tool-chevron" aria-hidden="true">›</span>
           <em>${itemCount} ${itemLabel}${itemCount === 1 ? '' : 's'}</em>
         </summary>
@@ -1211,10 +1144,7 @@ export function createMobileChatRendererRuntime(context = {}) {
       inner += _renderMobileProductCarousel(m);
     }
     inner += _renderMobileMediaGallery(_collectMessageMedia(m));
-    // Tool results can carry the eventual edit summary before the assistant
-    // turn has emitted its terminal frame. Keep the data on the turn for the
-    // final render, but do not surface the card while work is still running.
-    if (m.streaming !== true) inner += _renderMobileFileChanges(m.fileChanges);
+    inner += _renderMobileFileChanges(m.fileChanges);
     inner += _renderMobileThreadLinkArtifacts(m);
     inner += _renderMobileGoalCompletionReport(m.goalCompletionReport);
     if (inner.endsWith(statusDividerHtml)) inner = inner.slice(0, -statusDividerHtml.length);
@@ -2540,12 +2470,7 @@ export function createMobileChatRendererRuntime(context = {}) {
           if (stable?.node && stable.key === key && stable.node !== node) {
             node.replaceWith(stable.node);
           } else if (!stable || stable.key !== key) {
-            const previousLabel = String(
-              stable?.node?.querySelector?.('.t-think-text')?.textContent
-              || stable?.node?.textContent
-              || '',
-            ).trim();
-            if (previousLabel) animateThinkingTextSwap(node, previousLabel);
+            node.classList.add('pm-trace-summary-swap');
           }
         });
         if (stablePendingImageBatch) {
@@ -3248,9 +3173,7 @@ function _renderMobileAgentChatBubble(message, options = {}) {
       files: _mobileAgentMessageFiles(turnPresentation),
       artifacts: Array.isArray(turnPresentation.artifacts) ? turnPresentation.artifacts : [],
     }));
-    // Background tool results are also allowed to arrive before the final
-    // response. The completed lane will render this once streaming is false.
-    if (!streaming) inner += _renderMobileFileChanges(_mobileAgentMessageFileChanges(turnPresentation));
+    inner += _renderMobileFileChanges(_mobileAgentMessageFileChanges(turnPresentation));
     inner += _renderMobileThreadLinkArtifacts(turnPresentation);
     inner += _renderMobileGoalCompletionReport(turnPresentation.goalCompletionReport);
     if (message?.approvalRequest) {
@@ -3762,15 +3685,9 @@ function _upsertMobileBackgroundSpawnLane(msg = {}, sessionId = __pmChat.activeS
 }
 
 function _mobileBackgroundStoredDetailRecord(stored, id, sessionId, normalizeTrace) {
-  const identity = resolveBackgroundAgentIdentity(id, {
-    existingName: stored?.agentName || stored?.name,
-    existingColor: stored?.agentColor || stored?.color,
-  });
   const record = {
     ...stored,
     id,
-    agentName: identity.name,
-    agentColor: identity.color,
     sessionId: stored.sessionId || sessionId,
     backgroundSessionId: stored.backgroundSessionId || '',
     task: stored.task || stored.prompt || '',
@@ -3998,18 +3915,6 @@ function _renderMobileBackgroundSpawnPanel(lane, planHtml, processHtml) {
       <div class="pm-background-spawn-approval">${_renderMobileApprovalCard(approval, { compact: false })}</div>`;
   }
   return `${_renderMobileBackgroundSpawnPrompt(lane)}${planHtml}${processHtml}`;
-}
-
-function _mobileBackgroundSpawnTraceEntries(lane) {
-  const message = lane?.message && typeof lane.message === 'object' ? lane.message : {};
-  const liveEntries = Array.isArray(message.liveTraceEntries) ? message.liveTraceEntries : [];
-  const recoveredEntries = _mobileWorkflowTraceEntriesForMessage(message);
-  // During a live stream, keep the native trace as the source of truth. If
-  // it has not received a tool activity yet, use the durable process log so
-  // a recovered background lane still gets the same grouped UI as chat.
-  if (!liveEntries.length) return recoveredEntries;
-  if (!_mobileTraceHasToolGroup(liveEntries) && _mobileTraceHasToolGroup(recoveredEntries)) return recoveredEntries;
-  return liveEntries;
 }
 
 function _pushMobileBackgroundSpawnEvent(msg = {}, sessionId = __pmChat.activeSessionId) {
@@ -4250,38 +4155,29 @@ function _renderMobileBackgroundSpawnDock(dock, sessionId = __pmChat.activeSessi
   _reconcileMobileBackgroundSpawnDockMarkup(host, `
     <button type="button" class="pm-background-spawn-close" data-pm-bg-close aria-label="Collapse background agents">&times;<input type="checkbox" switch class="pm-haptic-switch-overlay" aria-hidden="true" tabindex="-1" /></button>
     ${lanes.map((lane) => {
-    const identity = resolveBackgroundAgentIdentity(lane.id, {
-      existingName: lane.agentName || lane.label,
-      existingColor: lane.agentColor,
-    });
-    const entries = _mobileBackgroundSpawnTraceEntries(lane);
+    const entries = Array.isArray(lane.message?.processEntries) ? lane.message.processEntries : [];
+    const latest = entries[entries.length - 1];
     const status = String(lane.status || 'running').toLowerCase();
     const pendingApproval = lane.approvalRequest && String(lane.approvalRequest.status || 'pending').toLowerCase() === 'pending';
     const finalText = status === 'completed' ? String(lane.result || lane.message?.content || '').trim() : '';
     const errorText = status === 'failed' ? String(lane.error || lane.message?.content || '').trim() : '';
-    const traceSummary = entries.length
-      ? (_mobileTraceProgressSummary(entries) || (status === 'running' || status === 'in_progress'
-        ? _mobileTraceCurrentToolLabel(entries)
-        : _mobileTraceToolSummary(entries)))
-      : '';
     const latestText = String(
       pendingApproval
         ? `Approval needed: ${_pmApprovalTitle(lane.approvalRequest)}`
-        : (finalText || errorText || traceSummary || lane.task || 'Working in parallel...')
+        : (finalText || errorText || latest?.text || latest?.content || lane.task || 'Working in parallel...')
     ).trim();
-    const isRunning = !['completed', 'failed', 'timed_out'].includes(status);
     const processHtml = entries.length
-      ? `<div class="pm-trace-drawer pm-background-spawn-trace" data-trace-live="1">${_renderMobileGroupedTrace(entries, { streaming: isRunning, openLiveCurrent: isRunning })}</div>`
+      ? _renderMobileProcess(entries).replace('<details class="pm-process-stream"', `<details class="pm-process-stream"${lane.expanded ? ' open' : ''}`)
       : '<div class="pm-background-spawn-empty">Waiting for live events...</div>';
     const planHtml = _renderMobileBackgroundSpawnPlan(lane);
     const panelHtml = _renderMobileBackgroundSpawnPanel(lane, planHtml, processHtml);
     const statusLabel = status === 'approval_required' ? 'approval' : (status === 'in_progress' ? 'running' : status);
     return `
       <section class="pm-background-spawn-lane ${escapeHtml(status)}" data-bg-id="${escapeHtml(lane.id)}" data-pm-row-key="background:${escapeHtml(lane.id)}">
-        <button type="button" class="pm-background-spawn-summary" data-pm-bg-open-detail="${escapeHtml(lane.id)}" aria-label="Open ${escapeHtml(identity.name)} background work">
-          <span class="pm-background-spawn-avatar" style="--background-agent-color:${escapeHtml(identity.color)}">${escapeHtml(identity.name.slice(0, 2).toUpperCase())}</span>
+        <button type="button" class="pm-background-spawn-summary" data-pm-bg-open-detail="${escapeHtml(lane.id)}" aria-label="Open ${escapeHtml(lane.agentName || 'background agent')} background work">
+          <span class="pm-background-spawn-avatar" style="--background-agent-color:${escapeHtml(lane.agentColor || '#1677d2')}">${escapeHtml(String(lane.agentName || 'Agent').slice(0, 2).toUpperCase())}</span>
           <span class="pm-background-spawn-main">
-            <strong style="color:${escapeHtml(identity.color)}">${escapeHtml(identity.name)}</strong>
+            <strong style="color:${escapeHtml(lane.agentColor || '#1677d2')}">${escapeHtml(lane.agentName || 'Agent')}</strong>
             <em>${escapeHtml(latestText)}</em>
           </span>
           <span class="pm-background-spawn-status">${escapeHtml(statusLabel)}</span>
@@ -4355,8 +4251,7 @@ function _applyMobileAgentStreamEvent(message, evt, fallbackName = 'Agent') {
       const chunk = String(evt.thinking || evt.text || '');
       if (!chunk) return false;
       _handleMobileThinkingDelta(message, evt);
-      const source = String(evt.source || evt.extra?.source || '').trim().toLowerCase();
-      if (source !== 'reasoning_summary') message._thinking = `${message._thinking || ''}${chunk}`;
+      message._thinking = `${message._thinking || ''}${chunk}`;
       message._progress = `${fallbackName} is thinking...`;
       return true;
     }
@@ -4553,13 +4448,6 @@ function _applyMobileAgentStreamEvent(message, evt, fallbackName = 'Agent') {
 function _pushMobileStreamProcessEntry(message, type, text, extra = null, includeLiveTrace = true) {
   const clean = String(text || '').trim();
   if (!message || !clean) return;
-  const source = String(extra?.source || '').trim().toLowerCase();
-  const reasoningKind = String(extra?.reasoningKind || extra?.presentationKind || '').trim().toLowerCase();
-  const event = String(extra?.event || extra?.eventType || '').trim().toLowerCase();
-  if (source === 'agent_progress'
-    || source === 'reasoning_summary'
-    || reasoningKind === 'summary'
-    || ['reasoning_summary', 'reasoning_summary_delta', 'reasoning_delta'].includes(event)) return;
   if (!Array.isArray(message.processEntries)) message.processEntries = [];
   const streamId = String(extra?.streamId || '').trim();
   const seq = Math.max(0, Math.floor(Number(extra?.seq || 0)) || 0);

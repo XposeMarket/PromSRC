@@ -1,4 +1,4 @@
-import './performance.js';
+import { markClientPerformance } from './performance.js';
 
 /**
  * app.js — F1 Scaffold
@@ -20,15 +20,22 @@ import './performance.js';
 import { state, THEME_KEY, APPEARANCE_KEY } from './state.js';
 import { runIfNeeded as runOnboardingIfNeeded } from './onboarding/onboarding-controller.js';
 import { initGlobalShortcuts } from './shortcuts.js';
-import { escHtml } from './utils.js';
-import { formatMainChatDefaultLabel, formatModelDisplayName, formatModelWithReasoning, relabelModelSelect } from './model-display.js';
+import { formatModelDisplayName, formatModelWithReasoning, relabelModelSelect } from './model-display.js';
 import './link-router.js';
+
+const shouldBootMobile = window.__PROM_SHOULD_BOOT_MOBILE?.() === true;
+void import('./renderer-performance-telemetry.js')
+  .then(({ installRendererPerformanceTelemetry }) => installRendererPerformanceTelemetry({
+    windowRef: window,
+    markClientPerformance,
+    shouldBootMobile,
+  }))
+  .catch(() => {});
 
 initGlobalShortcuts();
 
 window.formatModelDisplayName = formatModelDisplayName;
 window.formatModelWithReasoning = formatModelWithReasoning;
-window.mainModelLabel = (state) => escHtml(formatMainChatDefaultLabel(state));
 window.relabelModelSelect = relabelModelSelect;
 
 for (const [id, provider] of [

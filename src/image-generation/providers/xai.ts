@@ -1,5 +1,6 @@
+import { getConfig } from '../../config/config.js';
 import { getConfiguredProviderConfig } from '../../media-generation/provider-credentials.js';
-import { resolveXAIMediaRuntime } from '../../media-generation/xai-runtime.js';
+import { getValidXAIRuntimeCredentials, isXAIConnected } from '../../auth/xai-oauth.js';
 import type {
   ImageGenerationProvider,
   ImageGenerationResolvedRequest,
@@ -12,11 +13,11 @@ import {
   getImageGenerationConfig,
   persistGeneratedImage,
   resolveReferenceImages,
+  resolveSecretReference,
 } from '../utils.js';
 
-const DEFAULT_MODEL = 'grok-imagine-image-2.0';
+const DEFAULT_MODEL = 'grok-imagine-image-quality';
 const MODEL_IDS = [
-  'grok-imagine-image-2.0',
   'grok-imagine-image-quality',
   'grok-imagine-image-quality-latest',
   'grok-imagine-image',
@@ -32,14 +33,9 @@ const XAI_ASPECT_RATIO_BY_PROMETHEUS: Record<string, string> = {
 };
 
 const MODEL_ALIASES: Record<string, string> = {
-  // Keep older saved settings working while routing them to the current xAI
-  // image model name.
-  'grok-imagine-image-quality': 'grok-imagine-image-2.0',
-  'grok-imagine-image-quality-latest': 'grok-imagine-image-2.0',
-  'grok-imagine-image-pro': 'grok-imagine-image-2.0',
-  'grok-image-image-quality': 'grok-imagine-image-2.0',
-  'grok-image-quality': 'grok-imagine-image-2.0',
-  'grok-imagine-quality': 'grok-imagine-image-2.0',
+  'grok-image-image-quality': 'grok-imagine-image-quality',
+  'grok-image-quality': 'grok-imagine-image-quality',
+  'grok-imagine-quality': 'grok-imagine-image-quality',
   'grok-image': 'grok-imagine-image',
 };
 
@@ -73,9 +69,31 @@ function getApiBase(): string {
   return (configured || DEFAULT_ENDPOINT).replace(/\/+$/, '');
 }
 
+function getConfiguredAuthMode(): string {
+  const providerCfg = getXAIProviderConfig();
+  const explicit = String(providerCfg.auth_mode || providerCfg.authType || '').trim();
+  if (/^oauth/i.test(explicit)) return 'oauth';
+  if (explicit) return explicit;
+  return isXAIConnected(getConfig().getConfigDir(), String(providerCfg.accountId || '').trim() || undefined) ? 'oauth' : 'api_key';
+}
+
+async function getBearerToken(): Promise<string | undefined> {
+  const providerCfg = getXAIProviderConfig();
+  if (getConfiguredAuthMode() === 'oauth') {
+    const accountId = String(getXAIProviderConfig().accountId || '').trim() || undefined;
+    const creds = await getValidXAIRuntimeCredentials(getConfig().getConfigDir(), accountId);
+    return creds.api_key;
+  }
+  return resolveSecretReference(providerCfg.api_key) || process.env.XAI_API_KEY;
+}
+
 async function getRequestRuntime(): Promise<{ bearerToken?: string; baseUrl: string }> {
-  const runtime = await resolveXAIMediaRuntime(getApiBase());
-  return { bearerToken: runtime.bearerToken, baseUrl: runtime.baseUrl };
+  if (getConfiguredAuthMode() === 'oauth') {
+    const accountId = String(getXAIProviderConfig().accountId || '').trim() || undefined;
+    const creds = await getValidXAIRuntimeCredentials(getConfig().getConfigDir(), accountId);
+    return { bearerToken: creds.api_key, baseUrl: creds.base_url };
+  }
+  return { bearerToken: await getBearerToken(), baseUrl: getApiBase() };
 }
 
 function resolveDefaultModel(): string {
@@ -126,7 +144,7 @@ export class XAIImageGenerationProvider implements ImageGenerationProvider {
 
   async isAvailable(): Promise<boolean> {
     try {
-      return Boolean((await resolveXAIMediaRuntime(getApiBase())).bearerToken);
+      return Boolean(await getBearerToken());
     } catch {
       return false;
     }

@@ -29,8 +29,6 @@ assert.match(sourceRuntime, /function _renderChatMessageHtml\s*\(/, 'renderer ru
 assert.match(sourceRuntime, /function _renderThread\s*\(/, 'renderer runtime must own transcript rendering');
 assert.match(sourceRuntime, /function _applyMobileAgentStreamEvent\s*\(/, 'renderer runtime must own stream reduction');
 assert.match(sourceRuntime, /function _renderMobileBackgroundSpawnDock\s*\(/, 'renderer runtime must own background-agent dock rendering');
-assert.match(sourceRuntime, /if \(m\.streaming !== true\) inner \+= _renderMobileFileChanges\(m\.fileChanges\);/, 'main file-change cards must wait for the terminal turn state');
-assert.match(sourceRuntime, /if \(!streaming\) inner \+= _renderMobileFileChanges\(_mobileAgentMessageFileChanges\(turnPresentation\)\);/, 'background file-change cards must wait for the terminal turn state');
 
 function outputFor(source) {
   const output = manifest.moduleOutputs[source];
@@ -75,21 +73,10 @@ const measurements = {
 // that intentional goal-stream handoff. The background-agent side-chat
 // disclosure, prompt replay, and recovery presentation add 559 gzip bytes over
 // current main, and the question lifecycle facade adds 173 more bytes for the
-// step-aware composer handoff. The mobile chat mode launcher adds the explicit
-// voice/keyboard transition, native-keyboard focus, and gesture-gated scroll
-// auto-hide; keep the ceiling at the refreshed measurement plus a small
-// compression variance allowance so unrelated initial-load growth still fails
-// loudly. The keyboard viewport repair adds a small intentional mobile-only
-// positioning guard to this slice, and the deferred Voice runtime now receives
-// its history persistence boundary explicitly. The connector-brand resolver is
-// shared by the cold fallback and rich renderer, so allow its compact brand map
-// while keeping the ceiling narrow enough to catch unrelated growth. The chat
-// steer runtime-boundary repair adds a small local persistence/continuation
-// helper so queued steering no longer depends on lazy Voice hydration. The
-// full-screen drawer adds one local back control, which costs 39 gzip bytes.
-// The recovery continuity merge and invalidated-session cache generation fence
-// add a small, intentional client-state safety boundary to this slice. The
-// page-instance fence and pre-clear snapshot add the next measured increment.
-assert(measurements.gzipBytes <= 255550, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
+// step-aware composer handoff. The renderer telemetry sample also changes the
+// shared chunk layout by a small, intentional amount. Keep the ceiling at the
+// exact refreshed measurement so unrelated initial-load growth still fails
+// loudly.
+assert(measurements.gzipBytes <= 251112, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
 console.log(JSON.stringify({ buildId: manifest.buildId, measurements, rendererOutput }, null, 2));
 console.log('Mobile Chat renderer ownership contract passed.');

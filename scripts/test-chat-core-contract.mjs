@@ -1,13 +1,12 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 async function importSource(relativePath) {
-  const source = fs.readFileSync(path.join(root, relativePath), 'utf8');
-  return import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
+  return import(pathToFileURL(path.join(root, relativePath)).href);
 }
 
 const pairs = [
@@ -54,16 +53,28 @@ assert.deepEqual(slash.mergeSlashCommandSkillIds('/visual make a chart', ['exist
 let backgroundRaw = JSON.stringify([
   { id: 'bg-cache-1', sessionId: 'session-cache', status: 'running', updatedAt: 1 },
 ]);
+let backgroundWriteCount = 0;
 globalThis.localStorage = {
   getItem(key) {
     return key === 'prometheus_background_agent_work_v1' ? backgroundRaw : null;
   },
   setItem(key, value) {
-    if (key === 'prometheus_background_agent_work_v1') backgroundRaw = String(value);
+    if (key === 'prometheus_background_agent_work_v1') {
+      backgroundWriteCount += 1;
+      backgroundRaw = String(value);
+    }
   },
 };
 
 const background = await importSource('web-ui/src/features/chat/core/background-agent-work.js');
+const desktopBackgroundModule = await importSource('web-ui/src/features/chat/core/desktop-background-agent-work.js');
+const desktopBackground = desktopBackgroundModule.createDesktopBackgroundAgentWork({
+  mergeBackgroundAgentEvents: background.mergeBackgroundAgentEvents,
+  mergeBackgroundAgentTraceEntries: background.mergeBackgroundAgentTraceEntries,
+  normalizeBackgroundAgentWork: background.normalizeBackgroundAgentWork,
+  readBackgroundAgentWork: background.readBackgroundAgentWork,
+  writeBackgroundAgentWork: background.writeBackgroundAgentWork,
+});
 const normalized = background.normalizeBackgroundAgentWork({
   id: 'bg-1',
   sessionId: 'session-1',
@@ -78,6 +89,25 @@ assert.equal(normalized.events.length, 1);
 assert.equal(background.backgroundAgentPreview('a '.repeat(100), 20).length <= 20, true);
 assert.equal(background.backgroundAgentAgeLabel(Date.now(), Date.now()), 'just now');
 assert.equal(background.resolveBackgroundAgentIdentity('bg-1').name.length > 0, true);
+const firstLiveEvent = desktopBackground.appendBackgroundAgentEvent([], {
+  streamId: 'stream-test',
+  seq: 1,
+  type: 'tool',
+  content: 'first',
+});
+const secondLiveEvent = desktopBackground.appendBackgroundAgentEvent(firstLiveEvent, {
+  streamId: 'stream-test',
+  seq: 2,
+  type: 'result',
+  content: 'second',
+});
+assert.deepEqual(secondLiveEvent.map((event) => event.seq), [1, 2]);
+assert.equal(desktopBackground.appendBackgroundAgentEvent(secondLiveEvent, {
+  streamId: 'stream-test',
+  seq: 2,
+  type: 'result',
+  content: 'second',
+}).length, 2, 'duplicate stream events must remain deduplicated');
 
 const firstRead = background.readBackgroundAgentWork();
 const secondRead = background.readBackgroundAgentWork();
@@ -96,6 +126,48 @@ const written = background.writeBackgroundAgentWork([
 ]);
 assert.strictEqual(background.readBackgroundAgentWork(), written, 'writes should seed the same normalized cache used by reads');
 assert.equal(written[0].id, 'bg-cache-3');
+
+const writesBeforeDeferredPersist = backgroundWriteCount;
+desktopBackground.persistBackgroundAgentWork({
+  id: 'bg-live',
+  sessionId: 'session-live',
+  status: 'running',
+  streamId: 'stream-test',
+  lastSeq: 1,
+  events: [firstLiveEvent[0]],
+  updatedAt: 4,
+});
+desktopBackground.persistBackgroundAgentWork({
+  id: 'bg-live',
+  sessionId: 'session-live',
+  status: 'running',
+  streamId: 'stream-test',
+  lastSeq: 2,
+  events: secondLiveEvent,
+  updatedAt: 5,
+});
+assert.equal(backgroundWriteCount, writesBeforeDeferredPersist, 'live persistence should be deferred');
+desktopBackground.flushBackgroundAgentWorkPersistence();
+assert.equal(backgroundWriteCount, writesBeforeDeferredPersist + 1, 'flush should coalesce deferred persistence into one write');
+assert.deepEqual(
+  background.findBackgroundAgentWork('bg-live', 'session-live').events.map((event) => event.seq),
+  [1, 2],
+);
+desktopBackground.persistBackgroundAgentWork({
+  id: 'bg-live',
+  sessionId: 'session-live',
+  status: 'running',
+  streamId: 'stream-test',
+  lastSeq: 3,
+  events: [{ streamId: 'stream-test', seq: 3, type: 'tool', content: 'third' }],
+  updatedAt: 6,
+});
+desktopBackground.flushBackgroundAgentWorkPersistence();
+assert.deepEqual(
+  background.findBackgroundAgentWork('bg-live', 'session-live').events.map((event) => event.seq),
+  [1, 2, 3],
+  'partial monotonic persistence must retain the existing event buffer',
+);
 
 delete globalThis.localStorage;
 

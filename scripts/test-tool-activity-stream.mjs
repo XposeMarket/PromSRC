@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
 
 const sourcePath = path.resolve('web-ui/src/tool-activity.js');
-const activity = await import(pathToFileURL(sourcePath).href);
+const source = fs.readFileSync(sourcePath, 'utf8');
+const activity = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
 
 const {
   applyToolActivityEvent,

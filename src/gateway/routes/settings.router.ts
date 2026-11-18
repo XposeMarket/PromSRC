@@ -644,8 +644,7 @@ function getSessionDefaults() {
 
 function normalizeAuxReasoning(value: unknown): string {
   const effort = String(value || '').trim().toLowerCase();
-  if (effort === 'none' || effort === 'minimal') return 'low';
-  return ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(effort) ? effort : '';
+  return ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(effort) ? effort : '';
 }
 
 function mergeMainChatGoalRouting(incoming: any, existing: any): Record<string, any> {
@@ -2458,14 +2457,8 @@ router.post('/api/auth/openai/disconnect', (req, res) => {
 router.get('/api/auth/xai/status', (_req, res) => {
   const configDir = CONFIG_DIR_PATH;
   const accountId = String((_req.query as any)?.accountId || '').trim();
-  const accountConnected = isXAIConnected(configDir, accountId || undefined);
-  // Older OAuth sessions were stored under the legacy key. Treat that token
-  // as the selected account's fallback, matching the media/runtime resolver.
-  const legacyConnected = !accountConnected && isXAIConnected(configDir);
-  const connected = accountConnected || legacyConnected;
-  const tokens = connected
-    ? loadXAITokens(configDir, accountConnected ? accountId || undefined : undefined)
-    : null;
+  const connected = isXAIConnected(configDir, accountId || undefined);
+  const tokens = connected ? loadXAITokens(configDir, accountId || undefined) : null;
   const providerCfg = ((getConfig().getConfig() as any)?.llm?.providers?.xai || {}) as Record<string, any>;
   const accountCfg = accountId && providerCfg.accounts?.[accountId] ? providerCfg.accounts[accountId] : {};
   const hasApiKey = !!(getConfig().resolveSecret(accountCfg.api_key || providerCfg.api_key) || process.env.XAI_API_KEY);
@@ -2519,12 +2512,7 @@ router.post('/api/auth/xai/manual', async (req, res) => {
 
 router.post('/api/auth/xai/disconnect', (req, res) => {
   const accountId = String(req.body?.accountId || '').trim();
-  const accountConnected = accountId ? isXAIConnected(CONFIG_DIR_PATH, accountId) : false;
   clearXAITokens(CONFIG_DIR_PATH, accountId || undefined);
-  // If the selected account was using the pre-named-account legacy token,
-  // disconnect must clear that fallback too or the UI would reconnect it on
-  // the next refresh.
-  if (accountId && !accountConnected) clearXAITokens(CONFIG_DIR_PATH);
   res.json({ success: true });
 });
 

@@ -276,7 +276,6 @@ export const ICONS = {
   paperclip: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.4 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66L9.41 17.41a2 2 0 0 1-2.83-2.83l8.49-8.49"/></svg>',
   send:      '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 11l18-8-8 18-2-8-8-2z"/></svg>',
   micSmall:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v4"/></svg>',
-  keyboard:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M6 9h.01M9 9h.01M12 9h.01M15 9h.01M18 9h.01M6 13h.01M9 13h.01M12 13h.01M15 13h3"/></svg>',
   volume:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H3v6h3l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/></svg>',
   pin:       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 2h6l-1 6 4 4-3 3H9l-3-3 4-4z"/></svg>',
   brain:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3a3 3 0 0 0-3 3v12a3 3 0 0 0 5 2 3 3 0 0 0 5-2V6a3 3 0 0 0-5-2 3 3 0 0 0-2-1z"/></svg>',
@@ -456,18 +455,17 @@ function _wireDrawerPullToRefresh() {
     if (el) el.style.animation = on ? 'pm-ptr-spin .7s linear infinite' : '';
   };
 
-  const scrollEl = _drawerEl.querySelector('.pm-drawer-scroll') || _drawerEl;
-  scrollEl.addEventListener('touchstart', (e) => {
+  _drawerEl.addEventListener('touchstart', (e) => {
     if (_drawerSearch) return;
-    if (scrollEl.scrollTop > 0) return;
+    if (_drawerEl.scrollTop > 0) return;
     startY = e.touches?.[0]?.clientY || 0;
     pulling = true;
     armed = false;
   }, { passive: true });
 
-  scrollEl.addEventListener('touchmove', (e) => {
+  _drawerEl.addEventListener('touchmove', (e) => {
     if (!pulling) return;
-    if (scrollEl.scrollTop > 0) { setPull(0); return; }
+    if (_drawerEl.scrollTop > 0) { setPull(0); return; }
     const y = e.touches?.[0]?.clientY || 0;
     const dist = y - startY;
     if (dist <= 0) { setPull(0); return; }
@@ -476,7 +474,7 @@ function _wireDrawerPullToRefresh() {
     armed = dist * 0.5 >= THRESHOLD;
   }, { passive: true });
 
-  scrollEl.addEventListener('touchend', () => {
+  _drawerEl.addEventListener('touchend', () => {
     if (!pulling) return;
     if (armed) {
       setPull(THRESHOLD);
@@ -1216,41 +1214,41 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
         <img class="pm-brand-p1-mark" src="/static/assets/prometheus-one/p1-mark-ring.png?v=pm-v260-2026-08-09-mobile-theme-palette" alt="" decoding="async">
         <span class="pm-drawer-brand-p1" aria-hidden="true"></span>
       </div>
-      <button class="pm-drawer-close" type="button" data-mobile-drawer-close aria-label="Back to chat" title="Back to chat">${ICONS.chev}</button>
-      <div class="pm-drawer-scroll">
-        <div class="pm-drawer-gateway-filter" id="pm-drawer-gateway-filter" hidden></div>
-        <nav class="pm-drawer-list">
-          ${mobileDrawerItems.map(it => `
-            <button class="pm-drawer-item" data-route="${it.route}">
-              <span class="pm-icon">${ICONS[it.icon] || ''}</span>
-              <span class="pm-flex">${escapeHtml(it.label)}</span>
-              <span class="pm-chev">${ICONS.chev}</span>
-            </button>
-          `).join('')}
-        </nav>
-        <section class="pm-drawer-sessions" id="pm-drawer-sessions" aria-label="Sessions">
-          <div class="pm-drawer-divider"></div>
-          <div class="pm-drawer-pinned-list" id="pm-drawer-pinned-list"></div>
-          <div class="pm-drawer-project-list" id="pm-drawer-project-list"></div>
-          <div class="pm-drawer-session-head" id="pm-drawer-session-head"></div>
-          <div class="pm-drawer-session-list" id="pm-mobile-session-list"><div class="pm-session-empty">Loading...</div></div>
-        </section>
-        <section class="pm-drawer-search-results" id="pm-drawer-search-results" aria-label="Search results" hidden>
-          <div class="pm-drawer-section-title">Search Results</div>
-          <div class="pm-drawer-session-list" id="pm-mobile-search-list"></div>
-        </section>
-        <div id="pm-install-slot" style="margin-top:auto;"></div>
+      <button class="pm-theme-toggle" type="button" data-mobile-theme-toggle aria-label="Toggle dark mode"></button>
+      <button class="pm-drawer-search-toggle" type="button" data-mobile-drawer-search-toggle aria-label="Search chats" aria-expanded="false">${_searchIcon()}</button>
+      <div class="pm-drawer-gateway-filter" id="pm-drawer-gateway-filter" hidden></div>
+      <label class="pm-drawer-search" aria-label="Search chats" hidden>
+        ${_searchIcon()}
+        <input id="pm-drawer-search-input" type="search" autocomplete="off" spellcheck="false" placeholder="Search chats..." value="">
+      </label>
+      <div class="pm-drawer-top-actions">
+        <button class="pm-drawer-new-chat" type="button" data-mobile-new-chat aria-label="New chat">
+          <span class="pm-icon pm-icon-new-chat-default">${ICONS.plus}</span>
+          <span class="pm-icon pm-icon-new-chat-p1">${ICONS.starburst}</span>
+          <span>New chat</span>
+        </button>
       </div>
-      <div class="pm-drawer-bottom-bar" aria-label="Drawer actions">
-        <label class="pm-drawer-search" aria-label="Search chats">
-          ${_searchIcon()}
-          <input id="pm-drawer-search-input" type="search" autocomplete="off" spellcheck="false" placeholder="Search chats..." value="">
-        </label>
-        <div class="pm-drawer-bottom-actions">
-          <button class="pm-theme-toggle pm-drawer-bottom-action" type="button" data-mobile-theme-toggle aria-label="Toggle dark mode"></button>
-          <button class="pm-drawer-new-chat-icon pm-drawer-bottom-action" type="button" data-mobile-new-chat aria-label="New chat" title="New chat">${ICONS.compose}</button>
-        </div>
-      </div>
+      <nav class="pm-drawer-list">
+        ${mobileDrawerItems.map(it => `
+          <button class="pm-drawer-item" data-route="${it.route}">
+            <span class="pm-icon">${ICONS[it.icon] || ''}</span>
+            <span class="pm-flex">${escapeHtml(it.label)}</span>
+            <span class="pm-chev">${ICONS.chev}</span>
+          </button>
+        `).join('')}
+      </nav>
+      <section class="pm-drawer-sessions" id="pm-drawer-sessions" aria-label="Sessions">
+        <div class="pm-drawer-divider"></div>
+        <div class="pm-drawer-pinned-list" id="pm-drawer-pinned-list"></div>
+        <div class="pm-drawer-project-list" id="pm-drawer-project-list"></div>
+        <div class="pm-drawer-session-head" id="pm-drawer-session-head"></div>
+        <div class="pm-drawer-session-list" id="pm-mobile-session-list"><div class="pm-session-empty">Loading...</div></div>
+      </section>
+      <section class="pm-drawer-search-results" id="pm-drawer-search-results" aria-label="Search results" hidden>
+        <div class="pm-drawer-section-title">Search Results</div>
+        <div class="pm-drawer-session-list" id="pm-mobile-search-list"></div>
+      </section>
+      <div id="pm-install-slot" style="margin-top:auto;"></div>
     </aside>
   `);
   root.insertBefore(_drawerEl, app);
@@ -1311,12 +1309,13 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
       .catch(() => {});
   });
 
-  _drawerEl.querySelector('[data-mobile-drawer-close]')?.addEventListener('click', (event) => {
+  _drawerEl.querySelector('[data-mobile-theme-toggle]')?.addEventListener('click', _toggleMobileTheme);
+  _drawerEl.querySelector('[data-mobile-drawer-search-toggle]')?.addEventListener('click', (event) => {
     event.preventDefault();
     event.stopPropagation();
-    closeDrawer();
+    const search = _drawerEl.querySelector('.pm-drawer-search');
+    _setDrawerSearchOpen(search?.hidden !== false);
   });
-  _drawerEl.querySelector('[data-mobile-theme-toggle]')?.addEventListener('click', _toggleMobileTheme);
   _drawerEl.querySelector('#pm-drawer-search-input')?.addEventListener('input', (ev) => {
     _drawerSearch = String(ev.target?.value || '').trim();
     _renderDrawerSearchState({ onOpenSession, loadSessions, searchSessions, onNewChat });
@@ -1426,14 +1425,13 @@ async function _renderDrawerSessions({ onOpenSession, loadSessions, searchSessio
   const sessionList = renderDrawer?.querySelector('#pm-mobile-session-list');
   if (!head || !sessionList || typeof loadSessions !== 'function') return;
   const isCurrent = () => renderSeq === _drawerRenderSeq && renderDrawer === _drawerEl;
-  const scrollEl = renderDrawer?.querySelector('.pm-drawer-scroll') || renderDrawer;
-  const preservedScrollTop = preserveScroll ? Math.max(0, Number(scrollEl?.scrollTop) || 0) : null;
+  const preservedScrollTop = preserveScroll ? Math.max(0, Number(renderDrawer.scrollTop) || 0) : null;
   const restoreScroll = () => {
     if (preservedScrollTop === null || !isCurrent()) return;
     const apply = () => {
       if (!isCurrent()) return;
-      const maxScrollTop = Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight);
-      scrollEl.scrollTop = Math.min(preservedScrollTop, maxScrollTop);
+      const maxScrollTop = Math.max(0, renderDrawer.scrollHeight - renderDrawer.clientHeight);
+      renderDrawer.scrollTop = Math.min(preservedScrollTop, maxScrollTop);
     };
     apply();
     if (typeof requestAnimationFrame === 'function') requestAnimationFrame(apply);
@@ -1775,8 +1773,7 @@ function _wireDrawerInfiniteScroll({ loadSessions, onOpenSession, searchSessions
   // Pagination is intentionally explicit on mobile. Scrolling to the bottom
   // must leave the Load more and Settled controls available instead of
   // fetching another page and moving the target out from under the user.
-  const scrollEl = _drawerEl.querySelector('.pm-drawer-scroll') || _drawerEl;
-  scrollEl.onscroll = null;
+  _drawerEl.onscroll = null;
 }
 
 function _renderDrawerSearchState({ onOpenSession, loadSessions, searchSessions, onNewChat }) {
@@ -1796,8 +1793,7 @@ function _renderDrawerSearchState({ onOpenSession, loadSessions, searchSessions,
     return;
   }
 
-  const scrollEl = _drawerEl.querySelector('.pm-drawer-scroll') || _drawerEl;
-  scrollEl.onscroll = null;
+  if (_drawerEl) _drawerEl.onscroll = null;
 
   nav.hidden = true;
   sessions.hidden = true;
@@ -2457,12 +2453,26 @@ function _searchIcon() {
   return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>';
 }
 
-function _resetDrawerSearch() {
+function _setDrawerSearchOpen(open, { focus = true } = {}) {
   if (!_drawerEl) return;
+  const nextOpen = open === true;
+  const search = _drawerEl.querySelector('.pm-drawer-search');
   const input = _drawerEl.querySelector('#pm-drawer-search-input');
-  _drawerSearch = '';
-  if (input) input.value = '';
+  const toggle = _drawerEl.querySelector('[data-mobile-drawer-search-toggle]');
+  if (!nextOpen) {
+    _drawerSearch = '';
+    if (input) input.value = '';
+  }
+  if (search) search.hidden = !nextOpen;
+  if (toggle) {
+    toggle.setAttribute('aria-expanded', String(nextOpen));
+    toggle.setAttribute('aria-label', nextOpen ? 'Close search' : 'Search chats');
+    toggle.innerHTML = _searchIcon();
+  }
   if (_drawerCallbacks) _renderDrawerSearchState(_drawerCallbacks);
+  if (nextOpen && focus) {
+    requestAnimationFrame(() => input?.focus());
+  }
 }
 
 function _formatSessionDate(value) {
@@ -2490,7 +2500,7 @@ export function openDrawer() {
 }
 
 export function closeDrawer() {
-  _resetDrawerSearch();
+  _setDrawerSearchOpen(false, { focus: false });
   if (!_drawerEl || !_scrimEl) return;
   document.body.classList.remove('pm-mobile-drawer-open');
   _drawerEl.classList.remove('open');

@@ -573,7 +573,6 @@ if (!__pmChat.mobileRecoveryOwners || typeof __pmChat.mobileRecoveryOwners !== '
 if (!__pmChat.mobileRecoveryUncertainSince || typeof __pmChat.mobileRecoveryUncertainSince !== 'object') __pmChat.mobileRecoveryUncertainSince = {};
 
 let receipts = null;
-const mobileChatSteerSnapshotWriteQueues = new Map();
 
 const mobileChatRuntimeAdapter = createMobileChatRuntimeAdapter({
   defaultSessionId: MOBILE_CHAT_SESSION_ID,
@@ -1103,10 +1102,7 @@ function _compactMobileThreadCacheActivity(activity) {
 }
 
 function _compactMobileThreadCacheTrace(entries, limit = 180) {
-  return (Array.isArray(entries) ? entries : [])
-    .filter((entry) => !_isMobileTransientReasoningTraceEntry(entry))
-    .slice(-limit)
-    .map((entry) => {
+  return (Array.isArray(entries) ? entries : []).slice(-limit).map((entry) => {
     if (!entry || typeof entry !== 'object') return null;
     const text = String(entry.text || entry.content || entry.message || '').slice(0, 4200);
     const extra = _compactMobileThreadCacheExtra(entry.extra);
@@ -1122,14 +1118,11 @@ function _compactMobileThreadCacheTrace(entries, limit = 180) {
       ...(activity ? { activity } : {}),
     };
     return compact;
-    }).filter((entry) => entry && (entry.text || entry.activity || entry.extra));
+  }).filter((entry) => entry && (entry.text || entry.activity || entry.extra));
 }
 
 function _compactMobileThreadCacheProcess(entries, limit = 10) {
-  return (Array.isArray(entries) ? entries : [])
-    .filter((entry) => !_isMobileTransientReasoningTraceEntry(entry))
-    .slice(-limit)
-    .map((entry) => ({
+  return (Array.isArray(entries) ? entries : []).slice(-limit).map((entry) => ({
     id: String(entry?.id || '').trim() || undefined,
     _key: String(entry?._key || '').trim() || undefined,
     type: String(entry?.type || entry?.kind || 'event').trim() || 'event',
@@ -1140,7 +1133,7 @@ function _compactMobileThreadCacheProcess(entries, limit = 10) {
     time: String(entry?.time || '').trim() || undefined,
     status: String(entry?.status || '').trim() || undefined,
     extra: _compactMobileThreadCacheExtra(entry?.extra),
-    })).filter((entry) => entry.text || entry.content || entry.toolName);
+  })).filter((entry) => entry.text || entry.content || entry.toolName);
 }
 
 function _compactMobileThreadCacheWorkgroup(value) {
@@ -1318,18 +1311,7 @@ function _loadMobileThreadCache(sessionId) {
       try { localStorage.setItem(PM_MOBILE_THREAD_CACHE_KEY, JSON.stringify(store)); } catch {}
       return [];
     }
-    // Older snapshots may contain the pre-fix summary rows. They are live UI
-    // state, not transcript history; drop them before hydration so a cold
-    // open cannot turn a replaced summary back into a regular thought.
-    return entry.thread.map((message) => {
-      if (!message || typeof message !== 'object') return message;
-      const next = { ...message };
-      next.processEntries = _mobileDurableReasoningEntries(next.processEntries);
-      next.liveTraceEntries = _mobileDurableReasoningEntries(next.liveTraceEntries);
-      if (!next.processEntries.length) delete next.processEntries;
-      if (!next.liveTraceEntries.length) delete next.liveTraceEntries;
-      return next;
-    });
+    return entry.thread;
   } catch { return []; }
 }
 
@@ -1670,8 +1652,8 @@ function _mapServerHistoryToMobile(history) {
       time: message.time || '',
       body: { sender: 'Prometheus', text: 'Recovered goal activity from before the gateway restart.' },
       content: 'Recovered goal activity from before the gateway restart.',
-      processEntries: _mobileDurableReasoningEntries(entries),
-      liveTraceEntries: _mobileDurableReasoningEntries(recoveredTraceEntries.map(_normalizeMobileRecoveredTraceEntry).filter(Boolean)),
+      processEntries: entries,
+      liveTraceEntries: recoveredTraceEntries.map(_normalizeMobileRecoveredTraceEntry).filter(Boolean),
       streaming: false,
     });
     index += 1;
@@ -1759,11 +1741,9 @@ function _mapServerMessageToMobile(m, index = -1) {
     workflowPart: String(m?.workflowPart || '').trim() || undefined,
     workflowLabel: String(m?.workflowLabel || ''),
     voiceInterruptionEventId: String(m?.voiceInterruptionEventId || '').trim() || undefined,
-    processEntries: Array.isArray(m?.processEntries)
-      ? _mobileDurableReasoningEntries(m.processEntries.map(_normalizeMobileProcessEntry).filter(Boolean))
-      : [],
+    processEntries: Array.isArray(m?.processEntries) ? m.processEntries.map(_normalizeMobileProcessEntry).filter(Boolean) : [],
     liveTraceEntries: Array.isArray(m?.liveTraceEntries) && m.liveTraceEntries.length
-      ? _mobileDurableReasoningEntries(m.liveTraceEntries.map(_normalizeMobileRecoveredTraceEntry).filter(Boolean))
+      ? m.liveTraceEntries.map(_normalizeMobileRecoveredTraceEntry).filter(Boolean)
       : undefined,
     _pmBackgroundImageGeneration: m?._pmBackgroundImageGeneration === true || undefined,
   };
@@ -2083,8 +2063,6 @@ function _mobileHistoryForServer(thread = _activeMobileThread()) {
             files: _sanitizeMobileDurableMediaList(clone.body.files),
           }
         : undefined;
-      const processEntries = _mobileDurableReasoningEntries(msg.processEntries);
-      const liveTraceEntries = _mobileDurableReasoningEntries(msg.liveTraceEntries);
       return {
         ...clone,
         role: _mobileRoleToServerRole(msg.role),
@@ -2096,8 +2074,7 @@ function _mobileHistoryForServer(thread = _activeMobileThread()) {
         generatedImages: _sanitizeMobileDurableMediaList(clone.generatedImages),
         generatedVideos: _sanitizeMobileDurableMediaList(clone.generatedVideos),
         artifacts: _sanitizeMobileDurableMediaList(clone.artifacts),
-        processEntries: processEntries.length ? processEntries : undefined,
-        liveTraceEntries: liveTraceEntries.length ? liveTraceEntries : undefined,
+        liveTraceEntries: Array.isArray(msg.liveTraceEntries) && msg.liveTraceEntries.length ? msg.liveTraceEntries : undefined,
       };
     })
     // A realtime Voice show_ui card can intentionally have no text bubble.
@@ -2423,7 +2400,6 @@ function _moveMobileQueuedPromptToComposer(sessionId, index) {
   const queue = _getMobileQueuedPrompts(sid);
   if (!Number.isInteger(index) || index < 0 || index >= queue.length) return;
   const item = queue.splice(index, 1)[0] || {};
-  try { window.__pmMobileOpenChatComposer?.({ reason: 'queued-prompt' }); } catch {}
   const input = document.getElementById('pm-composer-input');
   if (input) {
     pmSelectedComposerSkillIds = _pmNormalizeSelectedSkillIds(item.selectedSkillIds || item.forcedSkillIds || item.matchedSkillIds);
@@ -2434,52 +2410,6 @@ function _moveMobileQueuedPromptToComposer(sessionId, index) {
     try { input.setSelectionRange(input.value.length, input.value.length); } catch {}
   }
   _renderMobileQueuedPromptsPanel(sid);
-}
-
-function _setMobileChatSteerContinuationTurn(sourceTurn, continuationTurn) {
-  if (!sourceTurn || !continuationTurn) return;
-  try {
-    Object.defineProperty(sourceTurn, '_steerContinuationTurn', {
-      value: continuationTurn,
-      configurable: true,
-      writable: true,
-    });
-    Object.defineProperty(continuationTurn, '_steerSourceTurn', {
-      value: sourceTurn,
-      configurable: true,
-      writable: true,
-    });
-    Object.defineProperty(continuationTurn, '_steerTimerAnchorTurn', {
-      value: sourceTurn._steerTimerAnchorTurn || sourceTurn,
-      configurable: true,
-      writable: true,
-    });
-  } catch {
-    sourceTurn._steerContinuationTurn = continuationTurn;
-    continuationTurn._steerSourceTurn = sourceTurn;
-    continuationTurn._steerTimerAnchorTurn = sourceTurn._steerTimerAnchorTurn || sourceTurn;
-  }
-}
-
-function _persistMobileChatSteerSnapshot(sessionId) {
-  const sid = String(sessionId || '').trim();
-  const thread = sid ? __pmChat.threads?.[sid] : null;
-  if (!sid || !Array.isArray(thread)) return Promise.resolve(false);
-  mobileChatRuntimeAdapter.sync(sid, { history: thread, source: 'mobile-steer-persist' });
-  const history = _mobileHistoryForServer(thread);
-  const previous = mobileChatSteerSnapshotWriteQueues.get(sid) || Promise.resolve(true);
-  const write = previous.catch(() => false)
-    .then(() => updateMobileChatSessionHistory(sid, history))
-    .then(() => true)
-    .catch((err) => {
-      console.warn('[mobile chat] failed to persist steer state:', err);
-      return false;
-    });
-  mobileChatSteerSnapshotWriteQueues.set(sid, write);
-  write.finally(() => {
-    if (mobileChatSteerSnapshotWriteQueues.get(sid) === write) mobileChatSteerSnapshotWriteQueues.delete(sid);
-  });
-  return write;
 }
 
 function _appendMobileQueuedSteerTurn(sessionId, message, data = {}) {
@@ -2543,9 +2473,9 @@ function _appendMobileQueuedSteerTurn(sessionId, message, data = {}) {
       workflowLabel: 'Response after steer',
     };
     thread.push(continuationTurn);
-    _setMobileChatSteerContinuationTurn(latestAi, continuationTurn);
+    _setMobileSteerContinuationTurn(latestAi, continuationTurn);
   }
-  void _persistMobileChatSteerSnapshot(sid);
+  _persistMobileThreadSnapshot(sid);
   const threadEl = document.getElementById('pm-chat-thread');
   const bodyEl = document.getElementById('pm-chat-body');
   if (threadEl && String(__pmChat.activeSessionId || '') === sid) {
@@ -3343,7 +3273,6 @@ function _appendMobileProcess(message, type, text, extra = null) {
   if (!Array.isArray(message.processEntries)) message.processEntries = [];
   const entry = _makeProcessEntry(type, text, extra);
   if (!entry) return;
-  if (_isMobileTransientReasoningTraceEntry(entry)) return;
   const entryKey = _mobileProcessEntryKey(entry);
   if (entryKey && message.processEntries.some((existing) => _mobileProcessEntryKey(existing) === entryKey)) return;
   const prev = message.processEntries[message.processEntries.length - 1];
@@ -3475,27 +3404,6 @@ function _isMobileProgressNarration(value) {
   return /^(?:Clarifying|Explaining|Confirming|Summarizing|Planning|Deciding|Inspecting|Preparing|Starting|Activating|Executing|Focusing|Prioritizing|Assessing|Attempting|Identifying|Verifying|Loading|Running|Capturing|Opening|Closing|Reading|Writing|Checking|Reviewing|Collecting|Invoking|Calling|Using|Searching|Coordinating|Waiting|Listing|Retrieving|Inferring|Implementing|Investigating|Exploring|Queuing|Dispatching)\b/i.test(text);
 }
 
-function _isMobileTransientReasoningTraceEntry(entry) {
-  if (!entry || typeof entry !== 'object') return false;
-  const type = String(entry.type || entry.kind || '').trim().toLowerCase();
-  const extra = entry.extra && typeof entry.extra === 'object' ? entry.extra : {};
-  const event = String(entry.event || extra.event || extra.eventType || '').trim().toLowerCase();
-  const source = String(entry.source || extra.source || '').trim().toLowerCase();
-  const visibility = String(entry.visibility || extra.visibility || '').trim().toLowerCase();
-  const reasoningKind = String(entry.reasoningKind || extra.reasoningKind || extra.presentationKind || '').trim().toLowerCase();
-  return source === 'agent_progress'
-    || source === 'reasoning_summary'
-    || type === 'reasoning_summary'
-    || ['reasoning_summary', 'reasoning_summary_delta', 'reasoning_delta'].includes(type)
-    || ['reasoning_summary', 'reasoning_summary_delta', 'reasoning_delta'].includes(event)
-    || reasoningKind === 'summary'
-    || (visibility === 'summary' && ['think', 'thinking', 'agent_thought'].includes(type));
-}
-
-function _mobileDurableReasoningEntries(entries) {
-  return (Array.isArray(entries) ? entries : []).filter((entry) => !_isMobileTransientReasoningTraceEntry(entry));
-}
-
 function _setMobileLiveProgressNarration(message, text, { replace = false, visibility = 'summary' } = {}) {
   if (!message) return false;
   const incoming = String(text || '');
@@ -3505,31 +3413,17 @@ function _setMobileLiveProgressNarration(message, text, { replace = false, visib
     String(entry?.extra?.source || '').toLowerCase() === 'agent_progress'
   );
   if (!existing) {
-    message.liveTraceEntries.push({
-      id: `mtrace_progress_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-      type: 'think',
-      text: incoming.trim(),
-      ts: Date.now(),
-      time: _nowTime(),
-      extra: { visibility, source: 'agent_progress', reasoningKind: 'summary' },
+    _appendMobileLiveTrace(message, 'think', incoming, {
+      extra: { visibility, source: 'agent_progress' },
     });
     return true;
   }
-  const previous = String(existing.text || '').trim();
-  const next = incoming.trim();
-  if (!next) return false;
-  const isSnapshot = next.length > previous.length && next.startsWith(previous);
-  const canAppend = !replace
-    && !isSnapshot
-    && previous
-    && !/[.!?:]\s*$/.test(previous)
-    && (/^\s/.test(incoming) || /^[a-z0-9,'"‘’“”\-—.;:!?)}\]]/.test(next));
-  const merged = canAppend
-    ? _dedupeMobileTraceProseText(_appendMobileStreamingText(previous, incoming))
-    : next;
-  const latest = canAppend
-    ? (merged.split(/\n\s*\n/).map((part) => part.trim()).filter(Boolean).pop() || merged)
-    : merged;
+  const merged = replace
+    ? incoming.trim()
+    : _dedupeMobileTraceProseText(_appendMobileStreamingText(existing.text || '', incoming));
+  const latest = replace
+    ? merged
+    : (merged.split(/\n\s*\n/).map((part) => part.trim()).filter(Boolean).pop() || merged);
   if (!latest) return false;
   const visibilityChanged = String(existing?.extra?.visibility || '') !== visibility;
   if (latest === String(existing.text || '').trim()) {
@@ -3542,20 +3436,56 @@ function _setMobileLiveProgressNarration(message, text, { replace = false, visib
   return true;
 }
 
+function _shouldAppendMobileReasoningSummary(message, chunk) {
+  const incoming = String(chunk || '');
+  if (!message || !incoming) return false;
+  const last = [...(Array.isArray(message.liveTraceEntries) ? message.liveTraceEntries : [])]
+    .reverse()
+    .find((entry) => String(entry?.type || '').toLowerCase() === 'reasoning_summary');
+  if (!last) return false;
+  const previous = String(last.text || '').trim();
+  const next = incoming.trimStart();
+  if (!previous || !next) return false;
+  // Keep transport-sized deltas together, but start a new durable summary
+  // paragraph when the provider has finished the previous thought.
+  return !/[.!?:]\s*$/.test(previous)
+    && (/^\s/.test(incoming) || /^[a-z0-9,'"’”\-—.;:!?)}\]]/.test(next));
+}
+
+function _appendMobileReasoningSummary(message, chunk) {
+  const incoming = String(chunk || '');
+  if (!message || !incoming) return false;
+  const previous = [...(Array.isArray(message.liveTraceEntries) ? message.liveTraceEntries : [])]
+    .reverse()
+    .find((entry) => String(entry?.type || '').toLowerCase() === 'reasoning_summary');
+  const previousText = String(previous?.text || '').trim();
+  const incomingText = incoming.trim();
+  if (previous && incomingText.length > previousText.length && incomingText.startsWith(previousText)) {
+    previous.text = incomingText;
+    previous.time = _nowTime();
+    return true;
+  }
+  if (previous && _mobileTraceThoughtTextsSimilar(previousText, incomingText)) return false;
+  _appendMobileLiveTrace(message, 'reasoning_summary', incoming, {
+    append: _shouldAppendMobileReasoningSummary(message, incoming),
+    extra: { visibility: 'summary', source: 'reasoning_summary' },
+  });
+  return true;
+}
+
 function _handleMobileThinkingDelta(message, evt) {
   if (!message) return false;
   const chunk = String(evt?.thinking || evt?.text || '');
   if (!chunk) return false;
-  const isSummary = chatProgressVisibility(evt) === 'summary';
-  if (!isSummary) message._pendingThinkingBurst = `${message._pendingThinkingBurst || ''}${chunk}`;
-  // Only explicit reasoning summaries stream live. Raw chain-of-thought stays
-  // out of both the live trace and the durable process journal.
-  if (isSummary) {
+  message._pendingThinkingBurst = `${message._pendingThinkingBurst || ''}${chunk}`;
+  // Only reasoning summaries stream live (desktop parity). Raw chain-of-thought stays buffered.
+  if (String(evt?.source || '').toLowerCase() === 'reasoning_summary') {
     // `reasoning_summary` is already an explicit user-safe progress channel.
     // Keep it in the single replaceable tool-stream status slot even when the
     // prose does not start with one of the action verbs in
     // `_isMobileProgressNarration`.
     _setMobileLiveProgressNarration(message, chunk);
+    _appendMobileReasoningSummary(message, chunk);
   }
   return true;
 }
@@ -3568,6 +3498,7 @@ function _handleMobileReasoningSummaryDelta(message, evt) {
   // It must update the collapsible tool-stream label rather than becoming a
   // second standalone thought card.
   _setMobileLiveProgressNarration(message, chunk);
+  _appendMobileReasoningSummary(message, chunk);
   return true;
 }
 
@@ -3577,15 +3508,6 @@ function _handleMobileCleanThought(message, evt) {
   if (visibility === 'private') return false;
   const text = String(evt?.thinking || evt?.text || '').trim();
   if (!text) return false;
-  const reasoningKind = String(evt?.reasoningKind || evt?.extra?.reasoningKind || evt?.extra?.presentationKind || '').trim().toLowerCase();
-  const source = String(evt?.source || evt?.extra?.source || '').trim().toLowerCase();
-  const isSummary = visibility === 'summary' || reasoningKind === 'summary' || source === 'reasoning_summary';
-  if (isSummary) {
-    // Some gateways replay a safe summary through the legacy thought event.
-    // Treat it exactly like the explicit summary channel: update one mutable
-    // slot and never copy it into `_thinking`, live thoughts, or process rows.
-    return _setMobileLiveProgressNarration(message, text, { replace: true, visibility: 'summary' });
-  }
   const streamId = String(evt?.streamId || '').trim();
   const seq = Number(evt?.seq);
   const eventKey = String(evt?.eventKey || '').trim()
@@ -3594,7 +3516,8 @@ function _handleMobileCleanThought(message, evt) {
     source: String(evt?.source || '').trim() || 'agent_thought',
     visibility,
     event: String(evt?.type || '').trim() || 'agent_thought',
-    reasoningKind: String(evt?.reasoningKind || evt?.extra?.reasoningKind || '').trim().toLowerCase() || 'full_thought',
+    reasoningKind: String(evt?.reasoningKind || evt?.extra?.reasoningKind || '').trim().toLowerCase()
+      || (String(evt?.source || '').trim().toLowerCase() === 'reasoning_summary' ? 'summary' : 'full_thought'),
     ...(streamId ? { streamId } : {}),
     ...(eventKey ? { eventKey } : {}),
     ...(Number.isFinite(seq) && seq >= 0 ? { seq: Math.floor(seq) } : {}),
@@ -3604,6 +3527,9 @@ function _handleMobileCleanThought(message, evt) {
   // slot; otherwise the renderer cannot keep the two presentation surfaces
   // distinct after a tool call or reconnect.
   message._thinking = message._thinking ? `${message._thinking}\n\n${text}` : text;
+  const updated = thoughtExtra.reasoningKind === 'summary'
+    ? _setMobileLiveProgressNarration(message, text, { replace: true, visibility })
+    : false;
   const alreadyJournaled = eventKey && Array.isArray(message.liveTraceEntries)
     && message.liveTraceEntries.some((entry) => (
       String(entry?.eventKey || entry?.extra?.eventKey || '').trim() === eventKey
@@ -3616,7 +3542,7 @@ function _handleMobileCleanThought(message, evt) {
     source: thoughtExtra.source,
     visibility,
   }, false);
-  return true;
+  return updated || true;
 }
 
 function _handleMobileThinkingCallback(message, text, meta = null) {
@@ -3654,26 +3580,14 @@ function _isInternalMobileRestartProcessEntry(entry) {
     || packetType === 'runtime_recovery_context';
 }
 
-function _isMobileInternalToolProtocolText(value) {
-  const text = String(value || '').replace(/\s+/g, ' ').trim();
-  return /^(?:latency:\s*provider_[a-z0-9_]+(?:\s+at\b.*)?|processing\.{0,3})$/i.test(text)
-    || /^prepared\s+(?:skill|request|tool|provider)\b/i.test(text);
-}
-
 function _isMobileHiddenRuntimeProcessEntry(entry) {
   if (_isInternalMobileRestartProcessEntry(entry)) return true;
   const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
   // Plan progress is rendered by the dedicated plan UI. Older runtime
   // checkpoints wrote it as generic `step` process rows, which made recovered
   // tool drawers show fake "Plan: Run …" tools.
-  if (String(extra.source || '').toLowerCase() === 'runtime_checkpoint'
-    && String(extra.event || '').toLowerCase() === 'progress_state') return true;
-  // Background runtimes may persist provider lifecycle diagnostics as plain
-  // process rows. They are implementation details, not user-facing tools;
-  // real tool calls/results remain visible through the activity coalescer.
-  return !entry?.activity && _isMobileInternalToolProtocolText(
-    entry?.text || entry?.content || entry?.message,
-  );
+  return String(extra.source || '').toLowerCase() === 'runtime_checkpoint'
+    && String(extra.event || '').toLowerCase() === 'progress_state';
 }
 
 function _normalizeMobileProcessEntry(entry) {
@@ -3826,8 +3740,7 @@ function _mobileBackgroundStoredProcessEntries(record) {
       extra: entry?.extra || entry,
     }))
     .map(_normalizeMobileProcessEntry)
-    .filter(Boolean)
-    .filter((entry) => !_isMobileTransientReasoningTraceEntry(entry));
+    .filter(Boolean);
 }
 
 function _mergeMobileProcessEntries(message, entries) {
@@ -3837,7 +3750,6 @@ function _mergeMobileProcessEntries(message, entries) {
   for (const raw of Array.isArray(entries) ? entries : []) {
     const entry = _normalizeMobileProcessEntry(raw);
     if (!entry) continue;
-    if (_isMobileTransientReasoningTraceEntry(entry)) continue;
     const key = _mobileProcessEntryKey(entry);
     if (key && existing.has(key)) continue;
     if (key) existing.add(key);
@@ -4414,7 +4326,6 @@ function _mobileTraceTextLooksLikeFinalAnswer(text, finalText) {
 function _mergeMobileLiveTraceIntoProcess(message) {
   if (!message) return;
   _flushMobileTraceThoughtProbe(message, { force: true });
-  message.processEntries = _mobileDurableReasoningEntries(message.processEntries);
   const traces = Array.isArray(message.liveTraceEntries) ? message.liveTraceEntries : [];
   if (!traces.length) return;
   if (!Array.isArray(message.processEntries)) message.processEntries = [];
@@ -4422,7 +4333,6 @@ function _mergeMobileLiveTraceIntoProcess(message) {
     `${String(entry?.type || '').toLowerCase()}|${String(entry?.text || entry?.content || '').replace(/\s+/g, ' ').trim()}`
   ));
   for (const trace of traces) {
-    if (_isMobileTransientReasoningTraceEntry(trace)) continue;
     const type = String(trace?.type || 'info').toLowerCase();
     const rawText = String(trace?.text || '').trim();
     const text = (type === 'preamble' || type === 'think' || type === 'assistant')
@@ -4443,7 +4353,7 @@ function _mergeMobileLiveTraceIntoProcess(message) {
 }
 
 function _mobileProcessEntriesWithLiveTrace(message, entries) {
-  const out = _mobileDurableReasoningEntries(entries).map((entry) => ({ ...entry }));
+  const out = Array.isArray(entries) ? entries.map((entry) => ({ ...entry })) : [];
   const traces = Array.isArray(message?.liveTraceEntries) ? message.liveTraceEntries : [];
   if (!traces.length) return out;
   const existing = new Set(out.map((entry) =>
@@ -4451,7 +4361,6 @@ function _mobileProcessEntriesWithLiveTrace(message, entries) {
   ));
   const liveEntries = [];
   for (const trace of traces) {
-    if (_isMobileTransientReasoningTraceEntry(trace)) continue;
     const type = String(trace?.type || 'info').toLowerCase();
     const rawText = String(trace?.text || '').trim();
     const text = (type === 'preamble' || type === 'think' || type === 'assistant')
@@ -4498,7 +4407,6 @@ function _mobileWorkflowTraceEntriesForMessage(message) {
   const add = (entry, fallbackType = 'info', fromProcess = false) => {
     if (!entry || typeof entry !== 'object') return;
     entry = _normalizeMobileRecoveredTraceEntry(entry);
-    if (_isMobileTransientReasoningTraceEntry(entry)) return;
     if (_isMobileHiddenRuntimeProcessEntry(entry)) return;
     let type = String(entry.type || entry.kind || fallbackType || 'info').toLowerCase();
     let text = String(entry.text || entry.content || entry.message || '').trim();
@@ -5463,44 +5371,6 @@ function _mergeMobileHistoryPageWithCurrent(_sessionId, olderHistory, currentThr
   return _reconcileMobileThreadOrder(merged);
 }
 
-function _mobileHistoryHasProtectedLocalContinuity(messages = []) {
-  return (Array.isArray(messages) ? messages : []).some((message) => message
-    && (
-      message.streaming === true
-      || message._pmFinalReceived === true
-      || message._pmRecoveryReplay === true
-      || message._pmOptimistic === true
-      || message._pmAdmissionPending === true
-    ));
-}
-
-function _mobileShouldPreserveLocalHistoryContinuity(mapped, durableLocal) {
-  const serverRows = Array.isArray(mapped) ? mapped : [];
-  const localRows = Array.isArray(durableLocal) ? durableLocal : [];
-  if (!localRows.length) return false;
-  const durableServerCount = serverRows.filter((message) => message
-    && (message.role === 'user' || message.role === 'ai')).length;
-  // A transient empty/short response is not permission to erase a transcript
-  // already painted from the recovery cache. The server-side history write is
-  // itself merge-preserving, so retaining the richer local copy is safe here.
-  if (!durableServerCount || localRows.length > durableServerCount) return true;
-  const latestServerUser = [...serverRows].reverse().find((message) => message?.role === 'user') || null;
-  const latestLocalUser = [...localRows].reverse().find((message) => message?.role === 'user') || null;
-  const serverUserTimestamp = Number(latestServerUser?.timestamp || 0) || 0;
-  const localUserTimestamp = Number(latestLocalUser?.timestamp || 0) || 0;
-  // Equal-sized pages can still be stale when a refresh races the durable
-  // history write for the newest prompt. The local prompt is the continuity
-  // boundary for the active turn, so do not let that older page roll it back.
-  if (localUserTimestamp > serverUserTimestamp + 500) return true;
-  const localRequestId = String(latestLocalUser?._clientRequestId || '').trim();
-  if (localRequestId && !serverRows.some((message) => message?.role === 'user'
-    && String(message?._clientRequestId || '').trim() === localRequestId)) return true;
-  // Equal-length snapshots can still replace a recovered row with a newer
-  // server row while the replay/final frame is settling. Keep the local
-  // continuity markers in that case as well.
-  return _mobileHistoryHasProtectedLocalContinuity(localRows);
-}
-
 function _mergeMobileSessionThreadWithLocal(sessionId, serverHistory, localThread, options = {}) {
   const mapped = _mapServerHistoryToMobile(serverHistory);
   const local = Array.isArray(localThread) ? localThread : [];
@@ -5509,12 +5379,8 @@ function _mergeMobileSessionThreadWithLocal(sessionId, serverHistory, localThrea
     && !_isMobileHiddenVoiceDraftMessage(message, index));
   // `/api/sessions/:id` deliberately returns a bounded tail on mobile. Keep
   // every already-loaded local transcript row when that response advertises
-  // older history, or when recovery has a richer local snapshot. Otherwise a
-  // cold reopen can render and cache only the tail, and a late stale response
-  // can make recovered messages disappear while the user is typing.
-  const preserveLocalHistory = options.preserveLocalHistory === true
-    || _mobileShouldPreserveLocalHistoryContinuity(mapped, durableLocal);
-  const base = preserveLocalHistory
+  // older history; otherwise a cold reopen can render and cache only the tail.
+  const base = options.preserveLocalHistory === true
     ? _mergeMobileHistoryRecords(mapped, durableLocal, { sortByTimestamp: true })
     : mapped;
   const merged = _mergeMobileThreadLocalArtifacts(base, local);
@@ -5912,42 +5778,12 @@ function _isMobileExplicitMediaToolName(name) {
 }
 
 function _isMobileImageGenerationStreamEntry(entry) {
-  const activity = entry?.activity && typeof entry.activity === 'object' ? entry.activity : {};
-  const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
-  const args = activity.args && typeof activity.args === 'object'
-    ? activity.args
-    : extra.args && typeof extra.args === 'object'
-      ? extra.args
-      : entry?.args && typeof entry.args === 'object'
-        ? entry.args
-        : {};
-  const action = _mobileToolEventName(
-    activity.action
-    || activity.toolName
-    || activity.tool_name
-    || activity.name
-    || extra.action
-    || extra.toolName
-    || extra.tool_name
-    || extra.name
-    || entry?.action
-    || entry?.toolName
-    || entry?.tool_name
-    || entry?.name,
-  );
-  if (!_isMobileGenerateImageToolName(action)) return false;
-  const presentationMode = String(
-    args.presentation_mode
-    || args.presentationMode
-    || activity.presentation_mode
-    || activity.presentationMode
-    || extra.presentation_mode
-    || extra.presentationMode
-    || entry?.presentation_mode
-    || entry?.presentationMode
-    || '',
-  ).trim().toLowerCase();
-  return presentationMode === 'foreground';
+  const text = String(entry?.text || entry?.content || entry?.message || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  if (!text) return false;
+  if (/\b(preparing generate image|prepared generate image|generate_image)\b/.test(text)) return true;
+  if (/^generate image\s*(?:[:(]|complete\b|failed\b)/.test(text)) return true;
+  if (/^generating image\s*(?:[:(]|$)/.test(text)) return true;
+  return false;
 }
 
 function _renderMobileGeneratedImageLoadingCard() {
@@ -7885,7 +7721,6 @@ function _collectMobileQuestionAnswers(q) {
 }
 
 function _focusMobileQuestionComposer() {
-  try { window.__pmMobileOpenChatComposer?.({ reason: 'question-focus' }); } catch {}
   const card = document.querySelector('[data-pm-q-card]');
   const answer = card?.querySelector('textarea:not([hidden]), input:not([hidden]), .pm-q-opt, .pm-q-other-toggle');
   if (answer) {
@@ -8912,11 +8747,7 @@ function _pmSkillComposerState(input) {
   const prefixChar = skillIndex > 0 ? beforeCursor.charAt(skillIndex - 1) : '';
   if (prefixChar && !/\s/.test(prefixChar)) return null;
   const query = beforeCursor.slice(skillIndex + CHAT_SKILL_TRIGGER.length);
-  // Skill ids commonly use hyphens (for example `airtable-connector`), but
-  // mobile users should be able to type the natural spaced form while the
-  // normalized matcher treats spaces and hyphens as equivalent. Stop only at
-  // a line break so ordinary spaces remain part of the skill query.
-  if (/[\r\n]/.test(query)) return null;
+  if (/[\s\r\n]/.test(query)) return null;
   return { start: skillIndex, end: cursor, query, value };
 }
 
@@ -8944,11 +8775,7 @@ function _pmReplaceSkillComposerWithSelection(page, input, skill) {
   const state = _pmSkillComposerState(input);
   if (!state || !input || !skill) return;
   const name = String(skill.name || skill.id || 'Skill').trim();
-  const safeName = name
-    .replace(/\*/g, '')
-    .replace(/[-_]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim() || 'Skill';
+  const safeName = name.replace(/\*/g, '').trim() || 'Skill';
   const suffix = String(state.value.slice(state.end) || '');
   const replacement = `${safeName}${suffix && /^\s/.test(suffix) ? '' : ' '}`;
   input.value = `${state.value.slice(0, state.start)}${replacement}${state.value.slice(state.end)}`;
@@ -9538,13 +9365,6 @@ function _saveMobileLastChatContext(context = {}) {
 }
 
 export async function renderChatPage(page, { navigate, sessionId = null, voiceRoomTranscript = false }) {
-  // A prior render can still have an in-flight history request when the route
-  // is remounted (especially after an iOS refresh/bfcache transition). The
-  // session id alone is not an ownership check: an old response for the same
-  // chat must not repaint the current page with its stale snapshot.
-  const mobilePageInstanceToken = `mobile_page_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-  let mobilePageDisposed = false;
-  __pmChat.mobilePageInstanceToken = mobilePageInstanceToken;
   await loadMobileChatRendererRuntime();
   receipts = mobileChatRendererRuntime.createMobileStreamReceiptLedger();
   await _ensureMobileQuestionController();
@@ -9611,9 +9431,6 @@ export async function renderChatPage(page, { navigate, sessionId = null, voiceRo
     }).catch(() => gatewayTarget)
     : Promise.resolve(gatewayTarget);
   const isVoiceRoomTranscript = voiceRoomTranscript === true && requestedSession.startsWith('voice_room_');
-  const isCurrentMobilePage = () => !mobilePageDisposed
-    && __pmChat.mobilePageInstanceToken === mobilePageInstanceToken
-    && __pmChat.activeSessionId === requestedSession;
   if (requestedSession !== MOBILE_CHAT_SESSION_ID) _rememberMobileLastChatSession(requestedSession);
   __pmChat.activeSessionId = requestedSession;
   if (requestedSession === MOBILE_CHAT_SESSION_ID) {
@@ -9810,17 +9627,7 @@ export async function renderChatPage(page, { navigate, sessionId = null, voiceRo
         <button type="button" id="pm-voice-room-return" aria-label="Return to Voice Room">Return to voice</button>
       </div>
     ` : ''}
-    ${!isVoiceRoomTranscript ? `
-      <div class="pm-chat-mode-launcher" id="pm-chat-mode-launcher" role="group" aria-label="Choose chat input">
-        <button type="button" class="pm-chat-mode-button pm-chat-mode-button--voice" data-pm-chat-mode="voice" id="pm-chat-mode-voice" aria-label="Start voice mode">
-          ${ICONS.micSmall}<span class="pm-chat-mode-button-label">Voice mode</span>
-        </button>
-        <button type="button" class="pm-chat-mode-button pm-chat-mode-button--keyboard" data-pm-chat-mode="keyboard" id="pm-chat-mode-keyboard" aria-label="Open keyboard composer">
-          ${ICONS.keyboard}<span class="pm-chat-mode-button-label">Keyboard composer</span>
-        </button>
-      </div>
-    ` : ''}
-    <form class="pm-composer${isVoiceRoomTranscript ? ' pm-voice-room-transcript-composer' : ''}${!isVoiceRoomTranscript ? ' pm-composer-mode-hidden' : ''}" id="pm-composer" aria-hidden="true" inert>
+    <form class="pm-composer${isVoiceRoomTranscript ? ' pm-voice-room-transcript-composer' : ''}" id="pm-composer"${isVoiceRoomTranscript ? ' aria-hidden="true" inert' : ''}>
       <span class="pm-glass-lens" aria-hidden="true"></span>
       <span class="pm-glass-border" aria-hidden="true"></span>
       <div class="pm-mobile-question-popover" id="pm-mobile-question-popover" hidden></div>
@@ -9990,9 +9797,6 @@ export async function renderChatPage(page, { navigate, sessionId = null, voiceRo
   const projectChip = page.querySelector('#pm-new-chat-project');
   const contextDock = page.querySelector('#pm-new-chat-context-dock');
   const micBtn = page.querySelector('#pm-chat-mic-btn');
-  const modeLauncher = page.querySelector('#pm-chat-mode-launcher');
-  const modeVoiceButton = page.querySelector('#pm-chat-mode-voice');
-  const modeKeyboardButton = page.querySelector('#pm-chat-mode-keyboard');
   const chatVoiceShell = page.querySelector('#pm-chat-voice-shell');
   const chatVoiceClose = page.querySelector('#pm-chat-voice-close');
   const chatVoiceCamera = page.querySelector('#pm-chat-voice-camera');
@@ -10644,13 +10448,6 @@ export async function renderChatPage(page, { navigate, sessionId = null, voiceRo
     const index = Number(btn.getAttribute('data-mobile-starter-prompt'));
     const card = _getMobileEmptyChatStarterCards()[index];
     if (!card || !input) return;
-    if (modeLauncher && !composerModeOpen) {
-      setChatComposerMode(true, {
-        animate: true,
-        preserveScroll: true,
-        reason: 'starter',
-      });
-    }
     input.value = card.prompt;
     resizeComposerInput();
     _pmUpdateComposerRichPreview(page, input);
@@ -10754,77 +10551,6 @@ export async function renderChatPage(page, { navigate, sessionId = null, voiceRo
     requestAnimationFrame(resizeComposerInput);
     requestAnimationFrame(updateComposerExpandedState);
   };
-  let composerModeOpen = isVoiceRoomTranscript;
-  let composerModeTransitionTimer = 0;
-  let composerModeScrollLockTop = null;
-  let composerModeScrollIgnoreUntil = 0;
-  let composerModeScrollIntentUntil = 0;
-  let composerModeLastScrollTop = Number(_mobileChatScrollTarget(body)?.scrollTop || 0);
-
-  function setChatComposerMode(open, {
-    animate = true,
-    preserveScroll = true,
-    reason = 'keyboard',
-    update = true,
-  } = {}) {
-    if (!form || !modeLauncher) return;
-    const nextOpen = !!open;
-    const scrollTarget = _mobileChatScrollTarget(body);
-    if (preserveScroll && scrollTarget) {
-      composerModeScrollLockTop = Number(scrollTarget.scrollTop || 0);
-    }
-    composerModeOpen = nextOpen;
-    page.classList.toggle('pm-chat-composer-mode-open', nextOpen);
-    page.classList.toggle('pm-chat-mode-launcher-active', !nextOpen);
-    form.classList.toggle('pm-composer-mode-hidden', !nextOpen);
-    form.setAttribute('aria-hidden', nextOpen ? 'false' : 'true');
-    if (nextOpen) form.removeAttribute('inert');
-    else form.setAttribute('inert', '');
-    modeLauncher.setAttribute('aria-hidden', nextOpen ? 'true' : 'false');
-    modeLauncher.classList.toggle('is-transitioning', !!animate);
-    if (composerModeTransitionTimer) {
-      window.clearTimeout(composerModeTransitionTimer);
-      composerModeTransitionTimer = 0;
-    }
-    if (animate) {
-      // The native keyboard can reveal a focused input well after the first
-      // visualViewport event. Keep those layout shifts out of the auto-hide
-      // path for the complete keyboard hand-off window.
-      const transitionIgnoreMs = reason === 'keyboard' ? 1800 : 420;
-      composerModeScrollIgnoreUntil = (window.performance?.now?.() || 0) + transitionIgnoreMs;
-      composerModeTransitionTimer = window.setTimeout(() => {
-        composerModeTransitionTimer = 0;
-        modeLauncher.classList.remove('is-transitioning');
-      }, 360);
-    } else {
-      composerModeScrollIgnoreUntil = (window.performance?.now?.() || 0) + 180;
-      modeLauncher.classList.remove('is-transitioning');
-    }
-    modeLauncher.dataset.pmChatModeReason = reason;
-    if (update) {
-      updateComposerExpandedState();
-      updateChatComposerSpace();
-    }
-  }
-
-  if (modeLauncher) {
-    setChatComposerMode(composerModeOpen, {
-      animate: false,
-      preserveScroll: false,
-      update: false,
-      reason: 'initial',
-    });
-  }
-  const previousOpenChatComposerBridge = window.__pmMobileOpenChatComposer;
-  const currentOpenChatComposerBridge = ({ reason = 'external' } = {}) => {
-    if (!modeLauncher || composerModeOpen) return;
-    setChatComposerMode(true, {
-      animate: true,
-      preserveScroll: true,
-      reason,
-    });
-  };
-  window.__pmMobileOpenChatComposer = currentOpenChatComposerBridge;
   let connectionStatusHideTimer = null;
   let connectionStatusSuccessTimer = null;
   requestAnimationFrame(resizeComposerInput);
@@ -10858,14 +10584,6 @@ export async function renderChatPage(page, { navigate, sessionId = null, voiceRo
     const hasAttachments = getPendingAttachments().length > 0;
     const focused = document.activeElement === input;
     const questionPending = !!_getPendingQuestionForSession(requestedSession);
-    if (questionPending && modeLauncher && !composerModeOpen) {
-      setChatComposerMode(true, {
-        animate: false,
-        preserveScroll: true,
-        reason: 'question',
-        update: false,
-      });
-    }
     form.classList.toggle('is-focused', focused);
     form.classList.toggle('has-text', hasText);
     form.classList.toggle('has-attachments', hasAttachments);
@@ -12029,7 +11747,7 @@ void main() {
     }
   };
   const showChatLoadRetry = (message = 'Chat is taking too long to load.') => {
-    if (!isCurrentMobilePage()) return;
+    if (__pmChat.activeSessionId !== requestedSession) return;
     if (__pmChat.threads[requestedSession]?.length) return;
     threadEl.innerHTML = `
       <div class="pm-chat-loading error">
@@ -12047,16 +11765,6 @@ void main() {
     invalidateMobileChatSessionCache(requestedSession);
     renderChatPage(page, { navigate, sessionId: requestedSession });
   });
-
-  // Register recovery ownership before starting the initial history request.
-  // This lets a later render invalidate the old request even if both renders
-  // target the same session id.
-  const mobileRecoveryOwnerToken = `mobile_recovery_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-  let mobileRecoveryDisposed = false;
-  __pmChat.mobileRecoveryOwners[requestedSession] = mobileRecoveryOwnerToken;
-  const isMobileRecoveryOwner = () => !mobileRecoveryDisposed
-    && isCurrentMobilePage()
-    && __pmChat.mobileRecoveryOwners[requestedSession] === mobileRecoveryOwnerToken;
 
   let initialSessionLoadPending = false;
   if (!__pmChat.threads[requestedSession]?.length && requestedSession !== MOBILE_CHAT_SESSION_ID) {
@@ -12085,7 +11793,7 @@ void main() {
       fullProcess: false,
     }))
       .then((session) => {
-        if (!isMobileRecoveryOwner()) return;
+        if (__pmChat.activeSessionId !== requestedSession) return;
         clearChatLoadRetryTimer();
         hideReconnectingStatus();
         targetProjectId = String(session?.projectId || session?.project?.id || '').trim();
@@ -12129,7 +11837,7 @@ void main() {
         refreshMobileRunRecovery({ silent: true, force: true, fullRefresh: false });
       })
       .catch((err) => {
-        if (!isMobileRecoveryOwner()) return;
+        if (__pmChat.activeSessionId !== requestedSession) return;
         clearChatLoadRetryTimer();
         if (!__pmChat.threads[requestedSession]?.length) {
           showChatLoadRetry(`Could not load chat: ${err.message || 'Unknown error'}`);
@@ -12147,6 +11855,12 @@ void main() {
     _restoreMobileVoiceWorkgroupsForSession(requestedSession).catch(() => {});
   }
 
+  const mobileRecoveryOwnerToken = `mobile_recovery_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  let mobileRecoveryDisposed = false;
+  __pmChat.mobileRecoveryOwners[requestedSession] = mobileRecoveryOwnerToken;
+  const isMobileRecoveryOwner = () => !mobileRecoveryDisposed
+    && __pmChat.activeSessionId === requestedSession
+    && __pmChat.mobileRecoveryOwners[requestedSession] === mobileRecoveryOwnerToken;
   let mobileRecoveryInFlight = null;
   let mobileRecoveryInFlightOptions = null;
   let queuedMobileRecovery = null;
@@ -12523,11 +12237,6 @@ void main() {
       const localThread = Array.isArray(__pmChat.threads?.[requestedSession])
         ? __pmChat.threads[requestedSession]
         : [];
-      // `_clearMobileLiveRunForSession` removes streaming rows in place. Keep
-      // a separate array for the final merge so a transient inactive/recovered
-      // read cannot erase the only copy of the current stream before the
-      // server snapshot is reconciled.
-      const localThreadBeforeClear = localThread.slice();
       const inactiveRecoveryClientRequestId = String(
         status?.run?.clientRequestId
         || status?.activeRun?.clientRequestId
@@ -12587,7 +12296,7 @@ void main() {
       ) || 0;
       const completedDurableTurn = recoveryStartedAt > 0
         && _mobileHistoryHasCompletedTurnSince(history, recoveryStartedAt, {});
-      if (replayStillActive || (localAiTurn?.streaming && !completedDurableTurn)) {
+      if (replayStillActive || (localAiTurn?.streaming && !completedDurableTurn && status?.recovered !== true)) {
         if (!isCurrentRecoveryTarget()) return;
         _adoptMobileActiveRunState(requestedSession, {
           run: status?.run || status?.activeRun || null,
@@ -12619,14 +12328,8 @@ void main() {
       if (!isCurrentRecoveryTarget()) return;
       _clearMobileLiveRunForSession(requestedSession);
       if (history.length) {
-        // If durable history positively contains this turn's completion, the
-        // post-clear array is intentional: it drops the old streaming row and
-        // lets the durable answer win. Otherwise merge the pre-clear snapshot
-        // so a stale/equal-sized page cannot roll back newer local messages.
-        const localThreadForMerge = completedDurableTurn ? localThread : localThreadBeforeClear;
-        __pmChat.threads[requestedSession] = _mergeMobileSessionThreadWithLocal(requestedSession, history, localThreadForMerge, {
-          preserveLocalHistory: _mobileHistoryPageIsPartial(session, history)
-            || (!completedDurableTurn && _mobileHistoryHasProtectedLocalContinuity(localThreadBeforeClear)),
+        __pmChat.threads[requestedSession] = _mergeMobileSessionThreadWithLocal(requestedSession, history, localThread, {
+          preserveLocalHistory: _mobileHistoryPageIsPartial(session, history),
         });
         _activeMobileThread();
         _flushThreadRender(threadEl, body, requestedSession);
@@ -12796,14 +12499,6 @@ void main() {
 
   function _setChatVoiceActive(active) {
     const enabled = !!active;
-    if (enabled && modeLauncher && !composerModeOpen) {
-      setChatComposerMode(true, {
-        animate: false,
-        preserveScroll: false,
-        reason: 'voice',
-        update: false,
-      });
-    }
     const thread = Array.isArray(__pmChat.threads?.[requestedSession]) ? __pmChat.threads[requestedSession] : [];
     const newChatVoice = !thread.some((message) => ['user', 'ai', 'assistant'].includes(String(message?.role || '').toLowerCase()));
     const hideNewChatContext = enabled && newChatVoice;
@@ -12952,25 +12647,10 @@ void main() {
       const composerOwnsKeyboard = document.body?.classList?.contains('pm-keyboard-open')
         || document.activeElement === input
         || (sideSheet?.classList?.contains('open') && document.activeElement === sideInput);
-      const lockedScrollTop = composerModeScrollLockTop;
-      composerModeScrollLockTop = null;
-      if (lockedScrollTop != null) {
-        const scrollTarget = _mobileChatScrollTarget(body);
-        const restoreComposerModeScroll = () => {
-          if (!scrollTarget) return;
-          const maxScrollTop = Math.max(0, scrollTarget.scrollHeight - scrollTarget.clientHeight);
-          scrollTarget.scrollTop = Math.min(Math.max(0, lockedScrollTop), maxScrollTop);
-        };
-        restoreComposerModeScroll();
-        requestAnimationFrame(restoreComposerModeScroll);
-      } else if (!composerOwnsKeyboard) _restoreMobileChatScroll(body, scrollSnapshot);
+      if (!composerOwnsKeyboard) _restoreMobileChatScroll(body, scrollSnapshot);
       const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
       const shift = Math.max(-64, Math.min(64, space - previousSpace));
-      // Once the composer owns the keyboard, the visual-viewport controller is
-      // already repositioning the fixed composer. A second WAAPI translation
-      // on the transcript makes the keyboard hand-off visibly flicker on iOS,
-      // especially while ResizeObserver reports the intermediate heights.
-      if (!reduceMotion && !composerOwnsKeyboard && Math.abs(shift) >= 2 && typeof threadEl?.animate === 'function') {
+      if (!reduceMotion && Math.abs(shift) >= 2 && typeof threadEl?.animate === 'function') {
         // ResizeObserver can fire on several consecutive frames while the
         // composer or a runtime card grows. Continue from the current visual
         // offset instead of restarting from zero on every measurement.
@@ -12990,7 +12670,7 @@ void main() {
         chatComposerShiftAnimation.addEventListener?.('finish', () => {
           chatComposerShiftAnimation = null;
         }, { once: true });
-      } else if (reduceMotion || composerOwnsKeyboard) {
+      } else if (reduceMotion) {
         chatComposerShiftAnimation?.cancel?.();
         chatComposerShiftAnimation = null;
       }
@@ -13004,10 +12684,7 @@ void main() {
   // actual boxes keeps the chat inset correct for every open/close path rather
   // than relying on each feature to remember to request a remeasurement.
   const chatSurfaceResizeObserver = typeof ResizeObserver === 'function'
-    ? new ResizeObserver(() => {
-      if (_pmKbFocusActive) _scheduleKeyboardOffset();
-      updateChatComposerSpace();
-    })
+    ? new ResizeObserver(() => updateChatComposerSpace())
     : null;
   [form, connectionStatus, toolProgressDock, mainPlanDock, backgroundSpawnDock, goalStrip, page?.querySelector?.('#pm-mobile-queued-prompts')]
     .filter(Boolean)
@@ -13064,43 +12741,6 @@ void main() {
     else if (keyedScroll.anchorKey) mobileTimelineController.anchorKey(timelineKey, keyedScroll.anchorKey);
     if (isUpwardScroll && scrollTop <= 80) loadOlderMobileMessages();
   };
-  const composerModeScrollTarget = _mobileChatScrollTarget(body);
-  const composerModeCanAutoHide = () => {
-    if (!composerModeOpen || !form || form.classList.contains('is-voice-active')) return false;
-    const keyboardOpen = document.body?.classList?.contains('pm-keyboard-open')
-      || page.querySelector('.pm-app')?.classList?.contains('pm-keyboard-open');
-    const keyboardFocusHandoff = _pmKbFocusActive
-      || document.activeElement === input
-      || (sideSheet?.classList?.contains('open') && document.activeElement === sideInput);
-    // A delayed iOS focus/viewport pass can briefly remove the CSS keyboard
-    // marker. Focus ownership is the stronger signal and must also suppress
-    // auto-hide, otherwise that layout shift closes the composer underneath
-    // the keyboard.
-    if (keyboardOpen || keyboardFocusHandoff) return false;
-    return !form.classList.contains('has-text')
-      && !form.classList.contains('has-attachments')
-      && !form.classList.contains('has-pending-question');
-  };
-  const onComposerModeScrollIntent = () => {
-    // Opening the composer on iOS can move the document by a few pixels while
-    // Safari reveals the focused field. That is layout work, not a user's
-    // upward scroll. Require a recent gesture before allowing auto-hide.
-    composerModeScrollIntentUntil = (window.performance?.now?.() || 0) + 900;
-  };
-  const onComposerModeScroll = () => {
-    const scrollTop = Number(composerModeScrollTarget?.scrollTop || 0);
-    const delta = scrollTop - composerModeLastScrollTop;
-    composerModeLastScrollTop = scrollTop;
-    if (delta >= -2) return;
-    if ((window.performance?.now?.() || 0) < composerModeScrollIgnoreUntil) return;
-    if ((window.performance?.now?.() || 0) > composerModeScrollIntentUntil) return;
-    if (!composerModeCanAutoHide()) return;
-    setChatComposerMode(false, {
-      animate: true,
-      preserveScroll: true,
-      reason: 'scroll',
-    });
-  };
   const onLoadOlderClick = (event) => {
     const button = event.target?.closest?.('[data-pm-load-older]');
     if (!button) return;
@@ -13113,13 +12753,12 @@ void main() {
     mobileTimelineController.followTail(`mobile:main:${requestedSession}`);
     _renderThread(threadEl, requestedSession);
     try { pmHaptic(12); } catch {}
-    // The transcript renderer preserves the user's keyed scroll position by
-    // design. A direct scrollTo before that reconciliation settles can be
-    // immediately overwritten, especially when document-scroll mode changes
-    // the composer inset in the same frame. Use the shared force-bottom path
-    // after rendering and once more after the layout frame.
-    _scrollChat(body);
-    requestAnimationFrame(() => requestAnimationFrame(() => _scrollChat(body)));
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
+    try {
+      scrollTarget.scrollTo({ top: scrollTarget.scrollHeight, behavior: reduceMotion ? 'auto' : 'smooth' });
+    } catch {
+      scrollTarget.scrollTop = scrollTarget.scrollHeight;
+    }
     scrollLatestBtn.hidden = true;
   };
   body?.addEventListener('scroll', updateScrollLatestButton, { passive: true });
@@ -13130,13 +12769,6 @@ void main() {
   window.addEventListener('scroll', syncBackgroundDockOnScroll, { passive: true });
   body?.addEventListener('scroll', maybeLoadOlderOnScroll, { passive: true });
   document.addEventListener('scroll', maybeLoadOlderOnScroll, { passive: true });
-  const composerModeScrollIntentOptions = { passive: true };
-  for (const eventName of ['touchstart', 'pointerdown', 'wheel']) {
-    composerModeScrollTarget?.addEventListener(eventName, onComposerModeScrollIntent, composerModeScrollIntentOptions);
-    if (composerModeScrollTarget !== body) document.addEventListener(eventName, onComposerModeScrollIntent, composerModeScrollIntentOptions);
-  }
-  composerModeScrollTarget?.addEventListener('scroll', onComposerModeScroll, { passive: true });
-  if (composerModeScrollTarget !== body) document.addEventListener('scroll', onComposerModeScroll, { passive: true });
   threadEl?.addEventListener('click', onLoadOlderClick);
   scrollLatestBtn?.addEventListener('click', jumpToLatest);
   requestAnimationFrame(updateScrollLatestButton);
@@ -13186,7 +12818,8 @@ void main() {
     const type = String(normalizedEntry.type || normalizedEntry.kind || rawType).trim().toLowerCase();
     const extra = normalizedEntry.extra && typeof normalizedEntry.extra === 'object' ? normalizedEntry.extra : {};
     if (_isMobileReasoningSummaryTraceEntry(entry) || _isMobileReasoningSummaryTraceEntry(normalizedEntry)) {
-      return _setMobileLiveProgressNarration(message, text);
+      _appendMobileReasoningSummary(message, text);
+      return true;
     }
     if (!['preamble', 'assistant', 'think', 'thinking', 'thought', 'agent_thought'].includes(type)) return false;
     const visibility = String(extra.visibility || normalizedEntry.visibility || entry.visibility || '').trim().toLowerCase();
@@ -13210,10 +12843,9 @@ void main() {
     const agentName = String(record?.agentName || 'Background agent');
     const promptText = _mobileBackgroundAgentDetailPrompt(record);
     const source = record?.message && typeof record.message === 'object' ? record.message : {};
-    const processEntries = (Array.isArray(source.processEntries) && source.processEntries.length
+    const processEntries = Array.isArray(source.processEntries) && source.processEntries.length
       ? source.processEntries
-      : _mobileBackgroundAgentDetailEvents(record))
-      .filter((entry) => !_isMobileTransientReasoningTraceEntry(entry));
+      : _mobileBackgroundAgentDetailEvents(record);
     const liveTraceEntries = Array.isArray(source.liveTraceEntries) && source.liveTraceEntries.length
       ? source.liveTraceEntries.map(_normalizeMobileRecoveredTraceEntry).filter(Boolean)
       : (Array.isArray(record.liveTraceEntries) ? record.liveTraceEntries.map(_normalizeMobileRecoveredTraceEntry).filter(Boolean) : []);
@@ -13319,14 +12951,11 @@ void main() {
       const processExtra = isReasoningSummary
         ? { ...(extra && typeof extra === 'object' ? extra : {}), source: 'reasoning_summary', visibility: 'user' }
         : extra;
+      _pushMobileStreamProcessEntry(lane.message, processType, text, processExtra, !isReasoningSummary);
       if (isReasoningSummary) {
-        const beforeTrace = String(lane.message.liveTraceEntries?.find((item) => (
-          String(item?.extra?.source || '').toLowerCase() === 'agent_progress'
-        ))?.text || '');
-        const traceChanged = _setMobileLiveProgressNarration(lane.message, text);
-        changed = changed || traceChanged || beforeTrace !== text;
-      } else {
-        _pushMobileStreamProcessEntry(lane.message, processType, text, processExtra, true);
+        const beforeTrace = Array.isArray(lane.message.liveTraceEntries) ? lane.message.liveTraceEntries.length : 0;
+        const traceChanged = _appendMobileReasoningSummary(lane.message, text);
+        changed = changed || traceChanged || (Array.isArray(lane.message.liveTraceEntries) && lane.message.liveTraceEntries.length > beforeTrace);
       }
       changed = changed || (Array.isArray(lane.message.processEntries) && lane.message.processEntries.length > before);
     }
@@ -13959,7 +13588,7 @@ void main() {
   let _pmKbFocusGraceTimer = 0;
   let _pmKbViewportMode = '';
   const _pmKbComposerShiftProperty = '--pm-keyboard-composer-shift';
-  const _pmKbComposerViewportProperties = ['position', 'left', 'right', 'top', 'bottom', 'z-index'];
+  const _pmKbComposerViewportProperties = ['position', 'left', 'right', 'bottom', 'z-index'];
   function _pmKbComposerNodes() {
     const nodes = [form];
     if (sideSheet) nodes.push(...sideSheet.querySelectorAll('.pm-composer'));
@@ -13976,71 +13605,30 @@ void main() {
   function _pmKbSetComposerViewportStyles(bottomPx) {
     const composer = _pmKbActiveComposer();
     if (!composer) return;
-    const layoutHeight = Math.max(
-      Number(window.innerHeight || 0),
-      Number(document.documentElement?.clientHeight || 0),
-    );
-    const vv = window.visualViewport;
-    const visualBottom = Math.round(
-      Math.max(0, Number(vv?.offsetTop || 0)) + Math.max(0, Number(vv?.height || layoutHeight || 0)),
-    );
-    const resolvedBottom = Math.max(8, Math.round(Number(bottomPx) || 8));
-    // Safari can derive an auto `top` for a fixed element from its old flow
-    // position while the document is being scrolled. Give the keyboard-owned
-    // composer an explicit top and make bottom auto so that static-position
-    // recalculation cannot move it to the top edge. The height observer below
-    // reapplies this when the multiline composer grows.
-    const viewportBottom = _pmKbViewportMode === 'visual' ? visualBottom : layoutHeight;
-    const composerHeight = Math.max(0, Number(composer.getBoundingClientRect?.().height || 0));
-    const top = Math.max(0, Math.round(viewportBottom - resolvedBottom - composerHeight));
-    const values = {
-      position: 'fixed',
-      left: '10px',
-      right: '10px',
-      top: `${top}px`,
-      bottom: 'auto',
-      'z-index': '10020',
-    };
-    Object.entries(values).forEach(([property, value]) => {
-      if (composer.style.getPropertyValue(property) !== value
-        || composer.style.getPropertyPriority(property) !== 'important') {
-        composer.style.setProperty(property, value, 'important');
-      }
-    });
-  }
-  let _pmKbComposerRepairRaf = 0;
-  function _pmKbScheduleComposerPositionRepair() {
-    if (_pmKbComposerRepairRaf || !_pmKbFocusActive || !_pmKbViewportMode) return;
-    _pmKbComposerRepairRaf = requestAnimationFrame(() => {
-      _pmKbComposerRepairRaf = 0;
-      if (!_pmKbFocusActive || !_pmKbViewportMode) return;
-      const composer = _pmKbActiveComposer();
-      if (!composer) return;
-      const rect = composer.getBoundingClientRect?.();
-      if (!rect || !rect.height) return;
-      const layoutHeight = Math.max(
-        Number(window.innerHeight || 0),
-        Number(document.documentElement?.clientHeight || 0),
-      );
-      const vv = window.visualViewport;
-      const visualHeight = Math.max(0, Number(vv?.height || layoutHeight || 0));
-      const visualBottom = Math.round(Math.max(0, Number(vv?.offsetTop || 0)) + visualHeight);
-      const keyboardHeightOffset = vv ? Math.max(0, Math.round(layoutHeight - visualHeight)) : 0;
-      const bottom = _pmKbViewportMode === 'layout' ? keyboardHeightOffset + 8 : 8;
-      const viewportBottom = _pmKbViewportMode === 'visual' ? visualBottom : layoutHeight;
-      const desiredTop = Math.max(0, Math.round(viewportBottom - bottom - rect.height));
-      const drift = desiredTop - Math.round(rect.top);
-      // Normal visualViewport panning should be a no-op. Only repair a large
-      // displacement, which is the iOS fixed/static-position failure mode.
-      if (Math.abs(drift) < 24) return;
-      const currentTop = Number.parseFloat(composer.style.getPropertyValue('top'));
-      const nextTop = Number.isFinite(currentTop) ? Math.max(0, Math.round(currentTop + drift)) : desiredTop;
-      composer.style.setProperty('top', `${nextTop}px`, 'important');
-    });
+    composer.style.setProperty('position', 'fixed', 'important');
+    composer.style.setProperty('left', '10px', 'important');
+    composer.style.setProperty('right', '10px', 'important');
+    composer.style.setProperty('bottom', `${Math.max(8, Math.round(Number(bottomPx) || 8))}px`, 'important');
+    composer.style.setProperty('z-index', '10020', 'important');
   }
   function _pmKbActiveComposer() {
     const sideFocused = sideSheet?.classList?.contains('open') && document.activeElement === sideInput;
     return sideFocused ? (sideInput?.closest?.('.pm-composer') || form) : form;
+  }
+  function _pmKbAnchorComposer(visualBottom) {
+    const composer = _pmKbActiveComposer();
+    if (!composer) return;
+    const rect = composer.getBoundingClientRect?.();
+    if (!rect || !rect.width || !rect.height) return;
+    const desiredBottom = Math.max(0, Number(visualBottom || 0) - 8);
+    const rawShift = desiredBottom - Number(rect.bottom || 0);
+    const limit = Math.max(Number(window.innerHeight || 0), Number(visualBottom || 0), Number(rect.height || 0)) + 80;
+    const shift = Math.max(-limit, Math.min(limit, rawShift));
+    if (Math.abs(shift) < 0.5) {
+      composer.style.removeProperty(_pmKbComposerShiftProperty);
+      return;
+    }
+    composer.style.setProperty(_pmKbComposerShiftProperty, `${Math.round(shift)}px`);
   }
   function _pmKbPinScroll() {
     // The document-scroll PWA path must remain fully user-scrollable. Its
@@ -14065,12 +13653,12 @@ void main() {
     );
     const visualHeight = Math.max(0, Number(vv?.height || layoutHeight || 0));
     const visualTop = Math.max(0, Number(vv?.offsetTop || 0));
-    // Keyboard height is the layout/visual height difference. Do not include
-    // visualViewport.offsetTop here: iOS changes that value while the user
-    // scrolls chat history, but the keyboard has not moved on screen.
+    // Keyboard height = layout viewport height minus the visible (visual)
+    // viewport height. The shell stays anchored to the layout viewport, so the
+    // composer only needs to float up by this amount.
     const visualBottom = Math.round(visualTop + visualHeight);
-    const keyboardHeightOffset = vv
-      ? Math.max(0, Math.round(layoutHeight - visualHeight))
+    const layoutOffset = vv
+      ? Math.max(0, Math.round(layoutHeight - visualBottom))
       : 0;
     const baselineOffset = Math.max(0, Math.round(_pmKbBaselineHeight - (vv ? visualHeight : layoutHeight)));
     const composerFocused = document.activeElement === input
@@ -14089,39 +13677,44 @@ void main() {
     // keyboard. Do not let that closing-frame measurement re-hide the tab bar;
     // only an actively focused composer or project-name field owns this state.
     const open = composerFocused && (
-      keyboardHeightOffset > 90
+      layoutOffset > 90
       || baselineOffset > 90
       || (_pmKbFocusActive && performance.now() < _pmKbFocusGraceUntil)
     );
-    const keyboardViewportSettled = keyboardHeightOffset > 90 || baselineOffset > 90;
     // iOS has two incompatible fixed-position behaviors: some webviews anchor
     // fixed children to the layout viewport, while others already anchor them
-    // to the visual viewport. Classify that behavior once after the keyboard
-    // settles; reclassifying on every scroll makes the composer jump between
-    // two different bottom anchors.
+    // to the visual viewport. Reset the small visual correction before each
+    // measurement so a scroll-up or viewport-pan cannot leave a stale mode or
+    // stale lift attached to the composer.
     if (!open) {
       _pmKbViewportMode = '';
       _pmKbApp.classList.remove('pm-keyboard-open');
       _pmKbClearComposerShift();
       _pmKbClearComposerViewportStyles();
     } else {
+      _pmKbApp.style.setProperty('--pm-keyboard-offset', '0px');
       _pmKbApp.classList.add('pm-keyboard-open');
-      if (keyboardViewportSettled && !_pmKbViewportMode) {
-        const composerBottom = Number(_pmKbActiveComposer()?.getBoundingClientRect?.().bottom || 0);
-        _pmKbViewportMode = composerBottom > 0 && composerBottom <= visualBottom + 44 ? 'visual' : 'layout';
-      }
-      _pmKbSetComposerViewportStyles(_pmKbViewportMode === 'layout' ? keyboardHeightOffset + 8 : 8);
+      _pmKbClearComposerShift();
+      const composerBottom = Number(_pmKbActiveComposer()?.getBoundingClientRect?.().bottom || 0);
+      _pmKbViewportMode = composerBottom > 0 && composerBottom <= visualBottom + 44 ? 'visual' : 'layout';
+      _pmKbSetComposerViewportStyles(_pmKbViewportMode === 'layout' ? layoutOffset + 8 : 8);
     }
-    const keyboardOffset = open && _pmKbViewportMode === 'layout' ? keyboardHeightOffset : 0;
-    const keyboardOffsetValue = `${keyboardOffset}px`;
-    if (_pmKbApp.style.getPropertyValue('--pm-keyboard-offset') !== keyboardOffsetValue) {
-      _pmKbApp.style.setProperty('--pm-keyboard-offset', keyboardOffsetValue);
-    }
+    const keyboardOffset = open && _pmKbViewportMode === 'layout' ? layoutOffset : 0;
+    _pmKbApp.style.setProperty('--pm-keyboard-offset', `${keyboardOffset}px`);
+    _pmKbApp.classList.toggle('pm-keyboard-open', open);
     // A focused field is not proof that iOS has presented the keyboard yet.
     // During that short focus-only window the new-project dialog must remain
     // centered; switch to keyboard anchoring only after the viewport has
     // actually contracted.
+    const keyboardViewportSettled = layoutOffset > 90 || baselineOffset > 90;
     syncNewProjectPopoverToKeyboard(open && keyboardViewportSettled, visualBottom, layoutHeight);
+    if (open && !document.body?.classList?.contains('pm-mobile-document-scroll')) {
+      // A document-scrolled iOS PWA can pan the visual viewport while the
+      // fixed composer remains tied to the layout viewport. Correct the final
+      // measured edge instead of guessing from the page's scroll position.
+      _pmKbClearComposerShift();
+      _pmKbAnchorComposer(visualBottom);
+    }
     // Do this on the actual nav node instead of depending on ancestor CSS.
     // Installed iOS PWAs may retain an older mobile stylesheet for one launch,
     // while this controller still has the authoritative keyboard state.
@@ -14155,28 +13748,18 @@ void main() {
     if (!_pmKbPinRaf) _pmKbPinRaf = requestAnimationFrame(_pmKbPinLoop);
   }
   const _onVvResize = () => { _scheduleKeyboardOffset(); _startKbPinLoop(400); };
-  // A visualViewport scroll is page panning, not a keyboard resize. Once the
-  // keyboard mode is locked, re-running the anchor pass here makes the
-  // composer chase offsetTop and visibly flicker while chat scrolls.
-  const _onVvScroll = () => {
-    if (_pmKbFocusActive && _pmKbViewportMode) {
-      _pmKbScheduleComposerPositionRepair();
-      return;
-    }
-    _scheduleKeyboardOffset();
-  };
+  // iOS pans visualViewport.offsetTop (without necessarily resizing it) when
+  // the user scrolls chat history while the keyboard stays open. Re-run the
+  // same anchoring pass so the fixed composer remains locked to the keyboard
+  // edge throughout that pan instead of drifting with the document.
+  const _onVvScroll = () => { _scheduleKeyboardOffset(); };
   const _onWindowKeyboardResize = () => { _scheduleKeyboardOffset(); };
-  const _onWindowKeyboardScroll = () => {
-    if (_pmKbFocusActive && _pmKbViewportMode) _pmKbScheduleComposerPositionRepair();
-  };
   const _pmVisualViewport = window.visualViewport || null;
   if (_pmVisualViewport) {
     _pmVisualViewport.addEventListener('resize', _onVvResize);
     _pmVisualViewport.addEventListener('scroll', _onVvScroll, { passive: true });
   }
   window.addEventListener('resize', _onWindowKeyboardResize, { passive: true });
-  window.addEventListener('scroll', _onWindowKeyboardScroll, { passive: true });
-  body?.addEventListener('scroll', _onWindowKeyboardScroll, { passive: true });
   const _onComposerFocusKb = () => {
     _pmKbFocusActive = true;
     _pmKbFocusGraceUntil = performance.now() + 1600;
@@ -14189,10 +13772,6 @@ void main() {
     // Move the real composer before Safari finishes presenting the keyboard;
     // the later viewport pass replaces the provisional 8px bottom edge with
     // the measured visual-viewport edge.
-    // Cancel any transcript shift that was queued before focus. The composer
-    // and keyboard must have one owner during this visual-viewport hand-off.
-    chatComposerShiftAnimation?.cancel?.();
-    chatComposerShiftAnimation = null;
     _pmKbApp.style.setProperty('--pm-keyboard-offset', '0px');
     _pmKbApp.classList.add('pm-keyboard-open');
     // Keep the dialog centered during the focus hand-off. The first measured
@@ -14277,9 +13856,6 @@ void main() {
       _pmVisualViewport.removeEventListener('scroll', _onVvScroll);
     }
     window.removeEventListener('resize', _onWindowKeyboardResize);
-    window.removeEventListener('scroll', _onWindowKeyboardScroll);
-    body?.removeEventListener('scroll', _onWindowKeyboardScroll);
-    if (_pmKbComposerRepairRaf) { cancelAnimationFrame(_pmKbComposerRepairRaf); _pmKbComposerRepairRaf = 0; }
     window.removeEventListener('pagehide', _onPageHideKb);
     window.removeEventListener('pageshow', _onPageShowKb);
     document.removeEventListener('visibilitychange', _onVisibilityChangeKb);
@@ -14315,10 +13891,6 @@ void main() {
       } catch {}
       try { if (chatVoiceShell) chatVoiceShell.hidden = true; } catch {}
       try { form?.classList.remove('is-voice-active'); } catch {}
-      try {
-        contextDock?.classList.remove('pm-chat-context-dock-voice-hidden');
-        contextDock?.setAttribute('aria-hidden', 'false');
-      } catch {}
       try { body?.classList.remove('pm-chat-voice-occluded'); } catch {}
       try {
         document.body?.classList.remove(
@@ -14337,14 +13909,6 @@ void main() {
       console.warn('[mobile chat] voice cleanup failed during close:', err);
     } finally {
       clearChatVoiceUi();
-      if (modeLauncher) {
-        setChatComposerMode(false, {
-          animate: false,
-          preserveScroll: true,
-          reason: 'voice-close',
-          update: false,
-        });
-      }
       try { updateChatComposerSpace(); } catch {}
       try { updateComposerSubmitState(); } catch {}
     }
@@ -14543,63 +14107,6 @@ void main() {
     updateChatComposerSpace();
     updateComposerSubmitState();
   }
-
-  const focusChatComposerInput = () => {
-    if (!input || form?.classList?.contains('is-voice-active')) return;
-    try {
-      input.focus({ preventScroll: true });
-    } catch {
-      try { input.focus(); } catch {}
-    }
-    try { input.setSelectionRange(input.value.length, input.value.length); } catch {}
-    // A few iOS WebViews report focus one frame late after the morph. Keep the
-    // trusted click's synchronous focus first, then retry only if it did not
-    // stick; this opens the native keyboard without changing the scroll anchor.
-    requestAnimationFrame(() => {
-      if (document.activeElement !== input) {
-        try { input.focus({ preventScroll: true }); } catch { try { input.focus(); } catch {} }
-      }
-    });
-  };
-  const onChatModeKeyboardClick = (event) => {
-    event.preventDefault();
-    if (document.body?.classList?.contains('pm-chat-voice-active')) return;
-    if (event.isTrusted) {
-      try { pmHaptic?.(10); } catch {}
-    }
-    setChatComposerMode(true, {
-      animate: true,
-      preserveScroll: true,
-      reason: 'keyboard',
-    });
-    focusChatComposerInput();
-  };
-  const onChatModeVoiceClick = (event) => {
-    event.preventDefault();
-    if (document.body?.classList?.contains('pm-chat-voice-active')) return;
-    if (!chatVoiceHost) return;
-    if (event.isTrusted) {
-      try { pmHaptic?.(12); } catch {}
-    }
-    setChatComposerMode(true, {
-      animate: true,
-      preserveScroll: true,
-      reason: 'voice',
-      update: false,
-    });
-    void _toggleChatVoiceMode({ autoStart: true }).catch((err) => {
-      console.warn('[mobile chat] launcher voice open failed:', err);
-      if (!document.body?.classList?.contains('pm-chat-voice-active')) {
-        setChatComposerMode(false, {
-          animate: false,
-          preserveScroll: true,
-          reason: 'voice-error',
-        });
-      }
-    });
-  };
-  modeKeyboardButton?.addEventListener('click', onChatModeKeyboardClick);
-  modeVoiceButton?.addEventListener('click', onChatModeVoiceClick);
 
   async function syncMobileThreadHistory(history = _mobileHistoryForServer(), options = {}) {
     try {
@@ -14911,6 +14418,7 @@ void main() {
             const text = String(evt.thinking || evt.text || '');
             if (text) {
               _setMobileLiveProgressNarration(replayState, text);
+              _appendMobileReasoningSummary(replayState, text);
             }
           }
           break;
@@ -14919,6 +14427,7 @@ void main() {
           const text = String(evt.text || evt.summary || '');
           if (text) {
             _setMobileLiveProgressNarration(replayState, text);
+            _appendMobileReasoningSummary(replayState, text);
           }
           break;
         }
@@ -16697,10 +16206,6 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
   page._pmCleanup = () => {
     previousCleanup?.();
     releaseActiveChatRuntime();
-    mobilePageDisposed = true;
-    if (__pmChat.mobilePageInstanceToken === mobilePageInstanceToken) {
-      __pmChat.mobilePageInstanceToken = '';
-    }
     mobileRecoveryDisposed = true;
     if (__pmChat.mobileRecoveryOwners[requestedSession] === mobileRecoveryOwnerToken) {
       delete __pmChat.mobileRecoveryOwners[requestedSession];
@@ -16722,18 +16227,6 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     window.removeEventListener('scroll', syncBackgroundDockOnScroll);
     body?.removeEventListener('scroll', maybeLoadOlderOnScroll);
     document.removeEventListener('scroll', maybeLoadOlderOnScroll);
-    composerModeScrollTarget?.removeEventListener('scroll', onComposerModeScroll);
-    if (composerModeScrollTarget !== body) document.removeEventListener('scroll', onComposerModeScroll);
-    for (const eventName of ['touchstart', 'pointerdown', 'wheel']) {
-      composerModeScrollTarget?.removeEventListener(eventName, onComposerModeScrollIntent, composerModeScrollIntentOptions);
-      if (composerModeScrollTarget !== body) document.removeEventListener(eventName, onComposerModeScrollIntent, composerModeScrollIntentOptions);
-    }
-    modeKeyboardButton?.removeEventListener('click', onChatModeKeyboardClick);
-    modeVoiceButton?.removeEventListener('click', onChatModeVoiceClick);
-    if (composerModeTransitionTimer) {
-      window.clearTimeout(composerModeTransitionTimer);
-      composerModeTransitionTimer = 0;
-    }
     threadEl?.removeEventListener('click', onLoadOlderClick);
     scrollLatestBtn?.removeEventListener('click', jumpToLatest);
     window.removeEventListener('pagehide', onAppHide, { capture: true });
@@ -16789,9 +16282,6 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     }
     if (window.__pmMobileQuestionComposerChanged === currentQuestionComposerBridge) {
       window.__pmMobileQuestionComposerChanged = previousQuestionComposerBridge;
-    }
-    if (window.__pmMobileOpenChatComposer === currentOpenChatComposerBridge) {
-      window.__pmMobileOpenChatComposer = previousOpenChatComposerBridge;
     }
     if (__pmChat.workTimer) {
       clearInterval(__pmChat.workTimer);
@@ -17994,7 +17484,6 @@ const mobileVoicePageContext = Object.freeze(Object.defineProperties({}, {
   "__pmChat": { enumerable: true, get: () => __pmChat },
   "__pmRealtimeAgent": { enumerable: true, get: () => __pmRealtimeAgent },
   "__pmVoice": { enumerable: true, get: () => __pmVoice },
-  "appendMobileVoiceRoomTranscript": { enumerable: true, get: () => appendMobileVoiceRoomTranscript },
   "_appendMobileLiveTrace": { enumerable: true, get: () => _appendMobileLiveTrace },
   "_appendMobilePrimaryWorkerProcess": { enumerable: true, get: () => _appendMobilePrimaryWorkerProcess },
   "_appendMobileProcess": { enumerable: true, get: () => _appendMobileProcess },
@@ -18007,7 +17496,6 @@ const mobileVoicePageContext = Object.freeze(Object.defineProperties({}, {
   "_deliveryNotificationToMobileMedia": { enumerable: true, get: () => _deliveryNotificationToMobileMedia },
   "_drawAgentSVG": { enumerable: true, get: () => _drawAgentSVG },
   "_ensureDurableMobileVoiceSession": { enumerable: true, get: () => _ensureDurableMobileVoiceSession },
-  "_findLatestAssistantTurn": { enumerable: true, get: () => _findLatestAssistantTurn },
   "_flushMobilePendingThinkingBurst": { enumerable: true, get: () => _flushMobilePendingThinkingBurst },
   "_formatBytes": { enumerable: true, get: () => _formatBytes },
   "_handleMobileCleanThought": { enumerable: true, get: () => _handleMobileCleanThought },
@@ -18017,8 +17505,6 @@ const mobileVoicePageContext = Object.freeze(Object.defineProperties({}, {
   "_mergeMobileMediaIntoMessage": { enumerable: true, get: () => _mergeMobileMediaIntoMessage },
   "_mergeMobileSessionThreadWithLocal": { enumerable: true, get: () => _mergeMobileSessionThreadWithLocal },
   "_mobileAssistantWorkStartedAt": { enumerable: true, get: () => _mobileAssistantWorkStartedAt },
-  "_mobileHistoryForServer": { enumerable: true, get: () => _mobileHistoryForServer },
-  "_mapServerMessageToMobile": { enumerable: true, get: () => _mapServerMessageToMobile },
   "_mobileMediaKind": { enumerable: true, get: () => _mobileMediaKind },
   "_mobileToolLabel": { enumerable: true, get: () => _mobileToolLabel },
   "_mobileToolResultLabel": { enumerable: true, get: () => _mobileToolResultLabel },
@@ -18030,8 +17516,6 @@ const mobileVoicePageContext = Object.freeze(Object.defineProperties({}, {
   "_normalizeMobileMediaList": { enumerable: true, get: () => _normalizeMobileMediaList },
   "_normalizeMobileVoiceWorkgroup": { enumerable: true, get: () => _normalizeMobileVoiceWorkgroup },
   "_notifyMobileChatVoiceUpdate": { enumerable: true, get: () => _notifyMobileChatVoiceUpdate },
-  "_notifyMobileVoiceAgentConnection": { enumerable: true, get: () => _notifyMobileVoiceAgentConnection },
-  "_markMobileRealtimeAgentBackendReady": { enumerable: true, get: () => _markMobileRealtimeAgentBackendReady },
   "_nowTime": { enumerable: true, get: () => _nowTime },
   "_pmApprovalCanSave": { enumerable: true, get: () => _pmApprovalCanSave },
   "_pmApprovalTechnicalText": { enumerable: true, get: () => _pmApprovalTechnicalText },
@@ -18041,12 +17525,10 @@ const mobileVoicePageContext = Object.freeze(Object.defineProperties({}, {
   "_pmLoadApprovalProcessRun": { enumerable: true, get: () => _pmLoadApprovalProcessRun },
   "_readMobileActiveRun": { enumerable: true, get: () => _readMobileActiveRun },
   "_recordMobileChatError": { enumerable: true, get: () => _recordMobileChatError },
-  "_rebindMobileCodexBridgeOwnerSession": { enumerable: true, get: () => _rebindMobileCodexBridgeOwnerSession },
   "_rememberMobileActiveRun": { enumerable: true, get: () => _rememberMobileActiveRun },
   "_rememberMobileLastChatSession": { enumerable: true, get: () => _rememberMobileLastChatSession },
   "_renderAgentVoicePicker": { enumerable: true, get: () => _renderAgentVoicePicker },
   "_renderMobileMediaGallery": { enumerable: true, get: () => _renderMobileMediaGallery },
-  "_renderMobileChatSessionNow": { enumerable: true, get: () => _renderMobileChatSessionNow },
   "_renderMobileRichArtifacts": { enumerable: true, get: () => _renderMobileRichArtifacts },
   "_restoreMobileVoiceWorkgroupsForSession": { enumerable: true, get: () => _restoreMobileVoiceWorkgroupsForSession },
   "_restoreTemporaryMobileSubagentVoiceProfile": { enumerable: true, get: () => _restoreTemporaryMobileSubagentVoiceProfile },
@@ -18065,24 +17547,17 @@ const mobileVoicePageContext = Object.freeze(Object.defineProperties({}, {
   "attachMobileHapticGestureSurface": { enumerable: true, get: () => attachMobileHapticGestureSurface },
   "bindMobileSessionTarget": { enumerable: true, get: () => bindMobileSessionTarget },
   "buildMobileGatewayWsUrl": { enumerable: true, get: () => buildMobileGatewayWsUrl },
-  "createVoiceInterruptionEvent": { enumerable: true, get: () => createVoiceInterruptionEvent },
   "denyMobileApproval": { enumerable: true, get: () => denyMobileApproval },
   "escapeHtml": { enumerable: true, get: () => escapeHtml },
   "getVoicePreviewDragStyle": { enumerable: true, get: () => getVoicePreviewDragStyle },
   "getVoicePreviewGestureOutcome": { enumerable: true, get: () => getVoicePreviewGestureOutcome },
-  "getDeviceToken": { enumerable: true, get: () => getDeviceToken },
   "invalidateMobileDrawerSessions": { enumerable: true, get: () => invalidateMobileDrawerSessions },
   "isCurrentGateway": { enumerable: true, get: () => isCurrentGateway },
   "loadMobileApprovals": { enumerable: true, get: () => loadMobileApprovals },
   "loadMobileChatSession": { enumerable: true, get: () => loadMobileChatSession },
-  "loadMobileChatRunStatus": { enumerable: true, get: () => loadMobileChatRunStatus },
-  "loadMobileSubagentDetail": { enumerable: true, get: () => loadMobileSubagentDetail },
   "loadMobileSubagents": { enumerable: true, get: () => loadMobileSubagents },
   "loadVoiceStatus": { enumerable: true, get: () => loadVoiceStatus },
-  "mobileChatRuntimeAdapter": { enumerable: true, get: () => mobileChatRuntimeAdapter },
   "mobileGatewayFetch": { enumerable: true, get: () => mobileGatewayFetch },
-  "mobileGatewayTextFetch": { enumerable: true, get: () => mobileGatewayTextFetch },
-  "updateMobileChatSessionHistory": { enumerable: true, get: () => updateMobileChatSessionHistory },
   "mountThinkingOrbWhenReady": { enumerable: true, get: () => mountThinkingOrbWhenReady },
   "notifyMobileModelChanged": { enumerable: true, get: () => notifyMobileModelChanged },
   "openDrawer": { enumerable: true, get: () => openDrawer },
@@ -18094,11 +17569,9 @@ const mobileVoicePageContext = Object.freeze(Object.defineProperties({}, {
   "registerAgentVoicePickerOnSaved": { enumerable: true, get: () => registerAgentVoicePickerOnSaved },
   "renderMobileHeader": { enumerable: true, get: () => renderMobileHeader },
   "resolveMobileSessionGateway": { enumerable: true, get: () => resolveMobileSessionGateway },
-  "resolveMobileVoiceRoom": { enumerable: true, get: () => resolveMobileVoiceRoom },
   "setMobileActiveGatewayTarget": { enumerable: true, get: () => setMobileActiveGatewayTarget },
   "stopMobileMainChat": { enumerable: true, get: () => stopMobileMainChat },
   "streamChat": { enumerable: true, get: () => streamChat },
-  "streamVoiceAgentInputMobile": { enumerable: true, get: () => streamVoiceAgentInputMobile },
   "streamSubagentChat": { enumerable: true, get: () => streamSubagentChat },
   "transcribeVoiceAudio": { enumerable: true, get: () => transcribeVoiceAudio },
   "window": { enumerable: true, get: () => window },

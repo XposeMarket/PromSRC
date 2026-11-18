@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { animateThinkingTextSwap, escHtml, renderMd, renderThinkingState, showToast, timeAgo, buildVisualIframe, buildVisualSrcdoc, bgtToast, showConfirm, setInnerHTMLPreservingVisuals } from '../utils.js';
+import { escHtml, renderMd, showToast, timeAgo, buildVisualIframe, buildVisualSrcdoc, bgtToast, showConfirm, setInnerHTMLPreservingVisuals } from '../utils.js';
 import { wsEventBus, wsSend } from '../ws.js';
 import { formatModelDisplayName } from '../model-display.js';
 import { CHAT_COMPOSER_SUGGESTION_LIMIT, CHAT_SKILL_TRIGGER, getChatSlashCommands, mergeSlashCommandSkillIds } from '../chat-slash-commands.js';
@@ -18,6 +18,7 @@ import {
 } from '../features/chat/optional/tool-activity-runtime.js';
 import { appendFinalResponseDelta, beginFinalResponse, reconcileFinalResponse } from '../chat-final-response.js';
 import { createDesktopChatRuntimeAdapter } from '../features/chat/runtime/desktop-chat-adapter.js';
+import { createChatPerformanceRuntime } from '../features/chat/runtime/chat-performance-runtime.js';
 import {
   normalizeQuestionRecord,
 } from '../features/chat/questions/question-model.js';
@@ -48,12 +49,35 @@ import {
   backgroundAgentRecordToMessage,
   backgroundAgentWorkForSession,
   findBackgroundAgentWork,
-  persistBackgroundAgentWork,
   mergeBackgroundAgentEvents,
+  mergeBackgroundAgentTraceEntries,
+  normalizeBackgroundAgentWork,
+  readBackgroundAgentWork,
   resolveBackgroundAgentIdentity,
+  writeBackgroundAgentWork,
 } from '../background-agent-work.js';
+import { createDesktopBackgroundAgentWork } from '../features/chat/core/desktop-background-agent-work.js';
 installToolActivityExpansionPersistence();
 const desktopStreamRenderScheduler = createAdaptiveStreamScheduler({ floorMs: 33, ceilingMs: 240, hiddenMs: 180 });
+
+const { appendBackgroundAgentEvent, persistBackgroundAgentWork } = createDesktopBackgroundAgentWork({
+  mergeBackgroundAgentEvents,
+  mergeBackgroundAgentTraceEntries,
+  normalizeBackgroundAgentWork,
+  readBackgroundAgentWork,
+  writeBackgroundAgentWork,
+});
+
+const chatPerformanceRuntime = createChatPerformanceRuntime({
+  persistSession,
+  persistActiveChat,
+  getChatSessionById,
+  getSessionStreamState,
+  renderProcessLog,
+  maybeAutoScrollRightColumn,
+  formatProcessLines,
+});
+const { addProcessEntry, addSessionProcessEntry, clearProcessLog } = chatPerformanceRuntime;
 
 let creativeSceneGraph = null;
 let CREATIVE_LIBRARY_PACKS = [];
@@ -1080,78 +1104,10 @@ const chatContextWindowState = {
   planProviderId: '',
   planAccountId: '',
 };
-const chatContextWindowStatesBySession = new Map();
-
-function getChatContextWindowElements(target = null) {
-  const source = target instanceof Element ? target : null;
-  const composer = source?.closest('.chat-input-area[data-canonical-secondary-composer="1"]') || null;
-  if (composer) {
-    const popover = composer.querySelector('.chat-context-window-popover');
-    return {
-      composer,
-      button: composer.querySelector('.chat-context-window-btn'),
-      popover,
-      total: popover?.querySelector('.chat-context-window-total'),
-      fill: popover?.querySelector('.chat-context-window-fill'),
-      toggle: popover?.querySelector('.chat-context-window-toggle'),
-      breakdown: popover?.querySelector('.chat-context-window-breakdown'),
-      metrics: popover?.querySelector('.chat-context-window-metrics'),
-      head: popover?.querySelector('.chat-context-window-head span:first-child'),
-      plan: popover?.querySelector('.chat-context-window-plan'),
-      planBody: popover?.querySelector('.ccw-plan-body'),
-    };
-  }
-  const popover = document.getElementById('chat-context-window-popover');
-  return {
-    composer: document.querySelector('#chat-view > .chat-input-area'),
-    button: document.getElementById('chat-context-window-btn'),
-    popover,
-    total: document.getElementById('chat-context-window-total'),
-    fill: document.getElementById('chat-context-window-fill'),
-    toggle: document.getElementById('chat-context-window-toggle'),
-    breakdown: document.getElementById('chat-context-window-breakdown'),
-    metrics: popover?.querySelector('.chat-context-window-metrics'),
-    head: popover?.querySelector('.chat-context-window-head span:first-child'),
-    plan: document.getElementById('chat-context-window-plan'),
-    planBody: document.getElementById('chat-context-window-plan-body'),
-  };
-}
-
-function getChatContextWindowTargetForSession(sessionId = '') {
-  const sid = String(sessionId || '').trim();
-  if (!sid || sid === String(window.activeChatSessionId || '').trim()) return null;
-  return Array.from(document.querySelectorAll('[data-context-window-session-id]'))
-    .find((node) => String(node.dataset.contextWindowSessionId || '') === sid) || null;
-}
-
-function getChatContextWindowStateForSession(sessionId = '') {
-  const sid = String(sessionId || '').trim();
-  if (!sid || sid === String(window.activeChatSessionId || '').trim()) return chatContextWindowState;
-  let state = chatContextWindowStatesBySession.get(sid);
-  if (!state) {
-    state = {
-      loading: false,
-      open: false,
-      expanded: false,
-      expandedRows: new Set(),
-      liveTurn: null,
-      lastSessionId: '',
-      lastFetchAt: 0,
-      data: null,
-      planFetchAt: 0,
-      planData: null,
-      planProviderId: '',
-      planAccountId: '',
-    };
-    chatContextWindowStatesBySession.set(sid, state);
-  }
-  return state;
-}
 
 function resetChatContextWindowLiveTurn(sessionId) {
   const sid = String(sessionId || '').trim();
-  const state = getChatContextWindowStateForSession(sid);
-  state.liveTurn = sid ? {
+  chatContextWindowState.liveTurn = sid ? {
     sessionId: sid,
     active: true,
     startedAt: Date.now(),
@@ -1166,19 +1122,16 @@ function resetChatContextWindowLiveTurn(sessionId) {
 }
 
 function settleChatContextWindowLiveTurn(sessionId) {
-  const sid = String(sessionId || '').trim();
-  const state = getChatContextWindowStateForSession(sid);
-  const target = getChatContextWindowTargetForSession(sid);
-  const live = state.liveTurn;
+  const live = chatContextWindowState.liveTurn;
   if (!live || String(live.sessionId || '') !== String(sessionId || '')) return;
   live.active = false;
   live.settledAt = Date.now();
   setTimeout(() => {
-    const current = state.liveTurn;
+    const current = chatContextWindowState.liveTurn;
     if (!current || current !== live) return;
     if (Date.now() - Number(current.settledAt || 0) < 7000) return;
-    state.liveTurn = null;
-    renderChatContextWindow(state.data, target);
+    chatContextWindowState.liveTurn = null;
+    renderChatContextWindow(chatContextWindowState.data);
   }, 7500);
   scheduleChatContextWindowRefresh(500);
 }
@@ -1192,12 +1145,10 @@ function estimateContextTokensFromText(text) {
 function recordChatContextWindowToolResult(event, sessionId) {
   const sid = String(sessionId || getChatContextWindowSessionId() || '').trim();
   if (!sid) return;
-  const state = getChatContextWindowStateForSession(sid);
-  const target = getChatContextWindowTargetForSession(sid);
-  let live = state.liveTurn;
+  let live = chatContextWindowState.liveTurn;
   if (!live || String(live.sessionId || '') !== sid) {
     resetChatContextWindowLiveTurn(sid);
-    live = state.liveTurn;
+    live = chatContextWindowState.liveTurn;
   }
   if (!live) return;
   const telemetry = event?.extra?.telemetry || event?.telemetry || {};
@@ -1225,19 +1176,12 @@ function recordChatContextWindowToolResult(event, sessionId) {
     tool.durationMsMax = Math.max(tool.durationMsMax, durationMs);
   }
   live.tools.set(action, tool);
-  renderChatContextWindow(state.data, target);
+  renderChatContextWindow(chatContextWindowState.data);
   scheduleChatContextWindowRefresh(1200);
 }
 
-function getChatContextWindowSessionId(target = null) {
-  const source = target instanceof Element ? target : null;
-  return String(
-    source?.dataset?.contextWindowSessionId
-    || source?.closest?.('[data-composer-session-id]')?.dataset?.composerSessionId
-    || window.activeChatSessionId
-    || window.agentSessionId
-    || '',
-  ).trim();
+function getChatContextWindowSessionId() {
+  return String(window.activeChatSessionId || window.agentSessionId || '').trim();
 }
 
 function formatContextDurationLabel(value) {
@@ -1272,13 +1216,13 @@ function formatContextTokenCount(value) {
   return String(Math.round(n));
 }
 
-function setChatContextWindowLoading(label = 'Loading...', target = null) {
-  const total = getChatContextWindowElements(target).total;
+function setChatContextWindowLoading(label = 'Loading...') {
+  const total = document.getElementById('chat-context-window-total');
   if (total) total.textContent = label;
 }
 
-function setChatContextWindowHeadLabel(label = 'Context window', target = null) {
-  const headLabel = getChatContextWindowElements(target).head;
+function setChatContextWindowHeadLabel(label = 'Context window') {
+  const headLabel = document.querySelector('#chat-context-window-popover .chat-context-window-head span:first-child');
   if (!headLabel) return;
   headLabel.innerHTML = `${escHtml(label)}<svg class="ccw-chevron" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"/></svg>`;
 }
@@ -1290,10 +1234,8 @@ function formatContextPercent(tokens, total) {
   return `${Math.max(0, (n / d) * 100).toFixed(1)}%`;
 }
 
-function renderChatContextRows(rows, windowTokens, target = null) {
-  const elements = getChatContextWindowElements(target);
-  const state = getChatContextWindowStateForSession(getChatContextWindowSessionId(target));
-  const metrics = elements.metrics;
+function renderChatContextRows(rows, windowTokens) {
+  const metrics = document.querySelector('#chat-context-window-popover .chat-context-window-metrics');
   if (!metrics) return;
   const source = Array.isArray(rows) && rows.length ? rows : [];
   const renderRow = (row, depth = 0) => {
@@ -1306,7 +1248,7 @@ function renderChatContextRows(rows, windowTokens, target = null) {
     const children = Array.isArray(row?.children) ? row.children.filter(Boolean) : [];
     const rowId = String(row?.id || row?.label || `row_${depth}`);
     const expandable = children.length > 0;
-    const expanded = expandable && state.expandedRows.has(rowId);
+    const expanded = expandable && chatContextWindowState.expandedRows.has(rowId);
     const tag = expandable ? 'button' : 'div';
     const typeAttr = expandable ? ' type="button"' : '';
     const dataAttr = expandable ? ` data-ccw-row-id="${escHtml(rowId)}" aria-expanded="${expanded ? 'true' : 'false'}"` : '';
@@ -1325,7 +1267,7 @@ function renderChatContextRows(rows, windowTokens, target = null) {
   };
   metrics.innerHTML = source.map((row) => renderRow(row, 0)).join('');
   metrics.querySelectorAll('[data-ccw-row-id]').forEach((row) => {
-    row.addEventListener('click', (event) => toggleChatContextWindowRow(event, target));
+    row.addEventListener('click', toggleChatContextWindowRow);
   });
 }
 
@@ -1372,25 +1314,20 @@ function applyChatContextWindowLiveOverlay(data) {
   return data;
 }
 
-function toggleChatContextWindowRow(event, target = null) {
+function toggleChatContextWindowRow(event) {
   if (event) event.stopPropagation();
   const id = event?.currentTarget?.dataset?.ccwRowId;
   if (!id) return;
-  const state = getChatContextWindowStateForSession(getChatContextWindowSessionId(target));
-  if (state.expandedRows.has(id)) state.expandedRows.delete(id);
-  else state.expandedRows.add(id);
-  renderChatContextWindow(state.data, target);
+  if (chatContextWindowState.expandedRows.has(id)) chatContextWindowState.expandedRows.delete(id);
+  else chatContextWindowState.expandedRows.add(id);
+  renderChatContextWindow(chatContextWindowState.data);
 }
 
-function renderChatContextWindow(data, target = null) {
-  const sessionId = getChatContextWindowSessionId(target);
-  const state = getChatContextWindowStateForSession(sessionId);
-  if (data === undefined) data = state.data;
+function renderChatContextWindow(data = chatContextWindowState.data) {
   data = applyChatContextWindowLiveOverlay(data);
-  const elements = getChatContextWindowElements(target);
-  const btn = elements.button;
-  const fill = elements.fill;
-  const total = elements.total;
+  const btn = document.getElementById('chat-context-window-btn');
+  const fill = document.getElementById('chat-context-window-fill');
+  const total = document.getElementById('chat-context-window-total');
   if (!btn) return;
 
   if (!data || data.success === false) {
@@ -1399,8 +1336,8 @@ function renderChatContextWindow(data, target = null) {
     if (fill) fill.style.width = '0%';
     if (fill) fill.classList.remove('is-over-capacity');
     if (total) total.textContent = 'Unavailable';
-    setChatContextWindowHeadLabel('Context window', target);
-    renderChatContextRows([], 0, target);
+    setChatContextWindowHeadLabel('Context window');
+    renderChatContextRows([], 0);
     return;
   }
 
@@ -1414,42 +1351,40 @@ function renderChatContextWindow(data, target = null) {
   btn.title = `Context window: ${usageLabel}${usage.status === 'over_capacity' ? ' — context is over capacity' : ''}`;
   if (fill) fill.style.width = `${usage.progressPercent.toFixed(1)}%`;
   if (fill) fill.classList.toggle('is-over-capacity', usage.status === 'over_capacity');
-  setChatContextWindowHeadLabel('Context window', target);
+  setChatContextWindowHeadLabel('Context window');
   if (total) {
     total.textContent = usageLabel;
   }
-  renderChatContextRows(currentState.rows, windowTokens, target);
+  renderChatContextRows(currentState.rows, windowTokens);
 }
 
 async function refreshChatContextWindow(options = {}) {
-  const target = options.target || getChatContextWindowTargetForSession(options.sessionId);
-  const sid = String(options.sessionId || getChatContextWindowSessionId(target)).trim();
-  const state = getChatContextWindowStateForSession(sid);
-  const btn = getChatContextWindowElements(target).button;
+  const sid = getChatContextWindowSessionId();
+  const btn = document.getElementById('chat-context-window-btn');
   if (!btn) return null;
   if (!sid) {
-    state.data = null;
-    renderChatContextWindow(null, target);
+    chatContextWindowState.data = null;
+    renderChatContextWindow(null);
     return null;
   }
   const force = options.force === true;
   const now = Date.now();
-  if (state.loading) return state.data;
-  if (!force && state.lastSessionId === sid && now - state.lastFetchAt < 3500) {
-    return state.data;
+  if (chatContextWindowState.loading) return chatContextWindowState.data;
+  if (!force && chatContextWindowState.lastSessionId === sid && now - chatContextWindowState.lastFetchAt < 3500) {
+    return chatContextWindowState.data;
   }
 
-  state.loading = true;
-  state.lastSessionId = sid;
-  if (!state.data) setChatContextWindowLoading('Loading...', target);
+  chatContextWindowState.loading = true;
+  chatContextWindowState.lastSessionId = sid;
+  if (!chatContextWindowState.data) setChatContextWindowLoading();
   try {
     const data = await fetchJsonWithTimeout(`/api/sessions/${encodeURIComponent(sid)}/context-window`, 5000);
-    state.lastFetchAt = Date.now();
-    state.data = data && data.success !== false ? data : null;
-    renderChatContextWindow(state.data, target);
-    return state.data;
+    chatContextWindowState.lastFetchAt = Date.now();
+    chatContextWindowState.data = data && data.success !== false ? data : null;
+    renderChatContextWindow(chatContextWindowState.data);
+    return chatContextWindowState.data;
   } finally {
-    state.loading = false;
+    chatContextWindowState.loading = false;
   }
 }
 
@@ -1458,49 +1393,39 @@ function scheduleChatContextWindowRefresh(delayMs = 450) {
   chatContextWindowState.refreshTimer = setTimeout(() => {
     chatContextWindowState.refreshTimer = 0;
     refreshChatContextWindow({ force: true }).catch(() => renderChatContextWindow(null));
-    document.querySelectorAll('[data-context-window-session-id]').forEach((target) => {
-      refreshChatContextWindow({ force: true, target }).catch(() => renderChatContextWindow(null, target));
-    });
   }, Math.max(0, Number(delayMs) || 0));
 }
 
-function toggleChatContextWindowPopover(event, target = null) {
+function toggleChatContextWindowPopover(event) {
   if (event) event.stopPropagation();
-  const source = target || event?.currentTarget || null;
-  const elements = getChatContextWindowElements(source);
-  const popover = elements.popover;
-  const btn = elements.button;
+  const popover = document.getElementById('chat-context-window-popover');
+  const btn = document.getElementById('chat-context-window-btn');
   if (!popover || !btn) return;
-  const state = getChatContextWindowStateForSession(getChatContextWindowSessionId(source));
-  state.open = popover.hidden;
-  popover.hidden = !state.open;
-  btn.setAttribute('aria-expanded', state.open ? 'true' : 'false');
-  if (state.open) {
+  chatContextWindowState.open = popover.hidden;
+  popover.hidden = !chatContextWindowState.open;
+  btn.setAttribute('aria-expanded', chatContextWindowState.open ? 'true' : 'false');
+  if (chatContextWindowState.open) {
     // Always open collapsed — the detailed breakdown expands only on bar click.
-    setChatContextBreakdown(false, source);
-    refreshChatContextWindow({ force: true, target: source }).catch(() => renderChatContextWindow(null, source));
-    refreshChatContextPlanUsage(false, source).catch(() => {});
+    setChatContextBreakdown(false);
+    refreshChatContextWindow({ force: true }).catch(() => renderChatContextWindow(null));
+    refreshChatContextPlanUsage().catch(() => {});
   }
 }
 
-function closeChatContextWindowPopover(target = null) {
-  const source = target || null;
-  const elements = getChatContextWindowElements(source);
-  const popover = elements.popover;
-  const btn = elements.button;
+function closeChatContextWindowPopover() {
+  const popover = document.getElementById('chat-context-window-popover');
+  const btn = document.getElementById('chat-context-window-btn');
   if (popover) popover.hidden = true;
   if (btn) btn.setAttribute('aria-expanded', 'false');
-  getChatContextWindowStateForSession(getChatContextWindowSessionId(source)).open = false;
+  chatContextWindowState.open = false;
 }
 
 // Collapsible detailed breakdown inside the popover (hidden until the user
 // clicks the context-window bar — mirrors the Claude UI plan-usage popover).
-function setChatContextBreakdown(expanded, target = null) {
-  const state = getChatContextWindowStateForSession(getChatContextWindowSessionId(target));
-  state.expanded = !!expanded;
-  const elements = getChatContextWindowElements(target);
-  const breakdown = elements.breakdown;
-  const toggle = elements.toggle;
+function setChatContextBreakdown(expanded) {
+  chatContextWindowState.expanded = !!expanded;
+  const breakdown = document.getElementById('chat-context-window-breakdown');
+  const toggle = document.getElementById('chat-context-window-toggle');
   if (breakdown) breakdown.hidden = !expanded;
   if (toggle) {
     toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
@@ -1508,11 +1433,9 @@ function setChatContextBreakdown(expanded, target = null) {
   }
 }
 
-function toggleChatContextBreakdown(event, target = null) {
+function toggleChatContextBreakdown(event) {
   if (event) event.stopPropagation();
-  const source = target || event?.currentTarget || null;
-  const state = getChatContextWindowStateForSession(getChatContextWindowSessionId(source));
-  setChatContextBreakdown(!state.expanded, source);
+  setChatContextBreakdown(!chatContextWindowState.expanded);
 }
 
 // ─── Plan usage (live provider limits) inside the context popover ─────────────
@@ -1537,13 +1460,10 @@ function ccwFmtReset(iso) {
   return `resets in ${days}d`;
 }
 
-function getChatContextPlanProviderId(target = null) {
-  const sid = getChatContextWindowSessionId(target);
-  const route = sid !== String(window.activeChatSessionId || '').trim()
-    ? window._activeChatModelRoutesBySession?.[sid]?.effective
-    : (String(window._activeChatModelRouteSessionId || '') === String(window.activeChatSessionId || ''))
-      ? window._activeChatModelRoute?.effective
-      : null;
+function getChatContextPlanProviderId() {
+  const route = (String(window._activeChatModelRouteSessionId || '') === String(window.activeChatSessionId || ''))
+    ? window._activeChatModelRoute?.effective
+    : null;
   const fromRoute = String(route?.providerId || route?.provider || '').trim().toLowerCase();
   if (fromRoute) return fromRoute;
   const modelRef = String(route?.modelRef || window._activeModel || '').trim();
@@ -1552,25 +1472,20 @@ function getChatContextPlanProviderId(target = null) {
   return String(window._activeProvider || '').trim().toLowerCase();
 }
 
-function getChatContextPlanAccountId(target = null) {
-  const sid = getChatContextWindowSessionId(target);
-  const route = sid !== String(window.activeChatSessionId || '').trim()
-    ? window._activeChatModelRoutesBySession?.[sid]?.effective
-    : (String(window._activeChatModelRouteSessionId || '') === String(window.activeChatSessionId || ''))
-      ? window._activeChatModelRoute?.effective
-      : null;
+function getChatContextPlanAccountId() {
+  const route = (String(window._activeChatModelRouteSessionId || '') === String(window.activeChatSessionId || ''))
+    ? window._activeChatModelRoute?.effective
+    : null;
   return String(route?.accountId || route?.account_id || window._activeAccountId || '').trim();
 }
 
-function renderChatContextPlanUsage(target = null) {
-  const elements = getChatContextWindowElements(target);
-  const wrap = elements.plan;
-  const body = elements.planBody;
+function renderChatContextPlanUsage() {
+  const wrap = document.getElementById('chat-context-window-plan');
+  const body = document.getElementById('chat-context-window-plan-body');
   if (!wrap || !body) return;
-  const state = getChatContextWindowStateForSession(getChatContextWindowSessionId(target));
-  const result = state.planData;
-  const providerId = getChatContextPlanProviderId(target);
-  const accountId = getChatContextPlanAccountId(target);
+  const result = chatContextWindowState.planData;
+  const providerId = getChatContextPlanProviderId();
+  const accountId = getChatContextPlanAccountId();
   const providers = (result && Array.isArray(result.providers)) ? result.providers : [];
   // Prefer the provider/account backing the active chat model route, not a
   // stale global status provider (that was why Grok still showed OpenAI weekly).
@@ -1615,27 +1530,26 @@ function renderChatContextPlanUsage(target = null) {
   wrap.hidden = false;
 }
 
-async function refreshChatContextPlanUsage(force = false, target = null) {
-  const state = getChatContextWindowStateForSession(getChatContextWindowSessionId(target));
+async function refreshChatContextPlanUsage(force = false) {
   const now = Date.now();
-  const providerId = getChatContextPlanProviderId(target);
-  const accountId = getChatContextPlanAccountId(target);
-  const providerChanged = providerId && providerId !== String(state.planProviderId || '');
-  const accountChanged = accountId && accountId !== String(state.planAccountId || '');
-  if (!force && !providerChanged && !accountChanged && state.planData && now - state.planFetchAt < 60000) {
-    renderChatContextPlanUsage(target);
+  const providerId = getChatContextPlanProviderId();
+  const accountId = getChatContextPlanAccountId();
+  const providerChanged = providerId && providerId !== String(chatContextWindowState.planProviderId || '');
+  const accountChanged = accountId && accountId !== String(chatContextWindowState.planAccountId || '');
+  if (!force && !providerChanged && !accountChanged && chatContextWindowState.planData && now - chatContextWindowState.planFetchAt < 60000) {
+    renderChatContextPlanUsage();
     return;
   }
   try {
     const data = await fetchJsonWithTimeout('/api/usage/limits', 6000);
     if (data && data.success !== false) {
-      state.planData = data;
-      state.planFetchAt = Date.now();
-      state.planProviderId = providerId;
-      state.planAccountId = accountId;
+      chatContextWindowState.planData = data;
+      chatContextWindowState.planFetchAt = Date.now();
+      chatContextWindowState.planProviderId = providerId;
+      chatContextWindowState.planAccountId = accountId;
     }
   } catch { /* leave previous planData */ }
-  renderChatContextPlanUsage(target);
+  renderChatContextPlanUsage();
 }
 
 function toggleVoiceSettingsPopover(event) {
@@ -1661,9 +1575,8 @@ function closeVoiceSettingsPopover() {
 if (!window.__promChatContextWindowHandlersInstalled) {
   window.__promChatContextWindowHandlersInstalled = true;
   document.addEventListener('click', (event) => {
-    document.querySelectorAll('.chat-model-switcher-wrap').forEach((wrap) => {
-      if (!wrap.contains(event.target)) closeChatContextWindowPopover(wrap);
-    });
+    const wrap = document.querySelector('.chat-model-switcher-wrap');
+    if (!wrap || !wrap.contains(event.target)) closeChatContextWindowPopover();
     const voiceWrap = document.querySelector('.voice-settings-wrap');
     if (!voiceWrap || !voiceWrap.contains(event.target)) closeVoiceSettingsPopover();
     if (desktopVoiceRoomPopoverOpen && desktopVoiceOrbDock && !desktopVoiceOrbDock.contains(event.target)) {
@@ -1672,7 +1585,7 @@ if (!window.__promChatContextWindowHandlersInstalled) {
   });
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') {
-      document.querySelectorAll('.chat-model-switcher-wrap').forEach((wrap) => closeChatContextWindowPopover(wrap));
+      closeChatContextWindowPopover();
       closeVoiceSettingsPopover();
       setDesktopVoiceRoomPopoverOpen(false);
     }
@@ -1687,13 +1600,6 @@ if (!window.__promChatContextWindowHandlersInstalled) {
     if (document.visibilityState === 'hidden') return;
     refreshChatContextWindow({ force: true }).catch(() => {});
     if (chatContextWindowState.open) refreshChatContextPlanUsage().catch(() => {});
-    document.querySelectorAll('[data-context-window-session-id]').forEach((target) => {
-      const state = getChatContextWindowStateForSession(target.dataset.contextWindowSessionId);
-      if (state.open) {
-        refreshChatContextWindow({ force: true, target }).catch(() => {});
-        refreshChatContextPlanUsage(false, target).catch(() => {});
-      }
-    });
   }, 5000);
   // Expose for status/model route refresh paths in index.html.
   window.refreshChatContextWindow = refreshChatContextWindow;
@@ -8228,6 +8134,7 @@ function refreshVisibleChannelsList() {
 }
 
 function persistActiveChat() {
+  chatPerformanceRuntime.cancelProcessLogPersistence(window.activeChatSessionId);
   const idx = window.chatSessions.findIndex(s => s.id === window.activeChatSessionId);
   if (idx === -1) return;
   window.chatSessions[idx].history = window.chatHistory;
@@ -8531,15 +8438,7 @@ function syncChatTopbarTitle() {
 
   const sessions = Array.isArray(window.chatSessions) ? window.chatSessions : [];
   const session = sessions.find((candidate) => String(candidate?.id || '') === String(window.activeChatSessionId || '')) || null;
-  const titleOverride = window.__PROM_CHAT_TITLE_OVERRIDE;
-  const hasTitleOverride = Boolean(
-    String(titleOverride?.sessionId || '').trim()
-      && String(titleOverride.sessionId) === String(window.activeChatSessionId || '')
-  );
-  const sessionTitle = hasTitleOverride
-    ? String(titleOverride?.title || '').trim() || 'Chat'
-    : String(session?.title || '').trim() || 'New chat';
-  const titleOverrideSubtitle = hasTitleOverride ? String(titleOverride?.subtitle || '').trim() : '';
+  const sessionTitle = String(session?.title || '').trim() || 'New chat';
   const projectName = String(
     session?.projectName
       || session?.canvasProjectLabel
@@ -8553,9 +8452,9 @@ function syncChatTopbarTitle() {
   );
 
   if (titleEl) titleEl.textContent = sessionTitle;
-  if (subEl) subEl.textContent = titleOverrideSubtitle || (isProjectSession && projectName
+  if (subEl) subEl.textContent = isProjectSession && projectName
     ? `Project · ${projectName}`
-    : DEFAULT_CHAT_TOPBAR_SUBTITLE);
+    : DEFAULT_CHAT_TOPBAR_SUBTITLE;
   if (contextTitleEl) contextTitleEl.textContent = sessionTitle;
   if (contextProjectNameEl) contextProjectNameEl.textContent = projectName;
   if (contextProjectEl) {
@@ -12075,12 +11974,8 @@ function renderFileChangeRow(file) {
   const canOpen = file.path && file.status !== 'deleted';
   const pathArg = encodeInlineJsString(file.path);
   const labelArg = encodeInlineJsString(file.displayPath.split(/[\\/]/).pop() || file.displayPath || 'file');
-  const openDiffArgs = canOpen ? `, { openMode: 'diff', diffView: 'turn' }` : '';
-  const turnFileDataAttrs = canOpen
-    ? `data-turn-file-path="${escHtml(file.path)}" data-turn-file-label="${escHtml(file.displayPath)}" data-turn-file-view="turn"`
-    : '';
   const openAttrs = canOpen
-    ? `role="button" tabindex="0" ${turnFileDataAttrs} onclick="canvasPresentFile(${pathArg}, ${labelArg}${openDiffArgs})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();canvasPresentFile(${pathArg}, ${labelArg}${openDiffArgs})}"`
+    ? `role="button" tabindex="0" onclick="canvasPresentFile(${pathArg}, ${labelArg})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();canvasPresentFile(${pathArg}, ${labelArg})}"`
     : 'aria-disabled="true"';
   return `
     <div class="file-change-row ${canOpen ? 'is-openable' : 'is-disabled'}" ${openAttrs}>
@@ -12351,17 +12246,8 @@ function normalizeLiveTraceProseText(value) {
 
 function isDesktopPreparedTraceEntry(entry) {
   const type = String(entry?.type || '').toLowerCase();
-  const text = String(entry?.text || entry?.content || entry?.message || '').replace(/\s+/g, ' ').trim();
+  const text = String(entry?.text || '').replace(/\s+/g, ' ').trim();
   return type === 'tool' && /^Prepared\b/i.test(text);
-}
-
-function isDesktopInternalToolProtocolTraceEntry(entry) {
-  if (!entry || entry.activity) return false;
-  const text = String(entry?.text || entry?.content || entry?.message || '')
-    .replace(/\s+/g, ' ')
-    .trim();
-  return /^(?:latency:\s*provider_[a-z0-9_]+(?:\s+at\b.*)?|processing\.{0,3})$/i.test(text)
-    || /^prepared\s+(?:skill|request|tool|provider)\b/i.test(text);
 }
 
 function isDesktopStartupStatusText(text) {
@@ -12378,143 +12264,14 @@ function isBareThinkingLiveTraceText(text) {
   return /^thinking(?:\.\.\.)?$/i.test(String(text || '').replace(/\s+/g, ' ').trim());
 }
 
-function isDesktopTraceThoughtType(type) {
-  const value = String(type || '').toLowerCase();
-  return value === 'preamble' || value === 'think' || value === 'assistant' || value === 'reasoning_summary';
-}
-
-function isDesktopTraceReasoningSummaryType(type) {
-  return String(type || '').toLowerCase() === 'reasoning_summary';
-}
-
-function isDesktopTransientReasoningTraceEntry(entry) {
-  if (!entry || typeof entry !== 'object') return false;
-  const type = String(entry.type || entry.kind || '').trim().toLowerCase();
-  const extra = entry.extra && typeof entry.extra === 'object' ? entry.extra : {};
-  const event = String(entry.event || extra.event || extra.eventType || '').trim().toLowerCase();
-  const source = String(entry.source || extra.source || '').trim().toLowerCase();
-  const visibility = String(entry.visibility || extra.visibility || '').trim().toLowerCase();
-  const reasoningKind = String(entry.reasoningKind || extra.reasoningKind || extra.presentationKind || '').trim().toLowerCase();
-  return source === 'agent_progress'
-    || source === 'reasoning_summary'
-    || type === 'reasoning_summary'
-    || ['reasoning_summary', 'reasoning_summary_delta', 'reasoning_delta'].includes(type)
-    || ['reasoning_summary', 'reasoning_summary_delta', 'reasoning_delta'].includes(event)
-    || reasoningKind === 'summary'
-    || (visibility === 'summary' && ['think', 'thinking', 'agent_thought'].includes(type));
-}
-
-function isDesktopMutableProgressTraceEntry(entry) {
-  const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
-  return String(entry?.source || extra.source || '').trim().toLowerCase() === 'agent_progress';
-}
-
-function desktopTracePresentationEntries(entries) {
-  return (Array.isArray(entries) ? entries : []).map((entry) => {
-    if (!entry || entry.activity) return entry;
-    const type = String(entry.type || '').toLowerCase();
-    const text = String(entry.text || entry.content || entry.message || '').trim();
-    const extra = entry.extra && typeof entry.extra === 'object' ? entry.extra : {};
-    const action = String(extra.action || extra.toolName || entry.action || entry.toolName || '').trim();
-    if (['info', 'progress'].includes(type) && !action
-      && String(extra.source || entry.source || '').toLowerCase() === 'agent_progress') {
-      return {
-        ...entry,
-        type: 'think',
-        extra: {
-          ...extra,
-          source: extra.source || 'agent_progress',
-          visibility: extra.visibility || 'user',
-        },
-      };
-    }
-    // Summary packets are transient transport updates. Keep one mutable
-    // agent_progress entry as the live summary owner and discard stale copies
-    // before grouping, so recovery cannot place them back in the timeline.
-    if (isDesktopTransientReasoningTraceEntry(entry) && !isDesktopMutableProgressTraceEntry(entry)) return null;
-    return entry;
-  }).filter(Boolean);
-}
-
-function desktopTraceComparableText(value) {
-  return normalizeLiveTraceProseText(value)
-    .replace(/\s+/g, ' ')
-    .replace(/[“”]/g, '"')
-    .replace(/[‘’]/g, "'")
-    .trim()
-    .toLowerCase();
-}
-
-function desktopTraceThoughtTextsSimilar(a, b) {
-  const left = desktopTraceComparableText(a);
-  const right = desktopTraceComparableText(b);
-  if (!left || !right) return false;
-  if (left === right) return true;
-  if (Math.min(left.length, right.length) >= 40 && (left.includes(right) || right.includes(left))) return true;
-  const leftTokens = new Set(left.split(/[^a-z0-9_']+/i).filter((token) => token.length > 2));
-  const rightTokens = new Set(right.split(/[^a-z0-9_']+/i).filter((token) => token.length > 2));
-  const smaller = Math.min(leftTokens.size, rightTokens.size);
-  if (smaller < 8) return false;
-  let overlap = 0;
-  leftTokens.forEach((token) => { if (rightTokens.has(token)) overlap += 1; });
-  return overlap / smaller >= 0.72;
-}
-
-function isDesktopTraceThoughtFragmentText(value) {
-  const raw = String(value || '').trim();
-  const comparable = desktopTraceComparableText(raw);
-  if (!comparable) return true;
-  const words = comparable.split(/\s+/).filter(Boolean);
-  if (!words.length) return true;
-  if (/[.!?]\s*$/.test(raw) || /\n\s*\n/.test(raw)) return false;
-  return words.length === 1 && comparable.length <= 16;
-}
-
-function dedupeDesktopTraceProseText(value) {
-  const normalized = normalizeLiveTraceProseText(value);
-  if (!normalized || /```/.test(normalized)) return normalized;
-  const lines = normalized.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  if (lines.length < 3) return normalized;
-  const isTitleLike = (line) => {
-    const clean = String(line || '').replace(/^[#*_`\s]+|[*_`\s]+$/g, '').trim();
-    if (!clean || clean.length > 96 || /[.!?]$/.test(clean)) return false;
-    const words = clean.split(/\s+/).filter(Boolean);
-    return words.length > 0 && words.length <= 9;
-  };
-  for (let i = 0; i < lines.length - 2; i += 1) {
-    if (!isTitleLike(lines[i])) continue;
-    const titleKey = desktopTraceComparableText(lines[i]);
-    if (!titleKey) continue;
-    for (let j = i + 2; j < lines.length; j += 1) {
-      const repeatedLineKey = desktopTraceComparableText(lines[j]);
-      if (repeatedLineKey !== titleKey && !repeatedLineKey.startsWith(`${titleKey} `)) continue;
-      const firstBlock = lines.slice(i, j).join('\n');
-      const duplicateTail = lines.slice(j).join('\n');
-      const firstComparable = desktopTraceComparableText(firstBlock);
-      const tailComparable = desktopTraceComparableText(duplicateTail);
-      if (!tailComparable) continue;
-      if (desktopTraceThoughtTextsSimilar(firstBlock, duplicateTail)
-        || (tailComparable.length >= titleKey.length && firstComparable.startsWith(tailComparable))) {
-        return lines.slice(0, j).join('\n').trim();
-      }
-    }
-  }
-  return normalized;
-}
-
 function isDesktopUserVisibleReasoningTraceEntry(entry) {
   const type = String(entry?.type || '').toLowerCase();
   if (type === 'preamble' || type === 'assistant') return true;
-  if (type !== 'think' && !isDesktopTraceReasoningSummaryType(type)) return false;
+  if (type !== 'think') return false;
   const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
-  const reasoningKind = String(extra.reasoningKind || entry?.reasoningKind || '').trim().toLowerCase();
-  if (reasoningKind === 'private') return false;
-  if (reasoningKind === 'summary' || reasoningKind === 'full_thought') return true;
   const source = String(extra.source || entry?.source || '').toLowerCase();
   const visibility = String(extra.visibility || entry?.visibility || '').toLowerCase();
-  return type === 'reasoning_summary'
-    ? source === 'reasoning_summary' || source === 'agent_progress' || ['user', 'summary', 'visible'].includes(visibility)
-    : source === 'reasoning_summary' || source === 'agent_progress' || source === 'agent_thought' || ['user', 'summary', 'visible'].includes(visibility);
+  return source === 'reasoning_summary' || ['user', 'summary', 'visible'].includes(visibility);
 }
 
 function liveTraceTextLooksLikeFinalAnswer(text, finalText) {
@@ -12530,40 +12287,11 @@ function liveTraceTextLooksLikeFinalAnswer(text, finalText) {
 }
 
 function visibleLiveTraceEntries(entries) {
-  const sourceEntries = desktopTracePresentationEntries(entries)
-    .filter((entry) => !isDesktopInternalToolProtocolTraceEntry(entry));
-  const replaceableProgressTexts = sourceEntries
-    .filter((entry) => String(entry?.extra?.source || entry?.source || '').toLowerCase() === 'agent_progress')
-    .map((entry) => String(entry?.text || entry?.content || '').trim())
-    .filter(Boolean);
-  const thoughtTexts = [];
-  return coalesceToolActivityEntries(sourceEntries).filter((entry) => {
-    if (!entry || isDesktopPreparedTraceEntry(entry) || isDesktopInternalToolProtocolTraceEntry(entry)
-      || isVisionInjectionStatusText(entry?.text) || isBareThinkingLiveTraceText(entry?.text)) return false;
+  return coalesceToolActivityEntries(entries).filter((entry) => {
+    if (!entry || isDesktopPreparedTraceEntry(entry) || isVisionInjectionStatusText(entry?.text) || isBareThinkingLiveTraceText(entry?.text)) return false;
     const type = String(entry?.type || '').toLowerCase();
-    if (isDesktopTransientReasoningTraceEntry(entry) && !isDesktopMutableProgressTraceEntry(entry)) return false;
-    const hasContent = String(entry?.text || '').trim() || isRenderableLiveTraceImageSource(entry?.preview?.dataUrl || entry?.dataUrl);
-    if (!hasContent) return false;
-    if (isDesktopTraceThoughtType(type)) {
-      if (replaceableProgressTexts.length
-        && type === 'think'
-        && String(entry?.extra?.source || entry?.source || '').toLowerCase() === 'reasoning_summary'
-        && replaceableProgressTexts.some((progressText) => desktopTraceThoughtTextsSimilar(entry?.text || '', progressText))) return false;
-      if (!isDesktopUserVisibleReasoningTraceEntry(entry)) return false;
-      const text = dedupeDesktopTraceProseText(entry?.text || '');
-      if (text) {
-        if (isDesktopTraceThoughtFragmentText(text)) return false;
-        const comparable = desktopTraceComparableText(text);
-        const words = comparable.split(/\s+/).filter(Boolean).length;
-        if (thoughtTexts.some((seen) => {
-          const seenComparable = desktopTraceComparableText(seen);
-          return desktopTraceThoughtTextsSimilar(seen, text)
-            || (comparable.length >= 18 && words >= 3 && seenComparable.includes(comparable));
-        })) return false;
-        thoughtTexts.push(text);
-      }
-    }
-    return true;
+    if ((type === 'preamble' || type === 'think' || type === 'assistant') && !isDesktopUserVisibleReasoningTraceEntry(entry)) return false;
+    return !!(String(entry?.text || '').trim() || isRenderableLiveTraceImageSource(entry?.preview?.dataUrl || entry?.dataUrl));
   });
 }
 
@@ -12574,9 +12302,9 @@ function renderLiveTraceEntry(entry) {
   const entryId = String(entry.id || `${type}_${text.replace(/\s+/g, ' ').slice(0, 80)}_${String(entry.ts || entry.time || '')}`).trim();
   const attr = entryId ? ` data-live-entry-id="${escHtml(entryId)}"` : '';
   const previewHtml = renderLiveTracePreview(entry);
-  if (isDesktopTraceThoughtType(type)) {
+  if (type === 'preamble' || type === 'think' || type === 'assistant') {
     return `<div class="live-turn-prose live-turn-${escHtml(type)}"${attr}>
-      <div class="live-turn-md">${renderMd(dedupeDesktopTraceProseText(text))}</div>
+      <div class="live-turn-md">${renderMd(normalizeLiveTraceProseText(text))}</div>
       ${previewHtml}
     </div>`;
   }
@@ -12619,22 +12347,8 @@ function renderLiveTraceList(entries) {
 }
 
 function isLiveTraceThoughtEntry(entry) {
-  return isDesktopTraceThoughtType(entry?.type || 'info');
-}
-
-function desktopTraceThoughtKind(entry) {
-  if (!isLiveTraceThoughtEntry(entry)) return '';
-  if (String(entry?.type || '').toLowerCase() === 'preamble') return 'full_thought';
-  const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
-  const explicit = String(extra.reasoningKind || extra.presentationKind || '').trim().toLowerCase();
-  if (explicit === 'summary' || explicit === 'full_thought') return explicit;
-  const source = String(extra.source || entry?.source || '').trim().toLowerCase();
-  return isDesktopTraceReasoningSummaryType(entry?.type)
-    || source === 'reasoning_summary'
-    || source === 'agent_progress'
-    || extra.visibility === 'summary'
-    ? 'summary'
-    : 'full_thought';
+  const type = String(entry?.type || 'info').toLowerCase();
+  return type === 'preamble' || type === 'think' || type === 'assistant';
 }
 
 function liveTraceGroupStableKey(group, index = 0) {
@@ -12673,10 +12387,7 @@ function liveTraceGroups(entries) {
     }
     if (isLiveTraceThoughtEntry(entry)) {
       activeToolGroup = null;
-      const groupKind = desktopTraceThoughtKind(entry) === 'summary' ? 'thought-summary' : 'thought';
-      const previous = groups[groups.length - 1];
-      if (previous?.kind === groupKind) previous.entries.push(entry);
-      else groups.push({ kind: groupKind, entries: [entry] });
+      groups.push({ kind: 'thought', entries: [entry] });
       return;
     }
     if (!activeToolGroup) {
@@ -12928,76 +12639,43 @@ function liveTraceSummaryKey(text) {
   return String(text || '').replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
-function desktopTraceProgressText(entries) {
+function desktopTraceProgressSummary(entries) {
   const source = Array.isArray(entries) ? entries : [];
   for (let index = source.length - 1; index >= 0; index -= 1) {
     const entry = source[index];
     const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
-    if (String(extra.source || entry?.source || '').toLowerCase() !== 'agent_progress') continue;
-    const text = dedupeDesktopTraceProseText(entry?.text || entry?.content || '')
+    if (String(extra.source || '').toLowerCase() !== 'agent_progress') continue;
+    const text = normalizeLiveTraceProseText(entry?.text || entry?.content || '')
       .replace(/\s+/g, ' ')
       .trim();
     if (!text) continue;
+    const normalized = text.toLowerCase();
+    const duplicatesVisibleReasoning = source.some((candidate) => {
+      if (!isDesktopUserVisibleReasoningTraceEntry(candidate)) return false;
+      const candidateText = normalizeLiveTraceProseText(candidate?.text || candidate?.content || '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .toLowerCase();
+      return candidateText === normalized
+        || (Math.min(candidateText.length, normalized.length) >= 36
+          && (candidateText.includes(normalized) || normalized.includes(candidateText)));
+    });
+    if (duplicatesVisibleReasoning) return 'Reasoning';
     return text.slice(0, 220);
   }
   return '';
 }
 
-function desktopTraceProgressSummary(entries) {
-  const source = Array.isArray(entries) ? entries : [];
-  const text = desktopTraceProgressText(source);
-  if (!text) return '';
-  const normalized = desktopTraceComparableText(text);
-  const duplicatesVisibleReasoning = source.some((candidate) => {
-    if (!isDesktopUserVisibleReasoningTraceEntry(candidate)) return false;
-    const candidateText = desktopTraceComparableText(dedupeDesktopTraceProseText(candidate?.text || candidate?.content || ''));
-    return candidateText === normalized
-      || (Math.min(candidateText.length, normalized.length) >= 36
-        && (candidateText.includes(normalized) || normalized.includes(candidateText)));
-  });
-  if (duplicatesVisibleReasoning) return 'Reasoning';
-  return text;
-}
-
-function renderLiveTurnTrace(entries, { streaming = false, openLiveCurrent = false, visibleKinds = null, openThoughts = false } = {}) {
-  const kindFilter = Array.isArray(visibleKinds) || visibleKinds instanceof Set
-    ? new Set(Array.from(visibleKinds).map((kind) => String(kind || '').toLowerCase()))
-    : null;
-  let groups = liveTraceGroups(entries).filter((group) => !kindFilter || kindFilter.has(String(group.kind || '').toLowerCase()));
+function renderLiveTurnTrace(entries, { streaming = false } = {}) {
+  const groups = liveTraceGroups(entries);
   if (!groups.length) return '';
-  if (!streaming
-    && !groups.some((group) => (group.kind === 'tools' || group.kind === 'compaction') && group.entries.length > 0)
-    && !kindFilter?.has('thought')
-    && !kindFilter?.has('thought-summary')) return '';
-  let latestToolGroupIndex = groups.reduce((latest, group, index) => (
+  if (!streaming && !groups.some((group) => (group.kind === 'tools' || group.kind === 'compaction') && group.entries.length > 0)) return '';
+  const latestToolGroupIndex = groups.reduce((latest, group, index) => (
     group.kind === 'tools' ? index : latest
   ), -1);
-  const activeProgressSummary = streaming ? desktopTraceProgressSummary(entries) : '';
-  if (streaming && activeProgressSummary && latestToolGroupIndex === groups.length - 1) {
-    groups = groups.filter((group) => !(
-      group.kind === 'thought-summary'
-      && desktopTraceThoughtTextsSimilar(desktopTraceProgressSummary(group.entries), activeProgressSummary)
-    ));
-    latestToolGroupIndex = groups.reduce((latest, group, index) => (
-      group.kind === 'tools' ? index : latest
-    ), -1);
-  }
   return `<div class="live-turn-timeline">${groups.map((group, index) => {
-    if (group.kind === 'thought' || group.kind === 'thought-summary') {
-      const isSummaryThought = group.kind === 'thought-summary';
-      const isLiveThought = streaming && index === groups.length - 1;
-      const progressSummary = isSummaryThought && isLiveThought ? desktopTraceProgressSummary(group.entries) : '';
-      const bodyEntries = group.entries.filter((entry) => !isDesktopMutableProgressTraceEntry(entry));
-      const summaryMarkup = progressSummary
-        ? `<div class="live-turn-thought-summary" aria-live="polite"><strong class="t-think" data-live-trace-summary-key="${escHtml(liveTraceSummaryKey(progressSummary))}">${renderThinkingState(progressSummary)}</strong></div>`
-        : '';
-      const bodyHtml = bodyEntries.length
-        ? `<div class="live-turn-thought-body"><div class="live-turn-trace">${bodyEntries.map(renderLiveTraceEntry).join('')}</div></div>`
-        : '';
-      return `<div class="live-turn-thought-group"${isLiveThought && progressSummary ? ' data-live-trace-current="1"' : ''} data-live-trace-group="${escHtml(group.id)}">
-        ${summaryMarkup}
-        ${bodyHtml}
-      </div>`;
+    if (group.kind === 'thought') {
+      return `<div class="live-turn-thought">${group.entries.map(renderLiveTraceEntry).join('')}</div>`;
     }
     if (group.kind === 'compaction') {
       return group.entries.map(renderLiveTraceCompactionBreak).join('');
@@ -13005,20 +12683,18 @@ function renderLiveTurnTrace(entries, { streaming = false, openLiveCurrent = fal
     if (group.kind === 'vision') {
       return `<div class="live-turn-vision-break" data-live-trace-group="${escHtml(group.id)}">${group.entries.map(renderLiveTracePreview).join('')}</div>`;
     }
-    const isLiveCurrent = streaming && index === latestToolGroupIndex && index === groups.length - 1;
-    const progressSummary = isLiveCurrent ? activeProgressSummary : '';
+    const isLiveCurrent = streaming && index === latestToolGroupIndex;
+    const progressSummary = isLiveCurrent ? desktopTraceProgressSummary(entries) : '';
     const summary = progressSummary || (isLiveCurrent ? liveTraceCurrentToolLabel(group.entries) : liveTraceToolSummary(group.entries));
     const summaryKey = liveTraceSummaryKey(summary);
     const visibleEntries = visibleLiveTraceEntries(group.entries);
     const callCount = visibleEntries.filter((entry) => entry?.activity?.kind === 'operation').length;
-    const nonReasoningEntries = visibleEntries.filter((entry) => !isDesktopTraceReasoningSummaryType(entry?.type));
-    const itemCount = callCount || nonReasoningEntries.length || (visibleEntries.length ? 1 : 0);
+    const itemCount = callCount || visibleEntries.length;
     const itemLabel = callCount ? 'call' : 'item';
-    const openAttr = isLiveCurrent && openLiveCurrent ? ' open' : '';
-    return `<details class="live-turn-tool-group"${openAttr}${isLiveCurrent ? ' data-live-trace-current="1"' : ''} data-live-trace-group="${escHtml(group.id)}">
+    return `<details class="live-turn-tool-group"${isLiveCurrent ? ' data-live-trace-current="1"' : ''} data-live-trace-group="${escHtml(group.id)}">
       <summary class="live-turn-tool-summary">
         <span class="live-turn-tool-icon" aria-hidden="true">${renderToolActivityIcon({ family: 'tool', key: 'tool.summary' }, escHtml)}</span>
-        <strong class="t-think" data-live-trace-summary-key="${escHtml(summaryKey)}">${renderThinkingState(summary)}</strong>
+        <strong data-live-trace-summary-key="${escHtml(summaryKey)}">${escHtml(summary)}</strong>
         <span class="live-turn-tool-chevron" aria-hidden="true">›</span>
         <em>${itemCount} ${itemLabel}${itemCount === 1 ? '' : 's'}</em>
       </summary>
@@ -13066,7 +12742,7 @@ function desktopWorkflowTraceEntriesForMessage(message) {
         summary: String(extra?.extra?.summary || extra?.summary || normalizedEntry.summary || '').trim(),
       };
     }
-    if (isDesktopTraceThoughtType(type)
+    if ((type === 'preamble' || type === 'think' || type === 'assistant')
       && !isDesktopUserVisibleReasoningTraceEntry({ ...traceEntry, type, extra })) return;
     const preview = normalizedEntry.preview && typeof normalizedEntry.preview === 'object' ? normalizedEntry.preview : null;
     const previewData = String(preview?.dataUrl || normalizedEntry.dataUrl || '').trim();
@@ -13126,7 +12802,7 @@ function liveTraceEntriesToProcessEntries(entries, existingEntries = []) {
       const type = String(entry?.type || 'info').toLowerCase();
       const text = String(entry?.text || entry?.content || '').trim();
       if (!text) return null;
-      if (!isDesktopTraceThoughtType(type)) return null;
+      if (type !== 'preamble' && type !== 'think') return null;
       if (!isDesktopUserVisibleReasoningTraceEntry(entry)) return null;
       const key = `${type}|${text.replace(/\s+/g, ' ').trim()}`;
       if (existingKeys.has(key)) return null;
@@ -13227,8 +12903,21 @@ function attachVoiceAgentProcessEntriesToRecentAssistantTurn(sessionId, entries,
   return true;
 }
 
+function isImageGenerationTerminalText(text) {
+  const value = String(text || '');
+  return /\b(?:generate[_ ]image|generating[_ ]image|generated[_ ]image|image[_ ](?:gen|generation)|imagegen)\b[\s\S]*\b(?:complete|completed|failed|failure|error|succeeded|success)\b/i.test(value)
+    || /\b(?:failed|error)\b[\s\S]*\b(?:generate[_ ]image|image[_ ](?:gen|generation)|imagegen)\b/i.test(value);
+}
+
 function isGenerateImagePendingFromEntries(...entryGroups) {
   const rawEntries = entryGroups.flatMap((group) => Array.isArray(group) ? group : []);
+  const hasBackgroundImageGeneration = rawEntries.some((entry) => {
+    const args = entry?.activity?.args || entry?.extra?.args || entry?.args || {};
+    const action = String(entry?.activity?.action || entry?.activity?.toolName || entry?.extra?.action || entry?.extra?.toolName || entry?.action || entry?.toolName || '').toLowerCase();
+    return ['generate_image', 'image_gen', 'imagegen'].includes(action)
+      && String(args?.presentation_mode || args?.presentationMode || '').toLowerCase() === 'background';
+  });
+  if (hasBackgroundImageGeneration) return false;
   const entries = [];
   const seen = new Set();
   rawEntries.forEach((entry) => {
@@ -13250,40 +12939,14 @@ function isGenerateImagePendingFromEntries(...entryGroups) {
     const type = String(entry?.type || '').toLowerCase();
     const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
     const activity = entry?.activity && typeof entry.activity === 'object' ? entry.activity : {};
-    const args = activity.args && typeof activity.args === 'object'
-      ? activity.args
-      : extra.args && typeof extra.args === 'object'
-        ? extra.args
-        : entry?.args && typeof entry.args === 'object'
-          ? entry.args
-          : {};
-    const action = String(
-      activity.action
-      || activity.toolName
-      || activity.tool_name
-      || activity.name
-      || extra.action
-      || extra.toolName
-      || extra.tool_name
-      || extra.name
-      || entry?.action
-      || entry?.toolName
-      || entry?.tool_name
-      || entry?.name
-      || '',
-    ).trim().toLowerCase().replace(/[^a-z0-9_]+/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '');
-    if (!['generate_image', 'image_gen', 'imagegen', 'image_generation', 'voice_generate_image', 'creative_generate_image_shot'].includes(action)) return;
-    const presentationMode = String(
-      args.presentation_mode
-      || args.presentationMode
-      || activity.presentation_mode
-      || activity.presentationMode
-      || extra.presentation_mode
-      || extra.presentationMode
-      || entry?.presentation_mode
-      || entry?.presentationMode
-      || '',
-    ).trim().toLowerCase();
+    const presentationMode = String(extra.presentation_mode || extra.presentationMode || activity.presentation_mode || activity.presentationMode || entry?.presentation_mode || '').trim().toLowerCase();
+    if (presentationMode === 'background') return;
+    const action = String(activity.action || activity.toolName || extra.action || extra.toolName || entry?.action || entry?.toolName || '').trim().toLowerCase();
+    const text = String(entry?.text || entry?.content || entry?.message || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    const isImageActivity = ['generate_image', 'image_gen', 'imagegen'].includes(action)
+      || /\b(generate_image|image_gen|imagegen|generate image|generating image|generated image|image generation|i am generating the image)\b/.test(text);
+    if (!isImageActivity) return;
+    observedImageActivity = true;
     const key = String(
       activity.callId
       || activity.call_id
@@ -13299,32 +12962,17 @@ function isGenerateImagePendingFromEntries(...entryGroups) {
       || extra.eventKey
       || `${action || 'image'}:anonymous`,
     ).trim();
-    const hasIdentity = !!(
-      entry?.callId
-      || entry?.eventKey
-      || extra.callId
-      || extra.call_id
-      || extra.toolCallId
-      || extra.tool_call_id
-      || extra.eventKey
-      || activity.callId
-      || activity.activityId
-    );
-    if (type === 'result' || type === 'error' || type === 'tool_result') {
-      if (presentationMode === 'background') return;
+    const terminalText = isImageGenerationTerminalText(text);
+    if (type === 'result' || type === 'error' || type === 'tool_result' || terminalText) {
       if (entry?.callId || entry?.eventKey || extra.callId || extra.call_id || extra.toolCallId || extra.tool_call_id || extra.eventKey || activity.callId || activity.activityId) activeImageCalls.delete(key);
       else activeImageCalls.clear();
       return;
     }
-    if (type === 'tool' || type === 'call' || type === 'tool_call') {
-      if (presentationMode !== 'foreground') return;
-      observedImageActivity = true;
+    if (type === 'tool' || type === 'call') {
       activeImageCalls.add(key);
       return;
     }
-    // A progress or prose row can mention image generation, but it cannot
-    // create this loader without an explicit foreground tool call.
-    if (presentationMode === 'background' || !hasIdentity || !activeImageCalls.has(key)) return;
+    if (activeImageCalls.size === 0) activeImageCalls.add(key);
   });
   return observedImageActivity && activeImageCalls.size > 0;
 }
@@ -13903,8 +13551,6 @@ function renderUnifiedDesktopComposerHtml(options = {}) {
   const voiceAction = String(options.voiceAction || '').trim();
   const sendAction = String(options.sendAction || '').trim();
   const footerHint = String(options.footerHint || '').trim();
-  const composerSessionId = String(options.sessionId || '').trim();
-  const secondarySurface = String(options.secondarySurface || '').trim();
   const modelName = String(options.modelName || document.getElementById('chat-model-name')?.textContent || 'your model').trim();
   const queueBadgeId = String(options.queueBadgeId || '').trim();
   const queueCount = Math.max(0, Number(options.queueCount || 0) || 0);
@@ -13930,7 +13576,7 @@ function renderUnifiedDesktopComposerHtml(options = {}) {
   const queueBadge = queueBadgeId
     ? `<span id="${escHtml(queueBadgeId)}" class="unified-chat-queue-badge" style="display:${queueCount ? 'inline-flex' : 'none'}">${queueCount} queued</span>`
     : '';
-  return `<div class="chat-input-area unified-desktop-chat-composer ${escHtml(composerClass)}" data-unified-composer="1" data-main-composer-parity="${mainComposerParity ? '1' : '0'}"${composerSessionId ? ` data-composer-session-id="${escHtml(composerSessionId)}"` : ''}${secondarySurface ? ` data-secondary-surface="${escHtml(secondarySurface)}"` : ''}>
+  return `<div class="chat-input-area unified-desktop-chat-composer ${escHtml(composerClass)}" data-unified-composer="1" data-main-composer-parity="${mainComposerParity ? '1' : '0'}">
     ${parityTopMarkup}${extraTopMarkup}
     ${stagingId ? `<div class="chat-composer-attachment-stack"><div id="${escHtml(stagingId)}" class="chat-file-staging" style="display:none"></div></div>` : ''}
     <input id="${escHtml(fileInputId)}" type="file" multiple style="display:none"${fileInputOnChange ? ` onchange="${fileInputOnChange}"` : ''}>
@@ -14115,8 +13761,6 @@ function renderSideChatPaneHtml(timelineBudget = null) {
       </div>
       ${renderUnifiedDesktopComposerHtml({
         inputId: 'side-chat-input',
-        sessionId: side.id,
-        secondarySurface: 'side-chat',
         placeholder: 'Send Prometheus a message',
         composerClass: 'side-chat-composer',
         attachAction: "showToast('Side chat attachments use the main chat context.', 'Attach files in the main composer before opening side context.', 'info')",
@@ -14142,11 +13786,7 @@ function renderBackgroundAgentSidePaneHtml(record, timelineBudget = null) {
       agentName: identity.name,
       agentColor: identity.color,
     }),
-    // Persisted structured traces are authoritative. Older records only have
-    // process events, so retain the event-to-trace recovery fallback.
-    liveTraceEntries: Array.isArray(record.liveTraceEntries) && record.liveTraceEntries.length
-      ? record.liveTraceEntries.slice()
-      : backgroundAgentEventsToLiveTraceEntries(record.events),
+    liveTraceEntries: backgroundAgentEventsToLiveTraceEntries(record.events),
     _backgroundAgentLive: running,
     streaming: running,
   };
@@ -14193,8 +13833,6 @@ function renderBackgroundAgentSidePaneHtml(record, timelineBudget = null) {
       </div>
       ${renderUnifiedDesktopComposerHtml({
         inputId: 'background-agent-chat-input',
-        sessionId: sideSessionId,
-        secondarySurface: 'background-agent',
         placeholder: `Steer ${identity.name} directly`,
         composerClass: 'side-chat-composer background-agent-side-composer',
         attachAction: "showToast('Attachments stay on the main composer while you steer a background agent.', '', 'info')",
@@ -14224,8 +13862,6 @@ function markLiveStreamMotionAfterRender(sessionId, beforeTextLen = 0) {
   const seen = seenBySession[key] || (seenBySession[key] = new Set());
   const summaryKeysBySession = window.__pmLiveTraceSummaryKeysBySession || (window.__pmLiveTraceSummaryKeysBySession = {});
   const summaryKeys = summaryKeysBySession[key] || (summaryKeysBySession[key] = {});
-  const summaryLabelsBySession = window.__pmLiveTraceSummaryLabelsBySession || (window.__pmLiveTraceSummaryLabelsBySession = {});
-  const summaryLabels = summaryLabelsBySession[key] || (summaryLabelsBySession[key] = {});
   document.querySelectorAll('[data-live-entry-id]').forEach((node) => {
     const id = String(node.getAttribute('data-live-entry-id') || '').trim();
     if (!id) return;
@@ -14238,15 +13874,10 @@ function markLiveStreamMotionAfterRender(sessionId, beforeTextLen = 0) {
     const groupKey = node.closest('details.live-turn-tool-group')?.getAttribute('data-live-trace-group') || '';
     const labelKey = String(node.getAttribute('data-live-trace-summary-key') || '').trim();
     if (!groupKey || !labelKey) return;
-    const currentLabel = String(node.querySelector('.t-think-text')?.textContent || node.textContent || '').trim();
     if (summaryKeys[groupKey] !== labelKey) {
-      const previousLabel = String(summaryLabels[groupKey] || '').trim();
-      if (previousLabel && currentLabel && previousLabel !== currentLabel) {
-        animateThinkingTextSwap(node, previousLabel);
-      }
+      node.classList.add('live-trace-summary-swap');
       summaryKeys[groupKey] = labelKey;
     }
-    if (currentLabel) summaryLabels[groupKey] = currentLabel;
   });
   const streaming = document.getElementById('streaming-text-content');
   const afterTextLen = String(streaming?.textContent || '').length;
@@ -16245,60 +15876,6 @@ function renderProgressPanel() {
   });
 }
 
-function clearProcessLog() {
-  window.processLogEntries.length = 0;
-  const el = document.getElementById('process-log');
-  if (el) el.innerHTML = '<div style="color:var(--muted);text-align:center;padding:20px 0;opacity:0.5">Waiting for activity...</div>';
-  window.processLogAutoFollow = true;
-  window.rightColumnAutoFollow = true;
-  maybeAutoScrollRightColumn(true);
-  persistActiveChat();
-}
-
-function addProcessEntry(type, content, extra) {
-  const ts = new Date().toLocaleTimeString();
-  const actor = (extra && typeof extra === 'object' && extra.actor) ? String(extra.actor) : undefined;
-  const contentText = String(content || '');
-  if (!actor && contentText.startsWith('Task "') && (contentText.includes('check sidebar') || contentText.includes('nothing to report'))) return;
-  window.processLogEntries.push({ ts, type, content, extra, actor });
-  renderProcessLog();
-  maybeAutoScrollRightColumn(window.isThinking || window.rightColumnAutoFollow);
-  persistActiveChat();
-  if (window.isThinking) {
-    const panel = document.getElementById('current-turn-process');
-    if (panel && panel.style.display !== 'none' && window.currentTurnStartIndex >= 0) {
-      panel.innerHTML = formatProcessLines(window.processLogEntries.slice(window.currentTurnStartIndex));
-    }
-  }
-}
-
-function addSessionProcessEntry(sessionId, type, content, extra) {
-  const sess = getChatSessionById(sessionId);
-  if (!sess) {
-    addProcessEntry(type, content, extra);
-    return;
-  }
-  if (!Array.isArray(sess.processLog)) sess.processLog = [];
-  const ts = new Date().toLocaleTimeString();
-  const actor = (extra && typeof extra === 'object' && extra.actor) ? String(extra.actor) : undefined;
-  sess.processLog.push({ ts, type, content, extra, actor });
-  const st = getSessionStreamState(sessionId);
-  const isViewing = window.activeChatSessionId === sessionId;
-  if (isViewing) {
-    window.processLogEntries = sess.processLog;
-    renderProcessLog();
-    maybeAutoScrollRightColumn(!!window._sessionThinking?.[sessionId] || window.rightColumnAutoFollow);
-    if (window._sessionThinking?.[sessionId]) {
-      const panel = document.getElementById('current-turn-process');
-      const startIndex = Number.isFinite(Number(st?.currentTurnStartIndex)) ? Number(st.currentTurnStartIndex) : -1;
-      if (panel && panel.style.display !== 'none' && startIndex >= 0) {
-        panel.innerHTML = formatProcessLines(sess.processLog.slice(startIndex));
-      }
-    }
-  }
-  persistSession(sessionId);
-}
-
 function renderProcessLog() {
   const el = document.getElementById('process-log');
   if (!el) return;
@@ -17187,6 +16764,7 @@ function syncSessionSidebarSummary(session) {
 
 // Persist a specific session by ID (used by SSE handler to target the right session even after a switch)
 function persistSession(id) {
+  chatPerformanceRuntime.cancelProcessLogPersistence(id);
   const idx = window.chatSessions.findIndex(s => s.id === id);
   if (idx === -1) return;
   const s = window.chatSessions[idx];
@@ -17413,7 +16991,7 @@ async function sendChat(queuedMessage = null, options = {}) {
     if (isBareThinkingLiveTraceText(content)) return;
     if (!Array.isArray(streamState.liveTraceEntries)) streamState.liveTraceEntries = [];
     const normalizedType = String(type || 'info').toLowerCase();
-    const isThoughtLike = isDesktopTraceThoughtType(normalizedType);
+    const isThoughtLike = normalizedType === 'preamble' || normalizedType === 'think' || normalizedType === 'assistant';
     const isUserVisibleThought = isThoughtLike && isDesktopUserVisibleReasoningTraceEntry({ type: normalizedType, extra });
     const last = streamState.liveTraceEntries[streamState.liveTraceEntries.length - 1];
     if (append && last && last.type === normalizedType
@@ -19046,6 +18624,8 @@ function toggleAgentPanel(agentId) {
 }
 
 // ---- Background Spawn Dock (one-shot background_spawn agents only) ----
+let backgroundSpawnDockRenderSignature = null;
+
 function ensureBackgroundSpawnDockMap() {
   if (!(window.backgroundSpawnDockMap instanceof Map)) window.backgroundSpawnDockMap = new Map();
   return window.backgroundSpawnDockMap;
@@ -19106,9 +18686,6 @@ function backgroundSpawnWorkRecord(lane) {
     error: lane.error,
     fileChanges: lane.fileChanges,
     events: lane.events,
-    liveTraceEntries: Array.isArray(lane.liveTraceEntries) && lane.liveTraceEntries.length
-      ? lane.liveTraceEntries
-      : backgroundAgentEventsToLiveTraceEntries(lane.events),
     streamId: lane.streamId,
     lastSeq: lane.lastSeq,
     steerMessages: lane.steerMessages,
@@ -19168,7 +18745,6 @@ function upsertBackgroundSpawnLane(msg = {}) {
     task: String(msg.task || msg.prompt || existing.task || '').trim(),
     status: String(msg.state || existing.status || 'running').trim(),
     events: Array.isArray(existing.events) ? existing.events : [],
-    liveTraceEntries: Array.isArray(existing.liveTraceEntries) ? existing.liveTraceEntries : [],
     expanded: existing.expanded === true,
     startedAt: Number(existing.startedAt || Date.now()),
     updatedAt: Date.now(),
@@ -19200,39 +18776,6 @@ function backgroundSpawnPreview(value, max = 180) {
   }
   raw = raw.replace(/\s+/g, ' ').trim();
   return raw.length > max ? `${raw.slice(0, max - 3)}...` : raw;
-}
-
-function mergeBackgroundReasoningSummary(trace, text, extra, index, { delta = false } = {}) {
-  const next = String(text || '').trim();
-  if (!next) return;
-  const previous = [...trace].reverse().find((entry) =>
-    String(entry?.extra?.source || '').toLowerCase() === 'agent_progress'
-  );
-  const visibleExtra = {
-    ...extra,
-    source: 'agent_progress',
-    visibility: 'summary',
-    reasoningKind: 'summary',
-  };
-  if (!previous) {
-    trace.push({
-      id: `background_trace_${index}`,
-      type: 'think',
-      text: next,
-      ts: String(extra?.ts || ''),
-      extra: visibleExtra,
-    });
-    return;
-  }
-  const current = String(previous.text || '').trim();
-  const isSnapshot = next.length > current.length && next.startsWith(current);
-  const canAppend = delta
-    && current
-    && !isSnapshot
-    && !/[.!?:]\s*$/.test(current)
-    && (/^\s/.test(text) || /^[a-z0-9,'"‘’“”\-—.;:!?)}\]]/.test(next));
-  previous.text = canAppend ? `${current}${next}`.replace(/\s+/g, ' ').trim() : next;
-  previous.extra = { ...(previous.extra || {}), ...visibleExtra };
 }
 
 function backgroundAgentEventsToLiveTraceEntries(events = []) {
@@ -19273,11 +18816,6 @@ function backgroundAgentEventsToLiveTraceEntries(events = []) {
       if (action) applyToolActivityEvent(trace, 'progress', payload);
       return;
     }
-    if (eventType === 'reasoning_summary' || eventType === 'reasoning_summary_delta' || eventType === 'reasoning_delta') {
-      const text = String(extra.thinking || extra.text || extra.message || entry.content || '').trim();
-      mergeBackgroundReasoningSummary(trace, text, extra, index, { delta: eventType.endsWith('_delta') });
-      return;
-    }
     if (eventType === 'thinking' || eventType === 'agent_thought' || eventType === 'thinking_delta' || entry.type === 'think') {
       const text = String(extra.thinking || extra.text || entry.content || '').trim();
       const visibility = chatProgressVisibility({ ...extra, type: eventType || entry.type });
@@ -19288,9 +18826,7 @@ function backgroundAgentEventsToLiveTraceEntries(events = []) {
         source: String(extra.source || (visibility === 'summary' ? 'reasoning_summary' : 'agent_progress')),
         visibility,
       };
-      if (visibility === 'summary') {
-        mergeBackgroundReasoningSummary(trace, text, extra, index, { delta: eventType === 'thinking_delta' });
-      } else if (previous?.type === 'think' && previous.extra?.source === visibleExtra.source && !/[.!?:]\s*$/.test(previous.text || '')) {
+      if (previous?.type === 'think' && previous.extra?.source === visibleExtra.source && !/[.!?:]\s*$/.test(previous.text || '')) {
         previous.text = `${previous.text || ''}${text}`;
         previous.extra = visibleExtra;
       } else {
@@ -19375,20 +18911,6 @@ function backgroundSpawnProcessEntryFromEventLegacy(msg = {}) {
         ? { ts, type: 'think', actor: 'Background Agent', content: text.slice(0, 220), extra: { ...extra, source: 'reasoning_summary', visibility } }
         : null;
     }
-    case 'reasoning_summary':
-    case 'reasoning_summary_delta':
-    case 'reasoning_delta': {
-      const text = String(msg.thinking || msg.text || msg.message || msg.summary || '').trim();
-      return text
-        ? {
-          ts,
-          type: 'think',
-          actor: 'Background Agent',
-          content: text,
-          extra: { ...extra, source: 'agent_progress', visibility: 'summary', reasoningKind: 'summary' },
-        }
-        : null;
-    }
     case 'info':
     case 'heartbeat':
     case 'ui_preflight': {
@@ -19463,6 +18985,17 @@ function renderBackgroundSpawnPlan(lane) {
   `;
 }
 
+function renderBackgroundAgentUi() {
+  const detailId = String(window.backgroundAgentDetailId || '').trim();
+  if (detailId) renderBackgroundAgentDetail();
+  else renderBackgroundSpawnDock();
+  if (typeof renderSourcePanel === 'function' && sourcePanelEnvironmentIsVisible()) renderSourcePanel();
+}
+
+function scheduleBackgroundAgentUiUpdate(options = {}) {
+  chatPerformanceRuntime.scheduleBackgroundAgentUiUpdate(renderBackgroundAgentUi, options);
+}
+
 function pushBackgroundSpawnEvent(msg = {}) {
   if (!backgroundSpawnEventSessionMatches(msg)) return;
   const lane = upsertBackgroundSpawnLane(msg);
@@ -19483,14 +19016,11 @@ function pushBackgroundSpawnEvent(msg = {}) {
   }
   const entry = backgroundSpawnProcessEntryFromEvent(msg);
   if (entry) {
-    lane.events = mergeBackgroundAgentEvents(lane.events, [entry]);
-    lane.liveTraceEntries = backgroundAgentEventsToLiveTraceEntries(lane.events);
+    lane.events = appendBackgroundAgentEvent(lane.events, entry);
   }
   if (streamId && seq) lane.lastSeq = seq;
   persistBackgroundAgentWork(backgroundSpawnWorkRecord(lane));
-  if (typeof renderSourcePanel === 'function') renderSourcePanel();
-  renderBackgroundSpawnDock();
-  if (String(window.backgroundAgentDetailId || '') === String(lane.id || '')) renderBackgroundAgentDetail();
+  scheduleBackgroundAgentUiUpdate();
 }
 
 function completeBackgroundSpawnLane(msg = {}) {
@@ -19519,9 +19049,8 @@ function completeBackgroundSpawnLane(msg = {}) {
       error: String(msg.error || existing.error || '').trim(),
       fileChanges: msg.fileChanges || existing.fileChanges || null,
       events: existing.events || [],
-    });
-    if (typeof renderSourcePanel === 'function') renderSourcePanel();
-    renderBackgroundAgentDetail();
+    }, { immediate: true });
+    scheduleBackgroundAgentUiUpdate({ immediate: true });
     return;
   }
   if (!backgroundSpawnEventSessionMatches(msg)) return;
@@ -19537,13 +19066,16 @@ function completeBackgroundSpawnLane(msg = {}) {
   const content = failed
     ? `${lane.agentName || 'Agent'} failed${lane.error ? `: ${backgroundSpawnPreview(lane.error, 260)}` : ''}`
     : `${lane.agentName || 'Agent'} complete${lane.result ? `: ${backgroundSpawnPreview(lane.result, 260)}` : ''}`;
-  lane.events.push({ ts, type: failed ? 'error' : 'final', actor: 'Background Agent', content, extra: msg });
-  lane.liveTraceEntries = backgroundAgentEventsToLiveTraceEntries(lane.events);
+  lane.events = appendBackgroundAgentEvent(lane.events, {
+    ts,
+    type: failed ? 'error' : 'final',
+    actor: 'Background Agent',
+    content,
+    extra: msg,
+  });
   lane.updatedAt = Date.now();
-  persistBackgroundAgentWork(backgroundSpawnWorkRecord(lane));
-  if (typeof renderSourcePanel === 'function') renderSourcePanel();
-  renderBackgroundSpawnDock();
-  if (String(window.backgroundAgentDetailId || '') === String(lane.id || '')) renderBackgroundAgentDetail();
+  persistBackgroundAgentWork(backgroundSpawnWorkRecord(lane), { immediate: true });
+  scheduleBackgroundAgentUiUpdate({ immediate: true });
 }
 
 function toggleBackgroundSpawnLane(id) {
@@ -19629,10 +19161,29 @@ function closeBackgroundAgentDetail() {
 function renderBackgroundSpawnDock() {
   const dock = document.getElementById('background-spawn-dock');
   if (!dock) return;
-  updateBackgroundSpawnDockOffset();
   const lanes = Array.from(ensureBackgroundSpawnDockMap().values())
     .filter((lane) => !lane.sessionId || lane.sessionId === String(window.activeChatSessionId || '').trim() || lane.sessionId === String(window.agentSessionId || '').trim())
     .sort((a, b) => a.startedAt - b.startedAt);
+  const sessionId = String(lanes[0]?.sessionId || window.activeChatSessionId || '').trim();
+  const dockOpen = backgroundSpawnDockIsOpen(sessionId, lanes.length);
+  const signature = [
+    String(window.activeChatSessionId || '').trim(),
+    dockOpen ? 'open' : 'collapsed',
+    lanes.map((lane) => [
+      lane.id,
+      lane.status,
+      lane.updatedAt,
+      lane.lastSeq,
+      lane.events?.length || 0,
+      lane.result,
+      lane.error,
+      lane.expanded === true ? 'expanded' : '',
+    ].join(':')).join('|'),
+  ].join('::');
+  if (signature === backgroundSpawnDockRenderSignature && dock.dataset.backgroundRenderSignature === signature) return;
+  backgroundSpawnDockRenderSignature = signature;
+  dock.dataset.backgroundRenderSignature = signature;
+  updateBackgroundSpawnDockOffset();
   dock.hidden = lanes.length === 0;
   dock.classList.toggle('has-many', lanes.length > 2);
   if (!lanes.length) {
@@ -19640,8 +19191,6 @@ function renderBackgroundSpawnDock() {
     updateBackgroundSpawnDockOffset();
     return;
   }
-  const sessionId = String(lanes[0]?.sessionId || window.activeChatSessionId || '').trim();
-  const dockOpen = backgroundSpawnDockIsOpen(sessionId, lanes.length);
   dock.classList.toggle('is-open', dockOpen);
   dock.classList.toggle('is-collapsed', !dockOpen);
   if (!dockOpen) {
@@ -19923,7 +19472,6 @@ let canvasPublishState = null;
 let canvasBrowserCollapsed = true;
 let canvasPreviewDevice = 'responsive';
 let canvasPreviewUpdateVersion = 0;
-let canvasDiffRequestVersion = 0;
 const canvasFolderExpanded = new Set();
 
 function sourcePanelContext() {
@@ -42686,17 +42234,8 @@ function toggleCanvasFullscreen() {
   if (!panel || !canvasOpen) return;
   canvasFullscreenMode = !canvasFullscreenMode;
   if (canvasFullscreenMode) {
-    // Electron's titlebar is a 30px native overlay. A fixed panel does not
-    // inherit the app's `.app { padding-top: ... }` inset, so keep the
-    // fullscreen Canvas below that overlay instead of putting its controls
-    // underneath the Windows caption buttons. Browser/PWA Canvas retains the
-    // original edge-to-edge fullscreen behavior.
-    const electronTitlebarInset = document.body.classList.contains('electron-shell')
-      && !document.body.classList.contains('pm-mobile-active')
-      ? 'var(--window-chrome-height) 0 0'
-      : '0';
     panel.style.position = 'fixed';
-    panel.style.inset = electronTitlebarInset;
+    panel.style.inset = '0';
     panel.style.zIndex = '1000';
     panel.style.background = '#2a2a2a';
   } else {
@@ -42865,19 +42404,6 @@ function canvasCloseTab(id, ev) {
 function setCanvasMode(mode) {
   const tab = canvasTabs.find(t => t.id === activeCanvasTabId);
   if (!tab) return;
-  if (mode === 'diff') {
-    tab.openMode = 'diff';
-    tab.diffAvailable = true;
-    tab.diffView = tab.diffView || 'turn';
-    tab.mode = 'code';
-    applyCanvasViewMode('code', tab);
-    canvasRenderTabs();
-    return;
-  }
-  // Code and Preview are the normal editable/preview views. Leaving the diff
-  // view should return to the same Canvas tab rather than creating another
-  // surface or losing the file that was just reviewed.
-  if (tab.openMode === 'diff') delete tab.openMode;
   // sync editor -> tab before switching
   if (canvasEditor && tab.mode !== 'preview') tab.content = canvasEditor.getValue();
   tab.mode = mode;
@@ -42885,87 +42411,28 @@ function setCanvasMode(mode) {
   canvasRenderTabs();
 }
 
-function canvasDiffRoot(tab) {
-  return String(
-    tab?.diffRoot
-    || sourcePanelState?.codingContext?.root
-    || sourcePanelState?.gitRoot
-    || '',
-  ).trim();
-}
-
-function canvasDiffFilePath(tab) {
-  return String(tab?.diskPath || tab?.workspacePath || tab?.originalPath || '').trim();
-}
-
-async function renderCanvasDiffInto(host, tab) {
-  if (!host || !tab) return;
-  const filePath = canvasDiffFilePath(tab);
-  if (!filePath) {
-    host.innerHTML = '<div class="canvas-diff-loading">This file has no workspace path to compare.</div>';
-    return;
-  }
-  const requestVersion = ++canvasDiffRequestVersion;
-  host.innerHTML = '<div class="canvas-diff-loading">Loading diff…</div>';
-  try {
-    const params = new URLSearchParams({
-      file: filePath,
-      view: String(tab.diffView || 'turn'),
-      sessionId: String(window.activeChatSessionId || window.agentSessionId || ''),
-    });
-    const root = canvasDiffRoot(tab);
-    if (root) params.set('root', root);
-    const data = await api(`/api/coding/diff?${params.toString()}`, { timeoutMs: 12000, dedupe: false });
-    if (requestVersion !== canvasDiffRequestVersion || activeCanvasTabId !== tab.id || tab.openMode !== 'diff') return;
-    const { renderUnifiedDiffMarkup } = await loadCodingDiffRenderer();
-    if (requestVersion !== canvasDiffRequestVersion || activeCanvasTabId !== tab.id || tab.openMode !== 'diff') return;
-    const baseline = data?.baselineKind === 'none'
-      ? 'No baseline'
-      : data?.baselineKind === 'turn-snapshot' || data?.baselineKind === 'session-snapshot'
-        ? 'Snapshot'
-        : data?.baselineKind === 'git-index'
-          ? 'Staged'
-          : 'Git working tree';
-    const additions = Number(data?.insertions) || 0;
-    const deletions = Number(data?.deletions) || 0;
-    host.innerHTML = `
-      <div class="canvas-diff-toolbar">
-        <span class="canvas-diff-title">Turn diff · ${escHtml(tab.name || filePath)}</span>
-        <span class="canvas-diff-meta">${escHtml(baseline)} · +${additions} · -${deletions}</span>
-      </div>
-      ${renderUnifiedDiffMarkup(data?.diff, { emptyText: data?.baselineKind === 'none' ? 'No comparison baseline is available for this file.' : undefined })}`;
-  } catch (error) {
-    if (requestVersion !== canvasDiffRequestVersion) return;
-    host.innerHTML = `<div class="canvas-diff-loading">${escHtml(error?.message || 'Unable to load diff.')}</div>`;
-  }
-}
-
 function applyCanvasViewMode(mode, tab) {
   const creativeShell = document.getElementById('canvas-creative-shell');
   const browserShell = document.getElementById('canvas-browser-shell');
   const editorWrap = document.getElementById('canvas-editor-wrap');
-  const diffWrap = document.getElementById('canvas-diff-wrap');
   const previewShell = document.getElementById('canvas-preview-shell');
   const previewFrame = document.getElementById('canvas-preview-frame');
   const emptyState = document.getElementById('canvas-empty-state');
   const noFilesHint = document.getElementById('canvas-no-files-hint');
   const fileBrowser = document.getElementById('canvas-file-browser');
   const codeModeBtn = document.getElementById('canvas-code-btn');
-  const diffModeBtn = document.getElementById('canvas-diff-btn');
   const previewModeBtn = document.getElementById('canvas-preview-btn');
   updateCanvasWorkspaceChrome();
   if (isStructuredCreativeMode()) {
     if (creativeShell) creativeShell.style.display = 'flex';
     if (browserShell) browserShell.style.display = 'none';
     if (editorWrap) editorWrap.style.display = 'none';
-    if (diffWrap) diffWrap.style.display = 'none';
     if (previewShell) previewShell.style.display = 'none';
     if (previewFrame) previewFrame.style.display = 'none';
     if (emptyState) emptyState.style.display = 'none';
     if (noFilesHint) noFilesHint.style.display = 'none';
     if (fileBrowser) fileBrowser.style.display = 'none';
     if (codeModeBtn) codeModeBtn.style.display = 'none';
-    if (diffModeBtn) diffModeBtn.style.display = 'none';
     if (previewModeBtn) previewModeBtn.style.display = 'none';
     renderCreativeWorkspace();
     syncCanvasSurfaceWidthLock(tab);
@@ -42975,14 +42442,12 @@ function applyCanvasViewMode(mode, tab) {
   if (isBrowserCanvasSurfaceActive()) {
     if (browserShell) browserShell.style.display = 'flex';
     if (editorWrap) editorWrap.style.display = 'none';
-    if (diffWrap) diffWrap.style.display = 'none';
     if (previewShell) previewShell.style.display = 'none';
     if (previewFrame) previewFrame.style.display = 'none';
     if (emptyState) emptyState.style.display = 'none';
     if (noFilesHint) noFilesHint.style.display = 'none';
     if (fileBrowser) fileBrowser.style.display = 'none';
     if (codeModeBtn) codeModeBtn.style.display = 'none';
-    if (diffModeBtn) diffModeBtn.style.display = 'none';
     if (previewModeBtn) previewModeBtn.style.display = 'none';
     renderBrowserCanvasSurface();
     syncCanvasSurfaceWidthLock(tab);
@@ -42992,31 +42457,26 @@ function applyCanvasViewMode(mode, tab) {
   if (!tab) {
     if (normalizeCreativeMode(window.currentCreativeMode) !== 'design') clearDesignSelectionContext();
     if (editorWrap) editorWrap.style.display = 'none';
-    if (diffWrap) diffWrap.style.display = 'none';
     if (previewShell) previewShell.style.display = 'none';
     if (previewFrame) previewFrame.style.display = 'none';
     if (emptyState) emptyState.style.display = 'flex';
     if (noFilesHint) noFilesHint.style.display = 'flex';
     if (fileBrowser) fileBrowser.style.display = 'none';
-    if (diffModeBtn) diffModeBtn.style.display = 'none';
     syncCanvasSurfaceWidthLock(tab);
     return;
   }
   if (emptyState) emptyState.style.display = 'none';
   if (noFilesHint) noFilesHint.style.display = 'none';
   if (fileBrowser) fileBrowser.style.display = 'none';
-  if (diffWrap) diffWrap.style.display = 'none';
   if (normalizeCreativeMode(window.currentCreativeMode) !== 'design' || mode !== 'preview') {
     clearDesignSelectionContext();
   }
   // Image tabs always show in preview mode — hide code/preview toggle buttons
   if (tab.isImage || tab.isBinary) {
     if (editorWrap) editorWrap.style.display = 'none';
-    if (diffWrap) diffWrap.style.display = 'none';
     if (previewShell) { previewShell.style.display = 'flex'; previewShell.style.flex = '1'; }
     if (previewFrame) { previewFrame.style.display = 'block'; previewFrame.style.flex = 'none'; }
     if (codeModeBtn) codeModeBtn.style.display = 'none';
-    if (diffModeBtn) diffModeBtn.style.display = 'none';
     if (previewModeBtn) previewModeBtn.style.display = 'none';
     canvasUpdatePreview();
     syncCanvasPreviewDeviceFrame();
@@ -43025,21 +42485,7 @@ function applyCanvasViewMode(mode, tab) {
   }
   // Restore buttons for non-image tabs
   if (codeModeBtn) codeModeBtn.style.display = '';
-  if (diffModeBtn) diffModeBtn.style.display = tab.diffAvailable || tab.openMode === 'diff' ? '' : 'none';
   if (previewModeBtn) previewModeBtn.style.display = '';
-  if (tab.openMode === 'diff') {
-    if (editorWrap) editorWrap.style.display = 'none';
-    if (diffWrap) diffWrap.style.display = 'flex';
-    if (previewShell) previewShell.style.display = 'none';
-    if (previewFrame) previewFrame.style.display = 'none';
-    if (codeModeBtn) codeModeBtn.classList.remove('active');
-    if (diffModeBtn) diffModeBtn.classList.add('active');
-    if (previewModeBtn) previewModeBtn.classList.remove('active');
-    renderCanvasDiffInto(diffWrap, tab).catch(() => {});
-    syncCanvasSurfaceWidthLock(tab);
-    return;
-  }
-  if (diffModeBtn) diffModeBtn.classList.remove('active');
   if (mode === 'preview') {
     if (editorWrap) editorWrap.style.display = 'none';
     if (previewShell) { previewShell.style.display = 'flex'; previewShell.style.flex = '1'; }
@@ -43072,12 +42518,10 @@ function canvasRenderTabs() {
     const label = getStructuredCreativeModeLabel(window.currentCreativeMode);
     tabsEl.innerHTML = `<div class="canvas-tab active" style="cursor:default"><span>${escHtml(label)}</span></div>`;
     const codeModeBtn = document.getElementById('canvas-code-btn');
-    const diffModeBtn = document.getElementById('canvas-diff-btn');
     const previewModeBtn = document.getElementById('canvas-preview-btn');
     const saveBtn = document.getElementById('canvas-save-btn');
     const saveControls = document.getElementById('canvas-save-controls');
     if (codeModeBtn) codeModeBtn.style.display = 'none';
-    if (diffModeBtn) diffModeBtn.style.display = 'none';
     if (previewModeBtn) previewModeBtn.style.display = 'none';
     if (saveBtn) saveBtn.style.display = 'none';
     if (saveControls) saveControls.style.display = 'none';
@@ -43087,12 +42531,10 @@ function canvasRenderTabs() {
   if (isBrowserCanvasSurfaceActive()) {
     tabsEl.innerHTML = '<div class="canvas-tab active" style="cursor:default"><span>Live Browser</span></div>';
     const codeModeBtn = document.getElementById('canvas-code-btn');
-    const diffModeBtn = document.getElementById('canvas-diff-btn');
     const previewModeBtn = document.getElementById('canvas-preview-btn');
     const saveBtn = document.getElementById('canvas-save-btn');
     const saveControls = document.getElementById('canvas-save-controls');
     if (codeModeBtn) codeModeBtn.style.display = 'none';
-    if (diffModeBtn) diffModeBtn.style.display = 'none';
     if (previewModeBtn) previewModeBtn.style.display = 'none';
     if (saveBtn) saveBtn.style.display = 'none';
     if (saveControls) saveControls.style.display = 'none';
@@ -43107,15 +42549,10 @@ function canvasRenderTabs() {
   `).join('') + `<button class="canvas-new-tab" onclick="canvasNewFile()" title="New file">+</button>`;
   const tab = canvasTabs.find(t => t.id === activeCanvasTabId);
   const codeModeBtn = document.getElementById('canvas-code-btn');
-  const diffModeBtn = document.getElementById('canvas-diff-btn');
   const previewModeBtn = document.getElementById('canvas-preview-btn');
   const saveBtn = document.getElementById('canvas-save-btn');
-  if (codeModeBtn) codeModeBtn.classList.toggle('active', !tab || (tab.mode !== 'preview' && tab.openMode !== 'diff'));
-  if (diffModeBtn) {
-    diffModeBtn.style.display = tab?.diffAvailable || tab?.openMode === 'diff' ? '' : 'none';
-    diffModeBtn.classList.toggle('active', tab?.openMode === 'diff');
-  }
-  if (previewModeBtn) previewModeBtn.classList.toggle('active', !!(tab && tab.mode === 'preview' && tab.openMode !== 'diff'));
+  if (codeModeBtn) codeModeBtn.classList.toggle('active', !tab || tab.mode !== 'preview');
+  if (previewModeBtn) previewModeBtn.classList.toggle('active', !!(tab && tab.mode === 'preview'));
   // Show save controls only for non-image files with a disk path. Keep the
   // original target disabled unless this tab came from an external file.
   const saveControls = document.getElementById('canvas-save-controls');
@@ -44685,10 +44122,6 @@ async function refreshOpenCanvasFiles(payload = {}, options = {}) {
         setCanvasEditorValue(tab.content);
         canvasEditor.setOption('mode', tab.language || getCanvasLang(tab.name));
       }
-      if (activeCanvasTabId === tab.id && tab.openMode === 'diff') {
-        const diffWrap = document.getElementById('canvas-diff-wrap');
-        if (diffWrap) renderCanvasDiffInto(diffWrap, tab).catch(() => {});
-      }
       refreshed += 1;
     } catch {
       tab.externalChanged = true;
@@ -44810,18 +44243,6 @@ async function canvasPresentFile(diskPath, label, options = {}) {
     if (dot) dot.style.display = 'block';
   };
   const name = label || diskPath.split('/').pop() || diskPath;
-  const requestedDiff = String(options.openMode || '').toLowerCase() === 'diff';
-  const requestedDiffRoot = String(options.diffRoot || '').trim();
-  const applyRequestedOpenMode = (candidate) => {
-    if (!candidate || !requestedDiff) return;
-    candidate.openMode = 'diff';
-    candidate.diffAvailable = true;
-    candidate.diffView = String(options.diffView || candidate.diffView || 'turn');
-    if (requestedDiffRoot) candidate.diffRoot = requestedDiffRoot;
-  };
-  const requestedOpenMode = requestedDiff
-    ? { openMode: 'diff', diffAvailable: true, diffView: String(options.diffView || 'turn'), ...(requestedDiffRoot ? { diffRoot: requestedDiffRoot } : {}) }
-    : {};
   let tab = canvasTabs.find((candidate) => candidate.diskPath === diskPath);
   if (tab) {
     try {
@@ -44861,7 +44282,6 @@ async function canvasPresentFile(diskPath, label, options = {}) {
         tab.dirty = false;
       }
     } catch {}
-    applyRequestedOpenMode(tab);
     if (!canvasOpen && shouldAutoOpen) toggleCanvas();
     else markCanvasHasHiddenFile();
     canvasOpenTab(tab.id);
@@ -44902,7 +44322,6 @@ async function canvasPresentFile(diskPath, label, options = {}) {
         id, name, content: dataUrl, savedContent: dataUrl,
         diskPath, dirty: false,
         ...canvasPathMeta,
-        ...requestedOpenMode,
         mode: 'preview',
         language: 'null',
         isImage: true,
@@ -44913,7 +44332,6 @@ async function canvasPresentFile(diskPath, label, options = {}) {
         id, name, content: '', savedContent: '',
         diskPath, dirty: false,
         ...canvasPathMeta,
-        ...requestedOpenMode,
         mode: 'preview',
         language: 'null',
         isBinary: true,
@@ -44927,7 +44345,6 @@ async function canvasPresentFile(diskPath, label, options = {}) {
         id, name, content: data.content, savedContent: data.content,
         diskPath, dirty: false,
         ...canvasPathMeta,
-        ...requestedOpenMode,
         mode: autoPreview ? 'preview' : 'code',
         language: getCanvasLang(name),
       });
@@ -46668,7 +46085,7 @@ function appendLiveTraceToStreamState(streamState, type, text, { append = false,
   if (isBareThinkingLiveTraceText(content)) return;
   if (!Array.isArray(streamState.liveTraceEntries)) streamState.liveTraceEntries = [];
   const normalizedType = String(type || 'info').toLowerCase();
-  const isThoughtLike = isDesktopTraceThoughtType(normalizedType);
+  const isThoughtLike = normalizedType === 'preamble' || normalizedType === 'think' || normalizedType === 'assistant';
   const isUserVisibleThought = isThoughtLike && isDesktopUserVisibleReasoningTraceEntry({ type: normalizedType, extra });
   const last = streamState.liveTraceEntries[streamState.liveTraceEntries.length - 1];
   if (append && last && last.type === normalizedType
@@ -46705,37 +46122,22 @@ function setDesktopLiveProgressNarration(streamState, text, appendTrace, { repla
     String(entry?.extra?.source || '').toLowerCase() === 'agent_progress'
   );
   if (!existing) {
-    appendTrace('think', incoming, { extra: { visibility, source: 'agent_progress', reasoningKind: 'summary' } });
+    appendTrace('think', incoming, { extra: { visibility, source: 'agent_progress' } });
     return true;
   }
-  const previous = String(existing.text || '').trim();
-  const next = incoming.trim();
-  if (!next) return false;
-  // Providers send both snapshots and token deltas on this channel. Treat a
-  // growing snapshot as replacement, otherwise append only when the previous
-  // sentence can safely continue. That keeps one mutable progress slot instead
-  // of leaving every transport packet behind in the tool timeline.
-  const isSnapshot = next.length > previous.length && next.startsWith(previous);
-  const canAppend = !replace
-    && !isSnapshot
-    && previous
-    && !/[.!?:]\s*$/.test(previous)
-    && (/^\s/.test(incoming) || /^[a-z0-9,'"‘’“”\-—.;:!?)}\]]/.test(next));
-  const merged = canAppend
-    ? dedupeDesktopTraceProseText(appendFinalResponseDelta(previous, incoming))
-    : normalizeLiveTraceProseText(next);
-  const latest = canAppend
-    ? (merged.split(/\n\s*\n/).map((part) => part.trim()).filter(Boolean).pop() || merged)
-    : merged;
+  const merged = replace
+    ? normalizeLiveTraceProseText(incoming)
+    : normalizeLiveTraceProseText(appendFinalResponseDelta(existing.text || '', incoming));
+  const latest = merged.split(/\n\s*\n/).map((part) => part.trim()).filter(Boolean).pop() || merged;
   if (!latest) return false;
   const visibilityChanged = String(existing?.extra?.visibility || '') !== visibility;
   if (latest === String(existing.text || '').trim()) {
-    if (visibilityChanged) existing.extra = { ...(existing.extra || {}), visibility, source: 'agent_progress', reasoningKind: 'summary' };
+    if (visibilityChanged) existing.extra = { ...(existing.extra || {}), visibility, source: 'agent_progress' };
     return visibilityChanged;
   }
   existing.text = latest;
   existing.ts = new Date().toLocaleTimeString();
-  existing.extra = { ...(existing.extra || {}), visibility, source: 'agent_progress', reasoningKind: 'summary' };
+  existing.extra = { ...(existing.extra || {}), visibility, source: 'agent_progress' };
   return true;
 }
 
@@ -46755,7 +46157,7 @@ function shouldAppendDesktopReasoningSummary(streamState, chunk) {
 function appendDesktopReasoningSummary(streamState, chunk, appendTrace) {
   appendTrace('think', chunk, {
     append: shouldAppendDesktopReasoningSummary(streamState, chunk),
-    extra: { visibility: 'user', source: 'reasoning_summary', reasoningKind: 'summary' },
+    extra: { visibility: 'user', source: 'reasoning_summary' },
   });
 }
 

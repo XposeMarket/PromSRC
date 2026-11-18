@@ -2302,7 +2302,6 @@ void main() {
     targetBtn.classList.toggle('subagent', !!subagentTarget);
     targetBtn.classList.remove('room');
   };
-  context.__pmVoice.paintTarget = _paintVoiceTarget;
 
   function _closeVoiceTargetPicker() {
     voiceTargetPickerOpen = false;

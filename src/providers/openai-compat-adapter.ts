@@ -32,9 +32,7 @@ function sanitizeCacheMarkers(messages: ChatMessage[]): ChatMessage[] {
 // 'xhigh' / 'extra_high' are Codex-only for most providers; xAI additionally
 // accepts xhigh for Grok 4.20 multi-agent, handled below by model slug.
 const EFFORT_MAP: Record<string, string> = {
-  // Legacy disabled/minimal spellings are recovered as the lowest public
-  // level. They are not valid selector values or provider IDs anymore.
-  none: 'low', minimal: 'low', fast: 'low',
+  none: 'none', minimal: 'minimal', fast: 'minimal',
   low: 'low', medium: 'medium', high: 'high',
   xhigh: 'xhigh', extra_high: 'xhigh', max: 'max',
 };
@@ -83,17 +81,17 @@ function normalizeReasoningEffortForProvider(providerId: string, rawEffort: stri
 
 function shouldSendReasoningEffort(providerId: string, effort: string, modelName?: string): boolean {
   const id = String(providerId || '').trim().toLowerCase();
-  // xAI accepts only real effort levels for supported Grok slugs. Other Grok
-  // slugs reject the effort field.
+  // xAI defaults grok-4.3 to low if omitted, so "none" must be sent explicitly
+  // for effort-capable models. Other Grok slugs reject the effort field.
   if (id === 'xai') {
     if (!xaiModelSupportsReasoningEffort(modelName || '')) return false;
     if (xaiModelSupportsXHighReasoningEffort(modelName || '')) {
       return effort === 'low' || effort === 'medium' || effort === 'high' || effort === 'xhigh';
     }
-    return effort === 'low' || effort === 'medium' || effort === 'high';
+    return effort === 'none' || effort === 'low' || effort === 'medium' || effort === 'high';
   }
   if (id === 'openai') return !!normalizeReasoningEffort('openai', modelName || '', effort);
-  return effort !== 'xhigh' && effort !== 'max';
+  return effort !== 'none' && effort !== 'xhigh' && effort !== 'max';
 }
 
 function providerToolLimit(providerId: string): number | null {
@@ -317,7 +315,7 @@ export class OpenAICompatAdapter implements LLMProvider {
 	      stream: !!options?.onToken,
     };
     const speedCfg = (getConfig().getConfig() as any)?.llm?.providers?.[this.id] || {};
-    const configuredSpeed = options?.speed || speedCfg.speed || (speedCfg.fast_mode === true ? 'fast' : 'standard');
+    const configuredSpeed = speedCfg.speed || (speedCfg.fast_mode === true ? 'fast' : 'standard');
     if (normalizeSpeed(this.id, model, configuredSpeed) === 'fast') body.service_tier = 'priority';
 	    // frequency_penalty removed: grok-4.3+ rejects the parameter with a 400 error.
 	    // Reasoning effort: only forward for providers that implement it.
@@ -440,24 +438,15 @@ export class OpenAICompatAdapter implements LLMProvider {
 	            }
 
 	            const thinkingDelta =
-	              delta.reasoning_summary
-	              || delta.reasoning_content
+	              delta.reasoning_content
 	              || delta.reasoning
 	              || delta.reasoning_text
+	              || delta.reasoning_summary
 	              || '';
-	            const reasoningIsSummary = Boolean(delta.reasoning_summary)
-	              || (this.id === 'xai' && Boolean(
-	                delta.reasoning_content || delta.reasoning || delta.reasoning_text,
-	              ));
-	            // xAI exposes Grok's user-visible reasoning on the compatible
-	            // chat-completions path as reasoning_content. Keep it on the
-	            // same summary lane as OpenAI Responses so the UI can retain
-	            // the active summary instead of dropping it as private thinking.
 	            if (thinkingDelta) {
 	              thinking += thinkingDelta;
-	              if (reasoningIsSummary) options?.onReasoningSummary?.(thinkingDelta);
-	              else options?.onThinking?.(thinkingDelta);
-	              options?.onModelEvent?.({ type: 'reasoning_delta', text: thinkingDelta, summary: reasoningIsSummary, nativeType: 'chat.completion.chunk', provider: this.id, model: body.model });
+	              options?.onThinking?.(thinkingDelta);
+	              options?.onModelEvent?.({ type: 'reasoning_delta', text: thinkingDelta, nativeType: 'chat.completion.chunk', provider: this.id, model: body.model });
 	            }
 
 	            if (Array.isArray(delta.tool_calls)) {

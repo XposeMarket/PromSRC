@@ -152,10 +152,9 @@ function parseUsage(usage: any): ModelUsage | undefined {
 // Reasoning effort levels accepted by the Codex Responses API.
 // Maps Prometheus-internal "think" hints → the literal effort string sent in the request body.
 export const CODEX_EFFORT_MAP: Record<string, string> = {
-  // Recover legacy values as the lowest supported public effort.
-  none: 'low',
-  minimal: 'low',
-  fast: 'low',
+  none: 'none',
+  minimal: 'minimal',
+  fast: 'minimal',
   low: 'low',
   medium: 'medium',
   high: 'high',
@@ -390,7 +389,7 @@ export class OpenAICodexAdapter implements LLMProvider {
       // Precedence: options.think (per-call override) → config reasoning_effort → default 'medium'.
       const cfgRoot = getConfig().getConfig() as any;
       const codexCfg = cfgRoot?.llm?.providers?.openai_codex || {};
-      const configuredSpeed = options?.speed || codexCfg.speed || (codexCfg.fast_mode === true ? 'fast' : 'standard');
+      const configuredSpeed = codexCfg.speed || (codexCfg.fast_mode === true ? 'fast' : 'standard');
       if (normalizeSpeed('openai_codex', requestedModel, configuredSpeed) === 'fast') body.service_tier = 'priority';
       const configuredEffort = typeof codexCfg.reasoning_effort === 'string' ? codexCfg.reasoning_effort.trim() : '';
       if (options?.think !== false && (options?.think || configuredEffort)) {
