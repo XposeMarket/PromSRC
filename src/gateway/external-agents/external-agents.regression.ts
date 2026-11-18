@@ -256,9 +256,16 @@ async function main(): Promise<void> {
       const result = await running;
       assert.strictEqual(result.status, 'interrupted');
       assert.strictEqual(result.finalText, 'partial answer');
-      await waitFor(() => !pidAlive(pid), 5000);
-      assert.strictEqual(stuck.isRunning(), false, 'an unconfirmed stop ends the app-server');
+      // A message sent straight away waits until the old process is confirmed gone, then runs on a fresh one.
+      const next = await stuck.runTurn({
+        sessionId: 's2c', cwd: workspace, text: 'hi there', signal: new AbortController().signal,
+        emit: () => undefined, requestUser: async () => ({ optionId: 'cancel' }),
+      });
+      assert.ok(!pidAlive(pid), 'an unconfirmed stop ends the app-server before anything new starts');
+      assert.notStrictEqual(stuck.processId(), pid, 'the next message runs on a fresh app-server');
+      assert.notStrictEqual(next.status, 'interrupted');
       await stuck.shutdown();
+      assert.strictEqual(stuck.isRunning(), false);
     }
 
     // ── command approval: options = upstream decisions, answer reaches the same JSON-RPC id, no Prometheus grant ──
@@ -373,6 +380,15 @@ async function main(): Promise<void> {
       assert.deepStrictEqual(fsPerm.card.options.map((o) => o.id), ['turn', 'session', 'deny']);
       const huge = mapCodexServerRequest('item/permissions/requestApproval', { threadId: 't', turnId: 'u', itemId: 'i', cwd: '/r', permissions: { fileSystem: { write: Array.from({ length: 60 }, (_, i) => `/p/${i}`) } } })!;
       assert.deepStrictEqual(huge.card.options.map((o) => o.id), ['deny']);
+      // A path is shown character for character: inner spaces are kept, and one that cannot be shown faithfully is decline-only.
+      const spaced = mapCodexServerRequest('item/permissions/requestApproval', { threadId: 't', turnId: 'u', itemId: 'i', cwd: '/r', permissions: { fileSystem: { write: ['C:/My  Files/a'] } } })!;
+      assert.deepStrictEqual(spaced.card.detail.grants, ['Files write: C:/My  Files/a']);
+      assert.deepStrictEqual(spaced.card.options.map((o) => o.id), ['turn', 'session', 'deny']);
+      for (const odd of ['C:/trailing ', ' C:/leading', 'C:/line\nbreak']) {
+        const hidden = mapCodexServerRequest('item/permissions/requestApproval', { threadId: 't', turnId: 'u', itemId: 'i', cwd: '/r', permissions: { fileSystem: { write: [odd] } } })!;
+        assert.deepStrictEqual(hidden.card.options.map((o) => o.id), ['deny'], `decline-only for ${JSON.stringify(odd)}`);
+      }
+      assert.match(fs.readFileSync(path.join(__dirname, '..', '..', '..', 'web-ui', 'src', 'styles', 'external-agents.css'), 'utf8'), /\.ea-card-grants li \{ white-space: pre-wrap/, 'grant lines keep their spaces on screen');
       assert.match(fs.readFileSync(path.join(__dirname, '..', '..', '..', 'web-ui', 'src', 'chat', 'external-agent-ui.js'), 'utf8'), /d\.grants\.map/, 'the shared card renders the grant list');
       const q = mapCodexServerRequest('item/tool/requestUserInput', { threadId: 't', turnId: 'u', itemId: 'i', isBlocking: true, questions: [{ id: 'q1', header: 'Pick', question: 'Which?', isOther: false, isSecret: false, options: [{ label: 'A', description: '' }] }] })!;
       assert.deepStrictEqual(q.toResult({ optionId: 'submit', answers: { q1: ['A'] } }), { answers: { q1: { answers: ['A'] } } });
