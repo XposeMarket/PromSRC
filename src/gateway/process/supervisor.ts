@@ -2,7 +2,6 @@ import crypto from 'crypto';
 import path from 'path';
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import { execSync } from 'child_process';
-import pty from 'node-pty';
 import { getConfig } from '../../config/config';
 import { broadcastWS } from '../comms/broadcaster';
 import { ProcessRunStore } from './store';
@@ -419,6 +418,11 @@ export class ProcessSupervisor {
     invocation: ReturnType<typeof getShellInvocation>,
     workspaceTracker: TerminalWorkspaceTracker | null,
   ): Promise<ManagedProcessRun> {
+    // Keep the native PTY optional for non-PTY tool paths. CI and lightweight
+    // runtimes install dependencies with lifecycle scripts disabled; importing
+    // node-pty at module load would make ordinary file/browser/desktop tools
+    // fail before they can run. A real PTY still loads the native module here.
+    const { default: pty } = await import('node-pty');
     const runId = record.runId;
     const cwd = record.cwd;
     let stdout = '';

@@ -53,7 +53,7 @@ export interface InstructionSegmentDefinition {
 }
 
 const IDS = [
-  'core.identity.main', 'core.identity.worker', 'core.action_posture', 'core.visual_grounding.vision', 'core.visual_grounding.text', 'core.skills_recovery', 'core.team_routing', 'core.creative_routing', 'core.plan_protocol',
+  'core.identity.main', 'core.identity.worker', 'core.action_posture', 'core.visual_grounding.vision', 'core.visual_grounding.text', 'core.skills_recovery', 'core.team_routing', 'core.creative_routing', 'core.plan_protocol', 'core.work_updates',
   'mode.background_task', 'mode.proposal_execution', 'mode.background_agent', 'mode.heartbeat', 'mode.cron', 'mode.team_subagent', 'mode.team_manager',
   'model.capabilities', 'model.current', 'onboarding.meet',
   'persona.prometheus_soul', 'persona.subagent_soul', 'runtime.prometheus_contract', 'persona.voice_soul', 'persona.user', 'persona.workspace_soul',
@@ -92,6 +92,7 @@ const TOKEN_ESTIMATES: Partial<Record<InstructionSegmentId, number>> = {
 };
 
 function segmentSource(id: string): string {
+  if (['core.action_posture', 'core.plan_protocol', 'core.skills_recovery', 'core.work_updates'].includes(id)) return 'src/runtime/operating-instructions.ts';
   if (id.startsWith('tools.category.') || id.startsWith('tools.') || id === 'skills.tool_block_always') return 'src/gateway/prompt-context.ts';
   if (id.startsWith('skills.')) return 'src/gateway/skills-runtime/skills-manager.ts';
   if (id.startsWith('provider.')) return 'src/providers';
