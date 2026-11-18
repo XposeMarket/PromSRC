@@ -20,6 +20,7 @@ import { mergeBackgroundAgentSteerMessages } from '../features/chat/core/backgro
 import { isSteerFrozenRow } from './mobile-restart-continuity.js';
 import { agentModelLabel, agentAvatarHtml } from '../components/provider-logo.js';
 import { buildMobileAttachmentInlineUrl as _aSrc } from './mobile-api.js';
+import { MOBILE_TOOL_PROGRESS_STALE_MS, clearMobileToolProgressState, readMobileToolProgressState, setMobileToolProgressState } from './mobile-tool-progress-state.js';
 
 function _imageGenerationToolName(value) {
   const raw = typeof value === 'string'
@@ -3420,54 +3421,24 @@ function _applyMobileMainPlanProgress(evt = {}, sessionId = __pmChat.activeSessi
 }
 
 function _setMobileToolProgress(sessionId, evt = {}) {
-  if (evt.show_pill !== true) return false;
+  if (!setMobileToolProgressState(__pmChat.toolProgressBySession, sessionId, evt)) return false;
   const sid = String(sessionId || '').trim();
-  const message = String(evt.message || '').trim();
-  if (!sid || !message) return false;
-  __pmChat.toolProgressBySession[sid] = {
-    action: String(evt.action || evt.name || evt.toolName || 'tool').trim(),
-    toolCallId: String(evt.toolCallId || evt.tool_call_id || '').trim(),
-    message: message.slice(0, 180),
-    phase: String(evt.phase || 'working').trim(),
-    current: Number.isFinite(Number(evt.current)) ? Number(evt.current) : null,
-    total: Number.isFinite(Number(evt.total)) ? Number(evt.total) : null,
-    updatedAt: Date.now(),
-  };
-  // Some completion paths (history recovery after a reconnect) never send a
-  // clearing event, so retire the pill ourselves once updates stop arriving.
+  // Repaint once updates stop arriving so a stale pill retires itself.
   setTimeout(() => {
     if (sid === String(__pmChat.activeSessionId || '').trim()) _renderMobileToolProgressDock(null, sid);
   }, MOBILE_TOOL_PROGRESS_STALE_MS + 500);
   return true;
 }
 
-// A progress pill with no update for this long belongs to a tool that already
-// finished; progress events arrive at least every 15s while a tool is working.
-const MOBILE_TOOL_PROGRESS_STALE_MS = 45000;
-
 function _clearMobileToolProgress(sessionId, action = '', toolCallId = '') {
-  const sid = String(sessionId || '').trim();
-  const state = __pmChat.toolProgressBySession?.[sid];
-  if (!state) return false;
-  const expected = String(action || '').trim();
-  const callId = String(toolCallId || '').trim();
-  // Wrapper tools report progress under an inner name (process_wait) but finish
-  // under the wrapper name (workspace_run), so the call id is the reliable match.
-  const sameCall = !!callId && !!state.toolCallId && callId === state.toolCallId;
-  if (!sameCall && expected && state.action && expected !== state.action) return false;
-  delete __pmChat.toolProgressBySession[sid];
-  return true;
+  return clearMobileToolProgressState(__pmChat.toolProgressBySession, sessionId, action, toolCallId);
 }
 
 function _renderMobileToolProgressDock(dock, sessionId = __pmChat.activeSessionId) {
   const host = dock || document.getElementById('pm-tool-progress-dock');
   if (!host) return;
   const sid = String(sessionId || '').trim();
-  let state = __pmChat.toolProgressBySession?.[sid];
-  if (state && Date.now() - Number(state.updatedAt || 0) > MOBILE_TOOL_PROGRESS_STALE_MS) {
-    delete __pmChat.toolProgressBySession[sid];
-    state = undefined;
-  }
+  const state = readMobileToolProgressState(__pmChat.toolProgressBySession, sid);
   const activeTurn = [...(Array.isArray(__pmChat.threads?.[sid]) ? __pmChat.threads[sid] : [])]
     .reverse()
     .find((message) => message?.role === 'ai' && message?.streaming === true);
