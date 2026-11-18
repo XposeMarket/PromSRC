@@ -3167,6 +3167,10 @@ function _mobileHistoryHasCompletedTurnSince(history, startedAt = 0, options = {
     const role = String(msg?.role || '').toLowerCase();
     if (role === 'user') return false;
     if (role !== 'assistant' && role !== 'ai') continue;
+    // delivery_send rows (login links, files) are side messages written
+    // mid-turn, not the turn's answer. Counting one as completion wiped the
+    // live tool stream on every foreground recovery (IMG_2065-2068).
+    if (isMobileDeliveryRow({ ...msg, role: 'ai' })) continue;
     // Restart checkpoint/status rows are written into history *during* a
     // mid-turn restart. They are continuity markers, not the turn's answer:
     // counting them as completion made an app that stayed open finalize the

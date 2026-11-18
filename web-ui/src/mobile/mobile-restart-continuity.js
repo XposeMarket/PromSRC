@@ -464,6 +464,56 @@ export function dropOrphanLiveRows(thread, keep) {
 }
 
 /**
+ * Track the lowest sequence a live row has applied for its current stream, so
+ * recovery can tell when the row never saw the start of its run.
+ */
+export function noteRowStreamSeq(row, evt) {
+  if (!row || !evt) return;
+  const sid = String(evt.streamId || '').trim();
+  const prior = String(row._streamId || '').trim();
+  if (sid && prior && sid !== prior) {
+    const hasContent = !!rowText(row)
+      || (Array.isArray(row.processEntries) && row.processEntries.length > 0)
+      || (Array.isArray(row.liveTraceEntries) && row.liveTraceEntries.length > 0);
+    if (hasContent) row._pmMultiStream = true;
+    delete row._pmMinSeq;
+    delete row._pmHeadVerified;
+  }
+  const seq = Math.max(0, Math.floor(Number(evt.seq || 0)) || 0);
+  if (seq > 0 && (!row._pmMinSeq || seq < row._pmMinSeq)) row._pmMinSeq = seq;
+}
+
+/**
+ * True when the live row belongs to the replayed stream but never received
+ * its head. A live frame that lands before recovery advances the replay
+ * cursor to the newest seq, so the incremental replay returned nothing and
+ * the earlier tool stream was never painted (IMG_2065-2068). Such a row must
+ * be rebuilt from a full replay. Rows spanning several streams (gateway
+ * restart) keep their earlier content and are never rebuilt this way.
+ */
+const HEAD_GAP_TOLERANCE = 25;
+
+export function liveRowMissingStreamHead(row, { replayStreamId = '', firstSeq = 0, steer = null } = {}) {
+  const sid = String(replayStreamId || '').trim();
+  if (!row || !sid || String(row._streamId || '').trim() !== sid) return false;
+  if (row._pmMultiStream === true || row._pmHeadVerified === sid) return false;
+  if (String(row.workflowPart || '') === 'before_interruption') return false;
+  let head = Math.max(0, Math.floor(Number(firstSeq || 0)) || 0);
+  if (steer) {
+    const steerStream = String(steer.workflowStreamId || '').trim();
+    const boundary = Math.max(0, Math.floor(Number(steer.workflowBoundarySeq || 0)) || 0);
+    head = steerStream === sid && boundary > 0 ? Math.max(head, boundary + 1) : 0;
+  }
+  if (!head) return false;
+  // Only rows that applied live frames this page session carry _pmMinSeq;
+  // a cache-restored row keeps the existing monotonic-preserve behavior.
+  // A few leading preflight frames can legitimately bypass the row; only a
+  // real gap (the earlier tool stream) forces a rebuild.
+  const minSeq = Math.max(0, Math.floor(Number(row._pmMinSeq || 0)) || 0);
+  return minSeq > head + HEAD_GAP_TOLERANCE;
+}
+
+/**
  * Whether a replayed frame belongs after a live steer boundary. Moved here from
  * mobile-chat-page-runtime.js (which re-exports it) to keep that file under its
  * architecture size ceiling.
