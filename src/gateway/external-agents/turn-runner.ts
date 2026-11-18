@@ -331,6 +331,8 @@ export async function runExternalAgentTurn(params: ExternalTurnRunParams, bindin
   setSessionExternalAgent(sessionId, {
     ...latest,
     ...(result.model ? { currentModel: result.model } : {}),
+    // The agent refused its own configured model and used one it lists: keep that choice for this chat.
+    ...(result.fallbackModel ? { selectedModel: result.fallbackModel } : {}),
     // A missing upstream session is kept so the user can explicitly start a new one.
     ...(result.upstreamSessionId ? { upstreamSessionId: result.upstreamSessionId } : {}),
     lastTurn: {
