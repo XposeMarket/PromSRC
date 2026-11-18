@@ -444,18 +444,25 @@ async function importPost(url, body) {
 function openImportCatalogSheet(onChanged) {
   document.querySelectorAll('.pm-plugin-sheet-backdrop').forEach((el) => el.remove());
   const wrap = document.createElement('div');
-  wrap.className = 'pm-plugin-sheet-backdrop';
+  wrap.className = 'pm-plugin-sheet-backdrop pm-import-backdrop';
   wrap.innerHTML = `
     <div class="pm-plugin-sheet pm-import-sheet" role="dialog" aria-modal="true" aria-label="Import from other agents">
       <button class="pm-plugin-sheet-close" type="button" aria-label="Close">${ICONS.x}</button>
       <h2 class="pm-import-title">Import plugins</h2>
-      <input class="pm-import-search" type="search" placeholder="Search" autocomplete="off"/>
+      <div class="pm-import-sources" role="group" aria-label="Plugin catalog">
+        <button type="button" data-catalog="claude-official" aria-pressed="true">Claude</button>
+        <button type="button" data-catalog="openai-official" aria-pressed="false">Codex</button>
+        <button type="button" data-catalog="codex-personal" aria-pressed="false">Codex personal</button>
+      </div>
+      <input class="pm-import-search" type="search" aria-label="Search selected catalog" placeholder="Search Claude" autocomplete="off"/>
       <div class="pm-import-list"><p class="pm-plugins-empty">Loading catalogs…</p></div>
     </div>`;
   const close = () => wrap.remove();
   const list = wrap.querySelector('.pm-import-list');
   const search = wrap.querySelector('.pm-import-search');
   let entries = [];
+  let catalog = 'claude-official';
+  let generation = 0;
   let timer = null;
   const paint = (head) => {
     list.innerHTML = `${head ? `<p class="pm-import-head">${escapeHtml(head)}</p>` : ''}${entries.length ? entries.map((e, i) => `
@@ -465,15 +472,30 @@ function openImportCatalogSheet(onChanged) {
       </div>`).join('') : '<p class="pm-plugins-empty">No matches.</p>'}`;
   };
   const load = async () => {
+    const request = ++generation;
+    entries = [];
+    list.scrollTop = 0;
+    list.innerHTML = '<p class="pm-plugins-empty">Loading…</p>';
     try {
-      const out = await importPost('/api/plugins/import/catalog', { query: search.value || '', limit: 60 });
+      const out = await importPost('/api/plugins/import/catalog', { catalog, query: search.value || '', limit: 60 });
+      if (request !== generation || !wrap.isConnected) return;
       entries = out?.data?.entries || [];
       paint('');
     } catch (err) {
-      list.innerHTML = `<p class="pm-plugins-empty">Could not load catalogs: ${escapeHtml(err?.message || String(err))}</p>`;
+      if (request !== generation || !wrap.isConnected) return;
+      list.innerHTML = `<p class="pm-plugins-empty">Could not load catalog: ${escapeHtml(err?.message || String(err))}</p>`;
     }
   };
-  search.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(load, 300); });
+  search.addEventListener('input', () => { ++generation; clearTimeout(timer); timer = setTimeout(load, 200); });
+  wrap.querySelector('.pm-import-sources').addEventListener('click', (event) => {
+    const source = event.target.closest('[data-catalog]');
+    if (!source || catalog === source.dataset.catalog) return;
+    catalog = source.dataset.catalog;
+    for (const b of wrap.querySelectorAll('[data-catalog]')) b.setAttribute('aria-pressed', String(b === source));
+    search.placeholder = `Search ${source.textContent}`;
+    clearTimeout(timer);
+    load();
+  });
   wrap.addEventListener('click', async (event) => {
     if (event.target === wrap || event.target?.closest?.('.pm-plugin-sheet-close')) { close(); return; }
     const btn = event.target?.closest?.('[data-import-index]');

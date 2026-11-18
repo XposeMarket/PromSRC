@@ -41,13 +41,14 @@ async function main() {
       await adapter.chat([{ role: 'user', content: 'Fast' }], model, { speed: 'fast', think: 'low', max_tokens: 256 });
       assert.equal(request.speed, 'fast');
       response = { content: [{ type: 'thinking', thinking: '', signature: 'test-prefix-signature' }, { type: 'tool_use', id: 'tool_1', name: 'lookup', input: { query: 'test' } }], stop_reason: 'tool_use' };
+      const originalBlocks = response.content;
       const first = await adapter.chat([{ role: 'user', content: 'Look up test' }], model, { think: 'high', max_tokens: 256 });
       assert.equal(first.message.tool_calls?.[0]?.function?.name, 'lookup');
       response = { content: [{ type: 'text', text: 'Done' }], stop_reason: 'end_turn' };
       await adapter.chat([{ role: 'user', content: 'Look up test' }, first.message, { role: 'tool', content: 'Found', tool_call_id: 'tool_1' }], model, { think: 'high', max_tokens: 256 });
       assert.ok(JSON.stringify(request.messages).includes('tool_result'));
-      assert.ok(!JSON.stringify(request.messages).includes('test-prefix-signature'));
-      assert.ok(!request.messages.some((m: any) => m.content?.some?.((b: any) => b.type === 'thinking')));
+      assert.deepEqual(request.messages.find((m: any) => m.role === 'assistant').content, originalBlocks);
+      assert.deepEqual(request.thinking.block_binding, { prefix_mismatch_behavior: 'drop_block' });
     }
     await adapter.chat([{ role: 'user', content: 'Hello' }], 'claude-haiku-4-5-20251001', { think: false, max_tokens: 256 });
     assert.equal(request.thinking, undefined);

@@ -4,7 +4,7 @@ import { renderContentReview } from '../components/ContentReview.js';
 import { mobileStreamOwner } from './mobile-stream-owner.js';
 import { reconcileMobileStaleRuns } from './mobile-turn-lifecycle.js';
 import { renderAgentPet } from '../components/agent-pets.js';
-import { orderMobileTurnDeliveries, repairMobileLiveRowPlacement } from './mobile-thread-order.js';
+import { isMobileDeliveryRow, orderMobileTurnDeliveries, repairMobileLiveRowPlacement } from './mobile-thread-order.js';
 import {
   ICONS, icon, escapeHtml, el, renderMobileHeader, wireHeaderActions, openDrawer, invalidateMobileDrawerSessions, refreshMobileDrawerSessions, isMobileChatPinned, toggleMobileChatPin,
 } from './mobile-shell.js';
@@ -3153,7 +3153,10 @@ function _ensureMobileQueuedPromptMenuDismiss() {
 function _findLatestAssistantTurn(thread) {
   const list = Array.isArray(thread) ? thread : [];
   for (let i = list.length - 1; i >= 0; i -= 1) {
-    if (list[i]?.role === 'ai') return list[i];
+    // delivery_send rows are durable side messages appended mid-turn, never
+    // the run's live row. Returning one made recovery allocate a fresh empty
+    // row after it and orphan the real tool stream (IMG_2060-2063).
+    if (list[i]?.role === 'ai' && !isMobileDeliveryRow(list[i])) return list[i];
   }
   return null;
 }
@@ -3167,6 +3170,10 @@ function _mobileHistoryHasCompletedTurnSince(history, startedAt = 0, options = {
     const role = String(msg?.role || '').toLowerCase();
     if (role === 'user') return false;
     if (role !== 'assistant' && role !== 'ai') continue;
+    // delivery_send rows (login links, files) are side messages written
+    // mid-turn, not the turn's answer. Counting one as completion wiped the
+    // live tool stream on every foreground recovery (IMG_2065-2068).
+    if (isMobileDeliveryRow({ ...msg, role: 'ai' })) continue;
     // Restart checkpoint/status rows are written into history *during* a
     // mid-turn restart. They are continuity markers, not the turn's answer:
     // counting them as completion made an app that stayed open finalize the

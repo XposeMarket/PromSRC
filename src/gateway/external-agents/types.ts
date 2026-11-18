@@ -84,6 +84,8 @@ export interface ExternalUserRequest {
     cwd?: string;
     reason?: string;
     files?: string[];
+    /** Permission cards: every item an Allow button would grant, one readable line each. */
+    grants?: string[];
     questions?: Array<{ id: string; prompt: string; options?: Array<{ id: string; label: string }>; multi?: boolean }>;
     raw?: unknown;
   };

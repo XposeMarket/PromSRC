@@ -240,6 +240,27 @@ async function main(): Promise<void> {
       await slow.shutdown();
     }
 
+    // ── a stop Codex never confirms: the app-server is ended, not left running behind "Stopped" ──
+    {
+      const stuck = makeAdapter('ready', { interruptGraceMs: 300 });
+      const controller = new AbortController();
+      const events: any[] = [];
+      const running = stuck.runTurn({
+        sessionId: 's2b', cwd: workspace, text: 'STUCK please', signal: controller.signal,
+        emit: (event) => events.push(event), requestUser: async () => ({ optionId: 'cancel' }),
+      });
+      await waitFor(() => events.some((e) => e.type === 'text_delta'));
+      const pid = stuck.processId();
+      assert.ok(pidAlive(pid), 'app-server is running before Stop');
+      controller.abort('operator_abort');
+      const result = await running;
+      assert.strictEqual(result.status, 'interrupted');
+      assert.strictEqual(result.finalText, 'partial answer');
+      await waitFor(() => !pidAlive(pid), 5000);
+      assert.strictEqual(stuck.isRunning(), false, 'an unconfirmed stop ends the app-server');
+      await stuck.shutdown();
+    }
+
     // ── command approval: options = upstream decisions, answer reaches the same JSON-RPC id, no Prometheus grant ──
     {
       const skipNoise = (rel: string) => rel.startsWith('workspace') || rel.endsWith('.log') || rel === 'external-agents.json';
@@ -345,6 +366,14 @@ async function main(): Promise<void> {
       const perm = mapCodexServerRequest('item/permissions/requestApproval', { threadId: 't', turnId: 'u', itemId: 'i', environmentId: null, startedAtMs: 0, cwd: '/r', reason: 'net', permissions: { network: { enabled: true }, fileSystem: null } })!;
       assert.deepStrictEqual(perm.toResult({ optionId: 'session' }), { permissions: { network: { enabled: true } }, scope: 'session' });
       assert.deepStrictEqual(perm.toResult({ optionId: 'deny' }), { permissions: {}, scope: 'turn' });
+      // The card lists exactly what Allow grants; a grant too large to list can only be declined.
+      assert.deepStrictEqual(perm.card.detail.grants, ['Network enabled: true']);
+      const fsPerm = mapCodexServerRequest('item/permissions/requestApproval', { threadId: 't', turnId: 'u', itemId: 'i', cwd: '/r', permissions: { network: null, fileSystem: { write: ['C:/outside', 'D:/x'], read: [] } } })!;
+      assert.deepStrictEqual(fsPerm.card.detail.grants, ['Files write: C:/outside', 'Files write: D:/x', 'Files read: none']);
+      assert.deepStrictEqual(fsPerm.card.options.map((o) => o.id), ['turn', 'session', 'deny']);
+      const huge = mapCodexServerRequest('item/permissions/requestApproval', { threadId: 't', turnId: 'u', itemId: 'i', cwd: '/r', permissions: { fileSystem: { write: Array.from({ length: 60 }, (_, i) => `/p/${i}`) } } })!;
+      assert.deepStrictEqual(huge.card.options.map((o) => o.id), ['deny']);
+      assert.match(fs.readFileSync(path.join(__dirname, '..', '..', '..', 'web-ui', 'src', 'chat', 'external-agent-ui.js'), 'utf8'), /d\.grants\.map/, 'the shared card renders the grant list');
       const q = mapCodexServerRequest('item/tool/requestUserInput', { threadId: 't', turnId: 'u', itemId: 'i', isBlocking: true, questions: [{ id: 'q1', header: 'Pick', question: 'Which?', isOther: false, isSecret: false, options: [{ label: 'A', description: '' }] }] })!;
       assert.deepStrictEqual(q.toResult({ optionId: 'submit', answers: { q1: ['A'] } }), { answers: { q1: { answers: ['A'] } } });
       assert.strictEqual(mapCodexServerRequest('item/tool/call', {}), null);
@@ -392,6 +421,17 @@ async function runSessionChecks(ctx: Record<string, any>): Promise<void> {
     const late = runner.bindExternalAgentForRequest('ea_native', { id: 'codex' });
     assert.strictEqual(late.ok, false);
     assert.strictEqual((late as any).code, 'agent_locked');
+
+    // Validation is a dry run: a request that has not been admitted yet never binds the chat.
+    sessions.getSession('ea_dry');
+    const dry = runner.bindExternalAgentForRequest('ea_dry', { id: 'codex' }, { dryRun: true });
+    assert.strictEqual(dry.ok, true);
+    assert.strictEqual(sessions.getSessionExternalAgent('ea_dry'), undefined, 'a dry run saves no binding');
+    const routerSource = fs.readFileSync(path.join(__dirname, '..', 'routes', 'chat.router.ts'), 'utf8');
+    const dryAt = routerSource.indexOf('agentRequest, { dryRun: true })');
+    const acquireAt = routerSource.indexOf('mainChatTurnCoordinator.tryAcquire(resolvedSessionId)');
+    const saveAt = routerSource.indexOf('bindExternalAgentForRequest(resolvedSessionId, agentRequest);');
+    assert.ok(dryAt > 0 && acquireAt > dryAt && saveAt > acquireAt, 'the chat route saves the binding only after the turn is admitted');
 
     // The branch sits before every native step, and the native path still calls handleChat.
     const itSource = fs.readFileSync(path.join(__dirname, '..', 'routes', 'chat', 'pipeline', 'interactive-turn.ts'), 'utf8');

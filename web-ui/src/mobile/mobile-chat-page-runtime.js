@@ -7,8 +7,9 @@ import { formatModelWithReasoning } from '../model-display.js';
 import { pinRuntimeChrome as pinChrome, restorableBackgroundStatuses as restorableBg, agentTitleHtml, alignBottomAbove as alignAbove } from './mobile-runtime-chrome.js';
 import { splitBackgroundAgentTimeline } from '../features/chat/core/background-agent-timeline.js';
 import { composerDraftKey, readComposerDraft, saveComposerDraft } from '../features/chat/composer-drafts.js';
-import { createReconnectStatusController as mkReconnect, createRestartContinuityHandler as mkRestart, isRestartSuspendedRun as isRestartSuspended, resolveRestartRecoveryMerge as resolveRestartMerge, shouldHoldStreamingTurn as holdStreamingTurn, revivableTurn as revivable, reviveIfFrozen as reviveFz, findLiveSteerContinuation as liveSteer, dropOrphanLiveRows as dropOrphans, reuseEmptyLiveRow as reuseEmptyLive, collapseEmptyLiveRows as collapseEmpty, mobileReplayFrameAfterSteer } from './mobile-restart-continuity.js';
+import { createReconnectStatusController as mkReconnect, createRestartContinuityHandler as mkRestart, isRestartSuspendedRun as isRestartSuspended, resolveRestartRecoveryMerge as resolveRestartMerge, shouldHoldStreamingTurn as holdStreamingTurn, revivableTurn as revivable, reviveIfFrozen as reviveFz, findLiveSteerContinuation as liveSteer, dropOrphanLiveRows as dropOrphans, reuseEmptyLiveRow as reuseEmptyLive, collapseEmptyLiveRows as collapseEmpty, mobileReplayFrameAfterSteer, noteRowStreamSeq, liveRowMissingStreamHead as missingHead } from './mobile-restart-continuity.js';
 import { isMobileQuestionOnlyRow as isQuestionOnly } from './mobile-question-rows.js';
+import { isMobileDeliveryRow } from './mobile-thread-order.js';
 import { resolveKeyboardBandTop, settleLoop } from './mobile-keyboard-band.js';
 import { createMobileChatCamera } from './mobile-chat-camera.js';
 import { finalizeMobileMainPlan } from './mobile-plan-finalize.js';
@@ -2811,7 +2812,8 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
 
       const activeThread = _activeMobileThread();
       // A hidden question-only row is never the live turn; prefer the run's row.
-      const latestAssistantTurn = [...activeThread].reverse().find((turn) => turn?.role === 'ai' && !isQuestionOnly(turn))
+      // Nor is a delivery_send row; it sits after the live row mid-turn.
+      const latestAssistantTurn = [...activeThread].reverse().find((turn) => turn?.role === 'ai' && !isQuestionOnly(turn) && !isMobileDeliveryRow(turn))
         || _findLatestAssistantTurn(activeThread);
       const latestUserTurn = [...activeThread].reverse().find((turn) => turn?.role === 'user') || null;
       const latestServerUserTurn = [...recoveredSessionHistory].reverse().find((turn) => {
@@ -2931,7 +2933,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
       const statusLatestAssistantText = normalizeRecoveryAnswer(status?.latestAssistant?.content);
       const recoveredLatestAssistant = [...recoveredSessionHistory].reverse().find((turn) => {
         const role = String(turn?.role || '').toLowerCase();
-        return (role === 'ai' || role === 'assistant') && _mobileAssistantHasVisibleAnswer(turn);
+        return (role === 'ai' || role === 'assistant') && !isMobileDeliveryRow({ ...turn, role: 'ai' }) && _mobileAssistantHasVisibleAnswer(turn);
       }) || null;
       const recoveredLatestAssistantText = normalizeRecoveryAnswer(_mobileMessageCopyText(recoveredLatestAssistant));
       const answerMatchesLocal = (candidateText) => !!candidateText
@@ -3198,6 +3200,21 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
           events = Array.isArray(replay?.events) ? replay.events : [];
           if (!isCurrentRecoveryTarget()) return;
         }
+        // A live frame that beat recovery advanced the cursor past the run's
+        // earlier tool stream; rebuild that row from a full replay (IMG_2065).
+        let rebuiltHead = false;
+        if (!shouldResetForReplay && missingHead(aiTurn, { replayStreamId, firstSeq, steer: recoverySteerBoundary })) {
+          shouldResetForReplay = true;
+          rebuiltHead = true;
+          replayAfter = 0;
+          receipts?.clear?.(requestedSession);
+          if (!__pmChat.activeRuns || typeof __pmChat.activeRuns !== 'object') __pmChat.activeRuns = {};
+          __pmChat.activeRuns[requestedSession] = { ...(__pmChat.activeRuns[requestedSession] || {}), lastSeq: 0, streamId: replayStreamId };
+          _rememberMobileActiveRun(requestedSession, { lastSeq: 0, streamId: replayStreamId });
+          replay = await loadMobileChatStreamReplay(requestedSession, 0).catch(() => replay);
+          events = Array.isArray(replay?.events) ? replay.events : [];
+          if (!isCurrentRecoveryTarget()) return;
+        }
         // Plan frames can sit before the cursor; the server keeps the latest.
         if (replay?.stream?.progressState) {
           _applyMobileMainPlanProgress(replay.stream.progressState, requestedSession);
@@ -3210,6 +3227,14 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
           });
           if (activeRunProcessLog.length) _mergeMobileProcessEntries(aiTurn, activeRunProcessLog);
           _mergeMobileWorkflowTraceFromProcessEntries(aiTurn);
+        }
+        if (shouldResetForReplay && events.length && String(aiTurn.workflowPart || '') !== 'before_interruption') {
+          // Live frames that landed during the replay fetch advanced the cursor
+          // again, so every replayed frame looked like a duplicate and the row
+          // kept only a few tail tools. The full replay owns the timeline from
+          // here (no await below).
+          receipts?.clear?.(requestedSession);
+          __pmChat.activeRuns[requestedSession] = { ...(__pmChat.activeRuns[requestedSession] || {}), lastSeq: 0, streamId: replayStreamId };
         }
         let terminal = '';
         aiTurn._pmRecoveryReplay = true;
@@ -3228,6 +3253,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
           endMobileReplayRenderBatch();
           delete aiTurn._pmRecoveryReplay;
         }
+        if (rebuiltHead && replayStreamId) aiTurn._pmHeadVerified = replayStreamId;
         _mergeMobileWorkflowTraceFromProcessEntries(aiTurn);
         if (!isCurrentRecoveryTarget()) return;
         flushMobileReplayRenderBatch();
@@ -6580,6 +6606,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
         delete aiTurn.workEndedAt;
       }
     }
+    noteRowStreamSeq(aiTurn, evt);
     if (evt.streamId) aiTurn._streamId = String(evt.streamId).trim();
     if (evt.runtimeId || evt.run?.id || evt.activeRun?.id) {
       aiTurn.runtimeId = String(evt.runtimeId || evt.run?.id || evt.activeRun?.id || '').trim();
@@ -6711,7 +6738,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
         _collectMediaFromToolEvent(aiTurn, evt);
         _appendMobileProcess(aiTurn, evt.error ? 'error' : 'result', `${label}${result ? ` -> ${result}` : ' complete'}`, evt);
         _applyMobileToolActivity(aiTurn, 'result', evt);
-        if (_clearMobileToolProgress(requestedSession, String(evt.action || evt.name || evt.toolName || ''))) {
+        if (_clearMobileToolProgress(requestedSession, String(evt.action || evt.name || evt.toolName || ''), String(evt.toolCallId || evt.tool_call_id || ''))) {
           _renderMobileToolProgressDock(toolProgressDock, requestedSession);
         }
         renderStreamingThreadNow();
@@ -7002,23 +7029,27 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
   }
 
   async function requestMobileMainChatAbort(sessionId = requestedSession, { showToast = true } = {}) {
-    const sid = String(sessionId || requestedSession || __pmChat.activeSessionId || MOBILE_CHAT_SESSION_ID).trim() || MOBILE_CHAT_SESSION_ID;
+    const sid = String(sessionId || '').trim();
+    if (!sid || sid !== requestedSession || sid !== __pmChat.activeSessionId) {
+      return { success: false, message: 'This chat is no longer selected.' };
+    }
     mobileChatRuntimeAdapter.requestInterruption(sid);
-    const runtimeId = String(
-      __pmChat.activeRuns?.[sid]?.runtimeId ||
-      __pmChat.activeRuns?.[requestedSession]?.runtimeId ||
-      _readMobileActiveRun(sid)?.runtimeId ||
-      ''
-    ).trim();
-    const localAbort =
-      __pmChat.activeRuns?.[sid]?.abort ||
-      __pmChat.activeRuns?.[requestedSession]?.abort ||
-      __pmChat.abort;
-    let localAbortRequested = false;
+    const ownedRun = __pmChat.activeRuns?.[sid];
+    const runtimeId = String(ownedRun?.runtimeId || _readMobileActiveRun(sid)?.runtimeId || '').trim();
+    const localAbort = ownedRun?.abort;
+    // Confirm the precise runtime before marking any row as stopped. A stale tap is a no-op.
+    const direct = await stopMobileMainChat(sid, { runtimeId, source: 'mobile_stop_button' });
+    if (!direct?.success) {
+      if (showToast) pmToast(direct?.message || 'This turn could not be stopped.', 'error');
+      return { success: false, message: direct?.message || 'Turn not stopped.', result: direct };
+    }
+    if (__pmChat.activeSessionId !== sid || requestedSession !== sid || __pmChat.activeRuns?.[sid] !== ownedRun ||
+        (runtimeId && ownedRun?.runtimeId && String(ownedRun.runtimeId) !== runtimeId)) return direct;
+
 
     if (localAbort && typeof localAbort.abort === 'function') {
-      localAbortRequested = true;
-      try { localAbort.abort(); } catch (err) {
+
+      try { localAbort.abort({ backendStopRequested: true }); } catch (err) {
         console.warn('[mobile chat] local abort failed:', err);
       }
     } else {
@@ -7041,40 +7072,8 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       setBusy(false, sid);
     }
 
-    try {
-      const direct = await stopMobileMainChat(sid, { runtimeId, source: 'mobile_stop_button' });
-      if (direct?.success) {
-        if (showToast) pmToast('Stopped.', 'success');
-        return { success: true, message: direct.message || 'Main chat aborted.', localAbortRequested, result: direct };
-      }
-
-      const targetsResult = await loadMobileStopTargets().catch(() => null);
-      const targets = Array.isArray(targetsResult?.targets) ? targetsResult.targets : [];
-      const match = targets.find((target) =>
-        target?.abortable !== false &&
-        ((runtimeId && String(target?.id || '').trim() === runtimeId) || String(target?.sessionId || '').trim() === sid)
-      );
-      if (match?.id) {
-        const fallback = await stopMobileRuntime(match.id, { source: 'mobile_stop_button_fallback' });
-        if (fallback?.success) {
-          if (showToast) pmToast('Stopped.', 'success');
-          return { success: true, message: fallback.message || 'Runtime aborted.', localAbortRequested, result: fallback };
-        }
-        return { success: localAbortRequested, message: fallback?.message || fallback?.error || direct?.message || 'Abort sent.', localAbortRequested, result: fallback };
-      }
-
-      return {
-        success: localAbortRequested,
-        message: localAbortRequested
-          ? 'Local stream stopped.'
-          : (direct?.message || 'No active main chat turn found for this session.'),
-        localAbortRequested,
-        result: direct,
-      };
-    } catch (err) {
-      if (!localAbortRequested) throw err;
-      return { success: true, message: 'Local stream stopped.', localAbortRequested, error: err };
-    }
+    if (showToast) pmToast('Stopped.', 'success');
+    return direct;
   }
 
   function screenshotRootActions() {
@@ -7930,7 +7929,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       },
     });
     let stopSent = false;
-    const abortHandle = { abort: () => {
+    const abortHandle = { abort: ({ backendStopRequested = false } = {}) => {
       if (stopSent) return;
       stopSent = true;
       stoppedByUser = true;
@@ -7940,7 +7939,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       _appendMobileProcess(aiTurn, 'warn', 'Stop requested. Aborting the live runtime now.', runtimeId ? { runtimeId } : undefined);
       _clearMobileActiveRun(actualSessionId);
       _markMobileSessionRunning(actualSessionId, false);
-      stopMobileMainChat(actualSessionId, { runtimeId, source: 'mobile_stop_button' }).catch((err) => {
+      if (!backendStopRequested) stopMobileMainChat(actualSessionId, { runtimeId, source: 'mobile_stop_button' }).catch((err) => {
         _appendMobileProcess(aiTurn, 'error', `Backend abort request failed: ${err?.message || err}`);
         renderThreadNow();
       });

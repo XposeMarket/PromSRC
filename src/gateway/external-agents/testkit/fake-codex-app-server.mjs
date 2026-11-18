@@ -13,6 +13,7 @@
  *   contains APPROVAL -> asks item/commandExecution/requestApproval first
  *   contains UNKNOWN  -> sends an unknown server request first
  *   contains SLOW     -> streams one delta, then waits for turn/interrupt
+ *   contains STUCK    -> streams one delta, acknowledges turn/interrupt, never ends the turn
  *   contains FAIL     -> turn/completed with status failed
  *   otherwise         -> command item, reasoning, two deltas, completed
  */
@@ -83,6 +84,10 @@ async function runTurn(threadId, turnId, text) {
     notify('item/agentMessage/delta', { ...base, itemId: 'm1', delta: `decision=${decision}` });
     notify('turn/completed', { threadId, turn: turnObject(turnId, 'completed') });
     return;
+  }
+  if (text.includes('STUCK')) {
+    notify('item/agentMessage/delta', { ...base, itemId: 'm1', delta: 'partial answer' });
+    await new Promise(() => {});
   }
   if (text.includes('SLOW')) {
     notify('item/agentMessage/delta', { ...base, itemId: 'm1', delta: 'partial answer' });

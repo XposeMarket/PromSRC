@@ -1,3 +1,4 @@
+import { ARGV_SUFFIX, literalNativeArgv } from './literal-command';
 import type { ProcessTerminationReason } from './types';
 
 export interface CommandTerminationInput {
@@ -13,7 +14,7 @@ export interface CommandTerminationOutcome {
   label: string;
 }
 
-export function classifyCommandTermination(input: CommandTerminationInput): CommandTerminationOutcome {
+export function classifyCommandTermination(input: CommandTerminationInput, command = ''): CommandTerminationOutcome {
   const code = typeof input.code === 'number' ? input.code : null;
   const signal = input.signal === undefined || input.signal === null || input.signal === '' ? null : String(input.signal);
   const rawReason = String(input.reason || '').trim();
@@ -31,6 +32,7 @@ export function classifyCommandTermination(input: CommandTerminationInput): Comm
   if (rawReason && rawReason !== 'exit') {
     return { ok: false, reason: 'unknown', label: rawReason.replace(/_/g, ' ').toUpperCase() };
   }
+  if (code === 1 && command.endsWith(ARGV_SUFFIX) && /^rg(?:\.exe)?$/i.test(literalNativeArgv(command.slice(0,-ARGV_SUFFIX.length))?.[0] ?? '')) return {ok:true, reason:'exit', label:'no matches; exit 1'};
   if (code === 0) return { ok: true, reason: 'exit', label: 'exit 0' };
   if (code !== null) return { ok: false, reason: 'exit', label: `exit ${code}` };
   return { ok: false, reason: 'unknown', label: 'UNKNOWN TERMINATION' };

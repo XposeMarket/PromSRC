@@ -61,6 +61,15 @@ async function main(): Promise<void> {
     'a stream that closes before response.completed must be retryable failure, not a partial final',
   );
 
+  for (const [frame, reason, retryable] of [
+    [{ type: 'response.failed', response: { error: { code: 'server_error' } } }, 'server_error', true],
+    [{ type: 'response.incomplete', response: { incomplete_details: { reason: 'max_output_tokens' } } }, 'max_output_tokens', false],
+    [{ type: 'error', code: 'rate_limit_exceeded' }, 'rate_limit_exceeded', false],
+    [{ type: 'error', error: { code: 'private_input', message: 'never echo' } }, 'unspecified', false],
+  ] as const) {
+    await assert.rejects(() => parse([`data:${JSON.stringify(frame)}\n\n`]), (err: any) =>
+      err.code === 'CODEX_TERMINAL_EVENT' && err.message === `openai_codex reported ${frame.type}: ${reason}.` && err.retryable === retryable);
+  }
   const emptyProviderEvents: any[] = [];
   await assert.rejects(
     () => parse(['data: {"type":"response.completed","response":{"output":[]}}\n\n'], {
@@ -96,6 +105,33 @@ async function main(): Promise<void> {
   // Native reasoning (including public summaries) is thinking, never assistant
   // commentary. Only actual output_text belongs to the assistant token lane.
   const sse = (event: any) => `data: ${JSON.stringify(event)}\n\n`;
+  const encrypted = { type: 'reasoning', id: 'rs_native', summary: [], encrypted_content: 'opaque-test-reasoning' };
+  const commentary = { type: 'message', role: 'assistant', phase: 'commentary', content: [{ type: 'output_text', text: 'Looking.' }] };
+  const fn = { type: 'function_call', call_id: 'call_native', name: 'lookup', arguments: '{}' };
+  const codex = new OpenAICodexAdapter(process.cwd());
+  (codex as any).getHeaders = async () => ({ 'ChatGPT-Account-ID': 'first' });
+  const realFetch = globalThis.fetch;
+  const sent: any[] = [];
+  globalThis.fetch = async (_url, init) => {
+    sent.push(JSON.parse(String(init?.body)));
+    return sseResponse([
+      sse({ type: 'response.output_item.done', output_index: 1, item: encrypted }),
+      sse({ type: 'response.completed', response: { output: [commentary, { ...encrypted, encrypted_content: undefined }, fn] } }),
+    ]);
+  };
+  try {
+    const history: any[] = [{ role: 'user', content: 'Lookup' }];
+    const first = await codex.chat(history, 'gpt-5.6-sol');
+    history.push(structuredClone(first.message), { role: 'tool', tool_call_id: fn.call_id, content: 'found' });
+    await codex.chat(history, 'gpt-5.6-sol');
+    assert.deepEqual(sent[1].include, ['reasoning.encrypted_content']);
+    assert.equal(sent[1].store, false);
+    assert.deepEqual(sent[1].input.slice(1), [commentary, encrypted, fn, { type: 'function_call_output', call_id: fn.call_id, output: 'found' }]);
+    (codex as any).getHeaders = async () => ({ 'ChatGPT-Account-ID': 'other' });
+    await codex.chat(history, 'gpt-5.6-sol');
+    assert.ok(!JSON.stringify(sent[2]).includes(encrypted.encrypted_content));
+  } finally { globalThis.fetch = realFetch; }
+
   const reasoningDeltaTypes = [
     'response.reasoning_summary_text.delta',
     'response.reasoning_summary.delta',

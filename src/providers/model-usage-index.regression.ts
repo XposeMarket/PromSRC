@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { ensureSessionUsageIndex, readIndexedSessionUsage, readRecentUsage, readUsageRange, resetSessionUsageIndexes } from './model-usage-index';
+import { ensureSessionUsageIndex, readIndexedSessionUsage, readRecentUsage, readUsageRange, resetSessionUsageIndexes, scanRecentUsage } from './model-usage-index';
 
 async function main() {
   const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'usage-byte-index-'));
@@ -48,6 +48,12 @@ async function main() {
     const recent = await readRecentUsage(file, Date.now() - 86400000);
     assert.equal(recent.length, 12001);
     assert.ok(recent.every(e => e.sessionId !== 'old'));
+    assert.equal(recent.at(-1)!.sessionId, 'target', 'recent rows come back oldest first');
+    const visited: string[] = [];
+    let visits = 0;
+    await scanRecentUsage(file, Date.now() - 86400000, (event) => { visits++; if (visited.length < 2) visited.push(String(event.sessionId)); });
+    assert.equal(visits, 12001, 'the scan visits the same rows without building a list');
+    assert.deepEqual(visited, ['target', 'noise'], 'the scan visits newest first');
     console.log('model-usage byte index regressions passed');
   } finally { resetSessionUsageIndexes(); await fs.promises.rm(dir, { recursive: true, force: true }); }
 }

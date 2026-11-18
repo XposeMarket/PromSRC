@@ -1,4 +1,5 @@
 import fs from 'fs';
+import { literalCommand, ARGV_SUFFIX } from '../process/literal-command';
 import path from 'path';
 import { normalizeDevSourcePatchsetArgs } from './../dev-source-patchset';
 import { hasBrowserStructuredCollectionInput } from './../browser-tools';
@@ -93,9 +94,8 @@ export function normalizeDevSourceWrapperTool(name: string, rawArgs: any): { nam
         : (Array.isArray(args.paths) ? args.paths.map((p: any) => ({ file: String(p) })) : []);
       const readArgs = { ...args, files };
       if (!hasProvidedArg(readArgs, 'max_files')) readArgs.max_files = FILE_TOOL_DEFAULT_BATCH_FILES;
-      if (!hasProvidedArg(readArgs, 'max_lines_per_file') && !hasProvidedArg(readArgs, 'num_lines')) {
-        readArgs.max_lines_per_file = FILE_TOOL_DEFAULT_BATCH_LINES;
-      }
+      // No default line cap is injected: the reader already gives unranged files 80 lines,
+      // and an injected cap would also clip a range the caller asked for explicitly.
       return { name: 'read_dev_sources', args: readArgs };
     }
     if (action === 'stats_batch') {
@@ -466,9 +466,8 @@ export function normalizeWorkspaceWrapperTool(name: string, rawArgs: any, worksp
     if (action === 'batch_read') {
       const readArgs = compactWorkspaceBatchReadArgs(args);
       if (!hasProvidedArg(readArgs, 'max_files')) readArgs.max_files = FILE_TOOL_DEFAULT_BATCH_FILES;
-      if (!hasProvidedArg(readArgs, 'max_lines_per_file') && !hasProvidedArg(readArgs, 'num_lines')) {
-        readArgs.max_lines_per_file = FILE_TOOL_DEFAULT_BATCH_LINES;
-      }
+      // No default line cap is injected: the reader already gives unranged files 80 lines,
+      // and an injected cap would also clip a range the caller asked for explicitly.
       return { name: 'read_files_batch', args: readArgs };
     }
     if (action === 'grep') {
@@ -501,6 +500,11 @@ export function normalizeWorkspaceWrapperTool(name: string, rawArgs: any, worksp
   }
 
   if (name === 'workspace_edit') {
+    if (args.dry_run === true || args.check === true) {
+      if (action === 'apply_patch' || action === 'preview_patch') return { name: 'preview_patch', args: { ...args, check: true } };
+      if (!['copy', 'move', 'copy_directory', 'move_directory'].includes(action)) return { name, args, error: `No files changed: ${action} has no dry run. Use preview_patch with a unified diff.` };
+      args.dry_run = true;
+    }
     if (action === 'create') return { name: 'create_file', args: compactWorkspaceEditArgs(args, pathArg, action) };
     if (action === 'write') return { name: 'write_file', args: compactWorkspaceEditArgs(args, pathArg, action) };
     if (action === 'append') return { name: 'append_file', args: compactWorkspaceEditArgs(args, pathArg, action) };
@@ -521,6 +525,35 @@ export function normalizeWorkspaceWrapperTool(name: string, rawArgs: any, worksp
   }
 
   if (name === 'workspace_run') {
+    // Strict-schema models (OpenAI) send every optional field, filled with an empty placeholder
+    // ("", [], {text:""}). An empty literal field means "not used": drop it before the
+    // either/or check below. Two real forms in one call still fail closed.
+    {
+      const blank = (v: any) => v == null || (typeof v === 'string' && !v.trim());
+      const s = args.search;
+      const searchUsed = s != null && !blank(s) && !(typeof s === 'object' && !Array.isArray(s) && blank(s.text));
+      if (!searchUsed) delete args.search;
+      const emptyArgv = args.argv == null || (Array.isArray(args.argv) && args.argv.length === 0);
+      const commandUsed = !blank(args.command);
+      // status/wait/log/kill/submit never take a literal form, so a program with no arguments there is a placeholder too.
+      if (emptyArgv && (searchUsed || commandUsed || blank(args.program) || action !== 'run')) { delete args.program; delete args.argv; }
+      if (searchUsed && typeof s === 'object' && !Array.isArray(s)) {
+        args.search = { ...s };
+        for (const key of ['directory', 'glob']) if (blank(args.search[key])) delete args.search[key];
+      }
+      if (!commandUsed && (args.program != null || args.search != null)) delete args.command;
+      // The same command written in both forms (command === program + argv) means one thing: run the literal form,
+      // which passes each argument exactly and still goes through the same deny and approval checks.
+      if (commandUsed && args.search == null && typeof args.program === 'string' && Array.isArray(args.argv) && args.argv.length
+        && args.argv.every((a: unknown) => typeof a === 'string') && String(args.command).trim() === [args.program, ...args.argv].join(' ')) delete args.command;
+    }
+
+    if (args.program != null || args.argv != null || args.search != null) {
+      if (action === 'run' && args.command) return { name, args, error: 'command and program/argv (or search) were both given and they differ. Send one form only: command:"" with program/argv or search, or argv:[] and search.text:"" with command.' };
+      if (action !== 'run' || args.command || args.elevated || args.visible || args.pty || args.stdin || (args.shell && args.shell !== 'auto') || process.platform !== 'win32') return { name, args, error: 'Literal arguments require a captured Windows run without command, explicit shell, elevation or PTY.' };
+      try { args.command = literalCommand(args) + ARGV_SUFFIX; } catch (e) { return {name,args,error:String(e)}; }
+      delete args.program; delete args.argv; delete args.search;
+    }
     if (action === 'telemetry' || action === 'benchmark_summary') return { name: 'tool_benchmark_summary', args };
     if (['run', 'start', 'status', 'log', 'wait', 'kill', 'submit'].includes(action)) {
       const runArgs = {

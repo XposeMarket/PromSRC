@@ -5,8 +5,6 @@ import { getConfig } from '../config/config';
 import type { ToolResult } from './tool-builder';
 
 export const GATEWAY_TOOL_RESULT_INLINE_MAX_CHARS = 64 * 1024;
-const TOOL_RESULT_HEAD_CHARS = 42 * 1024;
-const TOOL_RESULT_TAIL_CHARS = 14 * 1024;
 const RAW_REF_PREFIX = 'tool-result-raw:';
 
 export interface ToolResultEnvelopeMetadata {
@@ -45,10 +43,13 @@ function scrubSensitivePreview(text: string): string {
     .replace(/([?&](?:token|api[_-]?key|access[_-]?token|refresh[_-]?token)=)[^&#\s]+/gi, '$1***');
 }
 
-function buildBoundedPreview(text: string, metadata: Omit<ToolResultEnvelopeMetadata, 'previewChars'>): string {
-  const head = scrubSensitivePreview(text.slice(0, TOOL_RESULT_HEAD_CHARS)).trimEnd();
-  const tail = scrubSensitivePreview(text.slice(-TOOL_RESULT_TAIL_CHARS)).trimStart();
-  const omitted = Math.max(0, text.length - TOOL_RESULT_HEAD_CHARS - TOOL_RESULT_TAIL_CHARS);
+function buildBoundedPreview(text: string, metadata: Omit<ToolResultEnvelopeMetadata, 'previewChars'>, maxChars: number): string {
+  const payloadBudget = maxChars - 1024; // leave room for the reference and recovery instructions
+  const headChars = Math.floor(payloadBudget * 0.75);
+  const tailChars = payloadBudget - headChars;
+  const head = scrubSensitivePreview(text.slice(0, headChars)).trimEnd();
+  const tail = scrubSensitivePreview(text.slice(-tailChars)).trimStart();
+  const omitted = Math.max(0, text.length - headChars - tailChars);
   return [
     head,
     '',
@@ -105,12 +106,12 @@ export async function envelopeOversizedToolResult(
   options: { sessionId: string; toolName?: string; maxChars?: number },
 ): Promise<ToolResult> {
   const text = String(toolResult?.result || '');
-  const maxChars = Math.max(16 * 1024, Math.floor(Number(options.maxChars) || GATEWAY_TOOL_RESULT_INLINE_MAX_CHARS));
+  const maxChars = Math.max(2048, Math.floor(Number(options.maxChars) || GATEWAY_TOOL_RESULT_INLINE_MAX_CHARS));
   const toolName = String(options.toolName || toolResult?.name || '').trim();
 
   // A skill is not considered loaded if its entrypoint is clipped. Skill bundles
   // already use progressive resource reads, so keep the selected entrypoint intact.
-  if (toolName === 'skill_read' || text.length <= maxChars) return toolResult;
+  if (toolName === 'skill_read' || toolName === 'tool_result_read' || text.length <= maxChars) return toolResult;
 
   const originalBytes = Buffer.byteLength(text, 'utf8');
   const sha256 = crypto.createHash('sha256').update(text, 'utf8').digest('hex');
@@ -128,7 +129,7 @@ export async function envelopeOversizedToolResult(
     rawRef,
     rawPersistence: rawRef ? 'stored' as const : 'failed' as const,
   };
-  const preview = buildBoundedPreview(text, baseMetadata);
+  const preview = buildBoundedPreview(text, baseMetadata, maxChars);
   const metadata: ToolResultEnvelopeMetadata = {
     ...baseMetadata,
     previewChars: preview.length,
@@ -234,7 +235,9 @@ export async function readRawToolResultRange(input: {
     await handle.close();
   }
   const decoded = buffer.subarray(0, bytesRead).toString('utf8');
-  const content = decoded.slice(0, maxChars);
+  let content = decoded.slice(0, maxChars);
+  // Never split a surrogate pair: replacement bytes would skip the next UTF-8 character.
+  if (/[\uD800-\uDBFF]$/.test(content)) content = content.slice(0, -1);
   const consumedBytes = Buffer.byteLength(content, 'utf8');
   const nextOffsetBytes = offsetBytes + consumedBytes < stat.size ? offsetBytes + consumedBytes : null;
   return { rawRef: value, offsetBytes, nextOffsetBytes, maxChars, totalBytes: stat.size, content };

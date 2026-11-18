@@ -70,11 +70,11 @@ export function wireProjectFolderField(root) {
   const render = (access) => {
     if (!access?.path) return show('');
     if (access.allowed && access.revocable) {
-      return show(`<span>Prometheus can access this folder.</span><button type="button" class="pm-project-folder-access-btn is-quiet" data-folder-access="revoke">Remove access</button>`);
+      return show(`<span>Every Prometheus chat and agent can read and edit files in this folder.</span><button type="button" class="pm-project-folder-access-btn is-quiet" data-folder-access="revoke">Remove access</button>`);
     }
     if (access.allowed) return show('');
     if (access.grantable) {
-      return show(`<span>Outside the folders Prometheus can access. Linking it lets Prometheus read and edit files there.</span><button type="button" class="pm-project-folder-access-btn" data-folder-access="grant">Allow access</button>`);
+      return show(`<span>Outside the folders Prometheus can access. Allowing it lets every Prometheus chat and agent read and edit files there, not only this project.</span><button type="button" class="pm-project-folder-access-btn" data-folder-access="grant">Allow access</button>`);
     }
     return show(`<span class="is-warn">${esc(access.reason || 'This folder can\'t be linked.')}</span>`);
   };
@@ -185,13 +185,15 @@ export function normalizeDesktopNewChatProjects(data) {
     }))
     .sort((a, b) => (b.pinnedAt - a.pinnedAt) || (b.updatedAt - a.updatedAt));
 }
-if (typeof window.normalizeDesktopNewChatProjects !== 'function') {
-  window.normalizeDesktopNewChatProjects = normalizeDesktopNewChatProjects;
+// Node-based contract tests import this module without a browser, so the globals are optional.
+if (typeof window !== 'undefined') {
+  if (typeof window.normalizeDesktopNewChatProjects !== 'function') {
+    window.normalizeDesktopNewChatProjects = normalizeDesktopNewChatProjects;
+  }
+  window.__pmProjectFolder = {
+    html: projectFolderFieldHtml,
+    wire: wireProjectFolderField,
+    read: readProjectFolder,
+    mountMoveNewProjectForm,
+  };
 }
-
-window.__pmProjectFolder = {
-  html: projectFolderFieldHtml,
-  wire: wireProjectFolderField,
-  read: readProjectFolder,
-  mountMoveNewProjectForm,
-};

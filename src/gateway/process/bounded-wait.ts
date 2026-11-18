@@ -5,6 +5,12 @@ export function processWaitBudget(raw: unknown): number {
   return Number.isFinite(value) ? Math.max(1_000, Math.min(MAX_PROCESS_WAIT_MS, value)) : DEFAULT_PROCESS_WAIT_MS;
 }
 
+/** Compact m:ss clock for user-facing wait progress, e.g. 75_000 -> "1:15". */
+export function formatWaitClock(ms: number): string {
+  const total = Math.max(0, Math.floor((Number(ms) || 0) / 1000));
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
+}
+
 export type WaitCancellation = { aborted: boolean; signal?: AbortSignal };
 export type BoundedWaitResult<T> =
   | { kind: 'completed'; value: T }
