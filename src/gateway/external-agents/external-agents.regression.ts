@@ -545,8 +545,8 @@ async function main(): Promise<void> {
         const hidden = mapCodexServerRequest('item/permissions/requestApproval', { threadId: 't', turnId: 'u', itemId: 'i', cwd: '/r', permissions: { fileSystem: { write: [odd] } } })!;
         assert.deepStrictEqual(hidden.card.options.map((o) => o.id), ['deny'], `decline-only for ${JSON.stringify(odd)}`);
       }
-      assert.match(fs.readFileSync(path.join(__dirname, '..', '..', '..', 'web-ui', 'src', 'styles', 'external-agents.css'), 'utf8'), /\.ea-card-grants li \{ white-space: pre-wrap/, 'grant lines keep their spaces on screen');
-      assert.match(fs.readFileSync(path.join(__dirname, '..', '..', '..', 'web-ui', 'src', 'chat', 'external-agent-ui.js'), 'utf8'), /d\.grants\.map/, 'the shared card renders the grant list');
+      assert.match(fs.readFileSync(path.join(__dirname, '..', '..', '..', 'web-ui', 'src', 'styles', 'external-agents.css'), 'utf8'), /\.ea-card-grants[^{]*\{[^}]*white-space: pre-wrap/, 'grant lines keep their spaces on screen');
+      assert.match(fs.readFileSync(path.join(__dirname, '..', '..', '..', 'web-ui', 'src', 'chat', 'external-agent-card.js'), 'utf8'), /<pre class="ea-card-grants">\$\{esc\(grants\.join\('\\n'\)\)\}<\/pre>/, 'the shared card renders every grant line, unaltered');
       const q = mapCodexServerRequest('item/tool/requestUserInput', { threadId: 't', turnId: 'u', itemId: 'i', isBlocking: true, questions: [{ id: 'q1', header: 'Pick', question: 'Which?', isOther: false, isSecret: false, options: [{ label: 'A', description: '' }] }] })!;
       assert.deepStrictEqual(q.toResult({ optionId: 'submit', answers: { q1: ['A'] } }), { answers: { q1: { answers: ['A'] } } });
       assert.strictEqual(mapCodexServerRequest('item/tool/call', {}), null);
