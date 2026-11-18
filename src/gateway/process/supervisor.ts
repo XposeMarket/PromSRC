@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { literalNativeArgv, observedWindowsBatch, ARGV_SUFFIX } from './literal-command';
 import fs from 'fs';
 import path from 'path';
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
@@ -238,7 +239,7 @@ function getShellInvocation(command: string, requestedShell?: ProcessShell): { r
  * Exported for regression tests.
  */
 export function buildWindowsPowerShellWrapper(command: string): string {
-  return `try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $OutputEncoding = [System.Text.Encoding]::UTF8; $PSDefaultParameterValues['Get-Content:Encoding'] = 'UTF8'; $PSDefaultParameterValues['Select-String:Encoding'] = 'UTF8' } catch {}\n$Error.Clear()\n${command}\n$__pmOk = $?; $__pmNative = ($Error.Count -gt 0 -and "$($Error[0].FullyQualifiedErrorId)" -like 'NativeCommandError*'); if (-not $__pmOk) { if ($LASTEXITCODE -is [int] -and $LASTEXITCODE -eq -1 -and $Error.Count -eq 0) { exit 0 }; if ($LASTEXITCODE -is [int] -and $LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; if ($__pmNative) { exit 0 }; exit 1 }; exit 0`;
+  return `try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $OutputEncoding = [System.Text.Encoding]::UTF8; $PSDefaultParameterValues['Get-Content:Encoding'] = 'UTF8'; $PSDefaultParameterValues['Select-String:Encoding'] = 'UTF8' } catch {}\n$Error.Clear()\n${observedWindowsBatch(command) ?? command}\n$__pmOk = $?; $__pmNative = ($Error.Count -gt 0 -and "$($Error[0].FullyQualifiedErrorId)" -like 'NativeCommandError*'); if (-not $__pmOk) { if ($LASTEXITCODE -is [int] -and $LASTEXITCODE -eq -1 -and $Error.Count -eq 0) { exit 0 }; if ($LASTEXITCODE -is [int] -and $LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; if ($__pmNative) { exit 0 }; exit 1 }; exit 0`;
 }
 
 function killProcessTree(child: ChildProcessWithoutNullStreams): void {
@@ -368,7 +369,14 @@ export class ProcessSupervisor {
     // (including npm scripts); disabling optional index refresh is harmless for
     // writes and prevents killed child reads from leaving index.lock behind.
     const commandEnv = lockFreeGitReadOptions([], resolveCommandEnv()).env;
-    const directInvocation = input.pty === true ? null : getDirectInvocation(command, input.shell, commandEnv);
+    const literal = command.endsWith(ARGV_SUFFIX);
+    const directInvocation = literal ? (() => {
+      const argv = literalNativeArgv(command.slice(0, -ARGV_SUFFIX.length));
+      if (!argv || process.platform !== 'win32' || normalizeShell(input.shell) !== 'auto' || input.pty || process.env.PROMETHEUS_DISABLE_DIRECT_EXEC === '1') throw new Error('Literal argv requires Windows captured auto-shell execution.');
+      const shell = resolveExecutableOnPath(argv[0].toLowerCase().replace(/\.exe$/, ''), commandEnv);
+      if (!shell) throw new Error(`Executable not found: ${argv[0]}`);
+      return {requestedShell:'auto' as const, shellKind:'powershell' as const, shell, args:argv.slice(1), direct:true as const};
+    })() : input.pty === true ? null : getDirectInvocation(command, input.shell, commandEnv);
     const invocation = directInvocation || getShellInvocation(command, input.shell);
     const record: ProcessRunRecord = {
       runId,
@@ -549,7 +557,7 @@ export class ProcessSupervisor {
         };
         if (workspaceTracker) updateRecord({ state: 'exiting' });
         const workspaceResult = await finalizeWorkspace(exit);
-        const outcome = classifyCommandTermination({ code, timedOut: exit.timedOut, reason, signal });
+        const outcome = classifyCommandTermination({ code, timedOut: exit.timedOut, reason, signal }, command);
         updateRecord({
           state: 'exited',
           completedAt: nowIso(),
