@@ -88,6 +88,14 @@ export function rememberSeen(roomId: string, ids: string[], options: { synced?: 
   writeState(state);
 }
 
+/** Ids already mirrored into the room's chat. */
+export function getSeenIds(roomId: string): Set<string> {
+  return new Set(readState().rooms[roomId]?.seen || []);
+}
+
+/** Mirrored into the chat in memory but not yet confirmed on disk, per room. Never marked seen until saved. */
+const unsavedMirrored = new Map<string, Set<string>>();
+
 /** Record the token of a message sent from Prometheus, before it goes out. */
 export function rememberSent(roomId: string, token: string): void {
   const state = readState();
@@ -174,7 +182,8 @@ export async function syncDotRoom(dot: DotInfo, signal?: AbortSignal): Promise<{
   syncingRooms.add(dot.roomId);
   try {
     const room = readState().rooms[dot.roomId];
-    const first = !room;
+    // A room that only has send bookkeeping (no import yet) is still a first import.
+    const first = !room || (room.floorAt === undefined && !Number(room.lastAt));
     const messages = await listRoomMessages(dot.roomId, first ? FIRST_SYNC_LIMIT : SYNC_LIMIT, signal);
     // A turn may have started while the request was out (it owns the room now), or Dots was turned off.
     if (busyRooms.has(dot.roomId) || signal?.aborted || !dotsEnabled()) return { sessionId, added: 0 };
@@ -185,18 +194,24 @@ export async function syncDotRoom(dot: DotInfo, signal?: AbortSignal): Promise<{
     // message is still picked up. Only history older than the first import stays out, so a
     // wider page never back-fills old history at the bottom of the chat.
     const floor = Number(current?.floorAt ?? current?.lastAt ?? 0);
-    const fresh = messages.filter((msg) => !seen.has(msg.id) && !(msg.requestId && sent.has(msg.requestId)) && (first || msg.at > floor));
+    const waiting = unsavedMirrored.get(dot.roomId) || new Set<string>();
+    const fresh = messages.filter((msg) => !seen.has(msg.id) && !waiting.has(msg.id) && !(msg.requestId && sent.has(msg.requestId)) && (first || msg.at > floor));
     // ChatGPT's page size is the limit of what can be caught up. A full page with nothing
     // already mirrored means older messages may be missing, so the chat says so.
     if (!first && messages.length >= SYNC_LIMIT && fresh.length === messages.length) {
       addMessage(sessionId, { role: 'assistant', content: DOT_GAP_TEXT, timestamp: (fresh[0].at || Date.now()) - 1, suppressWorkTimer: true, externalAgent: { agentId: DOTS_AGENT_ID, status: 'completed' } } as any,
         { disableCompactionCheck: true, disableMemoryFlushCheck: true });
     }
-    for (const msg of fresh) mirror(sessionId, msg);
+    for (const msg of fresh) { mirror(sessionId, msg); waiting.add(msg.id); }
     // Saved to disk before the ids are marked seen: a crash can repeat a message, never lose one.
-    if (fresh.length) flushSession(sessionId);
-    const oldest = messages.length ? Math.min(...messages.map((msg) => msg.at)) : 0;
-    rememberSeen(dot.roomId, messages.map((msg) => msg.id), { synced: true, floorAt: first ? oldest : floor });
+    // If the save fails, nothing is marked seen; the messages stay in the open chat and the save is tried again next time.
+    if (waiting.size && !flushSession(sessionId)) {
+      unsavedMirrored.set(dot.roomId, waiting);
+    } else {
+      unsavedMirrored.delete(dot.roomId);
+      const oldest = messages.length ? Math.min(...messages.map((msg) => msg.at)) : 0;
+      rememberSeen(dot.roomId, [...messages.map((msg) => msg.id), ...waiting], { synced: true, floorAt: first ? oldest : floor });
+    }
     if (fresh.length) {
       if (first) markSessionReadForMobile(sessionId);
       broadcastWS({ type: 'session_history_changed', sessionId, timestamp: Date.now(), source: 'openai_dots' });

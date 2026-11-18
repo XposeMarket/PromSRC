@@ -64,7 +64,7 @@ room.push(msg('user-raul', 'thanks'));
   const registry = require('../external-agents/registry') as typeof import('../external-agents/registry');
   const runner = require('../external-agents/turn-runner') as typeof import('../external-agents/turn-runner');
   const session = require('../session') as typeof import('../session');
-  const { OpenAIDotsAdapter, DOT_PENDING_TEXT } = require('../external-agents/adapters/openai-dots') as typeof import('../external-agents/adapters/openai-dots');
+  const { OpenAIDotsAdapter, DOT_PENDING_TEXT, DOT_ALREADY_TEXT } = require('../external-agents/adapters/openai-dots') as typeof import('../external-agents/adapters/openai-dots');
 
   // Parsing.
   assert.equal(api.parseDot({ id: 'x', messaging_room_id: 'bad room!' }), null);
@@ -168,6 +168,17 @@ room.push(msg('user-raul', 'thanks'));
   // The user's own message never comes back as a ChatGPT message.
   assert.equal((await sync.syncAllDots(true)).added, 0);
   assert.equal(session.getSession(sid).history.filter((m: any) => m.content === 'dup check' && m.channelLabel === 'ChatGPT').length, 0);
+
+  // Replies the sync mirrored while a send was unanswered are not shown a second time by the retry.
+  flags.dropPostAnswer = true;
+  const dropped2 = await runner.runExternalAgentTurn({ sessionId: sid, message: 'dup check two', sendSSE: () => undefined }, session.getSessionExternalAgent(sid)!);
+  assert.equal(dropped2.externalAgent.status, 'failed');
+  await new Promise((r) => setTimeout(r, 150));
+  assert.equal((await sync.syncAllDots(true)).added, 2, 'the sync shows the reply while the send is still unanswered');
+  const retried2 = await runner.runExternalAgentTurn({ sessionId: sid, message: 'dup check two', sendSSE: () => undefined }, session.getSessionExternalAgent(sid)!);
+  assert.equal(sends.filter((body) => body.content.text === 'dup check two').length, 1);
+  assert.equal(retried2.text, DOT_ALREADY_TEXT);
+  assert.equal((await sync.syncAllDots(true)).added, 0);
 
   // A whole page of new messages means older ones may be missing: the chat says so.
   for (let i = 0; i < 40; i += 1) room.push(msg(DOT_AUTHOR, `burst ${i}`, { message_metadata: { turn_trigger: 'parent_notification' } }));

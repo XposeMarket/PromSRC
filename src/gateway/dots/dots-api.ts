@@ -90,7 +90,9 @@ async function call(pathname: string, init: { method?: string; body?: unknown; s
   const text = await res.text();
   if (!res.ok) {
     if (res.status === 401 || res.status === 403) throw new DotsApiError('ChatGPT rejected the OpenAI sign-in. Sign in again in Settings > Models.', res.status);
-    const retryAfter = Number((res as any).headers?.get?.('retry-after') || 0);
+    // Retry-After is either seconds or a date.
+    const rawRetry = String((res as any).headers?.get?.('retry-after') || '').trim();
+    const retryAfter = /^\d+(\.\d+)?$/.test(rawRetry) ? Number(rawRetry) : (rawRetry ? (Date.parse(rawRetry) - Date.now()) / 1000 : 0);
     throw new DotsApiError(`ChatGPT returned ${res.status}.`, res.status, retryAfter > 0 ? Math.min(retryAfter, 3600) * 1000 : 0);
   }
   try { return text ? JSON.parse(text) : {}; } catch { throw new DotsApiError('ChatGPT returned an unexpected response.', res.status); }
