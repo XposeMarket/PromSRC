@@ -6,6 +6,7 @@ import { assertSafeStorageId, isStorageBoundaryError } from '../../storage/stora
 import { bgPlanDeclare, bgPlanAdvance, backgroundJoin, backgroundStatus, backgroundAbort, backgroundSteer, listActiveBackgroundIdsForSession, registerBackgroundCompletionWake } from '../../tasks/task-runner';
 import { getVerificationFlowManager, getApprovalQueue } from '../../verification-flow';
 import { getPrometheusQuestionQueue } from '../../prometheus-questions';
+import { notifySecureAccessSteer } from '../../../security/secure-access-waits';
 import {
   wss as _wssRef, setWss,
   broadcastWS,
@@ -189,6 +190,8 @@ router.post('/api/chat/steer', (req, res) => {
         questionQueue.notifySteer(pending.id, message);
       }
     } catch { /* best effort */ }
+
+    try { notifySecureAccessSteer(sessionId, message); } catch { /* best effort */ }
 
     broadcastWS({
       type: 'chat_steer',

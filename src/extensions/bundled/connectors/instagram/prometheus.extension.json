@@ -37,6 +37,7 @@
     ],
     "capabilities": ["social", "analytics", "publishing"]
   },
+  "connection": { "schemaVersion": 1, "aliases": ["Instagram account"], "strategies": [{ "id": "instagram-oauth", "adapter": "connector-oauth", "priority": 100, "capabilities": ["account.read"], "readOnlyDefault": true, "authentication": { "type": "oauth2" }, "config": { "connectorId": "instagram", "provider": "instagram" }, "verification": ["oauth.authentication", "account.identity", "safe-read"] }] },
   "setup": {
     "authType": "oauth",
     "statusMode": "oauth_connector",

@@ -60,6 +60,8 @@
 
 ### Heartbeat path
 
+A provider failure or missing final with no completed tool results is a diagnostic, not an actionable update. The runner records `lastResult: error` without writing an automated chat, notifying channels, reviewing teams, or pruning queued one-offs. `HEARTBEAT_OK` remains a quiet success; tool-backed cutoff reports can still report work that actually ran.
+
 `update_heartbeat` accepts `agent_id` (default `main`), enabled, interval (1–1440 minutes; default 30), optional model, and full replacement `instructions`. `SubagentHeartbeatManager` saves config and registers an isolated heartbeat session for each agent. On fire it gates by configured active hours, reads that agent's `HEARTBEAT.md`, and runs the instruction as its own task. Keep operational checklist text in the workspace file; do not assume interval config itself tells the model what to do. A good HEARTBEAT file includes the contract: if no action applies, respond exactly `HEARTBEAT_OK` and nothing else.
 
 ### One-shot timer path

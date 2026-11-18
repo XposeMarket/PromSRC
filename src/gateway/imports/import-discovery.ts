@@ -105,7 +105,7 @@ function existsAsDirectory(value: string): boolean {
   }
 }
 
-function isTranscriptFile(relativePath: string, adapter: ImportAdapterId): boolean {
+export function isTranscriptFile(relativePath: string, adapter: ImportAdapterId): boolean {
   const lower = relativePath.replace(/\\/g, '/').toLowerCase();
   if (/\.(jsonl|json|md)$/i.test(lower) && /(session|transcript|conversation|history|rollout|chat|project)/i.test(lower)) return true;
   if (adapter === 'codex-local' && /\.jsonl$/i.test(lower)) return true;
@@ -171,7 +171,7 @@ function scanPath(root: string, adapter: ImportAdapterId, mode: CandidateDefinit
   return stats;
 }
 
-function listCodexRolloutFiles(root: string): Array<{ absolutePath: string; relativePath: string; bytes: number }> {
+export function listCodexRolloutFiles(root: string): Array<{ absolutePath: string; relativePath: string; bytes: number }> {
   const out: Array<{ absolutePath: string; relativePath: string; bytes: number }> = [];
   const walk = (current: string, relative: string, depth: number): void => {
     if (out.length >= 8_000 || depth > MAX_SCAN_DEPTH) return;
@@ -280,6 +280,22 @@ function chatGptExportCandidates(homeDir: string): CandidateDefinition[] {
   }
   return out;
 }
+
+/** Resolve only the requested browsable root; no unrelated setup/export scans. */
+export function agentConversationRoot(agentId: string, options: ImportDiscoveryOptions = {}): { root: string; adapter: ImportAdapterId } {
+  const home = path.resolve(options.homeDir || os.homedir());
+  const local = path.resolve(options.localAppData || defaultLocalAppData(home));
+  const roots: Record<string, { root: string; adapter: ImportAdapterId }> = {
+    codex: { root: path.join(home, '.codex', 'sessions'), adapter: 'codex-local' },
+    claude: { root: path.join(home, '.claude', 'projects'), adapter: 'claude-code-local' },
+    hermes: { root: path.join(local, 'hermes', 'sessions'), adapter: 'hermes-local' },
+    openclaw: { root: path.join(home, '.openclaw'), adapter: 'openclaw-local' },
+  };
+  const result = roots[agentId];
+  if (!result) throw new Error('That agent has no chats to list. Scan again.');
+  return result;
+}
+
 
 function definitions(options: Required<Pick<ImportDiscoveryOptions, 'homeDir' | 'localAppData' | 'appData'>>): CandidateDefinition[] {
   const { homeDir, localAppData, appData } = options;

@@ -18,6 +18,12 @@
 <style>
   html.mobile-settings-handoff body > :not(#settings-modal):not(script):not(style):not(link) { visibility: hidden !important; }
   html.mobile-settings-handoff #settings-modal { display: flex !important; visibility: visible; }
+  /* Phones: keep the handoff modal blank until the lightweight phone nav has
+     classed it (smh-home/smh-page), so the desktop tab strip never paints and
+     then jumps to the home list (first-paint layout shift / "freeze"). */
+  @media (max-width: 760px) {
+    html.mobile-settings-handoff:not(.settings-nav-ready) #settings-modal { visibility: hidden !important; }
+  }
 </style>
 <script>
   if (document.documentElement.classList.contains('mobile-settings-handoff')) {
@@ -25,6 +31,12 @@
     preload.rel = 'modulepreload';
     preload.href = '/src/pages/SettingsPage.js';
     document.head.appendChild(preload);
+    const navPreload = document.createElement('link');
+    navPreload.rel = 'modulepreload';
+    navPreload.href = '/src/settings/settings-mobile-nav.js';
+    document.head.appendChild(navPreload);
+    // Safety net: never leave the handoff modal blank if the nav module fails.
+    setTimeout(() => document.documentElement.classList.add('settings-nav-ready'), 4000);
   }
 </script>
 <link rel="manifest" href="/manifest.webmanifest">
@@ -195,7 +207,26 @@
       });
     };
 
+    // Each open/close bumps the token; an open that is still awaiting the lazy
+    // controller must not forward (and reopen) after a close or a newer open.
+    let settingsOpenToken = 0;
+    let settingsTabTouchedToken = -1;
+    const markSettingsNavReady = function markSettingsNavReady() {
+      document.documentElement.classList.add('settings-nav-ready');
+    };
+    // Lightweight phone nav (no deps) initialised before the heavy controller so
+    // the first paint already shows the final mobile layout.
+    const initEarlySettingsMobileNav = function initEarlySettingsMobileNav(startOnHome) {
+      if (!window.matchMedia?.('(max-width: 760px)').matches) { markSettingsNavReady(); return Promise.resolve(); }
+      return import('./src/settings/settings-mobile-nav.js')
+        .then((nav) => { nav.initSettingsMobileNav({ startOnHome }); })
+        .catch((err) => console.warn('[settings] early mobile nav failed:', err))
+        .finally(markSettingsNavReady);
+    };
+    window.__PROM_SETTINGS_OPEN_STATE = () => ({ openToken: settingsOpenToken, tabTouchedToken: settingsTabTouchedToken });
+
     const closeSettingsShim = function closeSettingsShim() {
+      settingsOpenToken += 1;
       if (document.documentElement.classList.contains('mobile-settings-handoff')) {
         if (window.__PROM_RETURN_FROM_MOBILE_SETTINGS?.()) return;
         import('./src/settings-return.js').then(({ returnFromMobileSettings }) => returnFromMobileSettings(location));
@@ -211,17 +242,23 @@
     const openSettingsShim = async function openSettingsShim(tab) {
       // The shim resolves a fallback tab before forwarding; remember whether the
       // caller asked for a specific section (phones open on the home list if not).
-      window.__promSettingsExplicitTab = !!tab;
+      const token = ++settingsOpenToken;
       const modal = document.getElementById('settings-modal');
       if (modal) modal.style.display = 'flex';
       document.body.classList.add('settings-page-open');
       window.queueNativeBrowserSurfaceSync?.({ force: true });
       const activeTab = applySettingsTabFallback(tab || window.settingsTab || 'system');
+      const early = initEarlySettingsMobileNav(!tab);
       try {
-        await window.__PROM_LOAD_SETTINGS();
+        await Promise.all([window.__PROM_LOAD_SETTINGS(), early]);
+        // Closed (or reopened) while the controller was loading: do not reopen.
+        if (token !== settingsOpenToken) return undefined;
         const loadedFn = window.openSettings;
         if (typeof loadedFn === 'function' && loadedFn !== openSettingsShim) {
-          return loadedFn(activeTab);
+          // A section picked during the load wins over the tab captured above.
+          const touched = settingsTabTouchedToken === token;
+          window.__promSettingsExplicitTab = !!tab || touched;
+          return loadedFn(touched ? (window.settingsTab || activeTab) : activeTab);
         }
       } catch (err) {
         console.warn('[settings] Failed to load SettingsPage:', err);
@@ -233,12 +270,16 @@
     openSettingsShim.__PROM_SHIM = true;
     window.openSettings = openSettingsShim;
 
+    let settingsTabSeq = 0;
     const setSettingsTabShim = async function setSettingsTabShim(tab) {
       const activeTab = applySettingsTabFallback(tab);
+      const seq = ++settingsTabSeq;
+      settingsTabTouchedToken = settingsOpenToken;
       try {
         await window.__PROM_LOAD_SETTINGS();
         const loadedFn = window.setSettingsTab;
-        if (typeof loadedFn === 'function' && loadedFn !== setSettingsTabShim) {
+        // Only the latest pick forwards; an older captured tab never overwrites it.
+        if (seq === settingsTabSeq && typeof loadedFn === 'function' && loadedFn !== setSettingsTabShim) {
           return loadedFn(activeTab);
         }
       } catch (err) {
@@ -314,7 +355,9 @@
 <link rel="stylesheet" href="src/styles/hub.css?v=skill-hover-actions">
 <link rel="stylesheet" href="src/styles/themes.css?v=desktop-sidebar-priority-v2">
 <link rel="stylesheet" href="src/styles/settings.css?v=full-page-settings-v2">
+<link rel="stylesheet" href="src/styles/agents-imports.css?v=agents-imports-v1">
 <link rel="stylesheet" href="src/styles/surfaces-polish.css?v=ui-polish-2026-10">
+<link rel="stylesheet" href="src/styles/refined-markdown.css?v=refined-markdown-v2">
 
 <!-- ── Prometheus Mobile PWA ─────────────────────────────────────── -->
 <meta name="application-name" content="Prometheus">
@@ -3528,6 +3571,27 @@
   .pam-label{font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px;display:block}
   .pam-btn{background:var(--brand);color:#fff;border:none;border-radius:8px;padding:10px 16px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit}
   .pam-btn:disabled{opacity:.5;cursor:default}
+  .pim{display:flex;flex-direction:column;gap:10px}
+  .pim-seg{display:flex;gap:2px;padding:2px;border:1px solid var(--line);border-radius:8px;align-self:flex-start}
+  .pim-src{background:none;border:0;color:var(--muted);padding:5px 12px;border-radius:6px;font-family:inherit;font-size:12px;font-weight:600;cursor:pointer}
+  .pim-src:hover{color:var(--text)}
+  .pim-src.active{background:var(--panel-2);color:var(--text)}
+  .pim-status{font-size:12px;color:var(--muted)}
+  .pim-status:empty{display:none}
+  .pim-list{display:flex;flex-direction:column}
+  .pim-row{display:flex;align-items:center;gap:12px;padding:9px 2px;border-bottom:1px solid var(--line)}
+  .pim-row:last-child{border-bottom:0}
+  .pim-row-text{flex:1;min-width:0}
+  .pim-name,.pim-desc{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .pim-name{font-size:13px;font-weight:600;color:var(--text)}
+  .pim-desc{font-size:12px;color:var(--muted);margin-top:1px}
+  .pim-btn{flex:none;background:none;border:1px solid var(--line);color:var(--text);border-radius:6px;padding:4px 10px;font-family:inherit;font-size:12px;font-weight:600;cursor:pointer}
+  .pim-btn:hover{border-color:var(--brand);color:var(--brand)}
+  .pim-actions{display:flex;gap:6px;flex:none}
+  .pim-done{flex:none;font-size:12px;color:var(--muted)}
+  .pim-empty,.pim-more{font-size:12px;color:var(--muted);padding:10px 2px}
+  .pim-added{border-bottom:1px solid var(--line);padding-bottom:4px}
+  .pim-added summary{font-size:12px;color:var(--muted);cursor:pointer;padding:4px 0}
   .pam-hint{font-size:11.5px;color:var(--muted);line-height:1.55}
 </style>
 <!-- ADD PLUGIN MODAL -->
@@ -3542,7 +3606,7 @@
       <button class="pam-tab" data-tab="rest" onclick="switchAddTab('rest')">REST API</button>
       <button class="pam-tab" data-tab="mcp" onclick="switchAddTab('mcp')">MCP server</button>
       <button class="pam-tab" data-tab="url" onclick="switchAddTab('url')">From URL</button>
-      <button class="pam-tab" data-tab="import" onclick="switchAddTab('import')">Import (Claude/Codex/Hermes/OpenClaw)</button>
+      <button class="pam-tab" data-tab="import" onclick="switchAddTab('import')">Import</button>
     </div>
     <div id="pam-body" style="padding:18px 20px 22px;overflow-y:auto"></div>
   </div>
@@ -3774,70 +3838,9 @@
 
 
         <section id="settings-external-import" class="settings-section settings-external-import-section">
-          <div class="settings-section-heading">
-            <h2>Import chats &amp; MCP integrations</h2>
-            <span class="settings-help" tabindex="0" aria-label="External import safety details" data-settings-help="Imports are staged and previewed before commit. Historical tool calls never execute. Credentials and OAuth tokens are redacted and must be authorized again.">?</span>
-          </div>
-          <div class="settings-import-discovery" aria-labelledby="settings-import-discovery-title">
-            <div class="settings-import-discovery-heading">
-              <div>
-                <h3 id="settings-import-discovery-title">Found on this computer</h3>
-              </div>
-              <button class="settings-inline-link" type="button" onclick="loadExternalImportDiscovery()">Scan again</button>
-            </div>
-            <div id="settings-import-discovery" class="settings-import-discovery-list" role="status" aria-live="polite">Scanning known local agent folders…</div>
-          </div>
-          <div class="settings-import-grid">
-            <article class="settings-import-card">
-              <div class="settings-import-card-heading">
-                <div>
-                  <h3>Import another conversation source</h3>
-                  <p>Prometheus automatically detects supported local transcripts, project boundaries, and official exports. Preview the newest chats first, then choose exactly what to import.</p>
-                </div>
-                <span class="settings-import-safety-badge">Preview first</span>
-              </div>
-              <label class="settings-import-field" for="settings-import-conversation-path">
-                <span>Local export or folder path</span>
-                <input id="settings-import-conversation-path" class="settings-row-input settings-import-path-input" type="text" autocomplete="off" placeholder="C:\\Exports\\conversations.zip or ~/.claude/projects" />
-              </label>
-              <div class="settings-import-card-actions">
-                <button class="btn btn-sm" type="button" onclick="previewExternalImportJob('conversation')">Build preview</button>
-                <span class="settings-import-inline-note">Project-aware preview is automatic. Nothing is committed yet.</span>
-              </div>
-              <div id="settings-import-conversation-status" class="settings-row-status" role="status" aria-live="polite"></div>
-              <div id="settings-import-conversation-job" class="settings-import-job" aria-live="polite"><div class="settings-import-empty">No staged import. Choose a local export or conversation folder and build a preview.</div></div>
-              <div id="settings-import-conversation-batches" class="settings-import-job settings-import-batches" aria-live="polite"></div>
-            </article>
-
-            <article class="settings-import-card">
-              <div class="settings-import-card-heading">
-                <div>
-                  <h3>Import MCP integrations</h3>
-                  <p>Prometheus detects local MCP declarations from supported agent configurations. Import metadata safely, then authorize and enable each integration in Plugins.</p>
-                </div>
-                <span class="settings-import-safety-badge settings-import-safety-badge--secure">Reauthorize secrets</span>
-              </div>
-              <label class="settings-import-field" for="settings-import-setup-path">
-                <span>Local MCP config folder or file</span>
-                <input id="settings-import-setup-path" class="settings-row-input settings-import-path-input" type="text" autocomplete="off" placeholder="C:\\Users\\you\\.codex\\config.toml" />
-              </label>
-              <div class="settings-import-card-actions">
-                <button class="btn btn-sm" type="button" onclick="previewExternalImportJob('setup')">Preview MCP integrations</button>
-                <span class="settings-import-inline-note">Conflicts are skipped by default; tokens and keys are never silently copied.</span>
-              </div>
-              <div id="settings-import-setup-status" class="settings-row-status" role="status" aria-live="polite"></div>
-              <div id="settings-import-setup-job" class="settings-import-job" aria-live="polite"><div class="settings-import-empty">No staged MCP integration preview. Imported definitions stay disabled until you confirm and authorize them.</div></div>
-            </article>
-          </div>
-          <section id="settings-import-history" class="settings-import-history" aria-labelledby="settings-import-history-title">
-            <div class="settings-import-history-heading">
-              <div>
-                <h3 id="settings-import-history-title">Import history &amp; rollback</h3>
-                <p>Completed imports stay here so the preview cards remain focused. Rollback removes only state created by that import.</p>
-              </div>
-            </div>
-            <div id="settings-import-history-list" class="settings-import-history-list" aria-live="polite"><div class="settings-import-empty">No completed imports or rollback records yet.</div></div>
-          </section>
+          <!-- Agents & imports (stage 1). Rendered by web-ui/src/settings/agents-imports.js;
+               the same module renders the mobile settings section. -->
+          <div id="settings-agents-imports" class="settings-agents-imports"></div>
         </section>
 
         <section class="settings-section settings-auto-settle-section">
@@ -5681,14 +5684,22 @@
     // browser/iOS HTTP cache. The query is intentionally changed with every
     // frontend release; updateViaCache prevents a cached SW script from being
     // treated as the current worker during the update check.
-    const PM_PWA_VERSION = 'pm-v308-2026-08-24-chat-voice-trace';
+    // Must match web-ui/src/mobile/mobile-pwa.js: a different registration URL
+    // makes the /mobile -> desktop Settings handoff install a new SW, whose
+    // clients.claim() fires controllerchange and reloads the handoff page.
+    const PM_PWA_VERSION = 'pm-v314-2026-09-20-mobile-reconnect';
     const PM_SERVICE_WORKER_URL = `/service-worker.js?v=${PM_PWA_VERSION}`;
 
     // Auto-reload once when the SW finishes installing a new version, so a
     // rebuild + gateway restart never leaves the device on stale assets.
     let _swReloadGuard = false;
+    // Scoped to the mobile Settings handoff only: a first-install claim on an
+    // uncontrolled handoff page has no stale assets to replace, so reloading it
+    // just repaints Settings. Every other page keeps the update-recovery reload.
+    const _swHadController = !!navigator.serviceWorker.controller;
+    const _swSettingsHandoff = document.documentElement.classList.contains('mobile-settings-handoff');
     navigator.serviceWorker.addEventListener('controllerchange', () => {
-      if (_swReloadGuard) return;
+      if (_swReloadGuard || (_swSettingsHandoff && !_swHadController)) return;
       _swReloadGuard = true;
       try {
         const pendingUntil = Number(sessionStorage.getItem('pm_reload_pending_until') || 0);

@@ -80,6 +80,8 @@ export function animateThinkingTextSwap(root, previousText) {
   if (!incoming || !previous) return false;
   const next = String(incoming.textContent || '').trim();
   if (!next || next === previous) return false;
+  // The same paragraph growing token by token is a stream, not a replacement.
+  if (next.startsWith(previous)) return false;
 
   root.querySelectorAll?.('.t-think-text').forEach((node) => {
     if (node !== incoming) node.remove();

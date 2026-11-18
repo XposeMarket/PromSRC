@@ -1,1 +1,0 @@
-window.PROMETHEUS_PUBLIC_BUILD=!0;

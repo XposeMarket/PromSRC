@@ -1,3 +1,6 @@
+import { renderContentReview } from '../components/ContentReview.js';
+
+import { renderTaskTool, renderTaskEvidence, rememberTaskTools } from '../features/tasks/task-detail-render.js';
 import { preserveRequestCards } from '../features/tasks/preserve-request-cards.js';
 
 /**
@@ -388,7 +391,7 @@ function renderVideoApprovalCard(item) {
   const p = item.payload || {};
   const id = escHtml(String(p.id || item.id || ''));
   const usd = Number(p.quotedUsd || 0).toFixed(2);
-  return `<div class="chat-approval-card chat-approval-card-low"><div class="chat-approval-title">Paid video run: ~$${escHtml(usd)}</div><div class="chat-approval-body">${escHtml(String(p.summary || 'Approve the quoted cost to start generating.'))}</div><div class="chat-approval-actions"><button class="chat-approval-btn" onclick="bgtVideoApprovalDismiss('${id}')">Dismiss</button><button class="chat-approval-btn chat-approval-approve" onclick="bgtVideoApprovalApprove('${id}')">Approve</button></div></div>`;
+  return `<div class="chat-approval-card chat-approval-card-low"><div class="chat-approval-title">Paid video run: ~$${escHtml(usd)}</div><div class="chat-approval-body">${escHtml(String(p.summary || 'Approve the quoted cost to start generating.'))}</div>${renderContentReview(p)}<div class="chat-approval-actions"><button class="chat-approval-btn" onclick="bgtVideoApprovalDismiss('${id}')">Dismiss</button><button class="chat-approval-btn chat-approval-approve" onclick="bgtVideoApprovalApprove('${id}')">Approve</button></div></div>`;
 }
 
 function renderTeamEscalationCard(item) {
@@ -396,7 +399,7 @@ function renderTeamEscalationCard(item) {
   const id = escHtml(String(item.id || ''));
   const teamId = escHtml(String(p.teamId || ''));
   const summary = escHtml(String(p.content || p.message || p.reason || 'Team needs your input.'));
-  return `<div class="chat-approval-card chat-approval-card-low"><div class="chat-approval-title">${summary}</div><form class="bgt-team-reply" onsubmit="event.preventDefault();bgtTeamEscalationReply('${id}', this)"><input type="text" name="reply" placeholder="Reply to the team…" autocomplete="off" aria-label="Reply to the team" /><div class="chat-approval-actions"><button type="submit" class="chat-approval-btn chat-approval-approve">Send reply</button>${teamId ? `<button type="button" class="chat-approval-btn" onclick="window.openTeamBoard&&window.openTeamBoard('${teamId}')">Open team</button>` : ''}</div></form></div>`;
+  return `<div class="chat-approval-card chat-approval-card-low"><div class="bgt-ny-message" role="button" tabindex="0" title="Show full message" onclick="this.classList.toggle('is-expanded')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();this.classList.toggle('is-expanded')}">${summary}</div><form class="bgt-team-reply" onsubmit="event.preventDefault();bgtTeamEscalationReply('${id}', this)"><input type="text" name="reply" placeholder="Reply to the team…" autocomplete="off" aria-label="Reply to the team" /><div class="chat-approval-actions"><button type="submit" class="chat-approval-btn chat-approval-approve">Send reply</button>${teamId ? `<button type="button" class="chat-approval-btn" onclick="window.openTeamBoard&&window.openTeamBoard('${teamId}')">Open team</button>` : ''}</div></form></div>`;
 }
 
 async function bgtVideoApprovalApprove(approvalId) {
@@ -684,7 +687,7 @@ function renderBgTasks() {
     const items = byStatus[col.key];
     if (items.length === 0 && (col.key === 'complete' || col.key === 'failed' || col.key === 'stalled' || col.key === 'needs_assistance' || col.key === 'cancelled')) continue;
     const colEl = document.createElement('div');
-    colEl.style.cssText = 'min-width:240px;max-width:280px;flex:0 0 auto;display:flex;flex-direction:column;gap:0;';
+    colEl.className = 'bgt-col';
     colEl.innerHTML = `
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
         <span style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.06em;color:${col.color}">${col.label}</span>
@@ -706,6 +709,7 @@ function renderBgTasks() {
 
   // If no tasks at all
   restoreRequestCards();
+  bindPlannedResumeButtons(board);
   board.querySelectorAll('[data-planned-chat-session]').forEach(button => {
     button.onclick = event => bgtOpenOriginChat(event, button.dataset.plannedChatSession);
   });
@@ -816,7 +820,7 @@ function bgtCardHTML(t, col) {
     ${card.tool ? `<div class="bgt-lr-now">now: <code>${escHtml(card.tool)}</code></div>` : ''}
     ${card.stalledFor ? `<div class="bgt-lr-stall">No progress for ${escHtml(card.stalledFor)}. Probably stuck.</div>` : ''}
     ${card.attention ? `<div class="bgt-lr-attn tone-${card.tone}" title="${escHtml(card.attention)}"><strong>Prometheus:</strong> ${escHtml(card.attention)}</div>` : ''}`}
-    ${card.planned ? `<div class="bgt-lr-actions"><button class="bgt-icon-btn" style="width:auto;height:auto;padding:5px 10px;white-space:nowrap" data-planned-chat-session="${escHtml(t.sessionId || '')}">Open chat</button></div>` : ''}
+    ${card.planned ? `<div class="bgt-lr-actions">${t.supportedActions?.includes('resume') ? `<button class="bgt-icon-btn" style="width:auto;padding:5px 10px" data-planned-resume="${escHtml(t.id)}">Resume</button>` : ''}<button class="bgt-icon-btn" style="width:auto;height:auto;padding:5px 10px;white-space:nowrap" data-planned-chat-session="${escHtml(t.sessionId || '')}">Open chat</button></div>` : ''}
   </div>`;
 }
 
@@ -825,12 +829,12 @@ function bgtProgressListHTML(progress) {
   return `<ol class="bgt-lr-steps">${progress.items.map((item, idx) => `<li class="is-${item.state}"><span class="bgt-lr-step-dot">${item.state === 'done' ? '✓' : item.state === 'failed' ? '!' : idx + 1}</span><span class="bgt-lr-step-text">${escHtml(item.text.slice(0, 200))}</span>${item.durationMs != null ? `<span class="bgt-lr-step-time">${escHtml(formatTaskDuration(item.durationMs))}</span>` : ''}</li>`).join('')}</ol>`;
 }
 
-function bgtActivityHTML(rows) {
+function bgtActivityHTML(rows, taskId) {
   if (!rows.length) return '<div style="color:var(--muted);padding:8px;font-size:12px">No activity recorded yet.</div>';
   const time = (t) => (t ? `<span class="bgt-lr-act-time">${escHtml(new Date(t).toLocaleTimeString())}</span>` : '');
-  return `<div class="bgt-lr-activity">${rows.map(row => {
+  return `<div class="bgt-lr-activity">${rows.map((row, idx) => {
     if (row.type === 'hidden') return `<details class="bgt-lr-hidden"><summary>Hiding ${row.count} update${row.count === 1 ? '' : 's'} · Show</summary>${row.rows.map(r => `<div class="bgt-lr-act is-status">${escHtml(String(r.text || r.kind || '').slice(0, 240))}</div>`).join('')}</details>`;
-    if (row.type === 'tool') return `<div class="bgt-lr-act is-tool${row.error ? ' is-error' : ''}"><div class="bgt-lr-act-line"><code>${escHtml(row.name || 'tool')}</code>${row.pending ? '<span class="bgt-lr-act-run">running…</span>' : ''}${time(row.t)}</div>${row.call ? `<div class="bgt-lr-act-call">${escHtml(String(row.call).slice(0, 200))}</div>` : ''}${row.result ? `<div class="bgt-lr-act-result">→ ${escHtml(String(row.result).slice(0, 240))}</div>` : ''}</div>`;
+    if (row.type === 'tool') return renderTaskTool(row, renderMd, time(row.t), `${taskId}:${idx}`);
     if (row.type === 'error') return `<div class="bgt-lr-act is-error"><div class="bgt-lr-act-line"><strong>Error</strong>${row.name ? ` <code>${escHtml(row.name)}</code>` : ''}${time(row.t)}</div><div>${escHtml(String(row.text || '').slice(0, 400))}</div></div>`;
     return `<div class="bgt-lr-act is-status"><div class="bgt-lr-act-line">${escHtml(String(row.text || '').slice(0, 300))}${time(row.t)}</div></div>`;
   }).join('')}</div>`;
@@ -859,7 +863,20 @@ function bgtStartedFromHTML(view) {
   return `<div class="bgt-lr-origin-wrap"><div class="bgt-lr-label">Started from</div><div class="bgt-lr-origin">${escHtml(view.startedFrom.slice(0, 4000))}</div>${view.rawInstructions ? `<details class="bgt-lr-raw"><summary>Show full agent instructions</summary><pre>${escHtml(view.rawInstructions)}</pre></details>` : ''}</div>`;
 }
 
+function bindPlannedResumeButtons(root) {
+  root.querySelectorAll('[data-planned-resume]').forEach(button => {
+    button.onclick = async event => {
+      event.preventDefault(); event.stopPropagation(); button.disabled = true;
+      try {
+        const result = await api(`/api/bg-tasks/${encodeURIComponent(button.dataset.plannedResume)}/resume`, { method: 'POST' });
+        if (!result?.success) throw new Error(result?.error || 'Could not resume task');
+        button.textContent = 'Resuming…';
+      } catch (error) { button.disabled = false; button.textContent = 'Retry resume'; button.title = error.message; }
+    };
+  });
+}
 function bgtRenderPlannedPanel(task, body) {
+  const restoreTools = rememberTaskTools(body);
   const view = detailSections(task);
   body.innerHTML = `
     ${bgtTabsHTML()}
@@ -872,12 +889,14 @@ function bgtRenderPlannedPanel(task, body) {
       ${bgtStartedFromHTML(view)}
       <div><div class="bgt-lr-label">Progress</div>${bgtProgressListHTML(view.progress)}</div>
     </div>
-    <div data-bgt-pane="activity">${bgtActivityHTML(view.activity)}</div>
-    <div data-bgt-pane="evidence"><div style="color:var(--muted);font-size:12px">Chat plans keep their evidence in the chat thread.</div></div>
-    <div class="bgt-lr-actions"><button class="bgt-icon-btn" style="width:auto;height:auto;padding:6px 12px" data-planned-chat-session="${escHtml(task.sessionId || '')}">Open chat</button></div>`;
+    <div data-bgt-pane="activity">${bgtActivityHTML(view.activity, task.id)}</div>
+    <div data-bgt-pane="evidence">${renderTaskEvidence(view.evidence, renderMd, t => new Date(t).toLocaleString())}</div>
+    <div class="bgt-lr-actions">${task.supportedActions?.includes('resume') ? `<button class="bgt-icon-btn" style="width:auto;padding:6px 12px" data-planned-resume="${escHtml(task.id)}">Resume</button>` : ''}<button class="bgt-icon-btn" style="width:auto;height:auto;padding:6px 12px" data-planned-chat-session="${escHtml(task.sessionId || '')}">Open chat</button></div>`;
+  bindPlannedResumeButtons(body);
   body.querySelectorAll('[data-planned-chat-session]').forEach(button => {
     button.onclick = event => bgtOpenOriginChat(event, button.dataset.plannedChatSession);
   });
+  restoreTools();
   bgtSetPanelTab(bgtPanelTab);
 }
 
@@ -1065,6 +1084,7 @@ async function bgtRefreshOpenPanel() {
       + '</div>';
   }
 
+  const restoreTools = rememberTaskTools(body);
   const approvalHTML = pendingApprovals.length > 0
     ? `<div class="chat-live-approvals">${pendingApprovals.map(renderTaskApprovalCard).join('')}</div>`
     : '';
@@ -1150,7 +1170,7 @@ async function bgtRefreshOpenPanel() {
 
     <!-- Activity tab: paired tool rows, errors in red, noise collapsed; raw log kept below -->
     <div data-bgt-pane="activity" style="display:flex;flex-direction:column;gap:14px">
-      ${bgtActivityHTML(lrView.activity)}
+      ${bgtActivityHTML(lrView.activity, task.id)}
       <details class="bgt-lr-raw"><summary>Raw process log (latest first)</summary>
         <div style="font-family:monospace;font-size:11px;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:6px 8px;max-height:300px;overflow-y:auto">
           ${journalHTML || '<div style="color:var(--muted);padding:8px">No entries yet.</div>'}
@@ -1181,6 +1201,7 @@ async function bgtRefreshOpenPanel() {
     </div>` : ''}
   `;
 
+  restoreTools();
   bgtSetPanelTab(bgtPanelTab);
   // Restore collapse state for coding workspace and command runs
   const wsBodyNew = document.getElementById('coding-workspace-body');
@@ -1410,30 +1431,7 @@ async function loadEvidenceBusEntries(taskId) {
       body.innerHTML = '<div style="color:var(--muted);font-size:11px;padding:6px">No evidence yet.</div>';
       return;
     }
-    const catColors = { finding:'#0d4faf', decision:'#7c4d00', artifact:'#1a6e35', error:'#9c1a1a', dedup_key:'#6d2d9e' };
-    // Group by category
-    const grouped = {};
-    for (const e of entries) {
-      if (!grouped[e.category]) grouped[e.category] = [];
-      grouped[e.category].push(e);
-    }
-    let html = '<div style="font-family:monospace;font-size:11px;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:6px 8px;max-height:250px;overflow-y:auto">';
-    for (const [cat, catEntries] of Object.entries(grouped)) {
-      const col = catColors[cat] || '#555';
-      html += `<div style="font-size:10px;font-weight:800;color:${col};text-transform:uppercase;padding:4px 0 2px">${escHtml(cat)} (${catEntries.length})</div>`;
-      for (const e of catEntries.slice(-10)) {
-        const keyPart = e.key ? ` <span style="color:#888;font-weight:700">[${escHtml(e.key)}]</span>` : '';
-        const stepPart = `<span style="color:var(--muted)">step ${e.stepIndex}</span>`;
-        const agentPart = e.agentId ? ` <span style="color:var(--muted)">by ${escHtml(e.agentId.slice(0,16))}</span>` : '';
-        const valueText = escHtml(e.value); // No truncation — full text
-        html += `<div style="padding:5px 0;border-bottom:1px solid var(--line)">`
-          + `<div style="display:flex;gap:6px;align-items:center;margin-bottom:2px">${stepPart}${agentPart}${keyPart}</div>`
-          + `<div style="color:var(--text);line-height:1.5;word-break:break-word;white-space:pre-wrap">${valueText}</div>`
-          + `</div>`;
-      }
-    }
-    html += '</div>';
-    body.innerHTML = html;
+    body.innerHTML = renderTaskEvidence(entries, renderMd, t => new Date(t).toLocaleString());
     // Update entry count
     if (count) count.textContent = `(${entries.length} entries)`;
   } catch (err) {

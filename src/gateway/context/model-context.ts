@@ -34,6 +34,8 @@ export interface ContextBudget {
 type KnownModelProfile = Partial<Omit<ModelContextProfile, 'providerId' | 'model' | 'source'>>;
 
 const KNOWN_MODEL_PROFILES: Array<{ provider: RegExp; model: RegExp; profile: KnownModelProfile }> = [
+  // GPT-6.2: keep standard usage below the long-context tariff boundary.
+  { provider: /^(openai|openai_codex)$/i, model: /^gpt-6\.2-(?:astra|sol)(?:-|$)/i, profile: { contextWindowTokens: 272000, maxContextWindowTokens: 1050000, maxOutputTokens: 128000, tokenizer: 'openai', supportsReasoningTokens: true } },
   // Verified Codex catalog maximum; the default working window is not the maximum.
   // ChatGPT web backend (openai_codex/chatgpt). Without this it fell through to
   // the small default and compacted at ~30k (2026-09-25).
@@ -53,7 +55,7 @@ const KNOWN_MODEL_PROFILES: Array<{ provider: RegExp; model: RegExp; profile: Kn
   { provider: /^(openai|openai_codex)$/i, model: /codex/i, profile: { contextWindowTokens: 272000, maxOutputTokens: 128000, tokenizer: 'openai', supportsReasoningTokens: true } },
   { provider: /^(openai|openai_codex)$/i, model: /^gpt-4\.1/i, profile: { contextWindowTokens: 1047576, maxOutputTokens: 32768, tokenizer: 'openai', supportsReasoningTokens: false } },
   { provider: /^(openai|openai_codex)$/i, model: /^(gpt-4o|o[134])/i, profile: { contextWindowTokens: 128000, maxOutputTokens: 16384, tokenizer: 'openai', supportsReasoningTokens: true } },
-  { provider: /^(anthropic)$/i, model: /^(claude-fable-5|claude-opus-(?:5|4-(?:6|7|8))|claude-sonnet-(?:5|4-6)|claude-haiku-5)(?:\b|[-_])/i, profile: { contextWindowTokens: 1000000, maxOutputTokens: 128000, tokenizer: 'anthropic', supportsReasoningTokens: true } },
+  { provider: /^(anthropic)$/i, model: /^(claude-fable-5|claude-mythos-5-2|claude-opus-(?:5|4-(?:6|7|8))|claude-sonnet-(?:5|4-6)|claude-haiku-5)(?:\b|[-_])/i, profile: { contextWindowTokens: 1000000, maxOutputTokens: 128000, tokenizer: 'anthropic', supportsReasoningTokens: true } },
   { provider: /^(anthropic)$/i, model: /^claude-haiku-4-5(?:\b|[-_])/i, profile: { contextWindowTokens: 200000, maxOutputTokens: 64000, tokenizer: 'anthropic', supportsReasoningTokens: true } },
   { provider: /^(anthropic)$/i, model: /^claude-/i, profile: { contextWindowTokens: 200000, maxOutputTokens: 8192, tokenizer: 'anthropic', supportsReasoningTokens: true } },
   { provider: /^(gemini)$/i, model: /^gemini-2\.5-pro/i, profile: { contextWindowTokens: 1000000, maxOutputTokens: 8192, tokenizer: 'gemini', supportsReasoningTokens: true } },

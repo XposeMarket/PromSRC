@@ -111,18 +111,15 @@ export function getPrimaryProvider(): string {
   }
 }
 
+/**
+ * Build a provider-neutral image part (the canonical `ContentPart` from
+ * LLMProvider.ts). Each adapter converts it at request serialization
+ * (Anthropic: anthropic-image.ts normalizeAnthropicContent; Codex/OpenAI-compat:
+ * input_image). Never pick a provider-specific shape here: the chat's active
+ * route can differ from the global provider, and messages outlive mid-turn
+ * model switches. A route-specific shape silently dropped images on Codex.
+ */
 export function buildVisionImagePart(base64: string, mimeType: string = 'image/png'): any {
-  const provider = getPrimaryProvider();
-  if (provider === 'anthropic') {
-    return {
-      type: 'image',
-      source: {
-        type: 'base64',
-        media_type: mimeType,
-        data: base64,
-      },
-    };
-  }
   return {
     type: 'image_url',
     image_url: {

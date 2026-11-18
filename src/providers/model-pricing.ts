@@ -39,6 +39,8 @@ type PricingRule = {
 // Rates are USD per 1M tokens. Because cost is stored in micro-dollars,
 // the per-token micro-dollar rate has the same numeric value.
 const BUILT_IN_RULES: PricingRule[] = [
+  { provider: /^(openai|openai_codex)$/i, model: /^gpt-6\.2-astra(?:-|$)/i, input: 8, output: 40, cacheRead: 0.40, cacheWrite: 10 },
+  { provider: /^(openai|openai_codex)$/i, model: /^gpt-6\.2-sol(?:-|$)/i, input: 2, output: 10, cacheRead: 0.10, cacheWrite: 2.50 },
   { provider: /^openai$/i, model: /^gpt-6\.1-terra(?:-|$)/i, input: 1, output: 5, cacheRead: 0.05 },
   { provider: /^openai_codex$/i, model: /^gpt-6\.1-terra(?:-|$)/i, input: 1, output: 5, cacheRead: 0.05 },
   { provider: /^(ollama|llama_cpp|lm_studio)$/i, model: /.*/, input: 0, output: 0, source: 'local' },
@@ -58,6 +60,8 @@ const BUILT_IN_RULES: PricingRule[] = [
   { provider: /^(openai|openai_codex)$/i, model: /^gpt-5/i, input: 1.25, output: 10.00, cacheRead: 0.125 },
   { provider: /^(openai|openai_codex)$/i, model: /^o[134]/i, input: 2.50, output: 10.00, cacheRead: 1.25 },
 
+  // Official 5.2 rates; precede the legacy Fable family fallback.
+  { provider: /^anthropic$/i, model: /^claude-(?:fable|mythos)-5-2(?:-|$)/i, input: 8.00, output: 40.00, cacheRead: 0.20, cacheWrite: 10.00 },
   { provider: /^anthropic$/i, model: /fable/i, input: 10.00, output: 50.00, cacheRead: 1.00, cacheWrite: 12.50 },
   { provider: /^anthropic$/i, model: /opus-4-(6|7|8)|opus-4\.(6|7|8)/i, input: 5.00, output: 25.00, cacheRead: 0.50, cacheWrite: 6.25 },
   { provider: /^anthropic$/i, model: /opus/i, input: 15.00, output: 75.00, cacheRead: 1.50, cacheWrite: 18.75 },
@@ -219,10 +223,11 @@ export function estimateModelUsageCost(input: {
 }): ModelUsageCostEstimate {
   const pricing = resolveModelPricing(input.provider, input.model);
   const inputTokens = normalizeTokenCount(input.inputTokens);
-  if (pricing.source === 'built_in_estimate' && /^(openai|openai_codex)$/.test(pricing.provider) && /^gpt-6\.1-terra(?:-|$)/i.test(pricing.model)) {
+  if (pricing.source === 'built_in_estimate' && /^(openai|openai_codex)$/.test(pricing.provider) && /^gpt-6\.(?:1-terra|2-(?:astra|sol))(?:-|$)/i.test(pricing.model)) {
     const long = inputTokens > 272000;
     pricing.inputMicrosPerToken *= (long ? 2 : 1);
     pricing.cacheReadMicrosPerToken *= (long ? 2 : 1);
+    if (/^gpt-6\.2-/.test(pricing.model)) pricing.cacheWriteMicrosPerToken *= (long ? 2 : 1);
     pricing.outputMicrosPerToken *= (long ? 1.5 : 1);
     pricing.reasoningMicrosPerToken *= (long ? 1.5 : 1);
   }

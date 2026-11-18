@@ -5,14 +5,18 @@
 //   They are read once at submit time, sent to the dedicated submit endpoint
 //   and cleared. Never stored in JS state, storage, chat/question data,
 //   notifications or console output. Nothing here writes storage at all.
-// - Cards clear secrets on success, cancel, expiry, hide, pagehide and unmount.
+// - Cards clear secrets on success, cancel, expiry, pagehide and unmount.
+//   Protected plugin entry alone allows brief app hiding (DOM only, five-minute cap).
 // - Only metadata (labels, origins, identifiers, states) is rendered/polled.
+
+import { SIGN_IN_CSS, signInIcon, presentSignIn } from './sign-in-presentation.js';
 
 export const SECURE_ACCESS_API = '/api/secure-access';
 const STYLE_ID = 'prom-secure-access-styles';
 
 const CSS = `
-.sa-card{--sa-b:var(--prom-border,color-mix(in srgb,currentColor 18%,transparent));--sa-m:var(--prom-muted,color-mix(in srgb,currentColor 62%,transparent));--sa-a:var(--prom-accent,var(--accent,#5b7cfa));border:1px solid var(--sa-b);border-radius:14px;background:var(--prom-surface,transparent);color:var(--prom-text,inherit);padding:14px;display:grid;gap:12px;max-width:460px;box-sizing:border-box;font-size:14px;line-height:1.45}
+.sa-card{--sa-b:var(--prom-border,color-mix(in srgb,currentColor 18%,transparent));--sa-m:var(--prom-muted,color-mix(in srgb,currentColor 62%,transparent));--sa-a:var(--prom-accent,var(--accent,#5b7cfa));border:1px solid var(--sa-b);border-radius:14px;background:var(--prom-surface,transparent);color:var(--prom-text,inherit);padding:14px;display:grid;gap:12px;max-width:460px;box-sizing:border-box;font-family:var(--font-sans,system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif);font-size:14px;line-height:1.45}
+.sa-card h2,.sa-card h3{margin:0;font-size:18px;line-height:1.3}.sa-card p{margin:0}.sa-card a.sa-btn{display:flex;align-items:center;justify-content:center;text-decoration:none}
 .sa-card *{box-sizing:border-box}
 .sa-hd{display:flex;gap:10px;align-items:flex-start}.sa-hd svg{flex:none;color:var(--sa-a);margin-top:2px}
 .sa-hd h3{font-size:15px;margin:0}.sa-muted,.sa-hd p{margin:0;color:var(--sa-m);font-size:12.5px;overflow-wrap:anywhere}
@@ -35,7 +39,7 @@ const CSS = `
 .sa-card details{border:1px solid var(--sa-b);border-radius:9px;padding:0 12px}
 .sa-card summary{min-height:40px;display:flex;align-items:center;cursor:pointer;font-weight:600;font-size:13px}
 .sa-card details ul,.sa-sum{margin:0 0 10px;padding-left:18px;font-size:12.5px;color:var(--sa-m)}
-.sa-err{color:var(--prom-danger,#d64545);font-size:12.5px;margin:0}.sa-err:empty{display:none}
+.sa-err{color:var(--prom-danger,#d64545);font-size:12.5px;margin:0}.sa-err:empty,.sa-card>.sa-muted:empty{display:none}
 .sa-ok{color:var(--prom-success,#2f9e63)}.sa-warn{color:var(--prom-warning,#b7791f)}
 .sa-badge{display:inline-flex;align-items:center;border:1px solid var(--sa-b);border-radius:999px;padding:1px 8px;font-size:11px;color:var(--sa-m);white-space:nowrap}
 .sa-sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
@@ -53,7 +57,7 @@ export function ensureSecureAccessStyles(doc = globalThis.document) {
   if (!doc || doc.getElementById(STYLE_ID)) return;
   const style = doc.createElement('style');
   style.id = STYLE_ID;
-  style.textContent = CSS;
+  style.textContent = CSS + SIGN_IN_CSS;
   (doc.head || doc.documentElement).appendChild(style);
 }
 
@@ -95,7 +99,7 @@ export function secureAccessErrorText(error, fallback) {
 // PR821 I1: actions that need a human-typed code in the native owner-approval window
 // when sent from the desktop app. Paired phones prove ownership with their device token.
 const CONSENT_ROUTE = /^\/api\/secure-access\/(requests\/[^/]+\/submit|credentials\/[^/]+\/(grants|replace|delete|login\/submit))$/;
-export function needsOwnerConsent(path) { const route = String(path || '').split('?')[0]; return CONSENT_ROUTE.test(route) || /^\/api\/(connection-secure-input\/[^/]+|connections\/credentials|connections\/disconnect|auth\/x-api\/credentials|auth\/x-api\/disconnect|protected-plugins\/(?:x|connection\/[^/]+)\/delete|protected-plugins\/(?:x|connection\/[^/]+)\/disconnect|connections-v2\/[^/]+\/disconnect)$/.test(route); }
+export function needsOwnerConsent(path) { const route = String(path || '').split('?')[0]; return /^\/api\/connection-attempts\/[^/]+\/connect$/.test(route) || CONSENT_ROUTE.test(route) || /^\/api\/(connection-secure-input\/[^/]+|connections\/credentials|connections\/disconnect|auth\/x-api\/credentials|auth\/x-api\/disconnect|protected-plugins\/(?:x|connection\/[^/]+)\/delete|protected-plugins\/(?:x|connection\/[^/]+)\/disconnect|connections-v2\/[^/]+\/disconnect|connector-accounts\/[^/]+\/[^/]+\/(?:default|remove)|connector-accounts\/[^/]+\/(?:add|cancel-add)|protected-plugins\/phone-signin\/[^/]+)$/.test(route); }
 export function ownerConsentBridge() {
   try { return globalThis.prometheusOwnerConsent && typeof globalThis.prometheusOwnerConsent.request === 'function' ? globalThis.prometheusOwnerConsent : null; } catch { return null; }
 }
@@ -194,9 +198,12 @@ export function mountSecureAccessCard(host, opts = {}) {
   const fetchJson = opts.fetchJson;
   const mode = MODE_COPY[request.mode] ? request.mode : 'existing';
   const copy = MODE_COPY[mode];
+  const loginStyle = mode === 'existing';
+  let presentation = null;
   const persistentAllowed = status.persistentAllowed === true;
-  // Fail closed (I1/I3): surfaces without owner proof never collect the secret at all.
-  const ownerBlocked = !!(status.owner && status.owner.canApprove === false);
+  // Entry capability is distinct from approval; replacement still needs owner proof.
+  const canEnter = request.replaces ? status.owner?.canApprove : (status.entry?.canEnter ?? status.owner?.canApprove);
+  const ownerBlocked = canEnter !== true;
   const uid = `sa-${String(request.id || Math.random()).replace(/[^a-zA-Z0-9_-]/g, '')}`;
   let remember = persistentAllowed;
   let busy = false;
@@ -231,6 +238,11 @@ export function mountSecureAccessCard(host, opts = {}) {
     revealBtn.textContent = show ? 'Hide' : 'Show';
     revealBtn.setAttribute('aria-pressed', show ? 'true' : 'false');
   });
+  if (loginStyle) {
+    revealBtn.classList.add('sa-reveal');
+    const updateEye = () => { revealBtn.replaceChildren(signInIcon('eye')); revealBtn.setAttribute('aria-label', secretInput.type === 'password' ? 'Show password' : 'Hide password'); };
+    revealBtn.addEventListener('click', updateEye); updateEye();
+  }
   const secretRow = el('div', { class: 'sa-inrow' }, secretInput, mode === 'otp' ? null : revealBtn);
 
   const recoveryBox = el('input', { type: 'checkbox', id: `${uid}-recovery` });
@@ -263,18 +275,19 @@ export function mountSecureAccessCard(host, opts = {}) {
   const knob = el('span', { class: 'sa-knob', 'aria-hidden': 'true' });
   const remTitle = el('strong', {});
   const remDesc = el('span', { class: 'sa-muted' });
-  const remSwitch = el('button', { type: 'button', role: 'switch', class: 'sa-switch', disabled: !persistentAllowed },
+  const remSwitch = el('button', { type: 'button', role: 'switch', class: `sa-switch${loginStyle ? ' sa-remember' : ''}`, disabled: !persistentAllowed },
     el('span', { style: 'display:grid;gap:2px' }, remTitle, remDesc), knob);
   remSwitch.addEventListener('click', () => { if (!persistentAllowed) return; remember = !remember; syncRemember(); say(remember ? 'Remember access on' : 'This session only'); });
   function syncRemember() {
     remSwitch.setAttribute('aria-checked', remember ? 'true' : 'false');
-    remTitle.textContent = remember ? 'Remember access' : 'This session only';
+    remTitle.textContent = loginStyle ? 'Save this login for next time' : (remember ? 'Remember access' : 'This session only');
     remDesc.textContent = persistentAllowed
       ? (remember ? 'Encrypted on this computer until you revoke or delete it.' : 'Kept in memory only; cleared when Prometheus restarts.')
       : 'Remembering is off: this computer has no protected key store, so access is kept in memory only and cleared when Prometheus restarts.';
   }
 
-  const saveBtn = el('button', { type: 'submit', class: 'sa-btn sa-pri', text: 'Save protected access' });
+  const saveLabel = loginStyle ? 'Save login' : 'Save protected access';
+  const saveBtn = el('button', { type: 'submit', class: 'sa-btn sa-pri', text: saveLabel });
   const cancelBtn = el('button', { type: 'button', class: 'sa-btn', text: 'Cancel' });
   function syncRecovery() {
     recoveryRow.hidden = secretInput.dataset.generated !== 'true';
@@ -290,20 +303,25 @@ export function mountSecureAccessCard(host, opts = {}) {
     el('ul', {},
       el('li', { text: 'Prom never sees this value. It is sent straight to the local protected vault.' }),
       el('li', { text: `Use is limited to main Prom on exactly ${request.origin || 'this site'}.` }),
-      el('li', { text: 'This allows signing in only. Posting, sending, buying or other account actions still ask you separately.' }),
+      el('li', { text: 'Saving allows Prom to prepare sign-in on this site. Submitting the sign-in still needs approval; posting, sending and buying need separate approval too.' }),
       el('li', { text: 'Anyone already running programs as you on this computer is not blocked by this vault.' })));
 
   const form = el('form', { class: 'sa-form', autocomplete: 'on', novalidate: true, 'data-prom-no-draft': 'true' },
     needsIdentifier ? el('label', { class: 'sa-field', for: idInput.id }, el('span', { class: 'sa-lbl', text: mode === 'new' ? 'Email or username for the new account' : 'Email or username' }), idInput) : null,
     el('div', { class: 'sa-field' }, el('label', { class: 'sa-lbl', for: secretInput.id, text: copy.secret }), secretRow),
-    genRow, recoveryRow, remSwitch, scope, errorLine,
+    genRow, recoveryRow, remSwitch,
+    loginStyle ? el('p', { class: 'sa-login-privacy', text: 'Your password stays out of chat and is never shown to the AI.' }) : null, scope, errorLine,
     el('div', { class: 'sa-row' }, saveBtn, cancelBtn));
 
   if (ownerBlocked) { secretInput.disabled = true; idInput.disabled = true; }
-  const body = el('div', { style: 'display:grid;gap:12px' }, ownerBlocked ? ownerSurfaceBanner(status) : null, form);
+  // Do not show a dead password field that looks like a broken touch target.
+  // Keep cancellation available; owner proof remains enforced by the server.
+  const body = el('div', { style: 'display:grid;gap:12px' },
+    ownerBlocked ? ownerSurfaceBanner(status) : null,
+    ownerBlocked ? el('div', { class: 'sa-row' }, cancelBtn) : form);
   const card = el('section', { class: 'sa-card', 'aria-labelledby': `${uid}-h`, 'data-secure-access-request': request.id || '' },
-    el('div', { class: 'sa-hd' }, lockIcon(20), el('div', { style: 'display:grid;gap:2px;min-width:0;flex:1' },
-      el('h3', { id: `${uid}-h`, text: `${copy.title}: ${request.label || 'access'}` }),
+    el('div', { class: 'sa-hd' }, loginStyle ? signInIcon() : lockIcon(20), el('div', { style: 'display:grid;gap:2px;min-width:0;flex:1' },
+      el('h3', { id: `${uid}-h`, text: loginStyle ? 'Save your login' : `${copy.title}: ${request.label || 'access'}` }),
       el('p', { text: request.origin || '' }),
       request.purpose ? el('p', { text: request.purpose }) : null), expiryText),
     body, live);
@@ -319,6 +337,7 @@ export function mountSecureAccessCard(host, opts = {}) {
     resolved = true;
     wipe();
     clearInterval(timer);
+    presentation?.finish();
     const receipt = state === 'saved'
       ? ['Saved. Prom received a reference only, never the value.', `Site: ${request.origin || ''}`, `Storage: ${storageLabel(extra.storage || (remember ? 'persistent' : 'session'))}`, 'Scope: main Prom, sign-in only']
       : [state === 'expired' ? 'This request expired. Nothing was saved.' : 'Cancelled. Nothing was saved.'];
@@ -352,7 +371,7 @@ export function mountSecureAccessCard(host, opts = {}) {
     } catch (error) {
       errorLine.textContent = secureAccessErrorText(error, 'Could not save. Check the request has not expired and try again.');
     } finally {
-      busy = false; saveBtn.textContent = 'Save protected access'; syncSave();
+      busy = false; saveBtn.textContent = saveLabel; syncSave();
     }
   });
   cancelBtn.addEventListener('click', async () => {
@@ -380,7 +399,10 @@ export function mountSecureAccessCard(host, opts = {}) {
   globalThis.addEventListener?.('pagehide', onPageHide);
   syncRemember(); syncRecovery(); tick();
   timer = setInterval(tick, 1000);
-  host.appendChild(card);
+  if (loginStyle && typeof document.createElement('dialog').showModal === 'function') {
+    presentation = presentSignIn(card, { origin: request.origin || '', onDismiss: wipe, onSkip: () => cancelBtn.click() });
+  }
+  host.appendChild(presentation?.el || card);
 
   const handle = {
     el: card,
@@ -393,6 +415,7 @@ export function mountSecureAccessCard(host, opts = {}) {
       wipe();
       clearInterval(timer);
       globalThis.removeEventListener?.('pagehide', onPageHide);
+      presentation?.destroy();
       card.remove();
     },
   };
@@ -411,12 +434,18 @@ export function mountPendingLoginCard(host, opts = {}) {
   const base = `${SECURE_ACCESS_API}/credentials/${encodeURIComponent(cred.id || '')}`;
   const origin = cred.loginOrigin || cred.origin || '';
   const err = el('p', { class: 'sa-err', role: 'alert' });
-  const body = el('div', { style: 'display:grid;gap:10px' });
+  const body = el('div', { style: 'display:grid;gap:10px;width:100%' });
   let done = false;
-  const card = el('section', { class: 'sa-card', 'data-secure-access-login': cred.id || '', 'aria-label': `Sign-in approval for ${cred.label || origin}` },
-    el('div', { class: 'sa-hd' }, lockIcon(20), el('div', { style: 'display:grid;gap:2px;min-width:0;flex:1' },
-      el('h3', { text: `Approve sign-in: ${cred.label || origin}` }),
-      el('p', { text: `${origin}${cred.identifier ? ` \u00b7 ${cred.identifier}` : ''}` }))),
+  let hostName = '';
+  try { hostName = new URL(origin).hostname; } catch { /* metadata only */ }
+  // ChatGPT-style compact card: lock tile, "Use this login?", origin, the saved account, two buttons.
+  const title = el('h3', { text: 'Use this login?' });
+  const card = el('section', { class: 'sa-card sa-login sa-use', 'data-secure-access-login': cred.id || '', 'aria-label': `Sign-in approval for ${cred.label || origin}` },
+    el('div', { class: 'sa-use-tile', 'aria-hidden': 'true' }, signInIcon('lock')),
+    title,
+    el('p', { class: 'sa-login-origin' }, signInIcon('lock'), origin),
+    el('div', { class: 'sa-use-acct' }, el('span', { 'aria-hidden': 'true' }, signInIcon()),
+      el('span', {}, el('b', { text: cred.identifier || cred.label || 'Saved login' }), el('small', { text: hostName }))),
     body, err);
   const resolve = (status) => {
     if (done) return;
@@ -430,14 +459,20 @@ export function mountPendingLoginCard(host, opts = {}) {
       resolve(verified ? 'login_verified' : 'login_failed');
     } catch (error) { err.textContent = secureAccessErrorText(error, 'Could not record that. Try again.'); }
   };
-  body.append(
-    el('p', { class: 'sa-muted', text: 'Prom filled the sign-in form in a protected page it cannot read. Approving submits that sign-in only. Posting, sending, buying or other actions still ask you separately.' }),
-    el('div', { class: 'sa-row' },
-      el('button', { type: 'button', class: 'sa-btn sa-pri', text: 'Approve sign-in', onclick: async (event) => {
+  const row = el('div', { class: 'sa-row' });
+  body.append(row, el('p', { class: 'sa-muted', text: 'Signs in only. Prom never sees the password; posting, sending or buying still ask you separately.' }));
+  row.append(
+      el('button', { type: 'button', class: 'sa-btn sa-pri', text: 'Use login', onclick: async (event) => {
         err.textContent = '';
-        event.currentTarget.disabled = true;
+        const button = event.currentTarget;
+        const original = [...row.childNodes];
+        title.textContent = 'Sign in to continue';
+        button.disabled = true;
+        button.replaceChildren(el('span', { class: 'sa-spin', 'aria-hidden': 'true' }), 'Signing in…');
+        row.replaceChildren(button);
         try {
           const out = await postJson(fetchJson, `${base}/login/submit`, { confirm: true });
+          title.textContent = out?.transferred === false ? 'Sign-in not sent' : 'Signed in?';
           body.replaceChildren(
             el('p', { class: 'sa-muted', text: out?.transferred === false ? 'Sign-in was not sent. Nothing changed.' : 'Sign-in sent. The result is unknown until checked. Did it work?' }),
             el('div', { class: 'sa-row' },
@@ -445,13 +480,19 @@ export function mountPendingLoginCard(host, opts = {}) {
               el('button', { type: 'button', class: 'sa-btn sa-sm', text: 'It did not work', onclick: () => outcome(false) }),
               el('button', { type: 'button', class: 'sa-btn sa-sm', text: 'Not sure yet', onclick: () => resolve('login_submitted') })));
           if (out?.transferred === false) resolve('login_not_sent');
-        } catch (error) { err.textContent = secureAccessErrorText(error, 'Sign-in could not be sent. It may have expired.'); event.currentTarget.disabled = false; }
+        } catch (error) {
+          err.textContent = secureAccessErrorText(error, 'Sign-in could not be sent. It may have expired.');
+          title.textContent = 'Use this login?';
+          button.disabled = false; button.textContent = 'Use login';
+          row.replaceChildren(...original);
+        }
       } }),
-      el('button', { type: 'button', class: 'sa-btn', text: 'Decline', onclick: async () => {
+      el('button', { type: 'button', class: 'sa-btn', text: 'Cancel', onclick: async () => {
         try { await postJson(fetchJson, `${base}/login/cancel`, {}); } catch { /* best effort */ }
-        body.replaceChildren(el('p', { class: 'sa-muted', text: 'Declined. Nothing was submitted.' }));
+        title.textContent = 'Sign-in cancelled';
+        body.replaceChildren(el('p', { class: 'sa-muted', text: 'Nothing was submitted.' }));
         resolve('login_declined');
-      } })));
+      } }));
   host.appendChild(card);
   return { el: card, get resolved() { return done; }, destroy() { card.remove(); } };
 }
@@ -491,15 +532,24 @@ function createMobileDockFit(host) {
     raf = 0;
     if (host.hidden || !host.isConnected) return;
     const parent = host.parentElement;
-    const composer = parent?.querySelector?.(':scope > form') || parent?.querySelector?.('form');
+    // Target the real composer, never a nested protected-entry form.
+    const composer = parent?.querySelector?.('#pm-composer');
+    const anchors = [composer, parent?.querySelector?.('#pm-chat-mode-launcher'), parent?.querySelector?.('#pm-new-chat-context-dock')];
+    const rects = anchors.filter(Boolean).filter((node) => {
+      const style = win.getComputedStyle(node);
+      return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) !== 0;
+    }).map(node => node.getBoundingClientRect()).filter(rect => rect.height > 0);
     const op = host.offsetParent;
-    if (!composer || !op || typeof composer.getBoundingClientRect !== 'function') return;
-    const c = composer.getBoundingClientRect();
+    if (!rects.length || !op) return;
+    const c = rects.reduce((top, rect) => rect.top < top.top ? rect : top);
     const o = op.getBoundingClientRect();
     if (!(c.height > 0) || !(o.height > 0)) return;
     const viewTop = Math.max(Number(o.top) || 0, vv ? Number(vv.offsetTop) || 0 : 0);
-    const bottom = Math.max(8, Math.round(o.bottom - c.top + 8));
-    const maxH = Math.max(120, Math.round(c.top - viewTop - 12));
+    // Absolute positioning uses the scroller's padding box, whereas rects are
+    // viewport coordinates. Account for scrolling and the parent's border.
+    const parentBottom = o.top + op.clientTop + op.clientHeight;
+    const bottom = Math.max(8, Math.round(parentBottom - c.top + 8 - op.scrollTop));
+    const maxH = Math.max(0, Math.min(Math.round(c.top - viewTop - 12), Math.round((vv?.height || win.innerHeight) * 0.62)));
     host.style.bottom = `${bottom}px`;
     host.style.maxHeight = `${maxH}px`;
   }
@@ -510,6 +560,8 @@ function createMobileDockFit(host) {
   vv?.addEventListener?.('resize', schedule);
   vv?.addEventListener?.('scroll', schedule);
   win?.addEventListener?.('resize', schedule);
+  // Capture ancestor scrolling so the card stays attached to the composer.
+  win?.addEventListener?.('scroll', schedule, true);
   host.addEventListener?.('focusin', schedule);
   return {
     schedule,
@@ -519,6 +571,7 @@ function createMobileDockFit(host) {
       vv?.removeEventListener?.('resize', schedule);
       vv?.removeEventListener?.('scroll', schedule);
       win?.removeEventListener?.('resize', schedule);
+      win?.removeEventListener?.('scroll', schedule, true);
       host.removeEventListener?.('focusin', schedule);
     },
   };
@@ -566,10 +619,11 @@ export function mountSecureAccessDock(host, opts = {}) {
       const key = `${cred.id}:${cred.loginPreparedAt || ''}`;
       const card = mountPendingLoginCard(host, {
         credential: cred, fetchJson,
-        onResolved: (meta) => {
+        onResolved: async (meta) => {
           loginHandled.add(key);
           setTimeout(() => { logins.get(cred.id)?.destroy(); logins.delete(cred.id); host.hidden = cards.size === 0 && logins.size === 0; }, 6000);
-          try { opts.onResolved?.({ ...meta, requestId: `login:${key}`, local: true, sessionId: sid }); } catch { /* metadata only */ }
+          const blocking = await fetchJson(`${SECURE_ACCESS_API}/blocking/${encodeURIComponent(cred.id)}`).then((r) => r?.blocking === true).catch(() => false);
+          try { opts.onResolved?.({ ...meta, requestId: `login:${key}`, local: true, sessionId: sid, blocking }); } catch { /* metadata only */ }
         },
       });
       logins.set(cred.id, card);
@@ -597,10 +651,11 @@ export function mountSecureAccessDock(host, opts = {}) {
           request: req,
           status: status || {},
           fetchJson,
-          onResolved: (meta) => {
+          onResolved: async (meta) => {
             handled.add(meta.requestId);
             setTimeout(() => { cards.get(meta.requestId)?.destroy(); cards.delete(meta.requestId); host.hidden = cards.size === 0; }, 6000);
-            try { opts.onResolved?.({ ...meta, sessionId: sid }); } catch { /* metadata callback only */ }
+            const blocking = await fetchJson(`${SECURE_ACCESS_API}/blocking/${encodeURIComponent(meta.requestId)}`).then((r) => r?.blocking === true).catch(() => false);
+            try { opts.onResolved?.({ ...meta, sessionId: sid, blocking }); } catch { /* metadata callback only */ }
           },
         });
         cards.set(req.id, card);
@@ -666,6 +721,8 @@ export function createSecureAccessContinuation(send) {
     // Only the device that resolved the card continues the chat, and expiry
     // is left to the backend/tool so Prom is not nudged by a timer.
     if (!meta.requestId || meta.local === false || meta.status === 'expired') return;
+    // A model turn blocked on this card (secure_access request/fill) already receives the result.
+    if (meta.blocking === true) return;
     if (sent.has(meta.requestId) || typeof send !== 'function') return;
     sent.add(meta.requestId);
     try { Promise.resolve(send(secureAccessContinuationText(meta), meta)).catch(() => {}); } catch { /* ignore */ }

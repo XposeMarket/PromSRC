@@ -3,8 +3,12 @@ import { publicConnectionValue } from '../../connections/serialize-public';
 import { getConnectionRuntime } from '../../connections/runtime';
 import { getConfig } from '../../config/config';
 import { getExtensionDescriptor } from '../../extensions/registry';
-import { bindPluginCredential } from '../../connections/plugin-credential-binding';
-import { requireProtectedOwner } from './secure-access.router';
+import { bindPluginCredential, hasBoundPluginCredential } from '../../connections/plugin-credential-binding';
+import { routeIncomingAccount, runWithConnectorAccounts, removeAccountRecord } from '../../connections/connector-accounts';
+import { beginAddAccount, cancelAddAccount, getConnectorAccountsView, makeDefaultConnectorAccount, removeConnectorAccount } from '../../connections/connector-account-service';
+import { pluginCredentialState } from '../../security/plugin-credential-state';
+import { requireProtectedOwner, secureInputTransportAllowed } from './secure-access.router';
+import { PAIRED_PLUGIN_DISCONNECT_ADAPTERS, pluginSetupSurfaceState, requirePluginDisconnect, requirePluginSetup, requirePluginSetupAdapter } from './plugin-setup-access';
 
 export const router = Router();
 // N1: the redaction wrapper is scoped to connection routes only (router is mounted at '/').
@@ -39,6 +43,17 @@ router.get('/api/connection-attempts', (req, res) => {
   catch (error: any) { res.status(500).json({ success: false, error: error?.message || String(error) }); }
 });
 
+router.post('/api/connection-attempts/start', async (req, res) => {
+  try {
+    const { serviceId, kind, attemptId } = req.body || {};
+    if (typeof serviceId !== 'string' || (kind && !['connector', 'mcp_preset', 'provider', 'integration'].includes(kind))) {
+      res.status(400).json({ success: false, error: 'INVALID_CONNECTION_TARGET' }); return;
+    }
+    const attempt = await getConnectionRuntime().start.start({ serviceId, kind, attemptId });
+    res.json({ success: true, attempt });
+  } catch (error: any) { res.status(400).json({ success: false, error: error.message }); }
+});
+
 router.post('/api/connection-attempts', async (req, res) => {
   try {
     const serviceId = String(req.body?.serviceId || req.body?.service || '').trim();
@@ -61,9 +76,31 @@ router.get('/api/connection-attempts/:id', (req, res) => {
   res.json({ success: true, attempt });
 });
 
-router.post('/api/connection-attempts/:id/connect', async (req, res) => {
-  try { res.json({ success: true, attempt: await getConnectionRuntime().orchestrator.connect(req.params.id, req.body || {}) }); }
+// A trusted surface may open an empty form. Only the existing protected save/connect routes authorize changes.
+router.post('/api/connection-attempts/:id/prepare-input', async (req, res) => {
+  if (!secureInputTransportAllowed(req) || !pluginSetupSurfaceState(req).canConfigure) { res.status(403).json({ error: 'OWNER_SURFACE_REQUIRED' }); return; }
+  try { res.json({ success: true, attempt: await getConnectionRuntime().orchestrator.prepareInput(req.params.id) }); }
+  catch { res.status(400).json({ error: 'PROTECTED_REQUEST_UNAVAILABLE' }); }
+});
+
+router.post('/api/connection-attempts/:id/connect', (req, res, next) => {
+  const adapter = getConnectionRuntime().orchestrator.getAttempt(req.params.id)?.plan?.strategy.adapter;
+  requirePluginSetupAdapter(req, res, next, adapter);
+}, async (req, res) => {
+  try { res.json({ success: true, attempt: await getConnectionRuntime().orchestrator.connect(req.params.id, { approved: true }) }); }
   catch (error: any) { res.status(400).json({ success: false, error: error?.message || String(error) }); }
+});
+
+// Same paired-device/native-owner boundary as Connect. URL and browser identity are server-derived.
+router.post('/api/connection-attempts/:id/oauth-handoff', (req, res, next) => {
+  const adapter = getConnectionRuntime().orchestrator.getAttempt(req.params.id)?.plan?.strategy.adapter;
+  requirePluginSetupAdapter(req, res, next, adapter);
+}, async (req, res) => {
+  try {
+    const { openConnectionPhoneHandoff } = await import('../../connections/oauth-phone-handoff');
+    const handoff = await openConnectionPhoneHandoff(getConnectionRuntime().orchestrator.getAttempt(req.params.id));
+    res.set('Cache-Control', 'no-store').json({ success: true, ...handoff });
+  } catch { res.status(409).json({ success: false, error: 'OAUTH_HANDOFF_UNAVAILABLE' }); }
 });
 
 router.post('/api/connection-attempts/:id/continue', async (req, res) => {
@@ -91,7 +128,12 @@ router.get('/api/connection-secure-input/:sessionId', (req, res) => {
   res.status(status.valid ? 200 : 404).json({ success: status.valid, ...status });
 });
 
-router.post('/api/connection-secure-input/:sessionId', (req, res, next) => requireProtectedOwner(req, res, next), async (req, res) => {
+router.post('/api/connection-secure-input/:sessionId', (req, res, next) => {
+  const runtime = getConnectionRuntime();
+  const session = runtime.secureInput.status(req.params.sessionId);
+  const adapter = session.attemptId ? runtime.orchestrator.getAttempt(session.attemptId)?.plan?.strategy.adapter : undefined;
+  requirePluginSetupAdapter(req, res, next, adapter);
+}, async (req, res) => {
   try {
     const runtime = getConnectionRuntime();
     const session = runtime.secureInput.status(req.params.sessionId);
@@ -110,6 +152,26 @@ router.post('/api/connection-secure-input/:sessionId', (req, res, next) => requi
       return;
     }
     // Protected plugin path: bind, then finish continuation server-side. Never return the ref.
+    // Add-account mode: a second credential binds to its own account slot and never replaces
+    // the default connection record or its credential.
+    {
+      const configDir = getConfig().getConfigDir();
+      const serviceId = session.serviceId!;
+      const addSlug = routeIncomingAccount(configDir, serviceId, 'credential', {},
+        () => hasBoundPluginCredential(configDir, serviceId) && !pluginCredentialState(configDir, serviceId).stopped ? { accountId: '__default__' } : null);
+      if (addSlug) {
+        try { runWithConnectorAccounts([serviceId], addSlug, () => bindPluginCredential(configDir, serviceId, result.credentialRef, session.attemptId!)); }
+        catch {
+          removeAccountRecord(configDir, serviceId, addSlug);
+          try { runtime.secureInput.clearReference(result.credentialRef, serviceId, session.attemptId!); } catch { /* reported below */ }
+          res.status(400).json({ success: false, error: 'CREDENTIAL_BINDING_FAILED' }); return;
+        }
+        try { runtime.orchestrator.cancel(session.attemptId!); } catch { /* attempt bookkeeping only */ }
+        const added = getConnectorAccountsView(serviceId).accounts.find((a) => a.slug === addSlug);
+        res.json({ success: true, status: 'STORED', account: added ? { slug: added.slug, label: added.label } : { slug: addSlug }, fieldsReceived: result.fieldsReceived });
+        return;
+      }
+    }
     let stored: { prior: any; connectionId: string } | undefined;
     try {
       stored = runtime.orchestrator.recordStoredCredential(session.attemptId!, result.credentialRef);
@@ -134,6 +196,35 @@ router.post('/api/connection-secure-input/:sessionId', (req, res, next) => requi
     }
     res.json({ success: true, status: 'STORED', fieldsReceived: result.fieldsReceived });
   } catch { res.status(400).json({ success: false, error: 'SECURE_INPUT_INVALID' }); }
+});
+
+// ── Multi-account plugins ────────────────────────────────────────────────────
+// Metadata only (labels/emails/usernames). Never returns credentials.
+router.get('/api/connector-accounts/:id', (req, res) => {
+  try { res.set('Cache-Control', 'no-store').json({ success: true, ...getConnectorAccountsView(req.params.id) }); }
+  catch (error: any) { res.status(400).json({ success: false, error: error?.message || String(error) }); }
+});
+
+// Arming add mode only routes the NEXT completed sign-in/credential to a new account slot.
+// Same guard as plugin credential setup: paired device (revalidated) or exact-request desktop consent.
+router.post('/api/connector-accounts/:id/add', (req, res, next) => requirePluginSetup(req, res, next), (req, res) => {
+  try { res.json({ success: true, ...beginAddAccount(req.params.id, { label: req.body?.label, hint: req.body?.hint }) }); }
+  catch (error: any) { res.status(400).json({ success: false, error: error?.message || String(error) }); }
+});
+
+router.post('/api/connector-accounts/:id/cancel-add', (req, res, next) => requirePluginSetup(req, res, next), (req, res) => {
+  try { cancelAddAccount(req.params.id); res.json({ success: true }); }
+  catch (error: any) { res.status(400).json({ success: false, error: error?.message || String(error) }); }
+});
+
+router.post('/api/connector-accounts/:id/:slug/default', (req, res, next) => requirePluginDisconnect(req, res, next), (req, res) => {
+  try { res.json({ success: true, ...makeDefaultConnectorAccount(req.params.id, req.params.slug) }); }
+  catch (error: any) { res.status(400).json({ success: false, error: error?.message || String(error) }); }
+});
+
+router.post('/api/connector-accounts/:id/:slug/remove', (req, res, next) => requirePluginDisconnect(req, res, next), (req, res) => {
+  try { const removed = removeConnectorAccount(req.params.id, req.params.slug); res.json({ success: true, removed: { slug: removed.slug, label: removed.label }, ...getConnectorAccountsView(req.params.id) }); }
+  catch (error: any) { res.status(400).json({ success: false, error: error?.message || String(error) }); }
 });
 
 router.get('/api/connections-v2', (_req, res) => {
@@ -169,7 +260,11 @@ router.post('/api/connections-v2/:id/tools', (req, res) => {
   } catch (error: any) { res.status(400).json({ success: false, error: error?.message || String(error) }); }
 });
 
-router.post('/api/connections-v2/:id/disconnect', (req, res, next) => requireProtectedOwner(req, res, next), async (req, res) => {
+router.post('/api/connections-v2/:id/disconnect', (req, res, next) => {
+  // A paired phone may only tear down local-credential plugins; OAuth revocation, model endpoints etc. need the owner.
+  const connection = getConnectionRuntime().orchestrator.listConnections().find(item => item.id === req.params.id);
+  requirePluginDisconnect(req, res, next, undefined, !!connection && PAIRED_PLUGIN_DISCONNECT_ADAPTERS.has(connection.adapterId || ''));
+}, async (req, res) => {
   try { await getConnectionRuntime().orchestrator.disconnect(req.params.id); res.json({ success: true }); }
   catch (error: any) { res.status(400).json({ success: false, error: error?.message || String(error) }); }
 });

@@ -3,6 +3,7 @@ import { mobileGatewayFetch, loadGatewayStatus, loadVoiceStatus } from './mobile
 import { prettifyModelName } from './mobile-model-badge.js';
 import { effortOptions, reasoningCapability, supportsFastSpeed, validEffort } from '../reasoning-capabilities.js';
 import { ensureMobileSettingsStyles } from './mobile-style-owners.js';
+import { mountAgentsImports } from '../settings/agents-imports.js';
 import { mountVoiceProviderSettings } from '../voice/voice-provider-settings.js';
 import { renderContextSelection, wireContextSelection } from '../context-selection.js';
 import { setCachedBusyComposerMode } from '../features/chat/runtime/busy-composer-mode.js';
@@ -11,9 +12,9 @@ import { setCachedBusyComposerMode } from '../features/chat/runtime/busy-compose
 // Fallback model lists when /api/extensions/catalog is unavailable.
 // Keep xAI order aligned with the xAI extension staticModels catalog.
 const BUILTIN_STATIC_MODELS = {
-  openai: ['gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol','gpt-5.6-terra','gpt-5.6-luna','gpt-5.5','gpt-5.4-pro','gpt-5.4','gpt-5.4-mini','gpt-5.4-nano','gpt-5-pro','gpt-5','gpt-5-mini','gpt-5-nano','gpt-5-chat-latest','gpt-4.1','gpt-4.1-mini','gpt-4o','gpt-4o-mini','o4-mini','o3','o1'],
-  openai_codex: ['gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol','gpt-5.6-terra','gpt-5.6-luna','gpt-5.5','gpt-5.4-codex','gpt-5.4-codex-mini','gpt-5.4','gpt-5.4-mini','gpt-5.3-codex','gpt-5.3-codex-spark','gpt-5.3','gpt-5.2-codex','gpt-5.2','gpt-5.1-codex-max','gpt-5.1-codex-mini','gpt-5.1-codex','gpt-5.1'],
-  anthropic: ['claude-fable-5-1','claude-fable-5','claude-opus-5-5','claude-opus-5','claude-opus-4-8','claude-opus-4-7','claude-opus-4-6','claude-sonnet-5-5','claude-sonnet-5','claude-sonnet-4-6','claude-sonnet-4-5-20250514','claude-haiku-5-5', 'claude-haiku-4-5-20251001'],
+  openai: ['gpt-6.2-astra', 'gpt-6.2-sol', 'gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol','gpt-5.6-terra','gpt-5.6-luna','gpt-5.5','gpt-5.4-pro','gpt-5.4','gpt-5.4-mini','gpt-5.4-nano','gpt-5-pro','gpt-5','gpt-5-mini','gpt-5-nano','gpt-5-chat-latest','gpt-4.1','gpt-4.1-mini','gpt-4o','gpt-4o-mini','o4-mini','o3','o1'],
+  openai_codex: ['gpt-6.2-astra', 'gpt-6.2-sol', 'gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol','gpt-5.6-terra','gpt-5.6-luna','gpt-5.5','gpt-5.4-codex','gpt-5.4-codex-mini','gpt-5.4','gpt-5.4-mini','gpt-5.3-codex','gpt-5.3-codex-spark','gpt-5.3','gpt-5.2-codex','gpt-5.2','gpt-5.1-codex-max','gpt-5.1-codex-mini','gpt-5.1-codex','gpt-5.1'],
+  anthropic: ['claude-fable-5-2', 'claude-mythos-5-2', 'claude-fable-5-1','claude-fable-5','claude-opus-5-5','claude-opus-5','claude-opus-4-8','claude-opus-4-7','claude-opus-4-6','claude-sonnet-5-5','claude-sonnet-5','claude-sonnet-4-6','claude-sonnet-4-5-20250514','claude-haiku-5-5', 'claude-haiku-4-5-20251001'],
   perplexity: ['sonar-pro','sonar','sonar-reasoning-pro','sonar-reasoning','sonar-deep-research'],
   gemini: ['gemini-2.5-pro','gemini-2.5-flash','gemini-2.5-flash-lite','gemini-2.0-flash','gemini-1.5-pro','gemini-1.5-flash'],
   xai: ['grok-4.7','grok-4.6','grok-4.5','grok-composer-2.5-fast','grok-4.3','grok-4.3-latest','grok-latest','grok-4.20-0309-reasoning','grok-4.20-0309-non-reasoning','grok-4.20-multi-agent-0309','grok-4.20-multi-agent','grok-build-0.1'],
@@ -73,6 +74,7 @@ const SECTIONS = [
   { id: 'models', title: 'Models', icon: 'brain', desc: 'LLM providers, defaults, brain, and compaction.' },
   { id: 'voice', title: 'Voice', icon: 'mic', desc: 'Voice providers, defaults, and listening mode.' },
   { id: 'agents', title: 'Agents', icon: 'robot', desc: 'Agent list and model defaults.' },
+  { id: 'imports', title: 'Agents & imports', icon: 'upload', desc: 'Copy chats and MCP config from coding agents on this computer.' },
   { id: 'channels', title: 'Channels', icon: 'send', desc: 'Telegram, Discord, and WhatsApp connections.' },
   { id: 'integrations', title: 'Integrations', icon: 'paperclip', desc: 'Webhooks and MCP servers.' },
 ];
@@ -233,6 +235,7 @@ async function loadSection(page, section, navigate) {
   if (section === 'heartbeat') return renderHeartbeat(content, page);
   if (section === 'security') return renderSecurity(content, page);
   if (section === 'agents') return renderAgents(content, page);
+  if (section === 'imports') return renderAgentsImports(content, navigate);
   if (section === 'channels') return renderChannels(content, page);
   if (section === 'integrations') return renderIntegrations(content, page);
 }
@@ -714,6 +717,18 @@ async function renderSecurity(content, page) {
       }) });
       setSectionStatus(page, 'File access settings saved.', 'ok');
     } catch (err) { setSectionStatus(page, err.message, 'error'); }
+  });
+}
+
+// Agents & imports: same module as desktop Settings > General. Reads happen on
+// the gateway computer; the phone only displays titles/previews for an opened
+// row and keeps nothing.
+function renderAgentsImports(content, navigate) {
+  content.innerHTML = '<div class="pm-card pm-settings-card pm-agents-imports"></div>';
+  mountAgentsImports(content.querySelector('.pm-agents-imports'), {
+    surface: 'mobile',
+    request: (path, opts = {}) => mobileGatewayFetch(path, opts),
+    openPlugins: () => navigate?.('#mobile/plugins'),
   });
 }
 

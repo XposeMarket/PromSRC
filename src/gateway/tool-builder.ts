@@ -1,4 +1,4 @@
-// src/gateway/tool-builder.ts
+﻿// src/gateway/tool-builder.ts
 // Tool definitions and execution utilities — extracted from server-v2.ts (Step 13.1, Phase 3).
 // Exports: BuildToolsDeps, buildTools(), ToolResult, TaskControlResponse, ScheduleJobAction,
 //          normalizeScheduleJobAction, summarizeCronJob, normalizeDeliveryChannel,
@@ -64,7 +64,19 @@ type InternalToolCategory = ToolCategory;
 
 export function buildConnectorStatus(): string {
   ensurePrometheusExtensionRuntimeLoaded();
-  return getExtensionRuntimeRegistry().buildConnectorStatus();
+  const base = getExtensionRuntimeRegistry().buildConnectorStatus();
+  // Multi-account plugins: list extra accounts so the model can pass `account` on connector tools.
+  try {
+    const { readAccountIndex } = require('../connections/connector-accounts') as typeof import('../connections/connector-accounts');
+    const { defaultAccountSummary } = require('../connections/connector-account-service') as typeof import('../connections/connector-account-service');
+    const { getConfig } = require('../config/config') as typeof import('../config/config');
+    const index = readAccountIndex(getConfig().getConfigDir());
+    const lines = Object.entries(index)
+      .filter(([, entry]) => Array.isArray(entry?.accounts) && entry.accounts.length)
+      .map(([id, entry]) => `  ${id}: default = ${defaultAccountSummary(id).label}; others = ${entry.accounts.map((a) => `${a.label} (account:"${a.slug}")`).join(', ')}`);
+    if (lines.length) return `${base}\n\nMultiple accounts (pass "account" on that connector's tools; omit it for the default):\n${lines.join('\n')}`;
+  } catch { /* account index is optional metadata */ }
+  return base;
 }
 
 export function getRuntimeToolCategories(): ToolCategory[] {
@@ -1224,7 +1236,7 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
             stdin: { type: 'boolean', description: 'Keep stdin open for interactive processes.' },
             runId: { type: 'string', description: 'Process runId for status/log/wait/kill/submit.' },
             limit: { type: 'number', description: 'Max process records for status.' },
-            maxChars: { type: 'number', description: 'Max log characters for log.' },
+            maxChars: { type: 'number', description: 'Max characters to return. run/wait/yielded output defaults to 4000 (clamped 1000-100000); longer output keeps the start and end with a truncation marker that names the runId for action:log. For log, the number of log characters to return.' },
             data: { type: 'string', description: 'Text to send for submit.' },
           },
         },
@@ -1303,13 +1315,13 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
       type: 'function',
       function: {
         name: 'process_wait',
-        description: 'Wait up to 10 seconds by default for a supervised process. If still running, return its current status and recent output so work can continue. Maximum wait per call is 30 seconds.',
+        description: 'Wait for a supervised process to finish; returns immediately on completion. Default 10 seconds, explicit maximum 5 minutes. Prefer one longer wait when no other work is ready instead of repeated polling. Timeout or cancellation ends observation, not the process; use process_kill to terminate it.',
         parameters: {
           type: 'object',
           required: ['runId'],
           properties: {
             runId: { type: 'string', description: 'Process run id.' },
-            timeoutMs: { type: 'number', description: 'Maximum wait in milliseconds, 1000–30000. Default 10000.' },
+            timeoutMs: { type: 'number', description: 'Maximum observation wait in milliseconds, 1000–300000. Default 10000. Does not kill on timeout.' },
           },
         },
       },
@@ -1437,6 +1449,7 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
           type: 'object',
           required: ['action'],
           properties: {
+            account: { type: 'string', description: 'Optional X account to act as (@username from connector_list). Omit for the default account.' },
             action: { type: 'string', enum: ['x_search', 'search_recent', 'search_all', 'search_spaces', 'get_trends', 'get_personalized_trends', 'get_space'] },
             query: { type: 'string' },
             q: { type: 'string' },
@@ -1461,6 +1474,7 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
           type: 'object',
           required: ['action'],
           properties: {
+            account: { type: 'string', description: 'Optional X account to act as (@username from connector_list). Omit for the default account.' },
             action: { type: 'string', enum: ['get_post', 'get_posts', 'create_post', 'delete_post', 'create_bookmark', 'delete_bookmark', 'get_bookmarks', 'like', 'unlike', 'get_liked_posts', 'get_liking_users', 'repost', 'unrepost', 'get_reposted_by', 'get_reposts_of_me'] },
             id: { type: 'string' },
             post_id: { type: 'string' },
@@ -1484,6 +1498,7 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
           type: 'object',
           required: ['action'],
           properties: {
+            account: { type: 'string', description: 'Optional X account to act as (@username from connector_list). Omit for the default account.' },
             action: { type: 'string', enum: ['me', 'get_user', 'get_user_by_username', 'get_user_posts', 'get_user_mentions', 'get_followers', 'get_following', 'follow', 'unfollow', 'mute', 'unmute', 'block', 'unblock'] },
             id: { type: 'string' },
             user_id: { type: 'string' },
@@ -1504,6 +1519,7 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
           type: 'object',
           required: ['action'],
           properties: {
+            account: { type: 'string', description: 'Optional X account to act as (@username from connector_list). Omit for the default account.' },
             action: { type: 'string', enum: ['get_list', 'get_owned_lists', 'get_list_posts', 'create_list', 'update_list', 'delete_list', 'add_member', 'remove_member', 'follow_list', 'unfollow_list', 'pin_list', 'unpin_list'] },
             id: { type: 'string' },
             list_id: { type: 'string' },
@@ -1526,6 +1542,7 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
           type: 'object',
           required: ['action'],
           properties: {
+            account: { type: 'string', description: 'Optional X account to act as (@username from connector_list). Omit for the default account.' },
             action: { type: 'string', enum: ['send', 'get_events'] },
             participant_id: { type: 'string' },
             conversation_id: { type: 'string' },
@@ -1545,6 +1562,7 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
           type: 'object',
           required: ['action'],
           properties: {
+            account: { type: 'string', description: 'Optional X account to act as (@username from connector_list). Omit for the default account.' },
             action: { type: 'string', enum: ['request', 'get_usage'] },
             method: { type: 'string' },
             path: { type: 'string' },

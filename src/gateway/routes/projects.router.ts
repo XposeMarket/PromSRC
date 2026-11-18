@@ -45,7 +45,8 @@ import {
   getProjectContextContent,
 } from '../projects/project-store.js';
 import { refreshProjectContextFromLatestPriorSession } from '../projects/project-learning.js';
-import { getSession, sessionExists } from '../session.js';
+import { getSession, sessionExists, getSessionSummaryById } from '../session.js';
+import { hydrateProjectSessions as hydrateProjectSessionsFromIndex } from '../projects/project-session-hydration.js';
 import { isStorageBoundaryError } from '../storage/storage-paths.js';
 
 const router = Router();
@@ -62,43 +63,10 @@ function parseStrictBooleanQuery(value: unknown, fallback: boolean): boolean | n
   return null;
 }
 
+// Reads the session index only. Loading each chat in full here blocked the
+// gateway for seconds on every project list request.
 function hydrateProjectSessions(project: any): any {
-  const sessions = Array.isArray(project?.sessions) ? project.sessions : [];
-  return {
-    ...project,
-    sessions: sessions.map((stored: any) => {
-      try {
-        const sessionId = String(stored.id || '');
-        if (!sessionExists(sessionId)) return stored;
-        const session = getSession(sessionId);
-        const firstUserMsg = session.history?.find((m: any) => m.role === 'user');
-        // Prefer the real chat title (auto-generated or user-renamed) so project lists match the
-        // main chat list. Fall back to the stored title, then the first user message.
-        const sessionTitle = String(session.title || '').trim();
-        const storedTitle = String(stored.title || '').trim();
-        const isPlaceholder = (t: string) => !t || /^new chat$/i.test(t);
-        const title = !isPlaceholder(sessionTitle)
-          ? sessionTitle
-          : !isPlaceholder(storedTitle)
-          ? storedTitle
-          : firstUserMsg?.content
-          ? String(firstUserMsg.content).replace(/\s+/g, ' ').trim().slice(0, 60)
-          : 'New chat';
-        const lastHistoryMessage = session.history?.[session.history.length - 1];
-        return {
-          ...stored,
-          title,
-          createdAt: session.createdAt || stored.createdAt,
-          updatedAt: session.lastActiveAt || stored.updatedAt,
-          messageCount: session.history?.length || 0,
-          preview: String(session.history?.slice().reverse().find((message: any) => (message?.role === 'user' || message?.role === 'assistant') && String(message?.content || '').trim())?.content || '').replace(/\s+/g, ' ').trim().slice(0, 240),
-          lastMessageAt: Number(lastHistoryMessage?.timestamp || session.lastActiveAt || stored.updatedAt || 0) || undefined,
-        };
-      } catch {
-        return stored;
-      }
-    }),
-  };
+  return hydrateProjectSessionsFromIndex(project, getSessionSummaryById);
 }
 
 router.get('/api/projects', (_req: Request, res: Response) => {

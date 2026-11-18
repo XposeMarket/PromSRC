@@ -9670,3 +9670,40 @@ p:has(> .prom-inline-figure + br + .prom-inline-figure) .prom-inline-media {
 .ce-studio-take video, .ce-studio-take img { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: contain; background: #000; }
 .ce-studio-take__meta { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 4px 6px 4px 8px; background: #121218; color: var(--ce-dim, rgba(255,255,255,0.6)); font-size: 10.5px; }
 .ce-studio-badge { display: inline-flex; align-items: center; gap: 4px; font-size: 10px; font-weight: 600; color: #fdba74; padding: 0 6px; }
+
+/* Website sign-in handoff: neutral action family; existing browser and decision flow. */
+.chat-question-card:has(.pq-login-handoff){border-radius:24px;padding:20px}
+.chat-question-card .pq-login-handoff{flex-direction:column;align-items:stretch;gap:12px}
+.chat-question-card .pq-login-origin{font-size:13px;color:var(--muted);overflow-wrap:anywhere}
+.chat-question-card .pq-login-open{min-height:49px;border-radius:28px;background:var(--text-primary,#f4f4f4);color:var(--bg-secondary,#222);font-weight:600}
+.chat-question-card .pq-login-note{line-height:1.6}
+.chat-question-card:has(.pq-login-handoff) .pq-actions button{border-radius:28px;min-height:44px}
+
+/* Reasoning summaries (OpenAI + Anthropic) show the full newest paragraph,
+   wrapped, instead of a one-line ellipsis (Raul, 2026-11-11). */
+.live-turn-tool-summary strong.t-think.is-reasoning,
+.live-turn-thought-summary .t-think.is-reasoning,
+.live-turn-tool-summary strong.t-think.is-reasoning .t-think-sizer,
+.live-turn-thought-summary .t-think.is-reasoning .t-think-sizer,
+.live-turn-tool-summary strong.t-think.is-reasoning .t-think-text,
+.live-turn-thought-summary .t-think.is-reasoning .t-think-text {
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+}
+.live-turn-tool-summary strong.t-think.is-reasoning,
+.live-turn-thought-summary .t-think.is-reasoning {
+  font-weight: 600;
+  line-height: 1.4;
+}
+.live-turn-tool-summary:has(strong.t-think.is-reasoning) {
+  align-items: flex-start;
+}
+
+/* Exposed reasoning blocks inside the expanded tool body stay muted grey (Raul, 2026-11-12). */
+.live-turn-prose.is-reasoning-prose,
+.live-turn-prose.is-reasoning-prose .live-turn-md,
+.live-turn-prose.is-reasoning-prose .live-turn-md * {
+  color: var(--prom-muted, var(--muted, #8a8f98)) !important;
+}
+.live-turn-prose.is-reasoning-prose { font-size: 0.92em; line-height: 1.45; border-color: transparent; }

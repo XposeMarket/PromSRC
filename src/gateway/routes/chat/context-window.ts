@@ -186,9 +186,39 @@ export function estimateToolObservationRawTokens(sessionId: string, profile: { t
 
 export function estimateStoredThreadFootprint(
   sessionId: string,
+  session: Parameters<typeof computeStoredThreadFootprint>[1],
+  profile: Parameters<typeof computeStoredThreadFootprint>[2],
+  observationSnapshot: ToolObservationSnapshot = readToolObservationSnapshot(sessionId, 512, profile.tokenizer),
+): ReturnType<typeof computeStoredThreadFootprint> {
+  const history = Array.isArray(session?.history) ? session.history : [];
+  // The context meter polls this; walking the whole session JSON each time
+  // (countJsonContainerChars) showed up as ~1s gateway stalls on long threads.
+  // Reuse the result while the thread is unchanged.
+  const last = history[history.length - 1];
+  const footprintKey = [
+    history.length,
+    last?.timestamp ?? last?.createdAt ?? '',
+    String(last?.content ?? '').length,
+    Array.isArray(last?.processEntries) ? last.processEntries.length : 0,
+    session?.updatedAt ?? session?.lastActiveAt ?? '',
+    observationSnapshot.storedObservationTokens,
+    String(profile?.tokenizer ?? ''),
+  ].join('|');
+  const cachedFootprint = storedThreadFootprintCache.get(sessionId);
+  if (cachedFootprint && cachedFootprint.key === footprintKey) return cachedFootprint.value;
+  const value = computeStoredThreadFootprint(sessionId, session, profile, observationSnapshot);
+  if (storedThreadFootprintCache.size > 200) storedThreadFootprintCache.clear();
+  storedThreadFootprintCache.set(sessionId, { key: footprintKey, value });
+  return value;
+}
+
+const storedThreadFootprintCache = new Map<string, { key: string; value: ReturnType<typeof computeStoredThreadFootprint> }>();
+
+function computeStoredThreadFootprint(
+  sessionId: string,
   session: any,
   profile: { tokenizer: any },
-  observationSnapshot: ToolObservationSnapshot = readToolObservationSnapshot(sessionId, 512, profile.tokenizer),
+  observationSnapshot: ToolObservationSnapshot,
 ) {
   const history = Array.isArray(session?.history) ? session.history : [];
   let visibleChatTokens = 0;

@@ -1,4 +1,6 @@
 import { Router } from 'express';
+import { pluginSetupSurfaceState, requirePluginDisconnect, requirePluginSetup } from './plugin-setup-access';
+import { nativeAppSetup } from '../../connections/native-app-setup';
 import { getConfig } from '../../config/config';
 import { getConnectionRuntime } from '../../connections/runtime';
 import { listExtensionDescriptors } from '../../extensions/registry';
@@ -7,20 +9,66 @@ import { protectedPluginStorageAvailable, pluginCredentialState, setPluginCreden
 import { clearXApiCredentials, clearXApiTokens, getXApiOAuthStatus } from '../../auth/x-api-oauth';
 import { deleteBoundPluginCredential } from '../../connections/plugin-credential-binding';
 import { ensurePrometheusExtensionRuntimeLoaded } from '../../extensions/extension-bootstrap';
+import { isXPhoneSignInEnabled, setXPhoneSignIn, xPhoneRedirectUri } from '../../auth/x-api-oauth';
+import { getConnector, listConnectors } from '../../integrations/connector-registry';
+import { gatewayPublicOrigin } from '../../integrations/gateway-oauth-callback';
 
 export const router = Router();
 function services() {
   ensurePrometheusExtensionRuntimeLoaded();
   return [{ id: 'x', name: 'X · OAuth 2.0 app' }, ...listExtensionDescriptors()
     .filter(item => item.id !== 'x' && ((item.setup?.authType === 'api_key' && item.setup.fields?.length) || item.connection?.strategies?.some(strategy => strategy.adapter === 'api-key' || strategy.adapter === 'setup-token')))
-    .map(item => ({ id: item.id, name: item.name }))];
+    .map(item => ({ id: item.id, name: item.name, ...(safeKeyUrl(item.docsUrl) ? { keyUrl: safeKeyUrl(item.docsUrl) } : {}) }))];
 }
+/** "Get your key" link: only https provider pages, never arbitrary schemes. */
+function safeKeyUrl(value: unknown): string {
+  try { const url = new URL(String(value || '')); return url.protocol === 'https:' && !url.username && !url.password ? url.toString() : ''; } catch { return ''; }
+}
+
+// Phone sign-in: OAuth returns through <public gateway>/oauth/connector/callback/<id> so a phone browser can finish it.
+// The redirect URI must be registered in the provider app first. Either reuse the primary app (providers allowing
+// several redirect URIs) or save a separate web client. Owner-only; secrets never come back out.
+function phoneSignInStatus() {
+  const directory = getConfig().getConfigDir();
+  const origin = gatewayPublicOrigin();
+  const items = listConnectors().map((id) => {
+    const connector: any = getConnector(id);
+    return { id, publicOrigin: !!origin, redirectUri: connector?.webRedirectUri?.() || '', enabled: !!connector?.webSignInAvailable?.(), broken: !!connector?.webClientEntryBroken?.() };
+  });
+  items.push({ id: 'x', publicOrigin: !!origin, redirectUri: xPhoneRedirectUri(), enabled: !!origin && isXPhoneSignInEnabled(directory), broken: false });
+  return { publicOrigin: origin, plugins: items };
+}
+router.get('/api/protected-plugins/phone-signin', (req, res) => {
+  if (!pluginSetupSurfaceState(req).canConfigure) { res.status(403).json({ error: 'OWNER_SURFACE_REQUIRED' }); return; }
+  res.json(phoneSignInStatus());
+});
+// Plugin configuration: a paired phone may set it (same gate as plugin setup), not only owner-approval surfaces.
+router.post('/api/protected-plugins/phone-signin/:id', (req, res, next) => requirePluginSetup(req, res, next), (req, res) => {
+  const id = String(req.params.id || '');
+  const enabled = req.body?.enabled !== false;
+  const clientId = String(req.body?.clientId || '').trim();
+  const clientSecret = String(req.body?.clientSecret || '').trim();
+  try {
+    if (id === 'x') setXPhoneSignIn(getConfig().getConfigDir(), enabled);
+    else {
+      const connector: any = getConnector(id);
+      if (!connector?.saveWebClientCredentials) { res.status(404).json({ error: 'UNSUPPORTED_PLUGIN' }); return; }
+      if (enabled) connector.saveWebClientCredentials(clientId, clientSecret); else connector.clearWebClientCredentials();
+    }
+    res.json({ success: true, ...phoneSignInStatus().plugins.find(item => item.id === id) });
+  } catch { res.status(400).json({ error: 'PHONE_SIGNIN_UPDATE_FAILED' }); }
+});
 router.use('/api/protected-plugins', (_req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); });
 router.get('/api/protected-plugins', (req, res) => {
-  res.json({ services: services(), owner: ownerSurfaceState(req), storageAvailable: protectedPluginStorageAvailable() });
+  res.json({ services: services(), owner: ownerSurfaceState(req), setup: pluginSetupSurfaceState(req), storageAvailable: protectedPluginStorageAvailable() });
+});
+router.get('/api/protected-plugins/app-schema/:attemptId', (req, res) => {
+  if (!pluginSetupSurfaceState(req).canConfigure || !protectedPluginStorageAvailable()) { res.status(403).json({ error: 'OWNER_SURFACE_REQUIRED' }); return; }
+  try { res.json(nativeAppSetup(getConnectionRuntime().orchestrator, req.params.attemptId)); }
+  catch { res.status(400).json({ error: 'STALE_OR_MISMATCHED_CONNECTION' }); }
 });
 router.post('/api/protected-plugins/request', async (req, res) => {
-  if (!secureInputTransportAllowed(req) || !ownerSurfaceState(req).canApprove) { res.status(403).json({ error: 'OWNER_SURFACE_REQUIRED' }); return; }
+  if (!secureInputTransportAllowed(req) || !pluginSetupSurfaceState(req).canConfigure) { res.status(403).json({ error: 'OWNER_SURFACE_REQUIRED' }); return; }
   if (!protectedPluginStorageAvailable()) { res.status(409).json({ error: 'PROTECTED_STORAGE_REQUIRED' }); return; }
   const serviceId = String(req.body?.serviceId || '');
   if (serviceId === 'x' || !services().some(item => item.id === serviceId)) { res.status(400).json({ error: 'UNSUPPORTED_PLUGIN' }); return; }
@@ -68,6 +116,7 @@ router.post('/api/protected-plugins/connection/:id/:action', (req, res, next) =>
     if (!secureInputTransportAllowed(req)) { res.status(403).json({ error: 'SECURE_ORIGIN_REQUIRED' }); return; }
     next(); return;
   }
+  if (req.params.action === 'disconnect') { requirePluginDisconnect(req, res, next); return; }
   requireProtectedOwner(req, res, next);
 }, async (req, res) => {
   if (!['stop', 'disconnect', 'delete'].includes(req.params.action)) { res.status(400).json({ error: 'UNSUPPORTED_ACTION' }); return; }

@@ -46,7 +46,7 @@ assert.match(
 );
 assert.match(
   chatRendererRuntime,
-  /_renderMobileUserEditComposer,[\s\S]{0,120}_renderMobileVoiceLyrics,[\s\S]{0,120}_renderMobileVoiceWorkgroup,/,
+  /_renderMobileVoiceLyrics,[\s\S]{0,120}_renderMobileVoiceWorkgroup,/,
   'the chat renderer runtime must pass the lyric renderer through its extracted ownership boundary',
 );
 assert.match(

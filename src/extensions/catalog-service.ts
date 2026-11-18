@@ -18,7 +18,7 @@ import type {
   LoadedExtensionDescriptor,
 } from './types.js';
 import { ConnectionStore } from '../connections/connection-store.js';
-import type { ConnectionRecord } from '../connections/types.js';
+import { overlayConnectionOnConnectorState, pickCatalogConnectionRecord } from './catalog-connector-state.js';
 
 type CatalogState = Record<string, unknown>;
 
@@ -209,12 +209,14 @@ function buildCatalogItems(kind: ExtensionKind): CatalogItem[] {
     const statuses = safeGetConnectorStatuses();
     const vercelCredentials = getVercelCredentials();
     return descriptors.map((descriptor) => {
-      const records = canonical.findByService(descriptor.id);
-      const latest = records[0];
+      const latest = pickCatalogConnectionRecord(canonical.findByService(descriptor.id));
       const baseState = buildConnectorState(descriptor, savedConnections, statuses, vercelCredentials);
+      const descriptorTools = Array.isArray(descriptor.ownership?.tools) ? descriptor.ownership.tools : [];
       return {
         ...stripSourcePath(descriptor),
-        state: latest ? overlayCanonicalConnectorState(baseState, latest, statuses[descriptor.id]) : baseState,
+        state: latest
+          ? overlayConnectionOnConnectorState(baseState, latest, statuses[descriptor.id], descriptorTools)
+          : baseState,
       };
     });
   }
@@ -272,43 +274,5 @@ export function buildExtensionsCatalog(kind?: ExtensionKind) {
     connectors: buildCatalogItems('connector'),
     mcpPresets: buildCatalogItems('mcp_preset'),
     integrations: buildCatalogItems('integration'),
-  };
-}
-
-function overlayCanonicalConnectorState(
-  base: CatalogState,
-  latest: ConnectionRecord,
-  liveStatus?: ConnectorStatusMap[string],
-): CatalogState {
-  const liveKnown = liveStatus !== undefined;
-  const liveConnected = latest.authenticated && (!liveKnown || liveStatus.connected);
-  const needsReauth = latest.authenticated && liveKnown && !liveStatus.connected;
-  return {
-    ...base,
-    connectionId: latest.id,
-    connected: liveConnected,
-    configured: latest.configured,
-    authenticated: liveConnected,
-    registered: latest.registered,
-    exposed: liveConnected && latest.exposed,
-    verified: latest.verified && liveConnected,
-    authState: needsReauth ? 'reauth_required' : latest.authState,
-    health: needsReauth ? 'degraded' : latest.health,
-    contractVersion: latest.contractVersion,
-    migration: latest.migration,
-    account: latest.account || base.account,
-    resources: latest.resources,
-    grantedCapabilities: latest.grantedCapabilities,
-    grantedScopes: latest.grantedScopes || base.grantedScopes,
-    capabilityGrants: latest.capabilityGrants,
-    registeredTools: latest.registeredTools,
-    availableTools: latest.availableTools || latest.registeredTools,
-    exposedTools: liveConnected ? latest.exposedTools : [],
-    tools: latest.tools,
-    providerApp: latest.providerApp,
-    verification: latest.verification,
-    lastVerifiedAt: latest.lastVerifiedAt,
-    lastHealthCheckAt: latest.lastHealthCheckAt,
-    lastError: latest.lastError,
   };
 }

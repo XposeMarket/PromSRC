@@ -38,7 +38,7 @@ TasksPage renders planned_chat records as passive cards with authoritative steps
 | Cards and response rendering | `web-ui/src/cards/`, `web-ui/src/utils.js` → `renderMarkdown()` | Rich outputs and visual sandboxing; see [23 Rich output](23-rich-output-cards-artifacts.md). |
 | Feature-owned modules | `web-ui/src/features/{chat,connectors,usage}/` | Move changes with the owning feature; avoid growing monolithic page modules. |
 | Styles and themes | `web-ui/src/styles/`, especially `themes.css`, `base.css`, `pages.css` | Desktop entry CSS imports shared tokens and page styling. |
-| Public output | `generated/public-web-ui/` | Build product, not source. `scripts/check-public-web-ui-sync.js` enforces sync. |
+| Public output | `generated/public-web-ui/` | Build product, not source, and **not tracked in git** (gitignored since 2026-11-11). Built by `npm run sync:web-ui`, `npm run build` (`build:web` now syncs), npm install (postinstall builds it when missing) and the release `prepare:public:desktop`. CI builds it right after install. `scripts/check-public-web-ui-sync.js` enforces sync. PRs never commit it. |
 
 ## How it works
 
@@ -201,3 +201,6 @@ Pending desktop chat picker work uses shared `web-ui/src/model-family-grouping.j
 
 ### Main-chat summary assembly
 Desktop SSE and replay use source reasoning_summary, visibility summary, exact delta append and complete snapshot replace. Tool/commentary boundaries freeze earlier summaries; agent_progress retains its separate heuristic. Collapse classification is coordinated with #780 before shipping.
+
+### Pending Tasks readable details (fix/tasks-readable-details, Nov8)
+`features/tasks/task-detail-render.js` is shared by desktop TasksPage and mobile Tasks. Tool activity uses native details/summary with tool name and timestamp; arguments/results are hidden initially and use escaped pretty JSON or existing sanitized Markdown. Evidence renders actual content/value as Markdown, not raw object JSON. Open disclosures survive polling replacement. Existing compact activity retention/truncation is unchanged. No glass/navigation redesign. Not merged/live.

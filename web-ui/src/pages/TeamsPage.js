@@ -1,3 +1,5 @@
+import { renderContentReview } from '../components/ContentReview.js';
+
 /**
  * TeamsPage.js — F3e Extract
  *
@@ -187,6 +189,7 @@ function renderTeamInlineApprovalCard(input = {}) {
         ${pending ? `<span class="chat-approval-risk">risk ${escHtml(String(approval.riskScore ?? 0))}</span>` : ''}
       </div>
     </div>
+    ${renderContentReview(approval)}
     ${approval.summary ? `<div class="chat-approval-detail">${escHtml(approval.summary)}</div>` : ''}
     ${boundaryScope && boundaryScope !== 'workspace' ? `<div class="chat-approval-scope"><span>Boundary</span>${escHtml(boundaryScope.replace(/_/g, ' '))}${boundary?.reason ? `<br>${escHtml(String(boundary.reason))}` : ''}</div>` : ''}
     ${boundaryPaths.length ? `<div class="chat-approval-scope"><span>External paths</span>${boundaryPaths.slice(0, 8).map((item) => escHtml(String(item))).join('<br>')}</div>` : ''}

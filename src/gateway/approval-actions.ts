@@ -116,7 +116,9 @@ export function resolveApprovalDecision(input: ResolveApprovalDecisionInput): Re
   }
 
   let permissionGrant: any = null;
-  let resumePrompt = '';
+  let resumePrompt = approval.contentReviewFeedback && decision === 'rejected'
+    ? `Content changes requested. No action authorized. Feedback: ${approval.contentReviewFeedback}\nPrepare a new request for review; do not execute the rejected action.`
+    : '';
 
   if (
     decision === 'approved'

@@ -34,6 +34,55 @@ export function agentOwnedMobileRoute(sessionId) {
   return '';
 }
 
+// Chat tab memory. The bottom Chat tab must return to the conversation the
+// user was last in, not a blank new chat. The router records the last explicit
+// `#mobile/chat/<arg>` route here; only New Chat (a bare chat render that did
+// not come from the tab) or deleting that chat forgets it. Kept separate from
+// pm_mobile_last_chat_session, which Voice drafts and other flows clear.
+export const MOBILE_CHAT_TAB_ROUTE_KEY = 'pm_mobile_chat_tab_route';
+
+function chatTabStore(storage) {
+  if (storage) return storage;
+  try { return globalThis.localStorage || null; } catch { return null; }
+}
+
+/** Record the raw (still URI-encoded) chat route arg the user is viewing. */
+export function rememberMobileChatTabRoute(arg, storage) {
+  const raw = String(arg || '').trim();
+  const store = chatTabStore(storage);
+  if (!raw || !store) return;
+  let decoded = raw;
+  try { decoded = decodeURIComponent(raw); } catch {}
+  if (decoded === 'mobile_default' || decoded === 'default' || agentOwnedMobileRoute(decoded)) return;
+  try { store.setItem(MOBILE_CHAT_TAB_ROUTE_KEY, raw); } catch {}
+}
+
+/** Forget the remembered chat (New Chat), or only if it points at sessionId (delete). */
+export function forgetMobileChatTabRoute(sessionId = '', storage) {
+  const store = chatTabStore(storage);
+  if (!store) return;
+  try {
+    const sid = String(sessionId || '').trim();
+    if (sid) {
+      const raw = String(store.getItem(MOBILE_CHAT_TAB_ROUTE_KEY) || '');
+      let decoded = raw;
+      try { decoded = decodeURIComponent(raw); } catch {}
+      if (!raw || (!decoded.includes(sid) && !raw.includes(sid))) return;
+    }
+    store.removeItem(MOBILE_CHAT_TAB_ROUTE_KEY);
+  } catch {}
+}
+
+/** Route the Chat tab should open: the remembered chat, else the given route. */
+export function resolveMobileChatTabRoute(route, storage) {
+  const target = String(route || '');
+  if (target !== '#mobile/chat' && target !== 'mobile/chat' && target !== '#/mobile/chat') return target;
+  const store = chatTabStore(storage);
+  let raw = '';
+  try { raw = String(store?.getItem(MOBILE_CHAT_TAB_ROUTE_KEY) || '').trim(); } catch {}
+  return raw ? `#mobile/chat/${raw}` : target;
+}
+
 /** Mobile route (without leading '#') for opening this session. */
 export function mobileRouteForSession(sessionId) {
   const owned = agentOwnedMobileRoute(sessionId);

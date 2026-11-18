@@ -16,11 +16,23 @@
 
 import fs from 'fs';
 import path from 'path';
+import type { HandleChatResult } from '../chat/chat-helpers';
 import { listTaskSummaries } from '../tasks/task-store';
 import { BackgroundTaskRunner } from '../tasks/background-task-runner';
 import { pruneHeartbeatOneOffTasks } from '../teams/managed-teams';
 import { registerLiveRuntime, finishLiveRuntime } from '../live-runtime-registry';
 import { setRuntimeActorContext } from '../runtime-actor';
+import { addMessage, flushSession, getSession, setWorkspace } from '../session';
+import { getConfig } from '../../config/config';
+
+/**
+ * Stable, deterministic chat thread for an agent's heartbeat output. Every
+ * actionable run appends here instead of spawning a new sidebar chat.
+ * The auto_ prefix makes it a system/automated session the session list admits.
+ */
+export function heartbeatThreadId(agentId: string): string {
+  return `auto_heartbeat_${String(agentId || 'main').trim() || 'main'}`;
+}
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -75,7 +87,7 @@ interface HeartbeatRunnerDeps {
     modelOverride?: string,
     executionMode?: 'interactive' | 'background_task' | 'heartbeat' | 'cron',
     toolFilter?: string[],
-  ) => Promise<{ type: string; text: string; thinking?: string }>;
+  ) => Promise<Pick<HandleChatResult, 'type' | 'text' | 'thinking' | 'noResultFailure'>>;
   getMainSessionId: () => string;
   broadcast?: (data: object) => void;
   deliverChannels?: (text: string) => Promise<void> | void;
@@ -548,6 +560,13 @@ export class SubagentHeartbeatManager {
         return;
       }
 
+      // A pipeline diagnostic is not an agent update. Keep pending one-offs for the next run.
+      if (result.noResultFailure) {
+        entry.lastResult = 'error';
+        console.warn(`[HeartbeatRunner] No result for "${entry.agentId}": ${result.noResultFailure}`);
+        return;
+      }
+
       const rawText = String(result?.text || '').trim();
       const isOk = isHeartbeatOkReply(rawText || 'HEARTBEAT_OK');
       entry.lastResult = isOk ? 'ok' : 'active';
@@ -565,24 +584,47 @@ export class SubagentHeartbeatManager {
         } catch { /* non-fatal */ }
       }
 
-      // Build automated session for the UI
-      const automatedSession = {
-        id: `heartbeat_${entry.agentId}_${Date.now()}`,
-        title: `💓 ${entry.agentId} — ${new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`,
-        jobName: 'Heartbeat',
-        jobId: `heartbeat_${entry.agentId}`,
-        agentId: entry.agentId,
-        automated: true as const,
-        createdAt: Date.now(),
-        history: [
-          { role: 'user', content: `[Heartbeat: ${entry.agentId}]\n\n${prompt.slice(0, 3000)}` },
-          { role: 'ai', content: finalText },
-        ],
-      };
-
       // HEARTBEAT_OK is deliberately silent: no chat/session/sidebar message,
       // no toast, and no delivery. Last-run state remains available via API.
       if (!isOk) {
+        // One persistent chat per agent: append this run to the agent's stable
+        // heartbeat thread (server-side) instead of creating a new chat per run.
+        const threadId = heartbeatThreadId(entry.agentId);
+        const title = `💓 ${entry.agentId} heartbeat`;
+        const runLabel = new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+        const userContent = `[Heartbeat: ${entry.agentId}]\nRun: ${runLabel}\n\n${prompt.slice(0, 3000)}`;
+        const now = Date.now();
+        let history: Array<{ role: string; content: string; timestamp?: number }> = [
+          { role: 'user', content: userContent, timestamp: now - 1 },
+          { role: 'ai', content: finalText, timestamp: now },
+        ];
+        try {
+          setWorkspace(threadId, getConfig().getWorkspacePath());
+          const opts = { disableCompactionCheck: true, disableMemoryFlushCheck: true };
+          addMessage(threadId, { role: 'user', content: userContent, timestamp: now - 1, channel: 'system' }, opts);
+          addMessage(threadId, { role: 'assistant', content: finalText, timestamp: now, channel: 'system' }, opts);
+          const live = getSession(threadId);
+          live.title = title;
+          live.autoTitleLocked = true;
+          flushSession(threadId);
+          history = (live.history || []).map((m: any) => ({
+            role: m.role === 'assistant' ? 'ai' : String(m.role || 'user'),
+            content: String(m.content || ''),
+            timestamp: Number(m.timestamp) || undefined,
+          }));
+        } catch (persistErr: any) {
+          console.warn(`[HeartbeatRunner] Failed to persist heartbeat thread ${threadId}:`, persistErr?.message || persistErr);
+        }
+        const automatedSession = {
+          id: threadId,
+          title,
+          jobName: 'Heartbeat',
+          jobId: `heartbeat_${entry.agentId}`,
+          agentId: entry.agentId,
+          automated: true as const,
+          createdAt: now,
+          history,
+        };
         this.deps.broadcast?.({
           type: 'heartbeat_done',
           agentId: entry.agentId,

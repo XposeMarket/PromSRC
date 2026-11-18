@@ -160,39 +160,42 @@ export function clampRealtimeInstructions(value: string, max = REALTIME_AGENT_IN
 }
 
 
-/** Budget disposable sections before touching personal context or continuity. */
+/**
+ * Fit realtime instructions into the budget without losing the parts a voice
+ * session cannot work without. Order: drop the worker packet, compact oversized
+ * personal context, then recent messages, then tool routing, and only then
+ * hard-cap while keeping the tail (current time).
+ */
 export function budgetRealtimeInstructions(value: string, max = REALTIME_AGENT_INSTRUCTIONS_MAX): string {
   let text = String(value || '').trim();
-  const trimSection = (start: string, end: string) => {
-    if (text.length <= max) return;
-    const from = text.indexOf(start);
-    if (from < 0) return;
-    const next = end ? text.indexOf(end, from + start.length) : -1;
-    const to = next < 0 ? text.length : next;
-    const remove = Math.min(to - from, text.length - max);
-    text = text.slice(0, to - remove) + text.slice(to);
-  };
-  trimSection('## Worker context packet', '## Current time');
-  trimSection('## When to call which tool', '## End tool-routing guidance');
-  trimSection('### Recent messages', '### End recent messages');
-  trimSection('## Shared Voice Room transcript', '## End shared voice room transcript');
   if (text.length <= max) return text;
-  // Protected personal context alone is over budget (large USER/SOUL/MEMORY/skills).
-  // Never fail the voice session over it: compact bracketed context blocks evenly so
-  // every block keeps its markers and opening lines, then hard-cap the section, and
-  // only then the whole text. Continuity, tool rules and current time stay intact.
   const originalLength = text.length;
   const note = '\n...[trimmed to fit the realtime voice budget]';
   const header = '## Prometheus personal context\n';
-  const start = text.indexOf(header);
-  if (start >= 0) {
+  // USER.md/SOUL.md content carries its own "## " headings, so the section ends
+  // at the builder's next marker, never at the first heading inside the body.
+  const personalEndMarkers = [
+    '\n## Mobile camera runtime (highest priority)\n',
+    '\n## Shared Voice Room transcript\n',
+    '\n## This conversation so far (',
+    '\nPersonality: warm, direct, technically sharp',
+  ];
+  const personalBounds = (): { bodyStart: number; bodyEnd: number } | null => {
+    const start = text.indexOf(header);
+    if (start < 0) return null;
     const bodyStart = start + header.length;
-    const ends = ['\n## ', '\nPersonality: '].map((marker) => text.indexOf(marker, bodyStart)).filter((index) => index >= 0);
-    const bodyEnd = ends.length ? Math.min(...ends) : text.length;
-    const head = text.slice(0, bodyStart);
-    const tail = text.slice(bodyEnd);
-    let body = text.slice(bodyStart, bodyEnd);
-    const excess = text.length - max;
+    const ends = personalEndMarkers.map((marker) => text.indexOf(marker, bodyStart)).filter((index) => index >= 0);
+    return { bodyStart, bodyEnd: ends.length ? Math.min(...ends) : text.length };
+  };
+  // Compact bracketed context blocks evenly so every block keeps its markers and
+  // opening lines, then hard-cap the section body if that was not enough.
+  const compactPersonalContext = (excess: number): boolean => {
+    const bounds = personalBounds();
+    if (!bounds || excess <= 0) return false;
+    const head = text.slice(0, bounds.bodyStart);
+    const tail = text.slice(bounds.bodyEnd);
+    let body = text.slice(bounds.bodyStart, bounds.bodyEnd);
+    const target = Math.max(0, body.length - excess);
     const blockRe = /(\[([A-Z0-9_]+)\]\n?)([\s\S]*?)(\n?\[\/\2\])/g;
     const lengths = Array.from(body.matchAll(blockRe)).map((match) => match[3].length);
     if (lengths.length) {
@@ -208,16 +211,52 @@ export function budgetRealtimeInstructions(value: string, max = REALTIME_AGENT_I
         inner.length > lo + note.length ? `${open}${inner.slice(0, lo).trimEnd()}${note}${close}` : `${open}${inner}${close}`
       ));
     }
+    if (body.length > target) body = `${body.slice(0, Math.max(0, target - note.length)).trimEnd()}${note}`;
     text = head + body + tail;
-    if (text.length > max) {
-      body = `${body.slice(0, Math.max(0, body.length - (text.length - max) - note.length)).trimEnd()}${note}`;
-      text = head + body + tail;
-    }
+    return true;
+  };
+  const trimSection = (start: string, end: string) => {
+    if (text.length <= max) return;
+    const from = text.indexOf(start);
+    if (from < 0) return;
+    const next = end ? text.indexOf(end, from + start.length) : -1;
+    const to = next < 0 ? text.length : next;
+    const remove = Math.min(to - from, text.length - max);
+    text = text.slice(0, to - remove) + text.slice(to);
+  };
+  // A large USER/SOUL/MEMORY must not push out tool routing and conversation
+  // continuity. Personal context is compacted only as far as the overflow
+  // requires, in steps: down to 35% of the budget before any continuity is
+  // cut, down to 15% before tool routing is cut, and fully only as a last step.
+  let compacted = false;
+  const compactPersonalTo = (share: number) => {
+    if (text.length <= max) return;
+    const bounds = personalBounds();
+    if (!bounds) return;
+    const over = bounds.bodyEnd - bounds.bodyStart - Math.max(0, Math.floor(share));
+    if (over <= 0) return;
+    compacted = compactPersonalContext(Math.min(over, text.length - max)) || compacted;
+  };
+  trimSection('## Worker context packet', '## Current time');
+  compactPersonalTo(max * 0.35);
+  trimSection('### Recent messages', '### End recent messages');
+  trimSection('## Shared Voice Room transcript', '## End shared voice room transcript');
+  compactPersonalTo(max * 0.15);
+  trimSection('## When to call which tool', '## End tool-routing guidance');
+  compactPersonalTo(0);
+  if (text.length > max) {
+    // Last resort: cut the middle, never the tail that holds the current time.
+    const marker = '\n...[truncated]\n';
+    const tailKeep = Math.min(Math.floor(max / 3), 8000);
+    text = `${text.slice(0, Math.max(0, max - tailKeep - marker.length)).trimEnd()}${marker}${text.slice(text.length - tailKeep)}`;
+    compacted = true;
   }
-  if (text.length > max) text = `${text.slice(0, Math.max(0, max - 18)).trimEnd()}\n...[truncated]`;
-  (globalThis as any).console?.warn?.('[voice-agent-realtime] personal context exceeded the instruction budget; compacted to fit', { max, originalLength, finalLength: text.length });
+  if (compacted) {
+    (globalThis as any).console?.warn?.('[voice-agent-realtime] personal context exceeded the instruction budget; compacted to fit', { max, originalLength, finalLength: text.length });
+  }
   return text;
 }
+
 
 // Convert the chat-completions style Voice definitions to Realtime format. The
 // canonical voice_thread_ops tool is intentionally included in this set so the

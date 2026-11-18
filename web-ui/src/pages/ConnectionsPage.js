@@ -1,3 +1,6 @@
+import { openConnectFlow } from '../features/connectors/connect-flow.js';
+import { mountConnectorAccounts } from '../features/connectors/connector-accounts-ui.js';
+import { postJson as connectionOwnerPost } from '../features/secure-access/secure-access-core.js';
 /**
  * ConnectionsPage.js
  *
@@ -546,7 +549,7 @@ function openConnectorView(id) {
           ${resources.length ? `<div><span class="cv-identity-label">Resource scope</span><strong>${escHtml(resources.slice(0, 3).map((resource) => resource.displayName || resource.id).join(', '))}</strong>${resources.length > 3 ? `<span>+${resources.length - 3} more</span>` : ''}</div>` : ''}
           ${grants.length ? `<div><span class="cv-identity-label">Capabilities</span><strong>${grants.filter((grant) => grant.granted).length} granted</strong><span>${grants.filter((grant) => !grant.granted).length} approval-gated</span></div>` : ''}
           ${scopes.length ? `<div><span class="cv-identity-label">Granted scopes</span><strong>${scopes.length} provider scope${scopes.length === 1 ? '' : 's'}</strong><span>${escHtml(scopes.join(' · '))}</span></div>` : ''}
-          ${registeredTools.length ? `<div><span class="cv-identity-label">Tool exposure</span><strong>${exposedTools.length}/${registeredTools.length} exposed</strong><span>${state.health ? `Health: ${escHtml(state.health)}` : 'Review-gated by default'}</span></div>` : ''}
+          ${registeredTools.length ? `<div><span class="cv-identity-label">Tool exposure</span><strong>${state.legacyRuntime ? `${registeredTools.length} tools on` : `${exposedTools.length}/${registeredTools.length} exposed`}</strong><span>${state.health ? `Health: ${escHtml(state.health)}` : 'Review-gated by default'}</span></div>` : ''}
         </div>`
       : '';
     stateEl.innerHTML = `<div class="cv-state-line"><strong>${escHtml(status.label)}</strong>${lifecycle ? `<span class="cv-state-chips">${lifecycle}</span>` : ''}</div>${identityMarkup}${errorMarkup}`;
@@ -588,16 +591,16 @@ function openConnectorView(id) {
             <input type="checkbox" data-connector-tool="${escHtml(tool)}"${checked} style="margin-top:2px;accent-color:var(--brand)" />
             <span style="min-width:0;flex:1"><code style="font-size:10.5px;color:var(--text-2);word-break:break-word">${escHtml(tool)}</code><span style="display:block;margin-top:2px;font-size:10px;color:${risk === 'read-only' ? 'var(--ok)' : 'var(--warn)'}">${escHtml(risk === 'read-only' ? 'read-only · automatic' : `${risk} · approval required`)}</span></span>
           </label>`
-        : `<div style="display:flex;align-items:flex-start;gap:8px;padding:6px 8px;border:1px solid var(--line);border-radius:7px;background:var(--panel-2);opacity:${availableTools.includes(tool) ? '1' : '0.55'}"><code style="font-size:10.5px;color:var(--text-2);word-break:break-word;flex:1">${escHtml(tool)}</code><span style="font-size:10px;color:${risk === 'read-only' ? 'var(--ok)' : 'var(--warn)'};white-space:nowrap">${escHtml(risk === 'read-only' ? 'read-only' : 'approval')}</span></div>`;
+        : `<div style="display:flex;align-items:flex-start;gap:8px;padding:6px 8px;border:1px solid var(--line);border-radius:7px;background:var(--panel-2);opacity:${availableTools.includes(tool) ? '1' : '0.55'}"><code style="font-size:10.5px;color:var(--text-2);word-break:break-word;flex:1">${escHtml(tool)}</code><span style="font-size:10px;color:${risk === 'read-only' ? 'var(--ok)' : 'var(--warn)'};white-space:nowrap${classification || exposedTools.includes(tool) ? '' : ';display:none'}">${escHtml(risk === 'read-only' ? 'read-only' : 'approval')}</span></div>`;
     }).join('');
     if (tools.length && isConnected && availableTools.length) {
       aiToolsEl.style.display = '';
       aiToolsEl.innerHTML = `
         <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Tools available to Prometheus</div>
-        <div style="font-size:11px;color:var(--muted);line-height:1.45;margin-bottom:8px">${exposedTools.length}/${tools.length} are read-only and automatic. Other enabled actions remain approval-gated at the moment they run.</div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.45;margin-bottom:8px">${canManageToolAvailability ? `${exposedTools.length}/${tools.length} are read-only and automatic. Other enabled actions remain approval-gated at the moment they run.` : 'Read-only tools run automatically. Tools that change something ask for your approval when they run.'}</div>
         <div style="display:flex;flex-direction:column;gap:5px">${toolRows}</div>
-        ${canManageToolAvailability ? `<button class="cv-btn-connect" onclick="saveConnectorToolAvailability(decodeURIComponent('${encodedConnectionId}'), this)" style="margin-top:9px;background:var(--panel-2);color:var(--text);border:1px solid var(--line)">Save tool access</button>` : '<div style="font-size:11px;color:var(--muted);margin-top:8px">This legacy connector uses its runtime availability. Canonical connections expose a selectable tool allowlist.</div>'}
-        <div style="font-size:11px;color:var(--muted);margin-top:8px">Activate with <code style="font-size:10.5px">request_tool_category({"category":"external_apps"})</code></div>
+        ${canManageToolAvailability ? `<button class="cv-btn-connect" onclick="saveConnectorToolAvailability(decodeURIComponent('${encodedConnectionId}'), this)" style="margin-top:9px;background:var(--panel-2);color:var(--text);border:1px solid var(--line)">Save tool access</button>` : '<div style="font-size:11px;color:var(--muted);margin-top:8px">All tools for this plugin are on. Per-tool switches are not available for it yet.</div>'}
+        
       `;
     } else if (tools.length && isConnected) {
       aiToolsEl.style.display = '';
@@ -622,6 +625,22 @@ function openConnectorView(id) {
   }
 
   renderConnectorActions(connector, isConnected);
+  if (isConnected) {
+    const verify = document.createElement('button'); verify.className = 'cv-btn-connect'; verify.type = 'button'; verify.textContent = 'Ask Prom to verify';
+    verify.onclick = () => { closeConnectorView(); window.sendChat?.(`I connected the ${connector.name} plugin (connector:${connector.id}). Please verify its connection and available features using safe, read-only checks. Do not post, send, or spend.`); };
+    const actionsHost = document.getElementById('cv-actions');
+    if (actionsHost) {
+      // Multi-account: current account, extra accounts, and "Add another account".
+      const accountsHost = document.createElement('div');
+      actionsHost.append(accountsHost);
+      mountConnectorAccounts(accountsHost, {
+        fetchJson: (path, opts = {}) => api(path, opts), connectorId: connector.id, name: connector.name, connected: true, accountLabel: connector.account || connector.accountEmail,
+        startConnect: () => openConnectFlow(api, { serviceId: connector.id, kind: 'connector' }, { onChanged: loadConnectionsState, onVerify: message => { closeConnectorView(); window.sendChat?.(message); } }),
+        onVerify: (message) => { closeConnectorView(); window.sendChat?.(message); },
+      });
+    }
+    actionsHost?.append(verify);
+  }
   if (connector.isUserPlugin) {
     const actionsEl = document.getElementById('cv-actions');
     if (actionsEl) {
@@ -716,7 +735,9 @@ async function runConnectionAttemptAction(attemptId, operation, button) {
 async function continueConnectionAttempt(attemptId, input = {}, button) {
   if (button) { button.disabled = true; button.textContent = 'Continuing…'; }
   try {
-    const result = await api(`/api/connection-attempts/${encodeURIComponent(attemptId)}/continue`, { method: 'POST', body: JSON.stringify(input || {}) });
+    const result = input?.approved === true
+      ? await connectionOwnerPost(api, `/api/connection-attempts/${encodeURIComponent(attemptId)}/connect`, {}, 'Approve connection')
+      : await api(`/api/connection-attempts/${encodeURIComponent(attemptId)}/continue`, { method: 'POST', body: JSON.stringify(input || {}) });
     showToast('Connection updated', String(result?.attempt?.state || 'continued'), 'success');
     await loadConnectionsState();
     if (activeConnectorId && getConnectorById(activeConnectorId)) openConnectorView(activeConnectorId);
@@ -936,6 +957,10 @@ function renderManagedOAuthActions(connector, isConnected) {
 }
 
 async function startCanonicalConnection(id) {
+  return startOAuthFlow(id);
+}
+
+async function startLegacyCanonicalConnection(id) {
   const connector = getConnectorById(id);
   if (!connector || !hasCanonicalOAuthStrategy(connector)) return;
   const strategy = connector.connection.strategies.find((item) => item?.adapter === 'connector-oauth');
@@ -1222,6 +1247,10 @@ async function pollXurlSetup() {
 }
 
 async function startOAuthFlow(id) {
+  return openConnectFlow(api, { serviceId: id, kind: 'connector' }, { onChanged: loadConnectionsState, onVerify: message => { closeConnectorView(); window.sendChat?.(message); } });
+}
+
+async function startLegacyOAuthFlow(id) {
   const connector = getConnectorById(id);
   if (!connector || connector.authType !== 'oauth') return;
 
@@ -1302,7 +1331,7 @@ function renderCredentialForm(id, connectorOverride = null, errorMsg = '') {
   if (!el || !connector) return;
 
   if (connector.id === 'x') {
-    el.innerHTML = `<div style="display:flex;flex-direction:column;gap:10px"><div style="font-size:12px;color:var(--muted)">X app Client ID / Secret are entered only in protected entry, then X sign-in continues in your browser.</div><button class="cv-btn-connect" onclick="saveConnectorCredentials('x')">Open protected entry</button></div>`;
+    void openProtectedPluginCard(protectedFetch, { serviceId: 'x', title: 'X app credentials', onSaved: () => loadConnectionsState?.() });
     return;
   }
   const info = connector.credInfo;
@@ -2102,74 +2131,128 @@ function switchAddTab(tab) {
 }
 
 // ── Import tab: Claude Code / Codex / Hermes / OpenClaw plugins ──────────────
+// Three sources: the live Claude + OpenAI official catalogs, plugins installed in
+// other agents on this computer, and standalone skill folders. Imported MCP servers
+// and hooks start OFF; turning them on is an explicit button press here.
 function renderImportTab() {
   return `
-    <div style="display:flex;flex-direction:column;gap:12px">
-      <div class="pam-hint">Imports skills, slash commands, agents, MCP servers and hooks from plugins installed in Claude Code, Codex, Hermes Agent or OpenClaw. Hosted apps and native Python/TS runtimes are listed as not importable. Hooks stay off until you approve them.</div>
-      <div style="display:grid;grid-template-columns:1fr auto;gap:8px">
-        <input id="pim-source" class="pam-input" placeholder="Folder, git URL, owner/repo, owner/repo#subdir, or GitHub tree URL"/>
-        <button class="pam-btn" data-pim-action="install-source">Import</button>
+    <div class="pim">
+      <input id="pim-query" class="pam-input" placeholder="Search, or paste a GitHub repo or folder" autocomplete="off"/>
+      <div class="pim-seg">
+        <button class="pim-src active" data-pim-action="src" data-pim-src="catalog">Catalogs</button>
+        <button class="pim-src" data-pim-action="src" data-pim-src="local">On this PC</button>
+        <button class="pim-src" data-pim-action="src" data-pim-src="skills">Skills</button>
       </div>
-      <label class="pam-hint"><input type="checkbox" id="pim-marketplaces" data-pim-action="rescan"/> Include local marketplace checkouts</label>
-      <div id="pim-status" class="pam-hint"></div>
+      <div id="pim-status" class="pim-status"></div>
       <div id="pim-imported"></div>
-      <div id="pim-list" class="pam-hint">Scanning installed plugins...</div>
+      <div id="pim-list" class="pim-list"><div class="pim-empty">Loading…</div></div>
     </div>
   `;
 }
 
 function pimEsc(v) { return escapeHtml(String(v ?? '')); }
+window.pimSource = window.pimSource || 'catalog';
+let pimQueryTimer = null;
+
+// A pasted folder path, owner/repo(#subdir) or GitHub URL imports directly instead of searching.
+function pimLooksLikeSource(q) {
+  return /^(https?:\/\/|[A-Za-z]:[\\/]|\\\\|\/|~[\\/]|\.{1,2}[\\/])/.test(q) || /^[\w.-]+\/[\w.-]+(#\S+)?$/.test(q);
+}
+
+// One quiet line per item: name, a single clipped description line, one action.
+function pimRow(name, desc, action) {
+  return `<div class="pim-row"><div class="pim-row-text"><div class="pim-name">${name}</div>${desc ? `<div class="pim-desc">${desc}</div>` : ''}</div>${action || ''}</div>`;
+}
+
+function pimMcpState(m) {
+  if (m.enabled) return 'on';
+  if (m.activation === 'pending') return 'off';
+  return m.missing?.length || m.secretKeys?.length ? 'needs secret' : 'off';
+}
+
+function renderPimImported(imported) {
+  const impEl = document.getElementById('pim-imported');
+  if (!impEl) return;
+  const open = impEl.querySelector('details')?.open ? ' open' : '';
+  impEl.innerHTML = imported.length ? `<details class="pim-added"${open}><summary>Added (${imported.length})</summary>` + imported.map((p) => {
+    const mcp = p.mcpServers || [];
+    const anyOn = mcp.some((m) => m.enabled || m.activation === 'active');
+    const needsKeys = mcp.some((m) => pimMcpState(m) === 'needs secret');
+    const id = pimEsc(p.id);
+    const state = [`${p.skills.length} skills`, mcp.length && `MCP ${anyOn ? 'on' : needsKeys ? 'needs a key' : 'off'}`, p.hooks.length && `hooks ${p.hooksApproved ? 'on' : 'off'}`].filter(Boolean).join(' · ');
+    const btns = [
+      mcp.length && `<button class="pim-btn" data-pim-action="${anyOn ? 'deactivate_mcp' : 'activate_mcp'}" data-pim-id="${id}">${anyOn ? 'Turn off' : 'Turn on'}</button>`,
+      mcp.some((m) => !m.enabled && m.activation !== 'pending') && `<button class="pim-btn" data-pim-action="enable_mcp" data-pim-id="${id}">Check keys</button>`,
+      p.hooks.length && `<button class="pim-btn" data-pim-action="${p.hooksApproved ? 'revoke_hooks' : 'approve_hooks'}" data-pim-id="${id}">${p.hooksApproved ? 'Block hooks' : 'Allow hooks'}</button>`,
+      `<button class="pim-btn" data-pim-action="uninstall" data-pim-id="${id}">Remove</button>`,
+    ].filter(Boolean).join('');
+    return pimRow(pimEsc(p.name), pimEsc(state), `<span class="pim-actions">${btns}</span>`);
+  }).join('') + '</details>' : '';
+}
 
 async function loadPluginImportScan() {
   const listEl = document.getElementById('pim-list');
-  const impEl = document.getElementById('pim-imported');
   if (!listEl) return;
-  const mk = document.getElementById('pim-marketplaces')?.checked ? '1' : '';
+  const src = window.pimSource;
+  const q = String(document.getElementById('pim-query')?.value || '').trim();
+  document.querySelectorAll('.pim-src').forEach((b) => b.classList.toggle('active', b.dataset.pimSrc === src));
+  const importBtn = (attr) => `<button class="pim-btn" data-pim-action="install" ${attr}>Import</button>`;
+  const added = '<span class="pim-done">Added</span>';
+  const cantRun = '<span class="pim-done">Can\'t run here</span>';
   try {
-    const res = await api(`/api/plugins/import/scan${mk ? '?marketplaces=1' : ''}`);
-    const imported = res?.imported || [];
-    if (impEl) impEl.innerHTML = imported.length ? `<div style="font-weight:600;margin-bottom:6px">Imported</div>` + imported.map((p) => `
-      <div style="border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-bottom:6px">
-        <div><b>${pimEsc(p.name)}</b> <span class="pam-hint">[${pimEsc(p.format)}] ${p.skills.length} skills, ${p.mcpServers.length} MCP, ${p.hooks.length} hooks${p.hooks.length ? (p.hooksApproved ? ' (approved)' : ' (off)') : ''}</span></div>
-        <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">
-          ${p.hooks.length ? `<button class="pam-btn" data-pim-action="${p.hooksApproved ? 'revoke_hooks' : 'approve_hooks'}" data-pim-id="${pimEsc(p.id)}">${p.hooksApproved ? 'Turn hooks off' : 'Approve hooks'}</button>` : ''}
-          ${p.mcpServers.some((m) => !m.enabled) ? `<button class="pam-btn" data-pim-action="enable_mcp" data-pim-id="${pimEsc(p.id)}">Re-check MCP secrets</button>` : ''}
-          <button class="pam-btn" data-pim-action="uninstall" data-pim-id="${pimEsc(p.id)}">Uninstall</button>
-        </div>
-      </div>`).join('') : '';
-    const rows = res?.plugins || [];
-    listEl.innerHTML = `<div style="font-weight:600;margin-bottom:6px">Found ${rows.length} plugin(s) in ${(res?.roots || []).map((r) => pimEsc(r.label)).join(', ') || 'no harness folders'}</div>` + rows.map((p) => {
-      const imp = p.importable || {};
-      const parts = [imp.skills?.length && `${imp.skills.length} skills`, imp.commands?.length && `${imp.commands.length} commands`, imp.agents?.length && `${imp.agents.length} agents`, imp.mcpServers?.length && `MCP: ${imp.mcpServers.join(', ')}`, imp.hooks?.length && `${imp.hooks.length} hooks`].filter(Boolean).join(' · ') || 'nothing importable';
-      const canImport = parts !== 'nothing importable';
-      return `<div style="border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-bottom:6px">
-        <div style="display:flex;justify-content:space-between;gap:8px;align-items:center">
-          <div><b>${pimEsc(p.name)}</b> <span class="pam-hint">[${pimEsc(p.format)}] ${pimEsc(p.harness)}</span></div>
-          ${p.installedAs ? '<span class="pam-hint">imported</span>' : (canImport ? `<button class="pam-btn" data-pim-action="install" data-pim-source="${pimEsc(p.root)}">Import</button>` : '')}
-        </div>
-        <div class="pam-hint">${pimEsc(parts)}${p.requiredEnv?.length ? ` · needs ${pimEsc(p.requiredEnv.join(', '))}` : ''}</div>
-        ${p.unsupported?.length ? `<div class="pam-hint" style="opacity:.75">Not importable: ${p.unsupported.map((u) => pimEsc(u.part)).join('; ')}</div>` : ''}
-      </div>`;
-    }).join('');
+    const scan = await api(`/api/plugins/import/scan?${new URLSearchParams({ q })}`);
+    renderPimImported(scan?.imported || []);
+    if (q && pimLooksLikeSource(q)) {
+      listEl.innerHTML = pimRow(pimEsc(q), 'Import from this folder or GitHub repo', importBtn(`data-pim-source="${pimEsc(q)}"`));
+      return;
+    }
+    if (src === 'local') {
+      const rows = scan?.plugins || [];
+      listEl.innerHTML = rows.length ? rows.map((p) => {
+        const imp = p.importable || {};
+        const parts = [imp.skills?.length && `${imp.skills.length} skills`, imp.commands?.length && `${imp.commands.length} commands`, imp.agents?.length && `${imp.agents.length} agents`, imp.mcpServers?.length && `${imp.mcpServers.length} MCP`, imp.hooks?.length && `${imp.hooks.length} hooks`].filter(Boolean).join(' · ');
+        return pimRow(pimEsc(p.name), pimEsc(parts || p.harness), p.installedAs ? added : parts ? importBtn(`data-pim-source="${pimEsc(p.root)}"`) : cantRun);
+      }).join('') : '<div class="pim-empty">No plugins from other agents on this computer.</div>';
+      return;
+    }
+    if (src === 'skills') {
+      const res = await api('/api/plugins/import/skills', { method: 'POST', body: JSON.stringify({ query: q, limit: 200 }) });
+      const rows = res?.data || [];
+      listEl.innerHTML = rows.length
+        ? rows.map((p) => pimRow(pimEsc(p.name || p.id), pimEsc(p.description || p.harness), p.installedAs ? added : importBtn(`data-pim-source="${pimEsc(p.root)}"`))).join('')
+        : '<div class="pim-empty">No skill folders found on this computer.</div>';
+      return;
+    }
+    const res = await api('/api/plugins/import/catalog', { method: 'POST', body: JSON.stringify({ query: q, limit: 120, refresh: window.pimRefreshCatalog === true }) });
+    window.pimRefreshCatalog = false;
+    const data = res?.data || {};
+    const entries = data.entries || [];
+    if (!entries.length) {
+      listEl.innerHTML = `<div class="pim-empty">${(data.catalogs || []).every((c) => c.origin === 'none') ? 'Catalogs are unavailable right now.' : 'No matches.'}</div>`;
+      return;
+    }
+    listEl.innerHTML = entries.map((e) => pimRow(pimEsc(e.name), pimEsc(e.description || e.category || ''), e.imported ? added : e.installable ? importBtn(`data-pim-entry="${pimEsc(e.id)}"`) : cantRun)).join('')
+      + (data.total > entries.length ? `<div class="pim-more">${entries.length} of ${data.total}. Search to find more.</div>` : '');
   } catch (e) {
-    listEl.textContent = 'Scan failed: ' + (e?.message || e);
+    listEl.innerHTML = `<div class="pim-empty">Couldn't load: ${pimEsc(e?.message || e)}</div>`;
   }
 }
 
 async function runPluginImportAction(action, payload) {
   const statusEl = document.getElementById('pim-status');
-  if (action === 'uninstall' && !confirm(`Uninstall imported plugin "${payload.id}"? Its skills and MCP servers are removed.`)) return;
-  if (action === 'approve_hooks' && !confirm('Plugin hooks run shell commands on this PC before/after tool calls. Approve them?')) return;
-  if (statusEl) statusEl.textContent = action === 'install' ? 'Importing...' : 'Working...';
+  if (action === 'uninstall' && !confirm(`Uninstall imported plugin "${payload.id}"? Its skills and MCP servers are removed (its saved data folder is kept).`)) return;
+  if (action === 'approve_hooks' && !confirm('Plugin hooks run shell commands on this computer before/after tool calls. Turn them on?')) return;
+  if (action === 'activate_mcp' && !confirm('Turning on this plugin\'s MCP servers runs third-party code on this computer (or sends requests to its server). Turn them on?')) return;
+  if (statusEl) statusEl.textContent = action === 'install' ? 'Importing…' : action === 'inspect' ? 'Fetching preview…' : 'Working…';
   try {
     const res = await api(`/api/plugins/import/${action}`, { method: 'POST', body: JSON.stringify(payload) });
     if (res?.success === false) throw new Error(res.result || res.error || 'Failed');
     if (statusEl) statusEl.textContent = res?.result || 'Done.';
-    if (action === 'install') showToast('Plugin imported', payload.source || '', 'success');
+    if (action === 'install') showToast('Plugin imported', payload.entry || payload.source || '', 'success');
   } catch (e) {
     if (statusEl) statusEl.textContent = 'Failed: ' + (e?.message || e);
   }
-  await loadPluginImportScan();
+  if (action !== 'inspect') await loadPluginImportScan();
 }
 
 // Delegated so plugin paths/ids never get compiled into inline handler source.
@@ -2177,16 +2260,31 @@ document.addEventListener('click', (event) => {
   const el = event.target?.closest?.('[data-pim-action]');
   if (!el || el.tagName === 'INPUT') return;
   const action = el.dataset.pimAction;
+  if (action === 'src') { window.pimSource = el.dataset.pimSrc; loadPluginImportScan(); return; }
+  if (action === 'refresh') { window.pimRefreshCatalog = true; loadPluginImportScan(); return; }
   if (action === 'install-source') {
     const source = String(document.getElementById('pim-source')?.value || '').trim();
     if (source) runPluginImportAction('install', { source });
     return;
   }
-  if (action === 'install') { runPluginImportAction('install', { source: el.dataset.pimSource }); return; }
+  if (action === 'install' || action === 'inspect') {
+    runPluginImportAction(action, el.dataset.pimEntry ? { entry: el.dataset.pimEntry } : { source: el.dataset.pimSource });
+    return;
+  }
   if (el.dataset.pimId) runPluginImportAction(action, { id: el.dataset.pimId });
 });
 document.addEventListener('change', (event) => {
   if (event.target?.id === 'pim-marketplaces') loadPluginImportScan();
+});
+document.addEventListener('keydown', (event) => {
+  if (event.target?.id !== 'pim-query' || event.key !== 'Enter') return;
+  const q = String(event.target.value || '').trim();
+  if (q && pimLooksLikeSource(q)) runPluginImportAction('install', { source: q });
+});
+document.addEventListener('input', (event) => {
+  if (event.target?.id !== 'pim-query') return;
+  clearTimeout(pimQueryTimer);
+  pimQueryTimer = setTimeout(loadPluginImportScan, 300);
 });
 
 function renderAiTab() {

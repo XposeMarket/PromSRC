@@ -16,6 +16,12 @@ export type ResolvedAgentRouting = {
 };
 
 const ANTHROPIC_MODEL_ALIASES: Record<string, string> = {
+  'fable-5.2': 'claude-fable-5-2',
+  'fable-5-2': 'claude-fable-5-2',
+  'claude-fable-5.2': 'claude-fable-5-2',
+  'mythos-5.2': 'claude-mythos-5-2',
+  'mythos-5-2': 'claude-mythos-5-2',
+  'claude-mythos-5.2': 'claude-mythos-5-2',
   'fable-5.1': 'claude-fable-5-1',
   'fable-5-1': 'claude-fable-5-1',
   'claude-fable-5.1': 'claude-fable-5-1',
@@ -93,7 +99,7 @@ export function normalizeProviderModel(providerId: string, model: string): strin
 export function inferProviderForBareModel(model?: string): string | null {
   const raw = String(model || '').trim().toLowerCase();
   if (!raw || raw.includes('/')) return null;
-  if (OPENAI_CODEX_MODEL_ALIASES[raw]) return 'openai_codex';
+  if (OPENAI_CODEX_MODEL_ALIASES[raw] || raw === 'gpt-6.2-astra' || raw === 'gpt-6.2-sol') return 'openai_codex';
   if (/^gpt-(?:5\.6|6(?:\.1)?)-(?:sol|luna|terra|astra)(?:$|[-.])/.test(raw)) return 'openai_codex';
   if (ANTHROPIC_MODEL_ALIASES[raw]) return 'anthropic';
   if (/^claude-/.test(raw)) return 'anthropic';

@@ -204,6 +204,7 @@ import {
   isLiveBackgroundJoin,
   isBlockingWaitInFlight,
   isQuestionWaitInFlight,
+  isApprovalWaitInFlight,
   resolveMainChatAbortSettlement,
   isMainChatSemanticProgressStalled,
   isMainChatStreamOwnerOrphaned,
@@ -1019,12 +1020,26 @@ function reconcileMainChatExecutionOwners(now = Date.now()): void {
       lastSemanticEvent: stream.lastSemanticEvent,
       lastSemanticProgressAt: stream.lastSemanticProgressAt,
       activeBackgroundCount: activeBackgroundIds.length,
+      lastBackgroundWaitAt: stream.lastBackgroundWaitAt,
     });
     const waitingOnQuestion = isQuestionWaitInFlight(stream.blockingWaits || [], stream.sessionId, () => {
       const queue = getPrometheusQuestionQueue();
       return queue.listPending().filter((question) => queue.hasResolveCallback(question.id));
     }, now);
-    if (ageExceeded && !waitingOnBackground && !waitingOnQuestion) {
+    // An approval card (including a one-shot administrator command) waits on
+    // the human exactly like a question card. Aborting the turn here also
+    // auto-rejects the approval, so the approved work can never run.
+    const waitingOnApproval = isApprovalWaitInFlight(stream.sessionId, stream.startedAt, () => {
+      const queue = getApprovalQueue();
+      return queue.listPending().map((approval) => ({
+        id: approval.id,
+        sessionId: approval.sessionId,
+        status: approval.status,
+        createdAt: approval.createdAt,
+        hasWaiter: queue.hasResolveCallback(approval.id),
+      }));
+    }, now);
+    if (ageExceeded && !waitingOnBackground && !waitingOnQuestion && !waitingOnApproval) {
       const memory = process.memoryUsage();
       const diagnostic = {
         reason: 'max_age_exceeded',
@@ -1043,7 +1058,7 @@ function reconcileMainChatExecutionOwners(now = Date.now()): void {
       continue;
     }
 
-    if (!waitingOnQuestion && !isBlockingWaitInFlight(stream.blockingWaits || [], now) && isMainChatSemanticProgressStalled({
+    if (!waitingOnQuestion && !waitingOnApproval && !waitingOnBackground && !isBlockingWaitInFlight(stream.blockingWaits || [], now) && isMainChatSemanticProgressStalled({
       now,
       lastSemanticProgressAt: stream.lastSemanticProgressAt,
       streamActive: stream.active,
@@ -1239,6 +1254,29 @@ export function runtimeToolDetailMetadata(data: Record<string, unknown> | null |
   const streamId = String(data?.streamId || '').trim();
   if (streamId) out.streamId = streamId;
   return out;
+}
+
+/** Append a raw reasoning delta to the current reasoning block; returns true when a new block entry was created. */
+export function appendRuntimeReasoningDelta(entries: Array<Record<string, unknown>>, raw: string): boolean {
+  if (!raw) return false;
+  const last = entries[entries.length - 1];
+  const lastExtra = last?.extra as { source?: unknown; event?: unknown } | undefined;
+  if (last && last.type === 'think' && lastExtra?.source === 'reasoning_summary' && lastExtra?.event === 'reasoning_summary_delta') {
+    const next = `${last.content || ''}${raw}`;
+    last.content = next.length > 16_000 ? next.slice(-16_000) : next;
+    return false;
+  }
+  const content = raw.replace(/^\s+/, '');
+  if (!content) return false;
+  entries.push({
+    ts: new Date().toLocaleTimeString(),
+    type: 'think',
+    actor: 'Prom',
+    content,
+    extra: { source: 'reasoning_summary', event: 'reasoning_summary_delta', visibility: 'user', reasoningKind: 'summary' },
+  });
+  if (entries.length > 12_000) entries.splice(0, entries.length - 12_000);
+  return true;
 }
 
 export function runtimeProcessEntryFromSseEvent(type: string, data: any): Record<string, any> | null {
@@ -2507,6 +2545,23 @@ router.post('/api/chat', async (req, res) => {
           thinkingTail: runtimeThinkingTail,
           processEntries: runtimeProcessEntries.length ? [...runtimeProcessEntries] : undefined,
         });
+      }
+      return;
+    }
+    if (event === 'reasoning_summary_delta') {
+      // Coalesce provider reasoning deltas into ONE growing, untrimmed process entry per
+      // reasoning block (was one trimmed entry + full checkpoint copy/flush per delta,
+      // which split words and stalled the loop on long Anthropic thinking). Copy and
+      // persist only when a new block starts or every 2s.
+      if (!__firstContentLogged) { __firstContentLogged = true; __turnTimingLog(`FIRST_CONTENT(${event})`); }
+      const started = appendRuntimeReasoningDelta(runtimeProcessEntries, String(data?.text ?? data?.summary ?? ''));
+      const now = Date.now();
+      const persist = now - lastRuntimeThinkingCheckpointAt >= 2000;
+      if (persist) lastRuntimeThinkingCheckpointAt = now;
+      if (started || persist) {
+        updateLiveRuntimeCheckpoint(runtimeId, { event, at: now, processEntries: [...runtimeProcessEntries] }, { persist });
+      } else {
+        markLiveRuntimeProgress(runtimeId, { event, phase: 'model_stream' });
       }
       return;
     }

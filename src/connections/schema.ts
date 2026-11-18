@@ -128,7 +128,7 @@ export const CONNECTION_STATE_TRANSITIONS: Readonly<Record<ConnectionAttemptStat
   research_required: ['discovering', 'planning', 'cancelled', 'failed'],
   planning: ['awaiting_approval', 'awaiting_secure_input', 'awaiting_oauth', 'awaiting_device_code', 'awaiting_browser_login', 'awaiting_cli_login', 'awaiting_external_admin', 'installing', 'registering', 'cancelled', 'failed'],
   awaiting_approval: ['awaiting_secure_input', 'awaiting_oauth', 'awaiting_device_code', 'awaiting_browser_login', 'awaiting_cli_login', 'awaiting_external_admin', 'installing', 'registering', 'verifying', 'cancelled', 'failed'],
-  awaiting_secure_input: ['registering', 'verifying', 'reauth_required', 'cancelled', 'failed'],
+  awaiting_secure_input: ['awaiting_oauth', 'registering', 'verifying', 'reauth_required', 'cancelled', 'failed'],
   awaiting_oauth: ['registering', 'verifying', 'reauth_required', 'cancelled', 'failed'],
   awaiting_device_code: ['registering', 'verifying', 'reauth_required', 'cancelled', 'failed'],
   awaiting_browser_login: ['registering', 'verifying', 'reauth_required', 'cancelled', 'failed'],

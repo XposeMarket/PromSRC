@@ -53,9 +53,11 @@ export const CARD_CSS = `
 .pc-flip.flipped{background:color-mix(in srgb,var(--pc-accent) 10%,var(--pc-soft))}
 .pc-flip-side{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--pc-muted)}.pc-flip-text{font-size:18px;font-weight:600}
 @keyframes pc-flip-in{from{transform:rotateX(70deg);opacity:.3}to{transform:none;opacity:1}}
-/* writing */
+/* writing: inherit chat typography for the draft; retain the card chrome's metrics. */
+.pc-writing{font-size:inherit;line-height:inherit}
+.pc-writing>.pc-head,.pc-writing>.pc-writing-subject,.pc-writing>.pc-writing-foot{font-size:14px;line-height:1.45}
 .pc-writing-subject{padding:8px 0;border-bottom:1px solid var(--pc-line);margin-bottom:8px}.pc-writing-subject span{color:var(--pc-muted);margin-right:8px;font-size:12px}
-.pc-writing-body{white-space:pre-wrap;font-family:Georgia,'Iowan Old Style',serif;font-size:15px;line-height:1.6}
+.pc-writing-body{white-space:pre-wrap;font-family:inherit;font-size:inherit;line-height:inherit}
 .pc-writing-foot{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-top:12px;padding-top:10px;border-top:1px solid var(--pc-line)}
 /* follow-ups */
 .pc-followups{display:grid;gap:0;margin:12px 0 4px;border-top:1px solid var(--pc-line)}

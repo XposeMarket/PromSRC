@@ -6,6 +6,10 @@ import { ConnectionAttemptStore } from './attempt-store';
 import { ConnectionStore } from './connection-store';
 import { accountIdentitiesMatch } from './connector-contract';
 import { invalidateConnectionToolSurfaceCache } from './tool-surface';
+import { CONNECTION_STATE_TRANSITIONS } from './schema';
+
+/** Adapters whose only proof of access is a stored credential; disconnecting them deletes it. */
+const CREDENTIAL_ADAPTERS = new Set(['api-key', 'setup-token']);
 import type {
   ConnectionAdapterResult, ConnectionAttempt, ConnectionPlan, ConnectionRecord,
   ConnectionDiscoveryResult, ConnectionStrategy, ConnectionVerificationResult,
@@ -27,21 +31,24 @@ export interface ConnectionOrchestratorOptions {
 }
 
 export class ConnectionOrchestrator {
+  private connectInFlight = new Map<string, Promise<ConnectionAttempt>>();
   constructor(private readonly options: ConnectionOrchestratorOptions) {}
 
   create(input: { serviceId: string; serviceName?: string; requestedCapabilities?: string[]; readOnly?: boolean; metadata?: Record<string, unknown> }): ConnectionAttempt {
-    const discovery = this.options.plans.discover?.(input.serviceId);
+    const discovery = this.options.plans.discover?.(input.metadata?.pluginKind ? `${input.metadata.pluginKind}:${input.serviceId}` : input.serviceId);
+    if (discovery?.status === 'ambiguous') throw new Error('AMBIGUOUS_SERVICE: choose a kind-qualified selector from discovery.');
     const canonicalServiceId = discovery?.status === 'resolved' ? discovery.canonicalServiceId! : input.serviceId;
     const requestedCapabilities = input.requestedCapabilities || [];
     const reusable = this.options.attempts.list({ limit: 100 }).find((item) =>
       item.serviceId === canonicalServiceId
+      && item.metadata?.pluginKind === discovery?.matches[0]?.pluginKind
       && !['connected', 'failed', 'cancelled'].includes(item.state)
       && !(item.state === 'awaiting_oauth' && Number(item.metadata?.oauthDiscoveryVersion || 0) < 2)
       && item.readOnly === (input.readOnly !== false)
       && JSON.stringify([...item.requestedCapabilities].sort()) === JSON.stringify([...requestedCapabilities].sort()));
     if (reusable) return reusable;
     const match = discovery?.status === 'resolved' ? discovery.matches[0] : undefined;
-    const attempt = this.options.attempts.create({ ...input, serviceId: canonicalServiceId, serviceName: input.serviceName || match?.serviceName, pluginId: match?.pluginId, requestedCapabilities, readOnly: input.readOnly !== false, metadata: { ...(input.metadata || {}), originalServiceQuery: input.serviceId } });
+    const attempt = this.options.attempts.create({ ...input, serviceId: canonicalServiceId, serviceName: input.serviceName || match?.serviceName, pluginId: match?.pluginId, requestedCapabilities, readOnly: input.readOnly !== false, metadata: { ...(input.metadata || {}), pluginKind: match?.pluginKind, originalServiceQuery: input.serviceId } });
     this.record(attempt, 'attempt.created', `Connection requested for ${input.serviceName || input.serviceId}.`);
     return attempt;
   }
@@ -91,9 +98,10 @@ export class ConnectionOrchestrator {
 
   async plan(id: string): Promise<ConnectionAttempt> {
     let attempt = this.requireAttempt(id);
+    if (attempt.plan || ['cancelled', 'connected', 'failed'].includes(attempt.state)) return attempt;
     attempt = this.transition(attempt, 'discovering', 'Discovering trusted connection options.');
     try {
-      const discovery = this.options.plans.discover?.(attempt.serviceId);
+      const discovery = this.options.plans.discover?.(attempt.metadata?.pluginKind ? `${attempt.metadata.pluginKind}:${attempt.serviceId}` : attempt.serviceId);
       if (discovery?.status === 'research_required' && attempt.metadata?.officialSource !== true) {
         return this.transition(this.options.attempts.update(id, { metadata: { ...(attempt.metadata || {}), discovery } }), 'research_required', 'No installed match was found. Research official sources before proposing a connection definition.');
       }
@@ -101,6 +109,7 @@ export class ConnectionOrchestrator {
         return this.transition(this.options.attempts.update(id, { metadata: { ...(attempt.metadata || {}), discovery } }), 'research_required', 'Multiple connection plugins match. Select one before continuing.');
       }
       const plan = await this.options.plans.resolve({ serviceId: attempt.serviceId, requestedCapabilities: attempt.requestedCapabilities, readOnly: attempt.readOnly !== false, metadata: attempt.metadata });
+      if (plan.serviceId !== attempt.serviceId) throw new Error('SERVICE_IDENTITY_MISMATCH');
       attempt = this.options.attempts.update(id, { serviceId: plan.serviceId, serviceName: plan.serviceName, plan, pluginId: plan.pluginId, selectedStrategy: plan.strategy.id, state: 'planning', error: undefined });
       return this.transition(attempt, 'awaiting_approval', plan.summary);
     } catch (error: any) {
@@ -108,12 +117,43 @@ export class ConnectionOrchestrator {
     }
   }
 
-  async connect(id: string, input?: Record<string, unknown>): Promise<ConnectionAttempt> {
+  /** Prepare a form, never launch OAuth, install a plugin, or grant consent. */
+  async prepareInput(id: string): Promise<ConnectionAttempt> {
+    const attempt = this.requireAttempt(id);
+    if (attempt.state !== 'awaiting_approval' || !attempt.plan) return attempt;
+    if (!['api-key', 'setup-token', 'connector-oauth'].includes(attempt.plan.strategy.adapter)) return attempt;
+    const adapter = this.options.adapters.resolve(attempt.plan.strategy);
+    if (!adapter.prepare) return attempt;
+    const result = await adapter.prepare(this.context(attempt));
+    // No adapter can use this route to register or authenticate a connection.
+    if (result.state !== 'awaiting_secure_input' || result.connection) return attempt;
+    return this.applyResult(attempt, { ...result, configuration: { ...result.configuration, inputPreparedOnly: true } }, adapter.id);
+  }
+
+  /** Called only after an owner-authorized native app credential save. */
+  confirmPreparedInputSaved(id: string): void {
+    const attempt = this.requireAttempt(id);
+    if (attempt.state !== 'awaiting_secure_input' || !attempt.metadata?.inputPreparedOnly) return;
+    this.options.attempts.update(id, { metadata: { ...attempt.metadata, inputPreparedOnly: false } });
+  }
+
+  connect(id: string, input?: Record<string, unknown>): Promise<ConnectionAttempt> {
+    const pending = this.connectInFlight.get(id); if (pending) return pending;
+    const task = this.connectOnce(id, input).finally(() => this.connectInFlight.delete(id));
+    this.connectInFlight.set(id, task); return task;
+  }
+
+  private async connectOnce(id: string, input?: Record<string, unknown>): Promise<ConnectionAttempt> {
     let attempt = this.requireAttempt(id);
+    if (['cancelled', 'connected', 'failed'].includes(attempt.state)) return attempt;
     if (!attempt.plan) attempt = await this.plan(id);
     if (!attempt.plan || attempt.state === 'failed') return attempt;
     if (attempt.state === 'awaiting_approval' && input?.approved !== true) return attempt;
-    const adapter = this.options.adapters.resolve(attempt.plan.strategy);
+    if (attempt.state.startsWith('awaiting_') && attempt.state !== 'awaiting_approval') {
+      if (attempt.state !== 'awaiting_secure_input' || !attempt.metadata?.inputPreparedOnly || input?.approved !== true) return attempt;
+      attempt = this.options.attempts.update(id, { metadata: { ...attempt.metadata, inputPreparedOnly: false } });
+    }
+    const adapter = this.options.adapters.resolve(attempt.plan!.strategy);
     this.options.attempts.addProgress(attempt.id, { state: attempt.state, message: `Using ${adapter.displayName}.` });
     try {
       const result = await adapter.connect(this.context(attempt, input));
@@ -125,16 +165,19 @@ export class ConnectionOrchestrator {
 
   async continue(id: string, input?: Record<string, unknown>): Promise<ConnectionAttempt> {
     const attempt = this.requireAttempt(id);
-    if (attempt.state === 'awaiting_approval') return this.connect(id, { ...(input || {}), approved: true });
+    // Continue is progress, not consent. Only the owner-gated connect route approves.
+    if (['awaiting_approval', 'cancelled', 'connected', 'failed'].includes(attempt.state)) return attempt;
     if (!attempt.plan) throw new Error(`Connection attempt ${id} has no plan.`);
+    if (attempt.metadata?.inputPreparedOnly && attempt.plan.strategy.adapter === 'connector-oauth') return attempt;
     const adapter = this.options.adapters.resolve(attempt.plan.strategy);
-    if (!adapter.continue) return this.connect(id, { ...input, approved: true });
+    if (!adapter.continue) return attempt;
     try { return this.applyResult(attempt, await adapter.continue(this.context(attempt, input), input), adapter.id); }
     catch (error: any) { return this.fail(attempt, 'CONNECTION_CONTINUE_FAILED', String(error?.message || error), true); }
   }
 
   async verify(id: string): Promise<ConnectionAttempt> {
     let attempt = this.requireAttempt(id);
+    if (attempt.state === 'cancelled' || attempt.state === 'awaiting_approval') return attempt;
     // The OAuth callback completes out-of-band (loopback listener), so the
     // attempt is still awaiting_oauth until something calls continue(). Verify
     // used to fail with NO_CONNECTION even though tokens were already stored
@@ -159,6 +202,7 @@ export class ConnectionOrchestrator {
     const checks: ConnectionVerificationResult[] = adapter.verify
       ? await adapter.verify(this.context(attempt), connection)
       : [{ id: randomUUID(), check: 'adapter', passed: connection.authenticated && connection.registered, message: 'Adapter state verification.', verifiedAt: new Date().toISOString() }];
+    if (this.requireAttempt(id).state === 'cancelled') return this.requireAttempt(id);
     const passed = checks.length > 0 && checks.every((check) => check.passed);
     const verifiedAt = new Date().toISOString();
     this.options.connections.update(connection.id, { verified: passed, health: passed ? 'healthy' : 'degraded', verification: checks, lastVerifiedAt: verifiedAt, lastHealthCheckAt: verifiedAt });
@@ -167,6 +211,7 @@ export class ConnectionOrchestrator {
 
   async repair(id: string): Promise<ConnectionAttempt> {
     const attempt = this.requireAttempt(id);
+    if (['awaiting_approval', 'cancelled', 'failed'].includes(attempt.state)) return attempt;
     if (!attempt.plan || !attempt.connectionId) return this.fail(attempt, 'NO_CONNECTION', 'No connection is available to repair.', false);
     const connection = this.options.connections.get(attempt.connectionId);
     if (!connection) return this.fail(attempt, 'NO_CONNECTION', 'The connection record no longer exists.', false);
@@ -176,7 +221,22 @@ export class ConnectionOrchestrator {
     catch (error: any) { return this.fail(attempt, 'REPAIR_FAILED', String(error?.message || error), true); }
   }
 
-  cancel(id: string): ConnectionAttempt { return this.transition(this.requireAttempt(id), 'cancelled', 'Connection attempt cancelled.'); }
+  /** Close an unfinished attempt from any state: cancel where allowed, otherwise fail it. */
+  abandon(id: string, reason = 'Abandoned stale setup attempt.'): ConnectionAttempt {
+    const attempt = this.requireAttempt(id);
+    if (['cancelled', 'connected', 'failed'].includes(attempt.state)) return attempt;
+    if (CONNECTION_STATE_TRANSITIONS[attempt.state]?.includes('cancelled')) return this.cancel(id);
+    this.fail(attempt, 'ABANDONED', reason, true);
+    return this.requireAttempt(id);
+  }
+
+  cancel(id: string): ConnectionAttempt {
+    const attempt = this.requireAttempt(id);
+    if (['cancelled', 'connected', 'failed'].includes(attempt.state)) return attempt;
+    const cancelled = this.transition(attempt, 'cancelled', 'Connection attempt cancelled.');
+    if (attempt.plan) { const adapter = this.options.adapters.resolve(attempt.plan.strategy); try { void Promise.resolve(adapter.cancel?.(this.context(attempt))).catch(() => this.options.attempts.addProgress(id, { state: 'cancelled', message: 'Cancellation cleanup failed; the attempt remains cancelled.' })); } catch { /* terminal state is retained */ } }
+    return cancelled;
+  }
 
   async disconnect(connectionId: string): Promise<void> {
     const connection = this.options.connections.get(connectionId);
@@ -193,13 +253,29 @@ export class ConnectionOrchestrator {
         console.warn(`[connections] disconnect cleanup failed for ${connectionId}:`, error?.message || error);
       }
     }
-    this.options.connections.update(connectionId, { enabled: false, authenticated: false, exposed: false, exposedTools: [], availableTools: [], authState: 'none', health: 'unavailable' });
+    // Credential-backed plugins (API key / setup token) return to a fresh "not set up" state:
+    // the stored key is gone, so the record must not keep claiming it is configured or point at
+    // the deleted reference. Registered tools stay so reconnecting only asks for credentials again.
+    const credentialBacked = CREDENTIAL_ADAPTERS.has(connection.adapterId || attempt?.plan?.strategy.adapter || '');
+    this.options.connections.update(connectionId, {
+      enabled: false, authenticated: false, exposed: false, exposedTools: [], availableTools: [], authState: 'none', health: 'unavailable',
+      ...(credentialBacked ? { configured: false, verified: false, credentialRef: undefined } : {}),
+    });
+    // Close every setup attempt still bound to this connection. A stale attempt stuck in
+    // 'registering' (never verified) was being resumed by Connect after a disconnect and
+    // showed "Saved. Setup is complete" instead of asking for credentials (Raul, 2026-11-12).
+    for (const stale of this.options.attempts.list({ serviceId: connection.serviceId })) {
+      if (stale.connectionId !== connectionId || stale.state === 'cancelled' || stale.state === 'failed') continue;
+      if (CONNECTION_STATE_TRANSITIONS[stale.state]?.includes('cancelled')) this.transition(stale, 'cancelled', 'Closed because the connection was disconnected.');
+      else this.fail(stale, 'DISCONNECTED', 'Closed because the connection was disconnected.', true);
+    }
     invalidateConnectionToolSurfaceCache();
     this.options.activity.append({ type: 'connection.disconnected', connectionId, serviceId: connection.serviceId, pluginId: connection.pluginId, message: `Disconnected ${connection.serviceName || connection.serviceId}.` });
     this.emit({ type: 'connection_updated', connection: this.options.connections.get(connectionId) });
   }
 
   private context(attempt: ConnectionAttempt, input?: Record<string, unknown>) {
+    if (attempt.metadata?.pluginKind && input) input = Object.fromEntries(Object.entries(input).filter(([key]) => ['credentialRef', 'approved'].includes(key)));
     if (input?.credentialRef !== undefined && (typeof input.credentialRef !== 'string' || this.options.validateCredentialReference?.(input.credentialRef, attempt.serviceId, attempt.id) !== true)) {
       throw new Error('Credential reference was not issued for this connection attempt. Enter credentials through its secure card.');
     }
@@ -207,6 +283,8 @@ export class ConnectionOrchestrator {
   }
 
   private applyResult(attempt: ConnectionAttempt, result: ConnectionAdapterResult, adapterId: string): ConnectionAttempt {
+    const current = this.requireAttempt(attempt.id);
+    if (current.state === 'cancelled') return current;
     if (result.error) return this.fail(attempt, result.error.code, result.error.message, result.error.retryable !== false);
     let connectionId = attempt.connectionId;
     if (result.connection && attempt.plan) {
@@ -253,6 +331,8 @@ export class ConnectionOrchestrator {
   }
 
   private fail(attempt: ConnectionAttempt, code: string, message: string, retryable: boolean): ConnectionAttempt {
+    const current = this.requireAttempt(attempt.id);
+    if (current.state === 'cancelled') return current;
     const failed = this.options.attempts.update(attempt.id, { state: 'failed', error: { code, message, retryable, phase: attempt.state, occurredAt: new Date().toISOString() } });
     this.record(failed, 'error', message);
     return failed;

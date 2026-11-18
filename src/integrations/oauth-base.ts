@@ -10,6 +10,7 @@ import http from 'http';
 import crypto from 'crypto';
 import { getVault } from '../security/vault.js';
 import { GATEWAY_OAUTH_CALLBACK_PREFIX, awaitGatewayOAuthCallback, gatewayPublicOrigin } from './gateway-oauth-callback.js';
+import { accountKeySuffix, addAccountArmed, listConnectorAccounts, routeIncomingAccount, runWithConnectorAccounts, type AccountIdentity } from '../connections/connector-accounts.js';
 
 export interface OAuthConnectorConfig {
   id: string;
@@ -43,6 +44,14 @@ export interface OAuthConnectorConfig {
    * public URL is configured.
    */
   gatewayCallback?: boolean;
+  /**
+   * Provider also accepts an optional "web" OAuth client (vault
+   * integration.<id>.web_credentials, or a fallback connector's). When one is
+   * saved and the gateway has a public https origin, sign-in returns through
+   * the gateway callback so it can finish from a phone browser. Grants record
+   * which client issued them so refresh/revoke keep using the same client.
+   */
+  webClient?: boolean;
 }
 
 /**
@@ -71,6 +80,8 @@ export interface ConnectorTokens {
   resource_kind?: string;
   identity_url?: string;
   instance_url?: string;
+  /** 'web' when the grant came from the optional web OAuth client; absent = primary client. */
+  oauth_client?: 'web';
 }
 
 export interface OAuthStartResult {
@@ -78,6 +89,8 @@ export interface OAuthStartResult {
   authUrl: string;
   flowId: string;
   error?: string;
+  /** True when the flow uses the web client + public gateway callback (works from any device). */
+  web?: boolean;
 }
 
 export interface OAuthCallbackResult {
@@ -97,12 +110,14 @@ export interface OAuthConnectorMetadata {
 }
 
 interface FlowState {
+  processing?: boolean;
   verifier?: string;
   state: string;
   createdAt: number;
   expectedAccountId?: string;
   requestedScopes?: string[];
   nonce?: string;
+  web?: boolean;
 }
 
 const FLOW_TTL_MS = 10 * 60 * 1000;
@@ -119,8 +134,27 @@ export abstract class OAuthConnector {
 
   get id() { return this.cfg.id; }
 
+  /** Default account keeps the original slot; extra accounts (connector-accounts.ts) get a suffix. */
   protected vaultKey(): string {
-    return `integration.${this.cfg.id}.oauth_tokens`;
+    return `integration.${this.cfg.id}.oauth_tokens${accountKeySuffix(this.cfg.id)}`;
+  }
+
+  /** Identity stored in the DEFAULT slot, regardless of the active account scope. */
+  public defaultAccountIdentity(): AccountIdentity | null {
+    try {
+      const secret = getVault(this.configDir).get(`integration.${this.cfg.id}.oauth_tokens`, `oauth:identity:${this.cfg.id}`);
+      if (!secret) return null;
+      const tokens = JSON.parse(secret.expose()) as ConnectorTokens;
+      return tokens?.access_token ? { email: tokens.account_email, accountId: tokens.account_id } : null;
+    } catch { return null; }
+  }
+
+  /** Store a NEW grant: routes to the default slot or an extra account (add-account mode). */
+  protected saveIncomingTokens(tokens: ConnectorTokens): string {
+    const slug = routeIncomingAccount(this.configDir, this.cfg.id, 'oauth',
+      { email: tokens.account_email, accountId: tokens.account_id }, () => this.defaultAccountIdentity());
+    runWithConnectorAccounts([this.cfg.id], slug, () => this.saveTokens(tokens));
+    return slug;
   }
 
   /** Opaque vault reference only; never returns a credential value. */
@@ -136,7 +170,7 @@ export abstract class OAuthConnector {
 
   saveTokens(tokens: ConnectorTokens): void {
     getVault(this.configDir).set(this.vaultKey(), JSON.stringify(tokens), `oauth:save:${this.cfg.id}`);
-    this.updateConnectionsFile(true, tokens.account_email);
+    if (!accountKeySuffix(this.cfg.id)) this.updateConnectionsFile(true, tokens.account_email);
   }
 
   clearTokens(): void {
@@ -152,7 +186,7 @@ export abstract class OAuthConnector {
     if (!tokens?.access_token || !this.cfg.revokeUrl) return;
     const body = new URLSearchParams({ token: tokens.refresh_token || tokens.access_token });
     const headers: Record<string, string> = { 'Content-Type': 'application/x-www-form-urlencoded' };
-    this.applyClientAuthentication(body, headers);
+    this.applyClientAuthentication(body, headers, tokens.oauth_client === 'web' ? this.webClientCredentials() : null);
     const response = await fetch(this.cfg.revokeUrl, {
       method: 'POST',
       headers,
@@ -270,7 +304,11 @@ export abstract class OAuthConnector {
       refresh_token: existing.refresh_token,
     });
     const headers: Record<string, string> = { 'Content-Type': 'application/x-www-form-urlencoded' };
-    this.applyClientAuthentication(body, headers);
+    const webCreds = existing.oauth_client === 'web' ? this.webClientCredentials() : null;
+    if (existing.oauth_client === 'web' && !webCreds) {
+      throw new Error(`${this.cfg.name} web sign-in client is no longer configured. Reconnect ${this.cfg.name} in the Connections panel.`);
+    }
+    this.applyClientAuthentication(body, headers, webCreds);
     this.decorateTokenBody(body);
     const res = await fetch(this.cfg.tokenUrl, {
       method: 'POST',
@@ -304,6 +342,14 @@ export abstract class OAuthConnector {
       // Reconnected or disconnected while the request was in flight: keep what is stored now.
       const current = this.loadTokens();
       if (!current) throw new Error(`${this.cfg.name} not connected. Connect via the Connections panel.`);
+      // Multi-account: the slot may now hold a DIFFERENT account (make default / remove ran
+      // while this refresh was in flight). Never hand that account's token to this call.
+      const sameAccount = (existing.account_id && current.account_id === existing.account_id)
+        || (existing.account_email && current.account_email?.toLowerCase() === existing.account_email.toLowerCase())
+        // No stored identity: we can't prove it's the same account, so only trust the slot when
+        // this connector has no extra accounts (no make-default/remove swap could have happened).
+        || (!existing.account_id && !existing.account_email && listConnectorAccounts(this.configDir, this.cfg.id).length === 0);
+      if (!sameAccount) throw new Error(`${this.cfg.name} account changed while refreshing. Retry the request.`);
       return current;
     }
     this.saveTokens(tokens);
@@ -331,7 +377,7 @@ export abstract class OAuthConnector {
     const token = String(accessToken || '').trim();
     if (!token) throw new Error('Access token is empty.');
     const tokens = await this.buildManualTokens(token);
-    this.saveTokens(tokens);
+    this.saveIncomingTokens(tokens);
     return { account: tokens.account_email || tokens.account_id };
   }
 
@@ -370,6 +416,55 @@ export abstract class OAuthConnector {
    */
   protected credentialFallbackIds(): string[] { return []; }
 
+  /** Optional web OAuth client (see OAuthConnectorConfig.webClient). Never exposed outside the connector. */
+  protected webClientCredentials(): { clientId: string; clientSecret: string } | null {
+    if (this.cfg.webClient === false) return null;
+    for (const id of [...new Set([this.cfg.id, ...this.credentialFallbackIds(), ...this.webClientFallbackIds()])]) {
+      try {
+        const secret = getVault(this.configDir).get(`integration.${id}.web_credentials`, `creds:web:${this.cfg.id}`);
+        if (!secret) continue;
+        const creds = JSON.parse(secret.expose()) as { clientId?: string; clientSecret?: string; samePrimary?: boolean };
+        // Providers that allow several redirect URIs on one app (X, Slack, Notion...) reuse the primary client.
+        if (creds.samePrimary) {
+          if (id !== this.cfg.id) continue;
+          if (this.cfg.clientId) return { clientId: this.cfg.clientId, clientSecret: this.cfg.clientSecret || '' };
+          continue;
+        }
+        if (creds.clientId) return { clientId: creds.clientId, clientSecret: creds.clientSecret || '' };
+      } catch { /* vault unavailable or malformed entry */ }
+    }
+    return null;
+  }
+
+  /** Connectors sharing one provider project may reuse another connector's web client. */
+  protected webClientFallbackIds(): string[] { return []; }
+
+  saveWebClientCredentials(clientId: string, clientSecret: string): void {
+    if (this.cfg.webClient === false) throw new Error(`${this.cfg.name} does not support a web sign-in client.`);
+    // Empty clientId = the primary app already lists the gateway redirect URI; reuse it.
+    const value = clientId ? { clientId, clientSecret } : { samePrimary: true };
+    getVault(this.configDir).set(`integration.${this.cfg.id}.web_credentials`, JSON.stringify(value), `creds:web:save:${this.cfg.id}`);
+  }
+
+  clearWebClientCredentials(): void {
+    getVault(this.configDir).delete(`integration.${this.cfg.id}.web_credentials`, `creds:web:clear:${this.cfg.id}`);
+  }
+
+  /** A web client entry is saved for this connector but can't be read (e.g. sealed with another vault key). */
+  webClientEntryBroken(): boolean {
+    if (this.cfg.webClient === false) return false;
+    try {
+      const vault = getVault(this.configDir);
+      const ids = [...new Set([this.cfg.id, ...this.credentialFallbackIds(), ...this.webClientFallbackIds()])];
+      return ids.some((id) => vault.has(`integration.${id}.web_credentials`)) && !this.webClientCredentials();
+    } catch { return false; }
+  }
+
+  /** Web sign-in works only with a saved web client AND a public https gateway origin. */
+  webSignInAvailable(): boolean {
+    return !!(this.webClientCredentials() && gatewayPublicOrigin());
+  }
+
   saveCredentials(clientId: string, clientSecret?: string): void {
     const vaultKey = `integration.${this.cfg.id}.credentials`;
     getVault(this.configDir).set(vaultKey, JSON.stringify({ clientId, clientSecret: clientSecret || '' }), `creds:save:${this.cfg.id}`);
@@ -405,15 +500,23 @@ export abstract class OAuthConnector {
     };
   }
 
+  private cancelListener?: () => void;
+  cancelFlow(): void { activeFlows.delete(this.cfg.id); this.cancelListener?.(); this.cancelListener = undefined; }
+
   startFlow(expectedAccountId?: string, requestedScopes?: string[]): OAuthStartResult {
     this.loadCredentialsFromVault();
-    if (!this.cfg.clientId) {
+    const webCreds = gatewayPublicOrigin() ? this.webClientCredentials() : null;
+    if (!this.cfg.clientId && !webCreds) {
       return {
         success: false,
         authUrl: '',
         flowId: this.cfg.id,
         error: `${this.cfg.name} OAuth app is not configured. Add the provider app credentials in Advanced setup.`,
       };
+    }
+    if (!webCreds && gatewayPublicOrigin() && this.webClientEntryBroken()) {
+      // Never silently fall back to the desktop-only flow when a phone setup exists but can't be read.
+      return { success: false, authUrl: '', flowId: this.cfg.id, error: `${this.cfg.name} phone sign-in setup can't be read. Open the plugin and save the phone sign-in client again.` };
     }
     const existing = activeFlows.get(this.cfg.id);
     if (existing && Date.now() - existing.createdAt <= FLOW_TTL_MS) {
@@ -425,12 +528,13 @@ export abstract class OAuthConnector {
       .map((scope) => String(scope || '').trim())
       .filter(Boolean))];
     const nonce = this.cfg.useNonce ? crypto.randomBytes(16).toString('hex') : undefined;
-    const flowState: FlowState = { state, createdAt: Date.now(), expectedAccountId, requestedScopes: scopes, nonce };
+    const web = !!webCreds;
+    const flowState: FlowState = { state, createdAt: Date.now(), expectedAccountId, requestedScopes: scopes, nonce, web };
 
     const params = new URLSearchParams({
       response_type: 'code',
-      client_id: this.cfg.clientId,
-      redirect_uri: this.callbackUrl(),
+      client_id: webCreds ? webCreds.clientId : this.cfg.clientId,
+      redirect_uri: this.redirectFor(web),
       state,
     });
     if (this.cfg.useOfflineAccess !== false) {
@@ -447,10 +551,16 @@ export abstract class OAuthConnector {
       params.set('code_challenge_method', 'S256');
     }
     this.decorateAuthParams(params);
+    // Adding another account: let the provider show its account chooser, preselecting the hint.
+    const adding = addAccountArmed(this.configDir, this.cfg.id);
+    if (adding) {
+      if (/accounts\.google\.com/i.test(this.cfg.authUrl)) params.set('prompt', 'select_account consent');
+      if (adding.hint) params.set('login_hint', adding.hint);
+    }
 
     activeFlows.set(this.cfg.id, flowState);
     const authUrl = `${this.cfg.authUrl}?${params.toString()}`;
-    return { success: false, authUrl, flowId: this.cfg.id };
+    return { success: false, authUrl, flowId: this.cfg.id, ...(web ? { web: true } : {}) };
   }
 
   public async handleCallback(code: string, returnedState: string, returnedNonce?: string): Promise<OAuthCallbackResult> {
@@ -467,13 +577,20 @@ export abstract class OAuthConnector {
       return { success: false, error: 'Nonce mismatch — possible replay.' };
     }
 
+    if (flow.processing) return { success: false, error: 'OAuth callback already in progress.' };
+    flow.processing = true;
     const body = new URLSearchParams({
       grant_type: 'authorization_code',
       code,
-      redirect_uri: this.callbackUrl(),
+      redirect_uri: this.redirectFor(!!flow.web),
     });
     const headers: Record<string, string> = { 'Content-Type': 'application/x-www-form-urlencoded' };
-    this.applyClientAuthentication(body, headers);
+    const flowWebCreds = flow.web ? this.webClientCredentials() : null;
+    if (flow.web && !flowWebCreds) {
+      activeFlows.delete(this.cfg.id);
+      return { success: false, error: `${this.cfg.name} web sign-in client was removed during sign-in. Click Connect again.` };
+    }
+    this.applyClientAuthentication(body, headers, flowWebCreds);
     if (flow.verifier) body.set('code_verifier', flow.verifier);
     this.decorateTokenBody(body);
 
@@ -490,7 +607,7 @@ export abstract class OAuthConnector {
     }
 
     const data = await res.json() as any;
-    activeFlows.delete(this.cfg.id);
+    if (activeFlows.get(this.cfg.id) !== flow) return { success: false, error: 'OAuth session cancelled or replaced.' };
 
     if (!data?.access_token || typeof data.access_token !== 'string') {
       return { success: false, error: 'Token exchange returned no access token.' };
@@ -516,16 +633,20 @@ export abstract class OAuthConnector {
     }
 
     const tokens = await this.buildTokens(data);
+    if (flow.web) tokens.oauth_client = 'web';
+    else delete tokens.oauth_client;
     if (flow.expectedAccountId && tokens.account_id && flow.expectedAccountId !== tokens.account_id) {
       return { success: false, error: 'OAuth account mismatch — the selected provider account did not authorize this connection.' };
     }
-    this.saveTokens(tokens);
+    if (activeFlows.get(this.cfg.id) !== flow) return { success: false, error: 'OAuth session cancelled or replaced.' };
+    activeFlows.delete(this.cfg.id);
+    this.saveIncomingTokens(tokens);
 
     return { success: true, account_email: tokens.account_email };
   }
 
   listenForCallback(): Promise<OAuthCallbackResult> {
-    if (this.cfg.gatewayCallback && gatewayPublicOrigin()) {
+    if ((this.cfg.gatewayCallback || activeFlows.get(this.cfg.id)?.web) && gatewayPublicOrigin()) {
       return awaitGatewayOAuthCallback(this.cfg.id, FLOW_TTL_MS, async (code, state, error) => {
         if (error || !code) return { success: false, error: error || 'No authorization code' };
         return this.handleCallback(code, state);
@@ -578,6 +699,12 @@ export abstract class OAuthConnector {
         }
       });
 
+      this.cancelListener = () => {
+        if (finished) return; finished = true;
+        if (timeout) clearTimeout(timeout);
+        server.close(() => undefined);
+        resolve({ success: false, error: 'OAuth cancelled.' });
+      };
       server.on('error', (e: any) => {
         if (finished) return;
         finished = true;
@@ -606,14 +733,26 @@ export abstract class OAuthConnector {
   /** Redirect URI the user must register in the provider app. */
   public redirectUri(): string { return this.callbackUrl(); }
 
-  private applyClientAuthentication(body: URLSearchParams, headers: Record<string, string>): void {
+  /** Redirect URI to register on the optional web client ('' when no public origin). */
+  public webRedirectUri(): string {
+    const origin = gatewayPublicOrigin();
+    return origin ? `${origin}${GATEWAY_OAUTH_CALLBACK_PREFIX}${this.cfg.id}` : '';
+  }
+
+  private redirectFor(web: boolean): string {
+    return web ? this.webRedirectUri() : this.callbackUrl();
+  }
+
+  private applyClientAuthentication(body: URLSearchParams, headers: Record<string, string>, override?: { clientId: string; clientSecret: string } | null): void {
+    const clientId = override ? override.clientId : this.cfg.clientId;
+    const clientSecret = override ? override.clientSecret : this.cfg.clientSecret;
     if (this.cfg.tokenAuthMethod === 'basic') {
-      if (!this.cfg.clientId || !this.cfg.clientSecret) throw new Error(`${this.cfg.name} OAuth client authentication is not configured.`);
-      headers.Authorization = `Basic ${Buffer.from(`${this.cfg.clientId}:${this.cfg.clientSecret}`, 'utf8').toString('base64')}`;
+      if (!clientId || !clientSecret) throw new Error(`${this.cfg.name} OAuth client authentication is not configured.`);
+      headers.Authorization = `Basic ${Buffer.from(`${clientId}:${clientSecret}`, 'utf8').toString('base64')}`;
       return;
     }
-    if (this.cfg.clientId) body.set('client_id', this.cfg.clientId);
-    if (this.cfg.clientSecret) body.set('client_secret', this.cfg.clientSecret);
+    if (clientId) body.set('client_id', clientId);
+    if (clientSecret) body.set('client_secret', clientSecret);
   }
 
   protected abstract buildTokens(data: Record<string, any>): Promise<ConnectorTokens>;

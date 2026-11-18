@@ -2364,7 +2364,7 @@ function _documentedReasoningCapability(provider, model) {
   const name = String(model || '').trim().toLowerCase().split('/').filter(Boolean).pop() || '';
   if (provider === 'openai_codex') {
     if (name === 'chatgpt') return { efforts: ['low','medium','high','xhigh','max','ultra'], defaultEffort: 'high' };
-    if (/^gpt-6(?:\.1)?-(?:astra|sol|luna)(?:-|$)/.test(name)) return { efforts: ['low','medium','high','xhigh','max'], defaultEffort: /^gpt-6-astra/.test(name) ? 'low' : 'medium' };
+    if (/^gpt-6(?:\.[12])?-(?:astra|sol|luna)(?:-|$)/.test(name)) return { efforts: ['low','medium','high','xhigh','max'], defaultEffort: /^gpt-6-astra/.test(name) ? 'low' : 'medium' };
     if (/^gpt-5\.6-(?:sol|terra)(?:-|$)/.test(name)) return { efforts: ['low','medium','high','xhigh','max','ultra'], defaultEffort: 'medium' };
     if (/^gpt-5\.6(?:-luna)?(?:-|$)/.test(name)) return { efforts: ['low','medium','high','xhigh','max'], defaultEffort: 'medium' };
     if (/^gpt-5\.5(?:-|$)/.test(name)) return { efforts: ['low','medium','high','xhigh'], defaultEffort: 'medium' };
@@ -2374,7 +2374,7 @@ function _documentedReasoningCapability(provider, model) {
     return { efforts: [] };
   }
   if (provider === 'openai') {
-    if (/^gpt-6(?:\.1)?-(?:astra|sol|luna)(?:-|$)/.test(name)) return { efforts: ['low','medium','high','xhigh','max'], defaultEffort: /^gpt-6-astra/.test(name) ? 'low' : 'medium' };
+    if (/^gpt-6(?:\.[12])?-(?:astra|sol|luna)(?:-|$)/.test(name)) return { efforts: ['low','medium','high','xhigh','max'], defaultEffort: /^gpt-6-astra/.test(name) ? 'low' : 'medium' };
     if (/^gpt-5\.6(?:-(?:sol|terra|luna))?(?:-|$)/.test(name)) return { efforts: ['low','medium','high','xhigh','max'], defaultEffort: 'medium' };
     if (/^gpt-5\.5(?:-|$)/.test(name)) return { efforts: ['low','medium','high','xhigh'], defaultEffort: 'medium' };
     if (/^gpt-5\.(?:[234])(?:-|$)/.test(name)) return { efforts: ['low','medium','high','xhigh'], defaultEffort: 'low' };
@@ -3071,10 +3071,11 @@ function _renderDesktopSwitcherQuick(state, controller = _desktopSwitcherControl
   };
   const saveQuickEffort = async (index) => {
     const effort = levels[index]?.v || '';
-    if (!effort || index === activeIndex) return;
+    if (!effort) return;
+    if (index === activeIndex) { _closeModelSwitcher(controller); return; }
     try {
       await setActiveChatModelRoute({ providerId: state.provider, model: state.model, reasoningEffort: effort || undefined, speed: state.speed }, controller.sessionId);
-      _renderDesktopSwitcherQuick(await _loadDesktopSwitcherState(controller.sessionId), controller);
+      _closeModelSwitcher(controller);
     } catch (err) { showToast('Could not save reasoning effort', String(err?.message || err), 'error'); }
   };
   if (slider) {
@@ -3185,9 +3186,7 @@ function _renderDesktopSwitcherEffort(state, controller = _desktopSwitcherContro
     const effort = button.getAttribute('data-switcher-effort') || '';
     try {
       await setActiveChatModelRoute({ providerId: state.provider, model: state.model, reasoningEffort: effort || undefined, speed: state.speed }, controller.sessionId);
-      const next = await _loadDesktopSwitcherState(controller.sessionId);
-      _renderDesktopSwitcherMain(next, controller);
-      _renderDesktopSwitcherEffort(next, controller);
+      _closeModelSwitcher(controller);
     } catch (err) { showToast('Could not save reasoning effort', String(err?.message || err), 'error'); }
   }));
 }
@@ -3753,9 +3752,9 @@ const AMD_SLOTS = {
 
 // Static model fallbacks (mirrors what loadAgentModelOptions uses)
 const AMD_STATIC_MODELS = {
-  openai:       ['gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-pro', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5-pro', 'gpt-5', 'gpt-5-mini', 'gpt-5-nano', 'gpt-5-chat-latest', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
-  openai_codex: ['chatgpt', 'gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-codex', 'gpt-5.4-codex-mini', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.3', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex-mini', 'gpt-5.1-codex', 'gpt-5.1'],
-  anthropic:    ['claude-fable-5-1', 'claude-fable-5', 'claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5-5', 'claude-sonnet-5', 'claude-sonnet-4-6', 'claude-haiku-5-5', 'claude-haiku-4-5-20251001'],
+  openai:       ['gpt-6.2-astra', 'gpt-6.2-sol', 'gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-pro', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5-pro', 'gpt-5', 'gpt-5-mini', 'gpt-5-nano', 'gpt-5-chat-latest', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
+  openai_codex: ['chatgpt', 'gpt-6.2-astra', 'gpt-6.2-sol', 'gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-codex', 'gpt-5.4-codex-mini', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.3', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex-mini', 'gpt-5.1-codex', 'gpt-5.1'],
+  anthropic:    ['claude-fable-5-2', 'claude-mythos-5-2', 'claude-fable-5-1', 'claude-fable-5', 'claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5-5', 'claude-sonnet-5', 'claude-sonnet-4-6', 'claude-haiku-5-5', 'claude-haiku-4-5-20251001'],
   perplexity:   ['sonar-pro', 'sonar', 'sonar-reasoning-pro', 'sonar-reasoning', 'sonar-deep-research'],
   gemini:       ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash'],
 };

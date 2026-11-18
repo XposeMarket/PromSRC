@@ -84,9 +84,11 @@ export class SecureAccessBroker {
     for (const r of this.requests.values()) if (r.status === 'pending' && Date.parse(r.expiresAt) <= this.now()) r.status = 'expired';
     return structuredClone([...this.requests.values()].filter(r => sessionId === undefined || r.sessionId === sessionId).slice(-100));
   }
-  submit(id: string, input: { identifier?: unknown; secret?: unknown; remember?: boolean; recoveryConfirmed?: boolean; generated?: boolean }): AccessCredential {
+  submit(id: string, input: { identifier?: unknown; secret?: unknown; remember?: boolean; recoveryConfirmed?: boolean; generated?: boolean }, policy: { entryOnly?: boolean } = {}): AccessCredential {
     const r = this.requests.get(id);
     if (!r || r.status !== 'pending' || Date.parse(r.expiresAt) <= this.now()) return deny('REQUEST_EXPIRED_OR_USED');
+    // Pairing permits fresh entry, not replacement/regrant of an existing credential.
+    if (policy.entryOnly && r.replaces) return deny('OWNER_APPROVAL_REQUIRED_FOR_REPLACEMENT');
     const secret = input.secret;
     if (typeof secret !== 'string' || secret.length < 1 || secret.length > 16384) return deny('INVALID_SECRET');
     const identifier = text(input.identifier ?? r.identifier, 254);

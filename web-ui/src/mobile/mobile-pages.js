@@ -1,8 +1,10 @@
+import { renderContentReview } from '../components/ContentReview.js';
+
 // Chat and inline Voice route owner.
 import { mobileStreamOwner } from './mobile-stream-owner.js';
 import { reconcileMobileStaleRuns } from './mobile-turn-lifecycle.js';
 import { renderAgentPet } from '../components/agent-pets.js';
-import { orderMobileTurnDeliveries, repairMobileLiveRowPlacement } from './mobile-thread-order.js';
+import { isMobileDeliveryRow, orderMobileTurnDeliveries, repairMobileLiveRowPlacement } from './mobile-thread-order.js';
 import {
   ICONS, icon, escapeHtml, el, renderMobileHeader, wireHeaderActions, openDrawer, invalidateMobileDrawerSessions, refreshMobileDrawerSessions, isMobileChatPinned, toggleMobileChatPin,
 } from './mobile-shell.js';
@@ -1584,6 +1586,9 @@ function _startMobileNewChat(navigate) {
   // so entering voice from this fresh chat cannot silently route back there.
   _exitMobileVoiceRoomForFreshChat('new_mobile_chat');
   _clearMobileLastChatSession();
+  // New Chat is the only action that should make the Chat tab land on a draft
+  // (key owned by the session-route module; inlined to keep the chat slice lean).
+  try { localStorage.removeItem('pm_mobile_chat_tab_route'); } catch {}
   __pmChat.activeSessionId = MOBILE_CHAT_SESSION_ID;
   resetMobileDraftModelRoute();
   _clearMobileDraftSessionState();
@@ -2962,6 +2967,15 @@ async function _steerMobileQueuedPrompt(sessionId, index) {
     return;
   }
   let clientSteerId = '';
+  // Close the queued banner immediately; waiting for upload + /api/chat/steer made it
+  // linger for seconds. Any failure puts the prompt back at its original slot.
+  let removedFromQueue = false;
+  const restoreQueued = () => {
+    if (!removedFromQueue) return;
+    removedFromQueue = false;
+    if (!queue.includes(item)) queue.splice(Math.min(index, queue.length), 0, item);
+  };
+  if (queue[index] === item) { queue.splice(index, 1); removedFromQueue = true; _renderMobileQueuedPromptsPanel(sid); }
   try {
     const files = Array.isArray(item.files) ? item.files : [];
     const uploadResults = files.length ? await _uploadMobileChatAttachments(files) : [];
@@ -2997,7 +3011,8 @@ async function _steerMobileQueuedPrompt(sessionId, index) {
       err.definitive = true;
       throw err;
     }
-    queue.splice(index, 1);
+    if (!removedFromQueue) { const at = queue.indexOf(item); if (at >= 0) queue.splice(at, 1); }
+    removedFromQueue = false;
     _renderMobileQueuedPromptsPanel(sid);
     // The steer just emptied the queue under the user's thumb; don't let the
     // next tap land on Stop.
@@ -3010,9 +3025,10 @@ async function _steerMobileQueuedPrompt(sessionId, index) {
     const definitive = err?.definitive === true
       || (Number(err?.status || 0) >= 400 && Number(err?.status || 0) < 500)
       || err?.retryable === false;
+    restoreQueued();
+    _renderMobileQueuedPromptsPanel(sid);
     if (definitive) {
       _rollbackMobileQueuedSteerTurn(sid, clientSteerId, errorText);
-      _renderMobileQueuedPromptsPanel(sid);
       pmToast(`Steer rejected: ${errorText}`, 'error');
       return;
     }
@@ -3040,6 +3056,16 @@ function _renderMobileQueuedPromptsPanel(sessionId = '') {
     return;
   }
   panel.hidden = false;
+  // Stream events re-render this panel constantly. Rebuilding identical markup wiped the
+  // open Steer/Delete popover under the user's thumb, so skip no-op rebuilds and keep the
+  // open menu across real ones.
+  const queueSignature = JSON.stringify([sid, queue.map((item) => [String(item?.id || ''), String(item?.message || ''), Array.isArray(item?.files) ? item.files.length : 0])]);
+  if (panel.dataset.pmQueueSig === queueSignature && panel.querySelector('.pm-mobile-queued-list')) {
+    try { window.__pmMobileQueuedPromptsChanged?.(); } catch {}
+    return;
+  }
+  const openMenuIndex = Number(panel.querySelector('.pm-mobile-queued-popover:not([hidden])')?.getAttribute('data-mobile-queued-menu'));
+  panel.dataset.pmQueueSig = queueSignature;
   panel.innerHTML = `
     <div class="pm-mobile-queued-list">
       ${queue.map((item, index) => `
@@ -3086,6 +3112,10 @@ function _renderMobileQueuedPromptsPanel(sessionId = '') {
       }
     });
   });
+  if (Number.isInteger(openMenuIndex) && openMenuIndex >= 0 && openMenuIndex < queue.length) {
+    const reopened = panel.querySelector(`[data-mobile-queued-menu="${openMenuIndex}"]`);
+    if (reopened) reopened.hidden = false;
+  }
   try { window.__pmMobileQueuedPromptsChanged?.(); } catch {}
 }
 
@@ -3120,7 +3150,10 @@ function _ensureMobileQueuedPromptMenuDismiss() {
 function _findLatestAssistantTurn(thread) {
   const list = Array.isArray(thread) ? thread : [];
   for (let i = list.length - 1; i >= 0; i -= 1) {
-    if (list[i]?.role === 'ai') return list[i];
+    // delivery_send rows are durable side messages appended mid-turn, never
+    // the run's live row. Returning one made recovery allocate a fresh empty
+    // row after it and orphan the real tool stream (IMG_2060-2063).
+    if (list[i]?.role === 'ai' && !isMobileDeliveryRow(list[i])) return list[i];
   }
   return null;
 }
@@ -3134,6 +3167,10 @@ function _mobileHistoryHasCompletedTurnSince(history, startedAt = 0, options = {
     const role = String(msg?.role || '').toLowerCase();
     if (role === 'user') return false;
     if (role !== 'assistant' && role !== 'ai') continue;
+    // delivery_send rows (login links, files) are side messages written
+    // mid-turn, not the turn's answer. Counting one as completion wiped the
+    // live tool stream on every foreground recovery (IMG_2065-2068).
+    if (isMobileDeliveryRow({ ...msg, role: 'ai' })) continue;
     // Restart checkpoint/status rows are written into history *during* a
     // mid-turn restart. They are continuity markers, not the turn's answer:
     // counting them as completion made an app that stayed open finalize the
@@ -3294,6 +3331,15 @@ function _mergeMobileAssistantTurnDetails(target, source, { preserveTargetText =
       const preview = String(item.preview?.dataUrl || item.dataUrl || '').slice(0, 120);
       if (callId) keys.push(`call:${type}|${callId}`);
       if (callId || action || text || preview) keys.push(`sig:${type}|${callId}|${action}|${text}|${preview}`);
+      // Media descriptors (generated images/videos, files, artifacts) carry no
+      // call id/text, so without a path identity every merge re-appended the
+      // whole list. One chat reached 1,422 copies of 3 images (4.3 MB) and
+      // froze the app on open. Identify them by their file/url instead.
+      if (MOBILE_MERGE_MEDIA_KEYS.has(key)) {
+        const mediaId = String(item.path || item.rel_path || item.relPath || item.url || item.src || item.file_name || item.fileName || item.name
+          || item.attempt?.id || item.artifactId || item.id || '').trim();
+        if (mediaId) keys.push(`media:${mediaId}`);
+      }
       return keys;
     };
     const positions = new Map();
@@ -5905,6 +5951,8 @@ function _normalizeMobileMedia(item) {
   };
 }
 
+const MOBILE_MERGE_MEDIA_KEYS = new Set(['generatedImages', 'generatedVideos', 'files', 'artifacts']);
+
 function _normalizeMobileMediaList(value) {
   const list = Array.isArray(value) ? value : (value ? [value] : []);
   const seen = new Set();
@@ -7321,6 +7369,7 @@ function _renderMobileApprovalCard(approvalInput = {}, { compact = false } = {})
     </div>
     <strong class="pm-chat-approval-title">${escapeHtml(title)}</strong>
     ${subtitle ? `<div class="pm-approval-sub ${isFinalAction ? '' : 'mono'}">${escapeHtml(subtitle)}</div>` : ''}
+    ${renderContentReview(approval)}
     ${human.summary ? `<blockquote class="pm-approval-quote">${escapeHtml(human.summary)}</blockquote>` : ''}
     ${pending ? _pmRenderCommandRunLink(approval) : ''}
     ${actionsHtml}
@@ -7885,19 +7934,6 @@ function _renderMobileMessageActions(m, index) {
   </div>`;
 }
 
-function _renderMobileUserEditComposer(m, index, attachmentHtml = '') {
-  const value = escapeHtml(String(m?._editingDraft ?? m?.body?.text ?? m?.content ?? ''));
-  // Only stop propagation for non-action targets (e.g. tapping the textarea) so
-  // the Cancel/Send buttons still reach the delegated threadEl click handler.
-  return `<div class="pm-mobile-edit-composer" data-msg-edit-index="${index}" onclick="if(!event.target.closest('[data-msg-action]'))event.stopPropagation()">
-    <textarea class="pm-mobile-edit-input" rows="4" data-msg-edit-input="${index}">${value}</textarea>
-    ${attachmentHtml}
-    <div class="pm-mobile-edit-actions">
-      <button type="button" class="pm-msg-action" data-msg-action="cancel-edit" data-msg-index="${index}">Cancel</button>
-      <button type="button" class="pm-msg-action primary" data-msg-action="submit-edit" data-msg-index="${index}">Send</button>
-    </div>
-  </div>`;
-}
 
 function _normalizeMobileFileChanges(fileChanges) {
   const files = Array.isArray(fileChanges?.files) ? fileChanges.files : [];
@@ -9528,7 +9564,6 @@ const mobileChatRendererContext = Object.freeze(Object.defineProperties({}, {
   "_renderMobileRichArtifacts": { enumerable: true, get: () => _renderMobileRichArtifacts },
   "_renderMobileSkillReferencedMarkdown": { enumerable: true, get: () => _renderMobileSkillReferencedMarkdown },
   "_renderMobileThreadLinkArtifacts": { enumerable: true, get: () => _renderMobileThreadLinkArtifacts },
-  "_renderMobileUserEditComposer": { enumerable: true, get: () => _renderMobileUserEditComposer },
   "_renderMobileVoiceLyrics": { enumerable: true, get: () => _renderMobileVoiceLyrics },
   "_renderMobileVoiceWorkgroup": { enumerable: true, get: () => _renderMobileVoiceWorkgroup },
   "_renderMobileWorkTimer": { enumerable: true, get: () => _renderMobileWorkTimer },

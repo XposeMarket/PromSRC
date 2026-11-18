@@ -27,13 +27,17 @@ async function main() {
     const rows = store.list(new Set());
     assert.equal(rows.find(r => r.runtimeId === 'a')?.status, 'completed');
     assert.equal(rows.find(r => r.runtimeId === 'a')?.title, 'Replacement');
-    assert.equal(rows.find(r => r.runtimeId === 'b')?.status, 'failed');
+    assert.equal(rows.find(r => r.runtimeId === 'b')?.status, 'paused');
     assert.equal(rows.find(r => r.runtimeId === 'c')?.status, 'cancelled');
-    assert.equal(rows.find(r => r.runtimeId === 'd')?.status, 'interrupted');
+    assert.equal(rows.find(r => r.runtimeId === 'd')?.status, 'paused');
     await store.progress('e', 's-d', progress, '', 'd');
     assert.equal(store.list(new Set(['e'])).find(r => r.runtimeId === 'e')?.resumedFromRuntimeId, 'd');
-    assert.equal(store.list(new Set(['e'])).length, 5);
-    assert.deepEqual(rows[0].supportedActions, ['open_chat']);
+    assert.equal(store.list(new Set(['e'])).length, 4, 'continuation replaces prior card instead of duplicating it');
+    assert.deepEqual(rows.find(r => r.runtimeId === 'd')?.supportedActions, ['open_chat', 'resume']);
+    await store.progress('unfinished', 'unfinished-chat', progress, '');
+    await store.finish('unfinished', 'completed');
+    assert.equal(store.get('unfinished')?.status, 'paused', 'normal return with pending steps is not completed');
+    assert.equal(store.get('unfinished')?.completedAt, undefined);
     const multi = path.join(dir, 'multi');
     const alive = (pid: number) => pid === 111 || pid === 222;
     const oldOwner = new PlannedChatRunStore(multi, 111, alive);
@@ -42,6 +46,7 @@ async function main() {
     const before = fs.readdirSync(multi).map(name => fs.readFileSync(path.join(multi, name), 'utf8')).join('');
     assert.equal(newOwner.list(new Set())[0].status, 'running', 'foreign owner still live');
     assert.equal(fs.readdirSync(multi).map(name => fs.readFileSync(path.join(multi, name), 'utf8')).join(''), before, 'polling does not write');
+    await oldOwner.progress('old', 'same', { ...progress, items: progress.items.map(item => ({ ...item, status: 'done' })) }, '');
     await oldOwner.finish('old', 'completed');
     await newOwner.progress('new', 'same', progress, '');
     assert.equal(newOwner.list(new Set(['new'])).find(r => r.runtimeId === 'old')?.status, 'completed', 'late terminal visible across stores');
@@ -57,7 +62,7 @@ async function main() {
       assert.equal(pending.find(r => r.runtimeId === 'newer')?.status, 'awaiting_user_input');
     } finally { Date.now = now; }
     await newOwner.resume('older', 'recovered', 'shared');
-    assert.equal(oldOwner.list(new Set(['older','newer'])).find(r => r.runtimeId === 'older')?.status, 'running', 'recovery never rewrites prior owner');
+    assert.equal(oldOwner.get('older')?.status, 'running', 'recovery never rewrites prior owner');
     console.log('PASS per-runtime multi-owner persistence, read-only polls, newest waiting scope');
     console.log('PASS planned chat validation, four runs, replacement, waiting, persistence, terminal outcomes, recovery linkage');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }

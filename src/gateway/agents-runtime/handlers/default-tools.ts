@@ -1,3 +1,5 @@
+import { normalizeContentReview } from '../../content-review.js';
+
 import os from 'os';
 import path from 'path';
 import { resolveGatewayRestartScope } from '../../../runtime/supervisor-restart-request';
@@ -29,7 +31,7 @@ import { getCoordinatedDevEdit, listCoordinatedDevEditPeers, beginCoordinatedDev
 import { formatDevVerificationSummary, resolveDevVerificationPlan, runDevVerificationPlan } from '../../dev-verification.js';
 import { createFinalActionApprovalScope, grantFinalActionApproval } from '../../final-action-approvals.js';
 import { claimBrainDreamProposalSlot, releaseBrainDreamProposalSlot } from '../../brain/brain-proposal-policy.js';
-import { inferAgentIdFromSession, inferApprovalOrigin, inferTeamNoteContext, appendAndBroadcastTeamChat, getTeamChatTargetMetadata, resolveTeammateReference, normalizeShareArtifactArgs, routeMemberProposalToManager, isProposalExecutionSession, resolveTaskForSession, maybeStartTeamStatusTaskMirror, getPromApplySurfacesForFiles, formatPromApplyDevChangesInstruction, executeTool } from '../subagent-executor';
+import { inferAgentIdFromSession, inferApprovalOrigin, inferTeamNoteContext, appendAndBroadcastTeamChat, getTeamChatTargetMetadata, resolveTeammateReference, normalizeShareArtifactArgs, routeMemberProposalToManager, isProposalExecutionSession, resolveTaskForSession, resolveRestartOwningTask, maybeStartTeamStatusTaskMirror, getPromApplySurfacesForFiles, formatPromApplyDevChangesInstruction, executeTool } from '../subagent-executor';
 import type { createWorkspaceHelpers } from '../workspace-helpers';
 export interface DefaultToolContext extends ReturnType<typeof createWorkspaceHelpers> {
  name: string;
@@ -419,6 +421,7 @@ export async function handleDefaultTool(ctx: DefaultToolContext): Promise<Awaite
               return { name, args, result: `write_proposal error: ${planError}`, error: true };
             }
             const proposal = createProposal({
+              contentReview: normalizeContentReview(args.content_review),
 	              type: args.type || 'general',
                 executionMode: ['code_change', 'action', 'general', 'review'].includes(String(args.execution_mode || args.executionMode || '').trim())
                   ? (String(args.execution_mode || args.executionMode).trim() === 'review' ? 'general' : String(args.execution_mode || args.executionMode).trim()) as any
@@ -1634,7 +1637,7 @@ export async function handleDefaultTool(ctx: DefaultToolContext): Promise<Awaite
           if (hasBackend) {
             try {
               const { buildAndRestart, gracefulRestart } = require('../../lifecycle');
-              const restartTask = resolveTaskForSession(sessionId);
+              const restartTask = resolveRestartOwningTask(sessionId);
               const sessionHint = getSessionChannelHint(sessionId);
               const isTelegramSession = String(sessionId || '').startsWith('telegram_') || sessionHint?.channel === 'telegram';
               const ctx = {
@@ -1849,7 +1852,7 @@ export async function handleDefaultTool(ctx: DefaultToolContext): Promise<Awaite
           const reason = String(args.reason || 'manual restart').trim();
           try {
             const { gracefulRestart } = require('../../lifecycle');
-            const restartTask = resolveTaskForSession(sessionId);
+            const restartTask = resolveRestartOwningTask(sessionId);
             const sessionHint = getSessionChannelHint(sessionId);
             const isTelegramSession = String(sessionId || '').startsWith('telegram_') || sessionHint?.channel === 'telegram';
             const resolvedTelegramChatId = Number.isFinite(Number(args.telegram_chat_id))
@@ -2894,6 +2897,7 @@ export async function handleDefaultTool(ctx: DefaultToolContext): Promise<Awaite
             surface: args?.surface || args?.app || args?.site,
             nextToolName: args?.next_tool_name || args?.nextToolName,
             nextToolArgs: args?.next_tool_args || args?.nextToolArgs,
+            contentReview: args?.content_review,
             screenshotId: args?.screenshot_id || args?.screenshotId,
             ttlMs: args?.ttl_ms || args?.ttlMs,
           });
@@ -3040,7 +3044,9 @@ export async function handleDefaultTool(ctx: DefaultToolContext): Promise<Awaite
           } catch {}
 
           if (!approved) {
-            return { name, args, result: 'Final action approval was rejected.', error: true };
+            return { name, args, result: approval.contentReviewFeedback
+              ? `Changes requested; no action authorized. User feedback: ${approval.contentReviewFeedback}\nPrepare the revised content and request a NEW final-action approval before posting.`
+              : 'Final action approval was rejected.', error: true };
           }
 
           return {

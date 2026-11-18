@@ -186,10 +186,10 @@ assert.equal(summaryTitle(background.liveTraceEntries), '', 'reasoning summaries
 assert.equal(summaryTitle(groups[0].entries), '', 'summary prose stays with its reasoning segment');
 
 const renderEntry = new Function('renderToolActivityEntry', 'escapeHtml', '_renderMobileLiveTracePreview',
-  '_isMobileTraceReasoningSummaryType', '_renderMobileMarkdown', '_dedupeMobileTraceProseText',
+  '_isMobileTraceReasoningSummaryType', '_renderMobileMarkdown', '_dedupeMobileTraceProseText', 'isMobileReasoningSummaryEntry',
   `${rendererFunction('_renderMobileLiveTraceEntry', '_isMobileTraceCompactionEntry')}return _renderMobileLiveTraceEntry;`,
-)(() => '', (s) => String(s), () => '', () => false, (s) => `<p>${s}</p>`, (s) => s);
-assert.match(renderEntry(groups[0].entries[0]), /class="pm-live-prose think"[\s\S]*Checking the current file content/,
+)(() => '', (s) => String(s), () => '', () => false, (s) => `<p>${s}</p>`, (s) => s, (entry) => String(entry?.extra?.source || '') === 'reasoning_summary');
+assert.match(renderEntry(groups[0].entries[0]), /class="pm-live-prose think(?: is-reasoning-prose)?"[\s\S]*Checking the current file content/,
   'shared renderer must emit an inline thought block, not just a disclosure label');
 assert.match(renderEntry(groups[2].entries[0]), /Applying the verified change/);
 const paragraphDelta = { liveTraceEntries: [] };

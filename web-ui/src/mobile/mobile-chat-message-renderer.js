@@ -1,3 +1,4 @@
+import { renderConnectionChatCards } from '../features/connectors/connection-chat-card.js';
 import { pendingStatusMarkup } from './mobile-ttft-state.js';
 import { highlightMobileVoiceMarkdown } from './mobile-voice-markdown-highlight.js';
 import { isMobileQuestionOnlyRow, isPendingMobileQuestion } from './mobile-question-rows.js';
@@ -53,7 +54,6 @@ export function createMobileChatMessageRenderer(resolveContext = () => ({})) {
       _renderMobileRichArtifacts,
       _renderMobileSkillReferencedMarkdown,
       _renderMobileThreadLinkArtifacts,
-      _renderMobileUserEditComposer,
       _renderMobileVoiceLyrics,
       _renderMobileVoiceWorkgroup,
       _renderMobileWorkTimer,
@@ -78,11 +78,8 @@ export function createMobileChatMessageRenderer(resolveContext = () => ({})) {
       const userBubbleHtml = (isAttachmentOnlyPlaceholder && !isWorkerHandoff)
         ? ''
         : `<div class="pm-bubble">${isWorkerHandoff ? '<span class="pm-sender pm-handoff-sender">Voice Agent to Worker</span>' : ''}${isAttachmentOnlyPlaceholder ? '' : `<div class="markdown-body">${_renderMobileSkillReferencedMarkdown(m.body.text, m.body.selectedSkillRefs || m.selectedSkillRefs)}</div>`}</div>`;
-      // While editing, render the composer in place of the bubble (NOT nested
-      // inside .pm-bubble) so it reads as an editable message, not an inner panel.
-      const contentHtml = isEditing
-        ? _renderMobileUserEditComposer(m, msgIndex, attachmentHtml)
-        : `${attachmentHtml}${userBubbleHtml}`;
+      // Editing borrows the bottom composer; keep the original bubble visible.
+      const contentHtml = `${attachmentHtml}${userBubbleHtml}`;
       return `<div class="pm-msg from-user${isEditing ? ' editing' : ''}${isWorkerHandoff ? ' voice-worker-handoff' : ''}${m.workflowPart ? ` workflow-${escapeHtml(String(m.workflowPart))}` : ''}" data-msg-index="${msgIndex}" data-pm-row-key="${escapeHtml(stableRowKey)}" data-pm-row-signature="${escapeHtml(`${stableRowSignature}:${isEditing ? 'editing' : 'view'}`)}">
         ${workflowLabel && !isWorkerHandoff ? `<div class="pm-workflow-transition-label">${escapeHtml(workflowLabel)}</div>` : ''}
         ${contentHtml}${isEditing ? '' : _renderMobileMessageActions(m, msgIndex)}${revealTime}</div>`;
@@ -227,6 +224,7 @@ export function createMobileChatMessageRenderer(resolveContext = () => ({})) {
     }
     if (b.browseState) inner += _renderBrowseCard(b.browseState);
     inner += _renderMobileRichArtifacts(b.text && !m.content ? { ...m, content: b.text } : m);
+    inner += renderConnectionChatCards(m);
     inner += _renderMobileVoiceWorkgroup(m);
     if (!(Array.isArray(m.richArtifacts) && m.richArtifacts.some((a) => a?.type === 'products'))) {
       inner += _renderMobileProductCarousel(m);

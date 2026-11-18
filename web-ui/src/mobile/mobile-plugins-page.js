@@ -1,4 +1,6 @@
 // Mobile Plugins page (replaces the old "More" landing on mobile only).
+import { openConnectFlow } from '../features/connectors/connect-flow.js';
+import { mountConnectorAccounts } from '../features/connectors/connector-accounts-ui.js';
 //
 // One alphabetical list of everything the gateway can plug into the model:
 // bundled connectors, MCP servers, and plugins imported from Claude Code /
@@ -99,12 +101,16 @@ export function buildPluginRows({ connectors = [], mcpServers = [], imported = [
     if (!plugin?.id) continue;
     for (const server of plugin.mcpServers || []) if (server?.id) importedMcpIds.add(String(server.id));
     const skills = Array.isArray(plugin.skills) ? plugin.skills.length : 0;
-    const mcpEnabled = (plugin.mcpServers || []).some((s) => s?.enabled);
-    const needsSecret = Array.isArray(plugin.requiredEnv) && plugin.requiredEnv.length > 0 && !mcpEnabled
-      && (plugin.mcpServers || []).length > 0;
+    const servers = plugin.mcpServers || [];
+    const mcpEnabled = servers.some((s) => s?.enabled);
+    // activation 'pending' = imported but the user hasn't turned it on yet (not a problem).
+    // Legacy imports have no activation field and count as turned on.
+    const mcpOn = servers.some((s) => s?.enabled || s?.activation === 'active' || (s && s.activation === undefined));
+    const needsSecret = Array.isArray(plugin.requiredEnv) && plugin.requiredEnv.length > 0 && mcpOn && !mcpEnabled
+      && servers.length > 0;
     const parts = [];
     if (skills) parts.push(`${skills} skill${skills === 1 ? '' : 's'}`);
-    if ((plugin.mcpServers || []).length) parts.push(needsSecret ? 'MCP needs a token' : 'MCP server');
+    if (servers.length) parts.push(needsSecret ? 'MCP needs a token' : mcpOn ? 'MCP on' : 'MCP off');
     if ((plugin.hooks || []).length) parts.push(plugin.hooksApproved ? 'hooks on' : 'hooks off');
     rows.push({
       key: `imported:${plugin.id}`,
@@ -116,6 +122,8 @@ export function buildPluginRows({ connectors = [], mcpServers = [], imported = [
       connected: true,
       needsAttention: needsSecret,
       requiredEnv: Array.isArray(plugin.requiredEnv) ? plugin.requiredEnv.map(String) : [],
+      mcpCount: servers.length,
+      mcpOn,
       toolCount: 0,
       permissions: [],
     });
@@ -321,7 +329,7 @@ function openSheet(page, row, navigate, onChanged) {
   const primary = isOn
     ? (row.kind === 'imported' ? 'Uninstall' : 'Disconnect')
     : row.reauthRequired ? `Reconnect ${row.name}`
-    : (row.kind === 'imported' ? 'Finish setup' : (row.oneTap ? `Connect ${row.name}` : `Ask Prom to connect ${row.name}`));
+    : (row.kind === 'imported' ? 'Finish setup' : `Connect ${row.name}`);
   const primaryIsDisconnect = isOn;
   const wrap = document.createElement('div');
   wrap.className = 'pm-plugin-sheet-backdrop';
@@ -335,20 +343,41 @@ function openSheet(page, row, navigate, onChanged) {
       </div>
       ${row.desc ? `<p class="pm-plugin-sheet-desc">${escapeHtml(row.desc)}</p>` : ''}
       ${details}
+      ${(isOn || row.reauthRequired) && row.kind === 'connector' ? '<div data-plugin-accounts></div>' : ''}
       ${perms}
+      ${row.kind === 'imported' && row.mcpCount ? `<button class="pm-plugin-sheet-primary" type="button" data-plugin-mcp-toggle>${row.mcpOn ? 'Turn MCP server off' : 'Turn MCP server on'}</button>` : ''}
+      ${isOn ? '<button class="pm-plugin-sheet-primary" type="button" data-plugin-verify>Ask Prom to verify</button>' : ''}
       <button class="${primaryIsDisconnect ? 'pm-plugin-sheet-danger' : 'pm-plugin-sheet-primary'}" type="button" data-plugin-primary>${escapeHtml(primary)}</button>
       ${!primaryIsDisconnect && canDisconnect ? `<button class="pm-plugin-sheet-danger" type="button" data-plugin-disconnect>${row.kind === 'imported' ? 'Uninstall' : 'Disconnect'}</button>` : ''}
       <p class="pm-plugin-sheet-note">${isOn
         ? (row.kind === 'imported' ? 'Removes the imported skills, MCP servers and hooks.' : `Removes Prometheus's access to ${escapeHtml(row.name)}. You can connect again any time.`)
         : row.reauthRequired
-          ? `${escapeHtml(row.name)}'s saved login expired or was revoked, so its tools are off until you sign in again. Prom handles the sign-in on your PC.`
+          ? `${escapeHtml(row.name)}'s saved login expired or was revoked, so its tools are off until you sign in again. Reconnect to open its sign-in or credential form.`
         : row.oneTap
           ? `Opens ${escapeHtml(row.name)}'s sign-in page. Tap Allow and you're done. No tokens to paste.`
-          : 'Prom handles this sign-in on your PC and asks before anything that writes or posts.'}</p>
+          : 'Connect opens this plugin’s setup. Your keys stay out of chat. You can ask Prom to verify afterward.'}</p>
     </div>`;
   const close = () => wrap.remove();
+  wrap.querySelector('[data-plugin-verify]')?.addEventListener('click', () => {
+    close(); askPromInChat(navigate, `I connected the ${row.name} plugin (${row.kind}:${row.id}). Please verify its connection and available features using safe, read-only checks. Do not post, send, or spend.`);
+  });
   wrap.addEventListener('click', (event) => { if (event.target === wrap) close(); });
   wrap.querySelector('.pm-plugin-sheet-close')?.addEventListener('click', close);
+  wrap.querySelector('[data-plugin-mcp-toggle]')?.addEventListener('click', async (event) => {
+    const turnOn = !row.mcpOn;
+    if (turnOn && !window.confirm(`Turning on ${row.name}'s MCP server runs third-party code on your computer (or sends requests to its server). Turn it on?`)) return;
+    const button = event.currentTarget;
+    button.disabled = true;
+    try {
+      const out = await importPost(`/api/plugins/import/${turnOn ? 'activate_mcp' : 'deactivate_mcp'}`, { id: row.id });
+      pmToast(out?.result || (turnOn ? 'MCP server on' : 'MCP server off'), 'success');
+      close();
+      onChanged?.();
+    } catch (err) {
+      button.disabled = false;
+      pmToast(`Failed: ${err?.message || err}`, 'error');
+    }
+  });
   const runDisconnect = async (button) => {
     const label = row.kind === 'imported' ? 'Uninstall' : 'Disconnect';
     if (!window.confirm(`${label} ${row.name}?`)) return;
@@ -383,8 +412,17 @@ function openSheet(page, row, navigate, onChanged) {
       return;
     }
     close();
-    askPromInChat(navigate, connectMessage(row));
+    await openConnectFlow(mobileGatewayFetch, { serviceId: row.id, kind: row.kind === 'mcp' ? 'mcp_preset' : ['connector', 'provider', 'integration'].includes(row.kind) ? row.kind : undefined }, { onChanged, onVerify: message => askPromInChat(navigate, message) });
   });
+  // Multi-account: current account first, then extra accounts and "Add another account".
+  const accountsHost = wrap.querySelector('[data-plugin-accounts]');
+  if (accountsHost) {
+    mountConnectorAccounts(accountsHost, {
+      fetchJson: mobileGatewayFetch, connectorId: row.id, name: row.name, connected: !!row.connected, accountLabel: row.account,
+      startConnect: () => openConnectFlow(mobileGatewayFetch, { serviceId: row.id, kind: 'connector' }, { onChanged, onVerify: message => { close(); askPromInChat(navigate, message); } }),
+      onVerify: (message) => { close(); askPromInChat(navigate, message); },
+    });
+  }
   // On <body>, not the page: a transformed page ancestor would pin a fixed
   // overlay to the page box instead of the viewport.
   document.body.appendChild(wrap);
@@ -393,10 +431,83 @@ function openSheet(page, row, navigate, onChanged) {
   window.addEventListener('popstate', onRoute);
 }
 
+async function importPost(url, body) {
+  const out = await mobileGatewayFetch(url, { method: 'POST', body: JSON.stringify(body || {}), timeoutMs: 120000 });
+  if (out?.success === false) throw new Error(out.result || out.error || 'request failed');
+  return out;
+}
+
+/**
+ * Browse the Claude official + OpenAI official plugin catalogs and import from
+ * the phone. Imported MCP servers and hooks still start off.
+ */
+function openImportCatalogSheet(onChanged) {
+  document.querySelectorAll('.pm-plugin-sheet-backdrop').forEach((el) => el.remove());
+  const wrap = document.createElement('div');
+  wrap.className = 'pm-plugin-sheet-backdrop';
+  wrap.innerHTML = `
+    <div class="pm-plugin-sheet pm-import-sheet" role="dialog" aria-modal="true" aria-label="Import from other agents">
+      <button class="pm-plugin-sheet-close" type="button" aria-label="Close">${ICONS.x}</button>
+      <h2 class="pm-import-title">Import plugins</h2>
+      <input class="pm-import-search" type="search" placeholder="Search" autocomplete="off"/>
+      <div class="pm-import-list"><p class="pm-plugins-empty">Loading catalogs…</p></div>
+    </div>`;
+  const close = () => wrap.remove();
+  const list = wrap.querySelector('.pm-import-list');
+  const search = wrap.querySelector('.pm-import-search');
+  let entries = [];
+  let timer = null;
+  const paint = (head) => {
+    list.innerHTML = `${head ? `<p class="pm-import-head">${escapeHtml(head)}</p>` : ''}${entries.length ? entries.map((e, i) => `
+      <div class="pm-import-row">
+        <div class="pm-import-row-text"><strong>${escapeHtml(e.name)}</strong><small>${escapeHtml(e.description || e.category || '')}</small></div>
+        ${e.imported ? '<span class="pm-import-done">Added</span>' : e.installable ? `<button type="button" class="pm-import-btn" data-import-index="${i}">Import</button>` : '<span class="pm-import-done">Can\'t run here</span>'}
+      </div>`).join('') : '<p class="pm-plugins-empty">No matches.</p>'}`;
+  };
+  const load = async () => {
+    try {
+      const out = await importPost('/api/plugins/import/catalog', { query: search.value || '', limit: 60 });
+      entries = out?.data?.entries || [];
+      paint('');
+    } catch (err) {
+      list.innerHTML = `<p class="pm-plugins-empty">Could not load catalogs: ${escapeHtml(err?.message || String(err))}</p>`;
+    }
+  };
+  search.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(load, 300); });
+  wrap.addEventListener('click', async (event) => {
+    if (event.target === wrap || event.target?.closest?.('.pm-plugin-sheet-close')) { close(); return; }
+    const btn = event.target?.closest?.('[data-import-index]');
+    if (!btn) return;
+    const entry = entries[Number(btn.getAttribute('data-import-index'))];
+    if (!entry) return;
+    btn.disabled = true;
+    btn.textContent = 'Importing…';
+    try {
+      const out = await importPost('/api/plugins/import/install', { entry: entry.id });
+      pmToast(String(out?.result || `${entry.name} imported`).split('\n')[0], 'success');
+      entry.imported = true;
+      paint(list.querySelector('.pm-import-head')?.textContent || '');
+      onChanged?.();
+    } catch (err) {
+      btn.disabled = false;
+      btn.textContent = 'Import';
+      pmToast(`Import failed: ${err?.message || err}`, 'error');
+    }
+  });
+  document.body.appendChild(wrap);
+  const onRoute = () => { close(); window.removeEventListener('hashchange', onRoute); };
+  window.addEventListener('hashchange', onRoute);
+  load();
+}
+
 function footerMarkup() {
   return `
     <div class="pm-plugins-section-title">More</div>
     <div class="pm-plugins-footer">
+      <button class="pm-plugin-row compact" type="button" data-plugins-import-catalog>
+        <span class="pm-plugin-logo small">${ICONS.refresh}</span>
+        <span class="pm-plugin-row-text"><strong>Import plugins</strong></span><span class="pm-plugin-trail">${ICONS.chev}</span>
+      </button>
       <button class="pm-plugin-row compact" type="button" data-route="#mobile/creative">
         <span class="pm-plugin-logo small">${ICONS.video}</span>
         <span class="pm-plugin-row-text"><strong>Creative</strong></span><span class="pm-plugin-trail">${ICONS.chev}</span>
@@ -469,6 +580,7 @@ export async function renderMobilePluginsPage(page, { navigate } = {}) {
       Promise.resolve(window.pmPurgeCaches?.()).catch(() => window.location.reload());
       return;
     }
+    if (event.target?.closest?.('[data-plugins-import-catalog]')) { openImportCatalogSheet(load); return; }
     if (event.target?.closest?.('[data-plugins-show-installed]')) {
       query = '';
       if (search) search.value = '';

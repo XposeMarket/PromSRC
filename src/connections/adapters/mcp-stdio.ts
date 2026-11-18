@@ -17,6 +17,7 @@ export class McpStdioConnectionAdapter implements ConnectionAdapter {
   }
   async connect(context: ConnectionAdapterContext): Promise<ConnectionAdapterResult> {
     const config = { ...(context.attempt.plan?.strategy.configuration || {}), ...(context.configuration || {}) };
+    if (typeof config.command !== 'string' || !config.command.trim()) return { state: 'failed', error: { code: 'MCP_COMMAND_REQUIRED', message: 'A local MCP command is required.', phase: 'planning' } };
     const result = await this.host.connect(context, config);
     if (!result.ok) return { state: 'failed', error: { code: 'MCP_STDIO_CONNECT_FAILED', message: result.error || 'Local MCP server failed to start.', retryable: true, phase: 'registering' } };
     const tools = result.tools || [];

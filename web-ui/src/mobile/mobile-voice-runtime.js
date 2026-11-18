@@ -1610,6 +1610,20 @@ export function createMobileVoiceRuntime(context = {}) {
     if (!(__pmRealtimeAgent.roomWarmConnections instanceof Map)) {
       __pmRealtimeAgent.roomWarmConnections = new Map();
     }
+    // Standby connections stay connected but do not poll bridge events, so tell
+    // the gateway they are still wanted (its idle sweep stops silent sessions).
+    if (!__pmRealtimeAgent.roomWarmKeepaliveTimer) {
+      __pmRealtimeAgent.roomWarmKeepaliveTimer = setInterval(() => {
+        const pool = __pmRealtimeAgent.roomWarmConnections;
+        if (!(pool instanceof Map) || !pool.size) return;
+        const sessionIds = [...pool.values()].map((conn) => String(conn?.codexBridgeSessionId || '').trim()).filter(Boolean);
+        if (!sessionIds.length) return;
+        mobileGatewayFetch('/api/realtime/codex-bridge/keepalive', {
+          method: 'POST',
+          body: JSON.stringify({ sessionIds }),
+        }).catch(() => {});
+      }, 120_000);
+    }
     return __pmRealtimeAgent.roomWarmConnections;
   }
 
@@ -4570,6 +4584,8 @@ export function createMobileVoiceRuntime(context = {}) {
     const cid = String(clientRequestId || '').trim();
     if (!cid || !Array.isArray(thread)) return null;
     const matches = thread.filter((turn) => turn?.role === 'ai'
+      && String(turn.messageKind || '').trim() !== 'delivery'
+      && String(turn.channelLabel || '').trim() !== 'delivery'
       && String(turn._clientRequestId || '').trim() === cid);
     if (!matches.length) return null;
     const continuation = [...matches].reverse().find((turn) => (

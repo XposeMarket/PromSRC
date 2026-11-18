@@ -228,8 +228,9 @@ export function resolveToolCapabilityMetadata(
   // config and plugin files; approving hooks enables shell execution.
   if (name === 'plugin_ops') {
     const action = String(args?.action || '').trim().toLowerCase();
-    if (['scan', 'inspect', 'list', 'marketplace'].includes(action)) return READ_ONLY;
-    if (action === 'approve_hooks') return COMMAND;
+    if (['scan', 'inspect', 'list', 'marketplace', 'catalog'].includes(action)) return READ_ONLY;
+    // Turning on imported hooks or MCP servers runs third-party code: always an approval card.
+    if (action === 'approve_hooks' || action === 'activate_mcp') return COMMAND;
     if (action === 'uninstall') return DESTRUCTIVE;
     return LOCAL_WRITE;
   }

@@ -347,7 +347,7 @@ export function getDesktopWrapperToolDefinitions(): any[] {
       type: 'function',
       function: {
         name: 'desktop_input',
-        description: 'Unified host-desktop/global-coordinate fallback for input, waits, and clipboard actions. Prefer desktop_window for a known app window.',
+        description: 'Unified host-desktop/global-coordinate fallback for input, waits, and clipboard actions. Prefer desktop_window for a known app window. type sends keys to whatever currently has focus (often a page field), not a browser address bar: navigate with browser_session open instead, or press ctrl+l first and verify focus with a screenshot.',
         parameters: {
           type: 'object',
           required: ['action'],

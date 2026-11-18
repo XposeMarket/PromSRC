@@ -1,3 +1,4 @@
+import { renderConnectionChatCards, wireConnectionChatCards } from '../features/connectors/connection-chat-card.js';
 import { compactMobileThreadCacheFileChanges as _compactMobileThreadCacheFileChanges } from './mobile-thread-cache-file-changes.js';
 import {
   coalesceToolActivityEntries,
@@ -14,7 +15,7 @@ import { normalizeMobileImage } from './mobile-image-shrink.js';
 import { swapKeyedTimelineSession } from '../features/chat/timeline/keyed-dom.js';
 import { animateThinkingTextSwap, renderThinkingState } from '../utils.js';
 import { mergeMobileBackgroundTraceEntries } from './mobile-background-trace-merge.js';
-import { foldMobileReasoningSummaryGroups, mobileReasoningSummaryTitle, renderMobileReasoningLiveGroup } from './mobile-reasoning-summary-fold.js';
+import { foldMobileReasoningSummaryGroups, isMobileReasoningSummaryEntry, mobileReasoningSummaryKey, mobileReasoningSummaryTitle, renderMobileReasoningLiveGroup } from './mobile-reasoning-summary-fold.js';
 import { mergeBackgroundAgentSteerMessages } from '../features/chat/core/background-agent-work.js';
 import { isSteerFrozenRow } from './mobile-restart-continuity.js';
 import { agentModelLabel, agentAvatarHtml } from '../components/provider-logo.js';
@@ -237,7 +238,6 @@ export function createMobileChatRendererRuntime(context = {}) {
   _renderMobileRichArtifacts,
   _renderMobileSkillReferencedMarkdown,
   _renderMobileThreadLinkArtifacts,
-  _renderMobileUserEditComposer,
   _renderMobileVoiceLyrics,
   _renderMobileVoiceWorkgroup,
   _renderMobileWorkTimer,
@@ -355,7 +355,7 @@ export function createMobileChatRendererRuntime(context = {}) {
     const attr = entryId ? ` data-pm-live-entry-id="${escapeHtml(entryId)}"` : '';
     const previewHtml = _renderMobileLiveTracePreview(entry);
     if (type === 'preamble' || type === 'think' || type === 'assistant' || _isMobileTraceReasoningSummaryType(type)) {
-      return `<div class="pm-live-prose ${escapeHtml(type)}"${attr}><div class="pm-live-md">${_renderMobileMarkdown(_dedupeMobileTraceProseText(text))}</div>${previewHtml}</div>`;
+      return `<div class="pm-live-prose ${escapeHtml(type)}${isMobileReasoningSummaryEntry(entry) ? ' is-reasoning-prose' : ''}"${attr}><div class="pm-live-md">${_renderMobileMarkdown(_dedupeMobileTraceProseText(text))}</div>${previewHtml}</div>`;
     }
     // Name the tool when the entry knows it; never a bare "Tool" label.
     const toolName = String(entry?.extra?.toolName || entry?.extra?.action || entry?.toolName || entry?.action || '')
@@ -1021,14 +1021,27 @@ export function createMobileChatRendererRuntime(context = {}) {
       // The model summary belongs to the tool group it narrates. Looking only
       // at the newest raw event made a tool_call replace that summary with the
       // synthetic action label (for example, "Request Tool Category").
-      const progressSummary = mobileReasoningSummaryTitle(group.reasoningEntries)
-        || _mobileTraceProgressSummary(group.entries);
-      const summary = progressSummary || (isLiveCurrent ? _mobileTraceCurrentToolLabel(group.entries) : _mobileTraceToolSummary(group.entries));
-      const summaryKey = _mobileTraceSummaryKey(summary);
-      const visibleEntries = _mobileVisibleTraceEntries(group.entries);
-      // Preserve the safe summary body in the same segment as its tools.
+      // Live: reasoning drives the header. Finished: header is the normal tool summary and
+      // reasoning only appears inside the expanded body (Raul, 2026-11-12).
+      const reasoningTitle = isLiveCurrent ? mobileReasoningSummaryTitle(group.reasoningEntries) : '';
+      const toolOnlyEntries = (group.entries || []).filter((entry) => !isMobileReasoningSummaryEntry(entry));
+      const progressSummary = reasoningTitle
+        || _mobileTraceProgressSummary(toolOnlyEntries);
+      const summary = progressSummary || (isLiveCurrent ? _mobileTraceCurrentToolLabel(toolOnlyEntries) : _mobileTraceToolSummary(toolOnlyEntries));
+      const summaryKey = reasoningTitle && summary === reasoningTitle
+        ? mobileReasoningSummaryKey(group.reasoningEntries)
+        : _mobileTraceSummaryKey(summary);
+      const visibleEntries = _mobileVisibleTraceEntries(toolOnlyEntries);
       const toolBodyEntries = visibleEntries;
-      const bodyTraceEntries = group.reasoningEntries?.length ? [...group.reasoningEntries, ...toolBodyEntries] : toolBodyEntries;
+      // Expanded body is chronological: reasoning block, its calls, next block...
+      const bodyTraceEntries = [];
+      let run = [];
+      const flushRun = () => { if (run.length) bodyTraceEntries.push(..._mobileVisibleTraceEntries(run)); run = []; };
+      for (const entry of group.entries || []) {
+        if (isMobileReasoningSummaryEntry(entry)) { flushRun(); bodyTraceEntries.push(entry); } else run.push(entry);
+      }
+      flushRun();
+      for (const entry of group.reasoningEntries || []) if (!bodyTraceEntries.includes(entry)) bodyTraceEntries.unshift(entry);
       const callCount = toolBodyEntries.filter((entry) => /^(operation|result)$/.test(entry?.activity?.kind)).length;
       const nonReasoningEntries = toolBodyEntries.filter((entry) => !_isMobileTraceReasoningSummaryType(entry?.type));
       const itemCount = callCount || nonReasoningEntries.length || (toolBodyEntries.length ? 1 : 0);
@@ -1044,7 +1057,7 @@ export function createMobileChatRendererRuntime(context = {}) {
       return `<details class="pm-trace-tool-group"${openAttr}${isLiveCurrent ? ' data-pm-trace-live-current="1"' : ''} data-pm-trace-group="${escapeHtml(group.id)}">
         <summary class="pm-trace-tool-summary">
           <span class="pm-trace-tool-icon${isLiveCurrent ? ' is-live' : ''}" aria-hidden="true">${isLiveCurrent ? '' : renderToolActivityIcon({ family: 'tool', key: 'tool.summary' }, escapeHtml)}</span>
-          <strong class="t-think" data-pm-trace-summary-key="${escapeHtml(summaryKey)}">${renderThinkingState(summary)}</strong>
+          <strong class="t-think${reasoningTitle && summary === reasoningTitle ? ' is-reasoning' : ''}" data-pm-trace-summary-key="${escapeHtml(summaryKey)}">${renderThinkingState(summary)}</strong>
           <span class="pm-trace-tool-chevron" aria-hidden="true">›</span>
           <em>${itemCount} ${itemLabel}${itemCount === 1 ? '' : 's'}</em>${isLiveCurrent ? waitCountdownHtml(toolBodyEntries) : ''}
         </summary>
@@ -1103,7 +1116,7 @@ export function createMobileChatRendererRuntime(context = {}) {
       ${pending && questionCount > 1 ? `<div class="pm-q-head"><span class="pm-q-progress" aria-label="Question ${currentIndex + 1} of ${questionCount}"><span class="pm-q-progress-current">${currentIndex + 1}</span><span class="pm-q-progress-total">/${questionCount}</span></span></div>` : ''}
       ${blocks}
       ${pending && q.loginHandoff
-        ? `<div class="pm-q-login"><button type="button" class="pm-q-login-open" onclick="_pmOpenLoginHandoff(${idJson}, ${escapeHtml(JSON.stringify(String(q.loginHandoff.browserSessionId || q.sessionId || '')))}, ${escapeHtml(JSON.stringify(String(q.loginHandoff.site || '')))})">Open &amp; log in</button><span class="pm-q-login-note">You log in yourself. Prometheus never sees your password.</span></div>`
+        ? `<div class="pm-q-login"><span class="pm-q-login-origin">${escapeHtml(String(q.loginHandoff.url || ''))}</span><button type="button" class="pm-q-login-open" onclick="_pmOpenLoginHandoff(${idJson}, ${escapeHtml(JSON.stringify(String(q.loginHandoff.browserSessionId || q.sessionId || '')))}, ${escapeHtml(JSON.stringify(String(q.loginHandoff.site || '')))})">Open &amp; log in</button><span class="pm-q-login-note">You log in yourself. Prometheus never sees your password.</span></div>`
         : ''}
       ${pending
         ? `<div class="pm-q-actions"><button type="button" class="pm-q-submit" data-pm-q-submit="1" onclick="_submitMobileQuestion(${idJson})">${isLastQuestion ? 'Submit answer' : 'Next question'}</button><button type="button" class="pm-q-cancel" onclick="_cancelMobileQuestion(${idJson})">Cancel</button></div>`
@@ -1140,7 +1153,6 @@ export function createMobileChatRendererRuntime(context = {}) {
     _renderMobileRichArtifacts,
     _renderMobileSkillReferencedMarkdown,
     _renderMobileThreadLinkArtifacts,
-    _renderMobileUserEditComposer,
     _renderMobileVoiceLyrics,
     _renderMobileVoiceWorkgroup,
     _renderMobileWorkTimer,
@@ -2057,6 +2069,7 @@ export function createMobileChatRendererRuntime(context = {}) {
     } catch {}
     threadEl.querySelectorAll('[data-pm-approval-action][data-pm-approval-id]').forEach(_wireMobileApprovalActionButton);
     _wireMobileProcessRunActions(threadEl);
+    wireConnectionChatCards(threadEl, mobileGatewayFetch);
     _wireMobileChatEnhancements(threadEl);
     _scheduleMobileThreadCacheSave(sid);
     _renderMobileApprovalSheet();
@@ -2519,7 +2532,8 @@ export function createMobileChatRendererRuntime(context = {}) {
           const key = String(node.getAttribute('data-pm-trace-summary-key') || '').trim();
           const stable = groupKey ? stableTraceSummaryLabels[groupKey] : null;
           if (stable?.node && stable.key === key && stable.node !== node) {
-            node.replaceWith(stable.node);
+            // Same reasoning paragraph still streaming: keep the fresh text, skip the swap animation.
+            if (String(stable.node.textContent || '') === String(node.textContent || '')) node.replaceWith(stable.node);
           } else if (!stable || stable.key !== key) {
             const previousLabel = String(
               stable?.node?.querySelector?.('.t-think-text')?.textContent
@@ -2574,6 +2588,7 @@ export function createMobileChatRendererRuntime(context = {}) {
     const patchedEl = threadEl.querySelector(`[data-msg-index="${msgIndex}"]`) || nextEl;
     patchedEl.querySelectorAll('[data-pm-approval-action][data-pm-approval-id]').forEach(_wireMobileApprovalActionButton);
     _wireMobileProcessRunActions(patchedEl);
+    wireConnectionChatCards(patchedEl, mobileGatewayFetch);
     _wireMobileChatEnhancements(patchedEl);
     try {
       _markMobileLiveStreamMotion(patchedEl, String(__pmChat?.activeSessionId || ''));
@@ -3313,6 +3328,7 @@ function _renderMobileAgentChatBubble(message, options = {}) {
       : (streaming && !hasPendingImageGeneration && !hasLiveTrace ? (window.PROM_THEME_ENGINE?.thinkingDotsHtml(String(message?.id || message?.timestamp || '')) || '') : '');
     inner += attachmentHtml;
     inner += _renderMobileRichArtifacts({ ...turnPresentation, content: markdownText });
+    inner += renderConnectionChatCards(turnPresentation);
     if (!(Array.isArray(turnPresentation.richArtifacts) && turnPresentation.richArtifacts.some((artifact) => artifact?.type === 'products'))) {
       inner += _renderMobileProductCarousel(turnPresentation);
     }
@@ -4510,8 +4526,10 @@ function _completeMobileBackgroundSpawnLane(msg = {}, sessionId = __pmChat.activ
 
 function _reconcileMobileBackgroundSpawnDockMarkup(host, markup) {
   if (!host) return;
+  const scrollState = captureKeyedScrollState(host, host);
   reconcileKeyedTimelineRows(host, markup, {
     scroller: host,
+    scrollState,
     setContents: (current, markup) => {
       const detailsState = _captureMobileTraceDetailsState(current);
       current.innerHTML = markup;
@@ -4647,6 +4665,7 @@ function _renderMobileBackgroundSpawnDock(dock, sessionId = __pmChat.activeSessi
     _wireMobileApprovalActionButton(btn);
   });
   _wireMobileProcessRunActions(host);
+  wireConnectionChatCards(host, mobileGatewayFetch);
   host.querySelectorAll('.pm-background-spawn-lane[data-bg-id]').forEach((node) => {
     const id = String(node.getAttribute('data-bg-id') || '');
     const saved = previousScroll[id];

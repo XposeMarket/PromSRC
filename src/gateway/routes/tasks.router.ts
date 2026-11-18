@@ -1,4 +1,6 @@
+import { readTaskNoteEvidence, taskJournalNoteEvidence } from '../tasks/task-note-evidence';
 import { listPlannedChatRuns, getPlannedChatRunDetail } from '../tasks/planned-chat-runs';
+import { continuePlannedChat } from '../tasks/planned-chat-resume';
 
 // src/gateway/routes/tasks.router.ts
 // Tasks, Background Tasks, Schedules, Error Response routes
@@ -438,25 +440,33 @@ router.get('/api/bg-tasks', (req, res) => {
   res.json({ success: true, tasks: limit ? combined.slice(0, limit) : combined });
 });
 
-router.get('/api/bg-tasks/:id', (req, res) => {
+router.get('/api/bg-tasks/:id', async (req, res) => {
   if (String(req.params.id || '').startsWith('chat-plan:')) {
     const planned = getPlannedChatRunDetail(req.params.id, collectNeedsYouItems());
     if (!planned) { res.status(404).json({ success: false, error: 'Task not found' }); return; }
-    res.json({ success: true, task: planned, evidenceBus: null });
+    const entries = await readTaskNoteEvidence(path.join(getConfig().getWorkspacePath(), 'memory'), planned, listPlannedChatRuns());
+    res.json({ success: true, task: { ...planned, evidenceBus: { entries } }, evidenceBus: { entries } });
     return;
   }
   const task = loadTask(req.params.id);
   if (!task) { res.status(404).json({ success: false, error: 'Task not found' }); return; }
   // Include evidence bus snapshot if available
-  const evidenceBus = getEvidenceBusSnapshot(req.params.id);
+  const bus = getEvidenceBusSnapshot(req.params.id);
+  const evidenceBus = { ...bus, entries: [...(bus?.entries || []), ...taskJournalNoteEvidence(task)] };
   res.json({ success: true, task, evidenceBus });
 });
 
 // Evidence bus endpoint — returns the live bus for a task
-router.get('/api/bg-tasks/:id/evidence', (req, res) => {
+router.get('/api/bg-tasks/:id/evidence', async (req, res) => {
+  if (String(req.params.id || '').startsWith('chat-plan:')) {
+    const planned = getPlannedChatRunDetail(req.params.id);
+    const entries = planned ? await readTaskNoteEvidence(path.join(getConfig().getWorkspacePath(), 'memory'), planned, listPlannedChatRuns()) : [];
+    res.json({ success: true, taskId: req.params.id, entries });
+    return;
+  }
   const bus = getEvidenceBusSnapshot(req.params.id);
-  if (!bus) { res.json({ success: true, entries: [], taskId: req.params.id }); return; }
-  res.json({ success: true, taskId: bus.taskId, entries: bus.entries, updatedAt: bus.updatedAt });
+  const task = loadTask(req.params.id);
+  res.json({ success: true, taskId: req.params.id, entries: [...(bus?.entries || []), ...taskJournalNoteEvidence(task || {})], updatedAt: bus?.updatedAt });
 });
 
 function skillSlugFromTitle(title: string): string {
@@ -735,7 +745,12 @@ router.post('/api/bg-tasks/:id/pause', (req, res) => {
   res.json({ success: true });
 });
 
-router.post('/api/bg-tasks/:id/resume', (req, res) => {
+router.post('/api/bg-tasks/:id/resume', async (req, res) => {
+  if (String(req.params.id).startsWith('chat-plan:')) {
+    const result = await continuePlannedChat(req.params.id);
+    res.status(result.success ? 202 : 409).json(result);
+    return;
+  }
   const task = loadTask(req.params.id);
   if (!task) { res.status(404).json({ success: false, error: 'Task not found' }); return; }
   const resumableStatuses: TaskStatus[] = ['paused', 'queued', 'stalled', 'needs_assistance', 'awaiting_user_input', 'running'];

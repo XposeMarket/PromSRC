@@ -44,9 +44,9 @@ const BUILTIN_LABELS = {
 };
 
 const BUILTIN_STATIC_MODELS = {
-  openai: ['gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-pro', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5-pro', 'gpt-5', 'gpt-5-mini', 'gpt-5-nano', 'gpt-5-chat-latest', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
-  openai_codex: ['chatgpt', 'gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-codex', 'gpt-5.4-codex-mini', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.3', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex', 'gpt-5.1'],
-  anthropic: ['claude-fable-5-1', 'claude-fable-5', 'claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5-5', 'claude-sonnet-5', 'claude-sonnet-4-6', 'claude-sonnet-4-5-20250514', 'claude-haiku-5-5', 'claude-haiku-4-5-20251001'],
+  openai: ['gpt-6.2-astra', 'gpt-6.2-sol', 'gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-pro', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5-pro', 'gpt-5', 'gpt-5-mini', 'gpt-5-nano', 'gpt-5-chat-latest', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
+  openai_codex: ['chatgpt', 'gpt-6.2-astra', 'gpt-6.2-sol', 'gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-codex', 'gpt-5.4-codex-mini', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.3', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex', 'gpt-5.1'],
+  anthropic: ['claude-fable-5-2', 'claude-mythos-5-2', 'claude-fable-5-1', 'claude-fable-5', 'claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5-5', 'claude-sonnet-5', 'claude-sonnet-4-6', 'claude-sonnet-4-5-20250514', 'claude-haiku-5-5', 'claude-haiku-4-5-20251001'],
   perplexity: ['sonar-pro', 'sonar', 'sonar-reasoning-pro', 'sonar-reasoning', 'sonar-deep-research'],
   gemini: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash'],
   xai: ['grok-4.7', 'grok-4.6', 'grok-4.5', 'grok-composer-2.5-fast', 'grok-4.3', 'grok-4.3-latest', 'grok-latest', 'grok-4.20-0309-reasoning', 'grok-4.20-0309-non-reasoning', 'grok-4.20-multi-agent-0309', 'grok-4.20-multi-agent', 'grok-build-0.1'],
@@ -218,6 +218,38 @@ export function attachMobileHapticGestureSurface(surface, handlers = {}) {
   let flippedDirection = false;
   let disposed = false;
   let surfaceStateObserver = null;
+  let settleFrame = 0;
+  let settleUntil = 0;
+  let settleStableFrames = 0;
+  let settleLastRect = '';
+
+  // A body-class change (drawer close, voice mode) usually starts a transform
+  // transition on an ancestor. Measuring once at mutation time parks the
+  // fixed sensor where the surface was mid-slide, so taps miss it. Track the
+  // surface every frame until its rect has been stable for a few frames.
+  const settleSurfacePosition = () => {
+    if (disposed) return;
+    settleUntil = performance.now() + 1200;
+    settleStableFrames = 0;
+    if (settleFrame) return;
+    const step = () => {
+      settleFrame = 0;
+      if (disposed) return;
+      if (pointerId == null) positionSurface({ clientX: 0, clientY: 0 }, false);
+      const r = surface.getBoundingClientRect?.();
+      const key = r ? `${Math.round(r.left)},${Math.round(r.top)},${Math.round(r.width)},${Math.round(r.height)}` : '';
+      settleStableFrames = key === settleLastRect ? settleStableFrames + 1 : 0;
+      settleLastRect = key;
+      if (settleStableFrames >= 4 || performance.now() > settleUntil) return;
+      settleFrame = requestAnimationFrame(step);
+    };
+    settleFrame = requestAnimationFrame(step);
+  };
+  const onAncestorTransitionEnd = (event) => {
+    if (disposed || pointerId != null) return;
+    const target = event.target;
+    if (target && typeof target.contains === 'function' && target.contains(surface)) settleSurfacePosition();
+  };
 
   // iOS only recognizes the switch as a haptic trigger when its direction is
   // changed *before* it is moved underneath the active finger.
@@ -341,6 +373,7 @@ export function attachMobileHapticGestureSurface(surface, handlers = {}) {
     surfaceStateObserver = new MutationObserver(() => {
       if (isSurfaceInactive()) cancelGesture();
       else if (!disposed) positionSurface({ clientX: 0, clientY: 0 }, false);
+      settleSurfacePosition();
     });
     surfaceStateObserver.observe(document.body, { attributes: true, attributeFilter: ['class'] });
   }
@@ -348,6 +381,8 @@ export function attachMobileHapticGestureSurface(surface, handlers = {}) {
     if (!disposed && pointerId == null) positionSurface({ clientX: 0, clientY: 0 }, false);
   };
   window.addEventListener('resize', onViewportResize, { passive: true });
+  document.addEventListener('transitionend', onAncestorTransitionEnd, true);
+  document.addEventListener('transitioncancel', onAncestorTransitionEnd, true);
   window.visualViewport?.addEventListener('resize', onViewportResize, { passive: true });
   window.visualViewport?.addEventListener('scroll', onViewportResize, { passive: true });
 
@@ -356,6 +391,10 @@ export function attachMobileHapticGestureSurface(surface, handlers = {}) {
     disposed = true;
     surfaceStateObserver?.disconnect?.();
     surfaceStateObserver = null;
+    if (settleFrame) cancelAnimationFrame(settleFrame);
+    settleFrame = 0;
+    document.removeEventListener('transitionend', onAncestorTransitionEnd, true);
+    document.removeEventListener('transitioncancel', onAncestorTransitionEnd, true);
     releaseCapture();
     input.removeEventListener('lostpointercapture', onLostPointerCapture, true);
     window.removeEventListener('blur', onWindowBlur);
@@ -370,6 +409,7 @@ export function attachMobileHapticGestureSurface(surface, handlers = {}) {
   };
   dispose.refresh = () => {
     if (!disposed) positionSurface({ clientX: 0, clientY: 0 }, false);
+    settleSurfacePosition();
   };
   _hapticGestureDisposers.add(dispose);
   return dispose;

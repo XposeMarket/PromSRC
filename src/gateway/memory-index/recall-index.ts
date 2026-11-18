@@ -102,6 +102,7 @@ interface WorkspaceState {
   running: boolean;
   lastFullScanAt: number;
   backfillComplete: boolean;
+  asyncScanFailed?: boolean;
 }
 const states = new Map<string, WorkspaceState>();
 
@@ -373,11 +374,50 @@ export function runRecallIndexSlice(workspacePath: string, budgetMs = SLICE_BUDG
   return done;
 }
 
+/**
+ * Async twin of listCandidateFiles for the background path. The sync version
+ * stats every transcript (~10k files) on the main thread, which profiled as a
+ * ~3s gateway stall during the 10-minute rescan. Stats here run on the libuv
+ * pool in small parallel chunks, so chat streaming keeps flowing.
+ */
+async function listCandidateFilesAsync(workspacePath: string): Promise<string[]> {
+  const fsp = fs.promises;
+  const names: string[] = [];
+  const transcripts = path.join(workspacePath, 'audit', 'chats', 'transcripts');
+  try { for (const n of await fsp.readdir(transcripts)) if (n.endsWith('.jsonl')) names.push(path.join(transcripts, n)); } catch { /* none yet */ }
+  const memDir = path.join(workspacePath, 'memory');
+  try { for (const n of await fsp.readdir(memDir)) if (/-intraday-notes\.md$/.test(n)) names.push(path.join(memDir, n)); } catch { /* none yet */ }
+  for (const n of ['MEMORY.md', 'USER.md', 'IDEAS.md', 'MEMORY-archive.md']) names.push(path.join(workspacePath, n));
+  const out: Array<{ abs: string; mtime: number }> = [];
+  for (let i = 0; i < names.length; i += 64) {
+    const chunk = names.slice(i, i + 64);
+    const stats = await Promise.all(chunk.map((abs) => fsp.stat(abs).then((st) => st.mtimeMs, () => null)));
+    stats.forEach((mtime, j) => { if (mtime !== null) out.push({ abs: chunk[j], mtime }); });
+  }
+  return out.sort((a, b) => b.mtime - a.mtime).map((f) => f.abs);
+}
+
 function scheduleSlices(workspacePath: string, delayMs: number): void {
   const s = stateFor(workspacePath);
   if (s.timer || s.running) return;
   s.timer = setTimeout(() => {
     s.timer = null;
+    // A full rescan is due: build the queue off the main thread first. On
+    // failure, fall through so runRecallIndexSlice's sync listing still runs.
+    if (!s.queue.length && !s.asyncScanFailed && Date.now() - s.lastFullScanAt > FULL_SCAN_INTERVAL_MS) {
+      s.running = true;
+      listCandidateFilesAsync(workspacePath).then((files) => {
+        if (!s.queue.length) s.queue = files;
+        s.lastFullScanAt = Date.now();
+      }, (err: any) => {
+        s.asyncScanFailed = true;
+        console.warn('[recall-index] async scan failed, using sync scan:', String(err?.message || err).slice(0, 200));
+      }).finally(() => {
+        s.running = false;
+        scheduleSlices(workspacePath, 0);
+      });
+      return;
+    }
     s.running = true;
     let done = true;
     try { done = runRecallIndexSlice(workspacePath); } catch (err: any) {

@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { findDisallowedWorkspacePaths } from './check-workspace-tracking.mjs';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const HISTORY = process.argv.includes('--history');
@@ -121,7 +122,13 @@ function currentFiles() {
 }
 
 function scanCurrent(findings) {
-  for (const file of currentFiles()) {
+  const files = currentFiles();
+  // workspace/ is personal runtime data. Only the allow-listed subtrees may be
+  // tracked; anything else always fails the audit, strict mode or not.
+  for (const file of findDisallowedWorkspacePaths(files)) {
+    findings.push({ scope: 'current', severity: 'block', kind: 'workspace-path-not-allowlisted', file });
+  }
+  for (const file of files) {
     addPathWarnings(file, 'current', findings);
     const abs = path.join(ROOT, file);
     let stat;
@@ -219,4 +226,9 @@ if (!unique.length) console.log('[privacy-audit] no findings');
 
 const currentBlocks = unique.filter((item) => item.scope === 'current' && item.severity === 'block');
 const historyBlocks = unique.filter((item) => item.scope === 'history' && item.severity === 'block');
+const workspaceBlocks = currentBlocks.filter((item) => item.kind === 'workspace-path-not-allowlisted');
+if (workspaceBlocks.length) {
+  console.error(`\n[privacy-audit] FAIL: ${workspaceBlocks.length} tracked path(s) under workspace/ are outside the allow-list (workspace/skills/** except .history/.cache, workspace/self/**). Untrack them with git rm -r --cached.`);
+  process.exit(1);
+}
 if ((STRICT_CURRENT && currentBlocks.length) || (FAIL_HISTORY && historyBlocks.length)) process.exit(1);

@@ -76,7 +76,7 @@ export function fromAnthropicWireToolName(name: string): string {
 
 /** Context window used for the system-prompt budget (mirrors model-context known table). */
 export function anthropicContextWindowTokens(model: string): number {
-  return /^(claude-fable-5|claude-opus-(?:5|4-(?:6|7|8))|claude-sonnet-(?:5|4-6)|claude-haiku-5)(?:\b|[-_])/i.test(String(model || ''))
+  return /^(claude-fable-5|claude-mythos-5-2|claude-opus-(?:5|4-(?:6|7|8))|claude-sonnet-(?:5|4-6)|claude-haiku-5)(?:\b|[-_])/i.test(String(model || ''))
     ? 1_000_000
     : 200_000;
 }
@@ -282,6 +282,7 @@ import { getConfig } from '../config/config';
 import { getReasoningCapability, normalizeReasoningEffort, normalizeSpeed, supportsFastSpeed } from './reasoning-capabilities';
 import { recordAnthropicRateLimitHeaders } from './usage-awareness';
 import { normalizeAnthropicContent } from './anthropic-image';
+import { pruneHistoryImages } from './history-image-prune';
 
 // Anthropic ignores cache breakpoints on segments below the minimum cacheable
 // size, but to avoid emitting pointless cache writes we only mark the system
@@ -289,6 +290,8 @@ import { normalizeAnthropicContent } from './anthropic-image';
 const ANTHROPIC_MIN_CACHE_CHARS = 3500;
 // Models available via Anthropic
 export const ANTHROPIC_MODELS = [
+  'claude-fable-5-2',
+  'claude-mythos-5-2',
   'claude-fable-5-1',
   'claude-fable-5',
   'claude-opus-5-5',
@@ -431,7 +434,7 @@ export class AnthropicAdapter implements LLMProvider {
   }
 
   private getKnownModelInfo(name: string): Partial<ModelInfo> {
-    if (/^(claude-fable-5|claude-opus-(?:5|4-(?:6|7|8))|claude-sonnet-(?:5|4-6)|claude-haiku-5)(?:\b|[-_])/.test(name)) {
+    if (/^(claude-fable-5|claude-mythos-5-2|claude-opus-(?:5|4-(?:6|7|8))|claude-sonnet-(?:5|4-6)|claude-haiku-5)(?:\b|[-_])/.test(name)) {
       return {
         contextWindowTokens: 1_000_000,
         maxOutputTokens: 128_000,
@@ -940,16 +943,17 @@ export class AnthropicAdapter implements LLMProvider {
     const configuredEffort = this.normalizeEffort((anthropicCfg as any).reasoning_effort, model);
     const requestedEffort = this.normalizeEffort(options?.think, model);
     const effort = requestedEffort || configuredEffort;
-    const extendedThinkingEnabled = options?.think !== false
+    // 5.2 thinking is always on, including automation's legacy think:false hint.
+    const extendedThinkingEnabled = /^claude-(?:fable|mythos)-5-2(?:-|$)/.test(model) || (options?.think !== false
       && options?.think !== 'none'
-      && (anthropicCfg.extended_thinking === true || !!options?.think);
+      && (anthropicCfg.extended_thinking === true || !!options?.think));
 
     const fastSpeed = normalizeSpeed('anthropic', model, options?.speed || anthropicCfg.speed || (anthropicCfg.fast_mode === true ? 'fast' : 'standard')) === 'fast';
     const vaultTokens = !this.directConfig && this.configDir
       ? loadTokens(this.configDir, this.accountId)
       : null;
     const headers = this.buildHeaders(model, extendedThinkingEnabled, fastSpeed, vaultTokens);
-    const { system, messages: anthropicMessages, turnUserIndex } = await this.buildMessages(messages, options?.omitIntradayNotes);
+    const { system, messages: anthropicMessages, turnUserIndex } = await this.buildMessages(pruneHistoryImages(messages).messages, options?.omitIntradayNotes);
 
     const body: any = {
       model,
@@ -1067,6 +1071,9 @@ export class AnthropicAdapter implements LLMProvider {
       return out;
     };
 
+    // The serialized body of the most recent attempt. Reused for requestBytes so
+    // a multi-MB body (images) is not stringified again just to log its size.
+    let lastSerializedBody = '';
     const requestShape = () => ({
       speed: body.speed || 'standard',
       effort: body.output_config?.effort || null,
@@ -1082,7 +1089,7 @@ export class AnthropicAdapter implements LLMProvider {
       // and logging the pre-slim list hid that (2026-09-25 logged 130, sent ~20).
       toolCount: Array.isArray(body.tools) ? body.tools.length : 0,
       builtToolCount: tools?.length || 0,
-      requestBytes: Buffer.byteLength(JSON.stringify(body)),
+      requestBytes: Buffer.byteLength(lastSerializedBody || JSON.stringify(body)),
     });
 
     // Successful setup-token requests are logged too (headers + request shape),
@@ -1201,10 +1208,11 @@ export class AnthropicAdapter implements LLMProvider {
         );
         let response: Response;
         try {
+          lastSerializedBody = JSON.stringify(body);
           response = await fetch(this.getMessagesEndpoint(), {
             method: 'POST',
             headers,
-            body: JSON.stringify(body),
+            body: lastSerializedBody,
             signal: options?.abortSignal
               ? AbortSignal.any([options.abortSignal, headerDeadline.signal])
               : headerDeadline.signal,
@@ -1433,10 +1441,16 @@ export class AnthropicAdapter implements LLMProvider {
                 if (delta.text) options.onModelEvent?.({ type: 'assistant_delta', text: delta.text, nativeType: 'content_block_delta.text_delta', provider: this.id, model });
 	              } else if (delta.type === 'thinking_delta') {
 	                const thinkDelta = delta.thinking || '';
+	                const thinkingIsSummary = !/claude-3/i.test(String(model || ''));
 	                thinking += thinkDelta;
 	                if (thinkDelta) {
-	                  options.onThinking?.(thinkDelta);
-	                  options.onModelEvent?.({ type: 'reasoning_delta', text: thinkDelta, nativeType: 'content_block_delta.thinking_delta', provider: this.id, model });
+	                  // Claude 4+ returns SUMMARIZED thinking (we also request display:'summarized'),
+	                  // the same user-safe class as OpenAI reasoning summaries. Route it through the
+	                  // visible reasoning-summary channel so every provider renders identically.
+	                  // Claude 3.x returned raw thinking, so it stays on the private channel.
+	                  if (thinkingIsSummary && options.onReasoningSummary) options.onReasoningSummary(thinkDelta);
+	                  else options.onThinking?.(thinkDelta);
+	                  options.onModelEvent?.({ type: 'reasoning_delta', text: thinkDelta, summary: thinkingIsSummary, nativeType: 'content_block_delta.thinking_delta', provider: this.id, model });
 	                }
 	              } else if (delta.type === 'input_json_delta') {
                 if (blocks[idx]) {

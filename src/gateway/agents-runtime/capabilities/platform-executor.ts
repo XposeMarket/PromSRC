@@ -9,6 +9,7 @@ import { resolveHookConfig } from '../../comms/webhook-handler';
 import { getConfig } from '../../../config/config';
 import { listMcpPresets, buildMcpServerConfigFromPreset } from '../../../extensions/mcp-preset-service';
 import * as secureAccessRuntime from '../../../security/secure-access-runtime';
+import { waitForSecureAccess } from '../../../security/secure-access-waits';
 
 const PLATFORM_TOOL_NAMES = new Set([
   'plugin_ops',
@@ -66,8 +67,37 @@ export const platformCapabilityExecutor: CapabilityExecutor = {
         let result: unknown;
         if (args.action === 'status') result = await runtime.secureAccessStatus();
         else if (args.action === 'list') result = { credentials: runtime.secureAccessCredentials() };
-        else if (args.action === 'request') result = { request: broker.create({ sessionId, label: args.label, purpose: args.purpose, origin: args.origin, mode: args.mode || 'existing', identifier: args.identifier }), next: 'Owner enters credentials in the protected chat card. Never ask for passwords in a chat message.' };
-        else if (args.action === 'fill') result = await runtime.prepareProtectedLogin(String(args.credential_id || ''), String(args.url || ''), sessionId, 'main');
+        else if (args.action === 'request') {
+          // Blocking like ask_prometheus_questions: the turn waits for the owner to resolve the card.
+          const request = broker.create({ sessionId, label: args.label, purpose: args.purpose, origin: args.origin, mode: args.mode || 'existing', identifier: args.identifier });
+          const waited = await waitForSecureAccess({
+            id: request.id, sessionId, timeoutMs: Math.max(5_000, Date.parse(request.expiresAt) - Date.now() + 5_000), abortSignal: deps.abortSignal,
+            check: () => { const r = broker.listRequests(sessionId).find((item) => item.id === request.id); return r && r.status !== 'pending' ? r : undefined; },
+          });
+          if (waited.kind === 'resolved') {
+            const r = waited.value;
+            result = r.status === 'saved'
+              ? { status: 'saved', credential_id: r.credentialId, origin: r.origin, label: r.label, next: 'Saved. Use secure_access fill with this credential_id and the exact login URL to sign in. The value is never visible to you.' }
+              : { status: r.status, origin: r.origin, next: r.status === 'cancelled' ? 'The owner declined. Nothing was saved. Do not ask for the password in chat.' : 'The request expired. Nothing was saved.' };
+          } else if (waited.kind === 'steer') result = { status: 'pending', request_id: request.id, interrupted_by_user: waited.message, next: 'The user sent a message while the card was open. Address it; the card stays open until it expires.' };
+          else if (waited.kind === 'aborted') result = { status: 'pending', request_id: request.id, next: 'Turn stopped. The card stays open; its result will be sent to chat when resolved.' };
+          else result = { status: 'expired', request_id: request.id, next: 'No answer before the card expired. Nothing was saved.' };
+        }
+        else if (args.action === 'fill') {
+          const credentialId = String(args.credential_id || '');
+          const prepared = await runtime.prepareProtectedLogin(credentialId, String(args.url || ''), sessionId, 'main');
+          const waited = await waitForSecureAccess({
+            id: credentialId, sessionId, timeoutMs: 130_000, abortSignal: deps.abortSignal,
+            check: () => { const c = runtime.secureAccessCredentials().find((item) => item.id === credentialId); return c && !c.pendingLogin ? c : undefined; },
+          });
+          if (waited.kind === 'resolved') {
+            const state = waited.value.state;
+            result = { status: state === 'verified' ? 'signed_in' : state === 'needs_attention' ? 'sign_in_failed' : state === 'submitted_outcome_unknown' ? 'submitted' : 'declined',
+              origin: prepared.origin, credential_state: state,
+              next: state === 'saved_not_submitted' || state === 'revoked' ? 'Sign-in was not submitted. Do not retry without asking.' : 'Check the page (browser snapshot) to confirm you are signed in before continuing.' };
+          } else if (waited.kind === 'steer') result = { ...prepared, status: 'awaiting_owner', interrupted_by_user: waited.message };
+          else result = { ...prepared, status: waited.kind === 'timeout' ? 'expired' : 'awaiting_owner' };
+        }
         else if (args.action === 'revoke') { result = { credential: broker.revoke(String(args.credential_id || '')) }; await runtime.cancelProtectedLogin(String(args.credential_id || '')); }
         else return { name, args, result: 'Unknown secure_access action.', error: true };
         return { name, args, result: JSON.stringify(result), error: false };
@@ -359,6 +389,10 @@ export const platformCapabilityExecutor: CapabilityExecutor = {
           const discovery = runtime.orchestrator.discover(service);
           return { name, args, result: JSON.stringify({ discovery }, null, 2), error: false };
         }
+        if (action === 'start') {
+          const attempt = await runtime.start.start({ serviceId: String(args.service || args.service_id || ''), kind: args.kind, attemptId: args.connection_attempt_id });
+          return { name, args, result: JSON.stringify({ attempt }), artifacts: [{ type: 'connection_card', title: attempt.serviceName || attempt.serviceId, status: attempt.state, attempt }], error: false };
+        }
         if (action === 'plan' || action === 'connect') {
           const existingAttemptId = String(args.connection_attempt_id || args.attempt_id || '').trim();
           if (existingAttemptId) {
@@ -366,14 +400,14 @@ export const platformCapabilityExecutor: CapabilityExecutor = {
             if (!existing) return { name, args, result: `Connection attempt "${existingAttemptId}" not found.`, error: true };
             const attempt = action === 'plan'
               ? (existing.plan ? existing : await runtime.orchestrator.plan(existingAttemptId))
-              : await runtime.orchestrator.connect(existingAttemptId, { ...(args.input || {}), approved: args.approved === true });
+              : await runtime.orchestrator.connect(existingAttemptId, { approved: false });
             return { name, args, result: JSON.stringify({ attempt }, null, 2), artifacts: [{ type: 'connection_card', title: attempt.serviceName || attempt.serviceId, status: attempt.state, summary: attempt.plan?.summary, attempt }], error: false };
           }
           const serviceId = String(args.service || args.service_id || '').trim();
           if (!serviceId) return { name, args, result: `${action} requires service`, error: true };
           const created = runtime.orchestrator.create({ serviceId, serviceName: args.service_name, requestedCapabilities: Array.isArray(args.requested_capabilities) ? args.requested_capabilities.map(String) : [], readOnly: args.read_only !== false, metadata: args.metadata });
           let attempt = await runtime.orchestrator.plan(created.id);
-          if (action === 'connect' && args.approved === true) attempt = await runtime.orchestrator.connect(created.id, { approved: true });
+          // A model-supplied approved flag is never owner consent. Return its action card.
           return { name, args, result: JSON.stringify({ attempt }, null, 2), artifacts: [{ type: 'connection_card', title: attempt.serviceName || attempt.serviceId, status: attempt.state, summary: attempt.plan?.summary, attempt }], error: false };
         }
         const attemptId = String(args.connection_attempt_id || args.attempt_id || '').trim();
@@ -532,6 +566,24 @@ export const platformCapabilityExecutor: CapabilityExecutor = {
       if (!registry.isToolAvailable(toolName)) {
         const connectorId = registry.getConnectorIdForTool(toolName) || 'unknown';
         return { name, args, result: `Connector tool "${toolName}" is unavailable: connector "${connectorId}" is not connected or this tool is disabled for its connection. Check connector_list.`, error: true };
+      }
+      // Multi-account: optional `account` picks which connected account runs this call.
+      let accountSlug = '';
+      if (toolArgs && typeof toolArgs === 'object' && 'account' in toolArgs) {
+        const { account, ...rest } = toolArgs as Record<string, unknown>;
+        toolArgs = rest;
+        const connectorId = registry.getConnectorIdForTool(toolName) || (toolName.startsWith('x_api_') ? 'x' : '');
+        if (account !== undefined && account !== null && String(account).trim() && connectorId) {
+          const { resolveAccountRef } = await import('../../../connections/connector-account-service.js');
+          const resolved = resolveAccountRef(connectorId, account);
+          if ('error' in resolved) return { name, args, result: resolved.error, error: true };
+          accountSlug = resolved.slug;
+        }
+        if (accountSlug) {
+          const { runWithConnectorAccounts } = await import('../../../connections/connector-accounts.js');
+          const connResult = await runWithConnectorAccounts([connectorId], accountSlug, () => registry.executeTool(toolName, toolArgs));
+          return { name: toolName, args: { ...toolArgs, account }, ...connResult };
+        }
       }
       const connResult = await registry.executeTool(toolName, toolArgs);
       return { name: toolName, args: toolArgs, ...connResult };

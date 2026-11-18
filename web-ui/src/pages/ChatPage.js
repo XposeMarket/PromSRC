@@ -1,4 +1,7 @@
-import { foldMobileReasoningSummaryGroups, mobileReasoningSummaryTitle } from '../mobile/mobile-reasoning-summary-fold.js';
+import { renderContentReview } from '../components/ContentReview.js';
+
+import { foldMobileReasoningSummaryGroups, isMobileReasoningSummaryEntry, mobileReasoningSummaryKey, mobileReasoningSummaryTitle } from '../mobile/mobile-reasoning-summary-fold.js';
+import { agentAvatarHtml } from '../components/provider-logo.js';
 import { liveTraceSummaryKey, desktopTraceProgressSummary as formatDesktopTraceProgressSummary } from '../features/chat/trace-summary-presentation.js';
 
 import { formatContextDurationLabel, formatContextToolDurationSuffix, formatContextTokenCount } from '../chat-context-formatters.js';
@@ -7622,8 +7625,52 @@ if (typeof window !== 'undefined' && !window.__PROM_DESKTOP_VISUAL_STATE_LISTENE
   });
 }
 
+// Heartbeat output used to create one sidebar chat per run (heartbeat_<agent>_<ms>).
+// It now lives in one stable thread per agent (auto_heartbeat_<agent>). Fold any
+// legacy per-run entries into that thread so the sidebar shows one chat per agent.
+const LEGACY_HEARTBEAT_RUN_ID_RE = /^heartbeat_(.+)_(\d{10,})$/;
+function heartbeatMessageKey(m) {
+  return `${m?.role === 'ai' ? 'assistant' : m?.role} ${String(m?.content || '').slice(0, 200)}`;
+}
+function mergeHeartbeatHistories(base, extra) {
+  const out = Array.isArray(base) ? base.slice() : [];
+  const seen = new Set(out.map(heartbeatMessageKey));
+  for (const m of Array.isArray(extra) ? extra : []) {
+    const key = heartbeatMessageKey(m);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(m);
+  }
+  return out.sort((a, b) => (Number(a?.timestamp) || 0) - (Number(b?.timestamp) || 0));
+}
+function foldLegacyHeartbeatSessions(list) {
+  if (!Array.isArray(list) || !list.some((s) => LEGACY_HEARTBEAT_RUN_ID_RE.test(String(s?.id || '')))) return list;
+  const kept = [];
+  const threads = new Map();
+  for (const s of list) {
+    const id = String(s?.id || '');
+    const legacy = LEGACY_HEARTBEAT_RUN_ID_RE.exec(id);
+    const stableMatch = /^auto_heartbeat_(.+)$/.exec(id);
+    const agentId = legacy ? legacy[1] : (stableMatch ? stableMatch[1] : '');
+    if (!agentId) { kept.push(s); continue; }
+    const threadId = `auto_heartbeat_${agentId}`;
+    const prev = threads.get(threadId);
+    if (!prev) {
+      const seeded = { ...s, id: threadId, title: `💓 ${agentId} heartbeat`, automated: true };
+      threads.set(threadId, seeded);
+      kept.push(seeded);
+      continue;
+    }
+    prev.history = mergeHeartbeatHistories(prev.history, s.history);
+    prev.unread = Boolean(prev.unread || s.unread);
+    prev.createdAt = Math.min(Number(prev.createdAt) || Date.now(), Number(s.createdAt) || Date.now());
+    prev.updatedAt = Math.max(Number(prev.updatedAt) || 0, Number(s.updatedAt) || 0);
+  }
+  return kept;
+}
+
 function setChatSessions(next) {
-  const sessions = (Array.isArray(next) ? next : [])
+  const sessions = foldLegacyHeartbeatSessions(Array.isArray(next) ? next : [])
     .filter((session) => !isInternalChatSession(session))
     .filter(hasPersistableChatSessionContent);
   if (typeof window.setChatSessionsRef === 'function') {
@@ -8007,7 +8054,10 @@ async function _loadSessionFromServer(id, options = {}) {
       params.set('historyLimit', String(Math.max(20, Math.min(300, Number(options.historyLimit || 80)))));
       params.set('processLimit', String(Math.max(40, Math.min(500, Number(options.processLimit || 240)))));
       params.set('includeToolLog', '0');
-      if (options.fullProcess === true || options.recovery === true) params.set('fullProcess', '1');
+      // Only explicit full-trace refreshes ask for fullProcess. Opening a working
+      // chat used to imply it via `recovery`, which pulled 5-10 MB (5-10 s) per
+      // open; the active run's trace is replayed from the stream right after.
+      if (options.fullProcess === true) params.set('fullProcess', '1');
     }
     const query = params.toString();
     const data = await fetchJsonWithTimeout(
@@ -9057,6 +9107,12 @@ function upsertAutomatedSession(as, opts = {}) {
     source: String(as.source || ''),
     unread: markUnread,
   };
+  if (/^auto_heartbeat_/i.test(String(as.id))) {
+    // Keep older runs (folded from legacy per-run chats) in the agent's single thread.
+    window.chatSessions = foldLegacyHeartbeatSessions(window.chatSessions);
+    const prior = window.chatSessions.find(s => s.id === as.id);
+    if (prior) nextSession.history = mergeHeartbeatHistories(nextSession.history, prior.history);
+  }
   const existingIdx = window.chatSessions.findIndex(s => s.id === as.id);
   if (existingIdx === -1) window.chatSessions.push(nextSession);
 	  else window.chatSessions[existingIdx] = { ...window.chatSessions[existingIdx], ...nextSession };
@@ -12533,7 +12589,7 @@ function renderConnectionCardArtifact(artifact) {
 }
 
 async function connectionCardContinue(attemptId, input, button) {
-  try { if (button) button.disabled = true; const result = await api(`/api/connection-attempts/${encodeURIComponent(attemptId)}/continue`, { method: 'POST', body: JSON.stringify(input || {}) }); showToast?.('Connection updated', String(result?.attempt?.state || ''), 'success', 3000); await connectionCardRefresh(attemptId, button); }
+  try { if (button) button.disabled = true; const result = input?.approved === true ? await (await import('../features/connectors/connection-actions.js')).approveConnection(api, attemptId) : await api(`/api/connection-attempts/${encodeURIComponent(attemptId)}/continue`, { method: 'POST', body: JSON.stringify(input || {}) }); showToast?.('Connection updated', String(result?.attempt?.state || ''), 'success', 3000); await connectionCardRefresh(attemptId, button); }
   catch (error) { showToast?.('Connection failed', String(error?.message || error), 'error', 5000); if (button) button.disabled = false; }
 }
 
@@ -13173,7 +13229,7 @@ function renderLiveTraceEntry(entry) {
   const attr = entryId ? ` data-live-entry-id="${escHtml(entryId)}"` : '';
   const previewHtml = renderLiveTracePreview(entry);
   if (isDesktopTraceThoughtType(type)) {
-    return `<div class="live-turn-prose live-turn-${escHtml(type)}"${attr}>
+    return `<div class="live-turn-prose live-turn-${escHtml(type)}${isMobileReasoningSummaryEntry(entry) ? ' is-reasoning-prose' : ''}"${attr}>
       <div class="live-turn-md">${renderMd(dedupeDesktopTraceProseText(text))}</div>
       ${previewHtml}
     </div>`;
@@ -13551,7 +13607,7 @@ function renderLiveTurnTrace(entries, { streaming = false, openLiveCurrent = fal
   ), -1);
   return `<div class="live-turn-timeline">${groups.map((group, index) => {
     if (group.kind === 'reasoning-live') {
-      return `<div class="live-turn-thought-summary" data-live-trace-group="${escHtml(group.id)}" aria-live="polite"><strong class="t-think">${renderThinkingState(mobileReasoningSummaryTitle(group.reasoningEntries))}</strong></div>`;
+      return `<div class="live-turn-thought-summary" data-live-trace-group="${escHtml(group.id)}" aria-live="polite"><strong class="t-think is-reasoning">${renderThinkingState(mobileReasoningSummaryTitle(group.reasoningEntries))}</strong></div>`;
     }
     if (group.kind === 'narration') {
       return `<div class="live-turn-narration" data-live-trace-group="${escHtml(group.id)}">${group.entries.map(renderLiveTraceEntry).join('')}</div>`;
@@ -13590,21 +13646,28 @@ function renderLiveTurnTrace(entries, { streaming = false, openLiveCurrent = fal
         : previews}</div>`;
     }
     const isLiveCurrent = streaming && index === latestToolGroupIndex && index === groups.length - 1;
-    // Lazily hydrate old groups, even during an active stream.
-    const lazyClosedGroup = !streaming || !isLiveCurrent;
+    // Closed current groups are lazy too; their hidden tool bodies need no
+    // per-token DOM, layout, or syntax highlighting. Toggle hydrates on demand.
+    const lazyClosedGroup = !(openLiveCurrent && isLiveCurrent);
     // Resolve progress only inside this tool group. This preserves earlier
     // groups and lets a summary that preceded the tool call remain attached
     // to the tool without resurrecting stale narration from another phase.
-    const progressSummary = mobileReasoningSummaryTitle(group.reasoningEntries) || desktopTraceProgressSummary(group.entries);
+    // Live: reasoning drives the header. Finished: normal tool summary; reasoning lives in the body.
+    const reasoningTitle = isLiveCurrent ? mobileReasoningSummaryTitle(group.reasoningEntries) : '';
+    const progressSummary = reasoningTitle || desktopTraceProgressSummary(group.entries.filter((entry) => !isMobileReasoningSummaryEntry(entry)));
     // liveTraceGroups already folded and filtered this presentation list.
     // Replaying it here (and again for the body) rebuilds every tool payload.
     const summary = progressSummary || (isLiveCurrent ? liveTraceCurrentToolLabel(group.entries, { coalesced: true }) : liveTraceToolSummary(group.entries, { coalesced: true }));
-    const summaryKey = liveTraceSummaryKey(summary);
+    const summaryKey = reasoningTitle && summary === reasoningTitle
+      ? mobileReasoningSummaryKey(group.reasoningEntries)
+      : liveTraceSummaryKey(summary);
     const visibleEntries = group.entries;
     // The mutable progress packet is rendered in the header only. Leaving it
     // in the body creates a duplicate summary and makes the next event appear
     // to overwrite the stream instead of extending it.
-    const toolBodyEntries = [...(group.reasoningEntries || []), ...visibleEntries.filter((entry) => !isDesktopMutableProgressTraceEntry(entry))];
+    // group.entries already holds reasoning blocks in chronological order with the calls.
+    const toolBodyEntries = visibleEntries.filter((entry) => !isDesktopMutableProgressTraceEntry(entry));
+    for (const entry of group.reasoningEntries || []) if (!toolBodyEntries.includes(entry)) toolBodyEntries.unshift(entry);
     const callCount = toolBodyEntries.filter((entry) => entry?.activity?.kind === 'operation').length;
     const nonReasoningEntries = toolBodyEntries.filter((entry) => !isDesktopTraceReasoningSummaryType(entry?.type));
     const itemCount = callCount || nonReasoningEntries.length || (toolBodyEntries.length ? 1 : 0);
@@ -13613,7 +13676,7 @@ function renderLiveTurnTrace(entries, { streaming = false, openLiveCurrent = fal
     return `<details class="live-turn-tool-group"${openAttr}${isLiveCurrent ? ' data-live-trace-current="1"' : ''} data-live-trace-group="${escHtml(group.id)}">
       <summary class="live-turn-tool-summary">
         <span class="live-turn-tool-icon" aria-hidden="true">${renderToolActivityIcon({ family: 'tool', key: 'tool.summary' }, escHtml)}</span>
-        <strong class="t-think" data-live-trace-summary-key="${escHtml(summaryKey)}">${renderThinkingState(summary)}</strong>
+        <strong class="t-think${reasoningTitle && summary === reasoningTitle ? ' is-reasoning' : ''}" data-live-trace-summary-key="${escHtml(summaryKey)}">${renderThinkingState(summary)}</strong>
         <span class="live-turn-tool-chevron" aria-hidden="true">›</span>
         <em>${itemCount} ${itemLabel}${itemCount === 1 ? '' : 's'}</em>${isLiveCurrent ? waitCountdownHtml(toolBodyEntries) : ''}
       </summary>
@@ -14746,21 +14809,15 @@ function toggleUnifiedDesktopComposerDictation(inputId, button = null) {
 
 function renderSessionThinkingBodyHtml(sessionId) {
   const st = getSessionStreamState(sessionId) || {};
-  const startupProgressPattern = /^(request received\. starting chat turn|preparing chat context|preparing prometheus runtime|building model context)/i;
-  const progressLines = (Array.isArray(st.currentProgressLines) ? st.currentProgressLines : [])
-    .filter((line) => !startupProgressPattern.test(String(line || '').trim()));
-  const progressHtml = progressLines.length
-    ? `<div style="margin:6px 0 8px 0;font-size:11px;line-height:1.6;color:var(--muted)">
-        ${progressLines.map((l) => `<div>• ${escHtml(l)}</div>`).join('')}
-      </div>`
-    : '';
+  // Transport/setup diagnostics are not conversation content. Match mobile:
+  // keep the three-dot placeholder until reasoning, tools or an answer arrive.
   const liveTraceHtml = renderLiveTurnTrace(st.liveTraceEntries || [], { streaming: true });
   const liveApprovalsHtml = renderStreamingApprovals(st.pendingApprovals || []);
   const inlinePlanHtml = renderInlineRuntimePlanHtml(st.runtimeProgressState);
   const answerStarted = !!(st.finalResponseStarted || String(st.streamingAIText || '').trim());
   const showAnswerText = answerStarted && !!String(st.streamingAIText || '');
   const showLiveTrace = !!liveTraceHtml;
-  const thinkingOnly = !showAnswerText && !progressHtml && !showLiveTrace && !liveApprovalsHtml && !inlinePlanHtml;
+  const thinkingOnly = !showAnswerText && !showLiveTrace && !liveApprovalsHtml && !inlinePlanHtml;
   const sess = getChatSessionById(sessionId);
   const startIndex = Number.isFinite(Number(st.currentTurnStartIndex)) ? Number(st.currentTurnStartIndex) : -1;
   const rawCurrentTurnEntries = startIndex >= 0 && Array.isArray(sess?.processLog) ? sess.processLog.slice(startIndex) : [];
@@ -14782,11 +14839,11 @@ function renderSessionThinkingBodyHtml(sessionId) {
             ${assistantWorkTimerHtml}
             ${assistantStatusDividerHtml}
             ${!thinkingOnly ? activeModelBadgeHtml : ''}
-            ${showLiveTrace ? liveTraceHtml : (!showAnswerText ? progressHtml : '')}
+            ${showLiveTrace ? liveTraceHtml : ''}
             ${pendingImageHtml}
             ${showAnswerText
               ? `<div id="streaming-text-content">${renderAssistantContent(st.streamingAIText)}</div>`
-              : (showLiveTrace || progressHtml || pendingImageHtml ? '' : (window.PROM_THEME_ENGINE?.thinkingDotsHtml(String(st.turnStartedAt || '')) || ''))
+              : (showLiveTrace || pendingImageHtml || liveApprovalsHtml || inlinePlanHtml ? '' : (window.PROM_THEME_ENGINE?.thinkingDotsHtml(String(st.turnStartedAt || '')) || '<div class="thinking" role="status" aria-label="Thinking"><div class="thinking-dot"></div><div class="thinking-dot"></div><div class="thinking-dot"></div></div>'))
             }
             ${liveApprovalsHtml}
             ${inlinePlanHtml}`;
@@ -14801,9 +14858,8 @@ function renderSessionThinkingHtml(sessionId) {
     && String(sessionId || '').trim() === String(window.activeChatSessionId || '').trim();
   const st = getSessionStreamState(sessionId) || {};
   const hasNonQuestionThinking = !!String(st.streamingAIText || '').trim()
-    || !!Array.isArray(st.liveTraceEntries || []).length
-    || !!Array.isArray(st.currentProgressLines || []).length
-    || !!Array.isArray(st.pendingApprovals || []).length
+    || !!(st.liveTraceEntries || []).length
+    || !!(st.pendingApprovals || []).length
     || !!getRuntimePlanItems(st.runtimeProgressState).length;
   if (pendingQuestion && !hasNonQuestionThinking) return '';
   const thinkingOnly = !hasNonQuestionThinking;
@@ -15506,7 +15562,9 @@ function syncLiveTraceNodeAttributes(currentNode, nextNode) {
     }
   });
   Array.from(nextNode?.attributes || []).forEach((attribute) => {
-    if (!preserved.has(attribute.name)) currentNode.setAttribute(attribute.name, attribute.value);
+    if (!preserved.has(attribute.name) && currentNode.getAttribute(attribute.name) !== attribute.value) {
+      currentNode.setAttribute(attribute.name, attribute.value);
+    }
   });
 }
 
@@ -15549,9 +15607,11 @@ function patchLiveTraceEntries(currentTrace, nextTrace) {
     const key = getLiveTraceNodeKey(nextNode, index);
     const currentNode = existing.get(key);
     if (currentNode && currentNode.tagName === nextNode.tagName && currentNode.className === nextNode.className) {
-      if (currentNode.outerHTML !== nextNode.outerHTML) {
+      const markup = nextNode.outerHTML;
+      if ((liveTraceRenderedMarkup.get(currentNode) || currentNode.outerHTML) !== markup) {
         const disclosures = captureLiveTraceDisclosureState(currentNode);
         const replacement = nextNode.cloneNode(true);
+        liveTraceRenderedMarkup.set(replacement, markup);
         restoreLiveTraceDisclosureState(replacement, disclosures);
         currentNode.replaceWith(replacement);
         ordered.push(replacement);
@@ -15577,14 +15637,15 @@ function patchLiveTraceGroup(currentGroup, nextGroup) {
   const currentBody = directLiveTraceChild(currentGroup, (node) => node.classList.contains('live-turn-tool-body'));
   const nextBody = directLiveTraceChild(nextGroup, (node) => node.classList.contains('live-turn-tool-body'));
   if (currentBody && nextBody?.hasAttribute('data-lazy-trace')) {
-    // Preserve closed bodies; refresh open groups with latest entries.
-    if (currentBody.hasAttribute('data-lazy-trace') || !currentBody.firstElementChild || wasOpen) {
+    if (!wasOpen) {
       currentBody.setAttribute('data-lazy-trace', nextBody.getAttribute('data-lazy-trace'));
-      currentBody.innerHTML = '';
-      if (wasOpen) hydrateLazyTraceBody(currentBody);
+      if (currentBody.firstChild) currentBody.replaceChildren();
+      return true;
     }
-    currentGroup.open = wasOpen;
-    return true;
+    // Generate the next open body off-document, then reconcile individual rows.
+    // Never tear down an expanded live group on each summary/token update.
+    hydrateLazyTraceBody(nextBody);
+    currentBody.removeAttribute('data-lazy-trace');
   }
   const currentTrace = directLiveTraceChild(currentBody, (node) => node.classList.contains('live-turn-trace'));
   const nextTrace = directLiveTraceChild(nextBody, (node) => node.classList.contains('live-turn-trace'));
@@ -15599,8 +15660,14 @@ function patchLiveTraceGroup(currentGroup, nextGroup) {
   return true;
 }
 
+const liveTraceRenderedMarkup = new WeakMap();
 function patchLiveTraceTimelineNode(currentNode, nextNode) {
   if (!currentNode || !nextNode) return false;
+  // Compare generated templates, not user-mutated disclosure DOM. Stable groups
+  // need no writes, scroll reads, re-hydration, or loss of selection.
+  const markup = nextNode.outerHTML;
+  if (liveTraceRenderedMarkup.get(currentNode) === markup) return true;
+  liveTraceRenderedMarkup.set(currentNode, markup);
   if (currentNode.matches('details.live-turn-tool-group')) return patchLiveTraceGroup(currentNode, nextNode);
 
   const wasOpen = currentNode.matches('details') ? currentNode.open === true : false;
@@ -15691,7 +15758,7 @@ function patchStreamingChatBubble(sessionId) {
   // Keep placeholder styling in sync when the first answer/tool arrives.
   const st = getSessionStreamState(sid) || {};
   bubble.classList.toggle('thinking-only', !String(st.streamingAIText || '').trim()
-    && !(st.liveTraceEntries || []).length && !(st.currentProgressLines || []).length
+    && !(st.liveTraceEntries || []).length
     && !(st.pendingApprovals || []).length && !getRuntimePlanItems(st.runtimeProgressState).length);
 
   const patchedAnswer = patchStreamingAnswerText(content, nextContent);
@@ -19209,7 +19276,7 @@ function renderBackgroundSpawnDock() {
     return `
       <section class="background-spawn-lane ${escHtml(status)}" data-bg-id="${escHtml(lane.id)}" style="--background-agent-color:${escHtml(identity.color)}">
         <button type="button" class="background-spawn-summary" data-bg-open-detail="${escHtml(lane.id)}" aria-label="Open ${escHtml(identity.name)} background work">
-          <span class="background-spawn-avatar">${escHtml(identity.name.slice(0, 2).toUpperCase())}</span>
+          <span class="background-spawn-avatar">${agentAvatarHtml(lane, identity.name)}</span>
           <span class="background-spawn-main">
             <strong>${escHtml(identity.name)}</strong>
             <em>${escHtml(detail)}</em>
@@ -27015,7 +27082,7 @@ function startCodexBridgeRealtimeEventPoll(conn) {
           cache: 'no-store', signal: poll.controller.signal,
         });
         const data = await response.json().catch(() => ({}));
-        if (!response.ok || data?.success === false) break;
+        if (!response.ok || data?.success === false || data?.ended === true) break;
         for (const notification of (Array.isArray(data?.events) ? data.events : [])) {
           poll.afterId = Math.max(poll.afterId, Number(notification?.id || 0) || 0);
           const event = normalizeCodexBridgeRealtimeTranscript(notification);
@@ -44570,6 +44637,7 @@ function renderInlineApprovalRequest(item) {
         ${pending ? `<span class="chat-approval-risk">risk ${escHtml(String(approval.riskScore ?? 0))}</span>` : ''}
       </div>
     </div>
+    ${renderContentReview(approval)}
     ${approval.summary ? `<div class="chat-approval-detail">${escHtml(approval.summary)}</div>` : ''}
     ${approval.humanDetail ? `<div class="chat-approval-subdetail">${escHtml(approval.humanDetail)}</div>` : ''}
     ${pending && devPlan?.reasoning ? `<div class="chat-approval-scope"><span>Reasoning</span>${escHtml(String(devPlan.reasoning))}</div>` : ''}
@@ -44681,7 +44749,7 @@ function renderInlinePrometheusQuestion(item, options = {}) {
     ${questionBlocks}
     ${pending && question.loginHandoff
       ? `<div class="pq-login-handoff">
-          <button class="pq-login-open" type="button" onclick="openDesktopLoginHandoff(${encodeInlineJsString(String(question.loginHandoff.url || ''))})">Open browser &amp; log in</button>
+          <span class="pq-login-origin">${escHtml(String(question.loginHandoff.url || ''))}</span><button class="pq-login-open" type="button" onclick="openDesktopLoginHandoff(${encodeInlineJsString(String(question.loginHandoff.url || ''))})">Open browser &amp; log in</button>
           <span class="pq-login-note">You log in yourself. Prometheus never sees your password.</span>
         </div>`
       : ''}
@@ -46497,6 +46565,14 @@ async function catchUpMainChatStream(sessionId, options = {}) {
       : knownStreamId
         ? Math.max(getMainChatStreamLastSeq(sid, knownStreamId), Number(rememberedRun?.lastSeq || 0) || 0)
         : (options.recovery === true ? 0 : getMainChatStreamLastSeq(sid));
+    // A persisted cursor is not a hydrated renderer. A newly opened window
+    // must replay its visible state before resuming at that saved position.
+    const hydratedState = getSessionStreamState(sid);
+    if (options.recovery === true && after > 0
+      && !(hydratedState?.liveTraceEntries?.length || hydratedState?.streamingAIText || hydratedState?.streamingThinkingText)) {
+      after = 0;
+      resetMainChatStreamCursor(sid, knownStreamId);
+    }
     let data = await fetchJsonWithTimeout(`/api/mobile/chat/stream/${encodeURIComponent(sid)}?after=${encodeURIComponent(String(after))}`, 4000);
     if (!data) return null;
 
@@ -46537,7 +46613,15 @@ async function catchUpMainChatStream(sessionId, options = {}) {
     }
 
     const events = Array.isArray(data?.events) ? data.events : [];
-    events.forEach((frame) => applyMainChatStreamFrame(sid, frame, { recovery: options.recovery === true }));
+    // Hydration is one transaction. Replaying each frame through renderProgressPanel
+    // used to repeatedly rebuild the same active turn before its first paint.
+    events.forEach((frame) => applyMainChatStreamFrame(sid, frame, { recovery: options.recovery === true, suppressRender: true }));
+    if (events.length && sid === window.activeChatSessionId) {
+      applyStreamStateToWindow(sid);
+      syncActiveSessionRunState();
+      renderProgressPanel();
+      renderStreamingChatUpdate(sid);
+    }
     const lastSeq = Number(data?.stream?.lastSeq || 0) || 0;
     if (streamId && lastSeq > 0) {
       rememberDesktopActiveChatRun(sid, { streamId, lastSeq });
@@ -46762,7 +46846,7 @@ function handleMainChatStreamEvent(msg = {}, options = {}) {
   const isViewing = sid === window.activeChatSessionId;
   const renderIfViewing = () => {
     // Snapshot replays rebuild hundreds of frames in one tick and render once at the end.
-    if (!isViewing || options.suppressRender === true) return;
+    if (!isViewing || sid !== window.activeChatSessionId || options.suppressRender === true) return;
     applyStreamStateToWindow(sid);
     syncActiveSessionRunState();
     renderProgressPanel();
@@ -48464,11 +48548,7 @@ wsEventBus.on('bg_agent_event', (msg) => {
   // single bg_agent_done notification below is the lifecycle notification.
 });
 
-// ─── Background agent late-completion injection ───────────────
-// When a background agent finishes AFTER the main turn's finalization gate
-// already ran (or during the turn but after the done event), the server
-// sends bg_agent_done via WebSocket with the full result. We inject it into
-// the last AI message as a proper inner panel so it's visible to the user.
+// Background completions update their own dock/detail, never a parent reply.
 wsEventBus.on('bg_agent_done', (msg) => {
   completeBackgroundSpawnLane(msg || {});
   const sessionId = String(msg?.spawnerSessionId || msg?.sessionId || '').trim();
@@ -48481,64 +48561,11 @@ wsEventBus.on('bg_agent_done', (msg) => {
       { state: failed ? 'failed' : 'complete', title: failed ? 'Background agent needs attention' : 'Background agent complete' },
     );
   }
-  if (msg.state !== 'completed' || !msg.result) return;
-  // Route strictly by the spawner session. The result must never land in
-  // whichever chat happens to be open on this device.
-  if (!sessionId) return;
-  const isActiveTarget = sessionId === String(window.activeChatSessionId || '').trim();
-  if (isActiveTarget && window.isThinking) {
-    addProcessEntry('info', `Background Agent ${msg.bgId}: result ready; merging into final reply.`, { actor: 'Background Agent' });
-    renderProcessLog();
-    return;
+  // The server owns synthesis and durable internal evidence. A late completion
+  // must not rewrite whichever answer happens to be last, active or inactive.
+  if (sessionId === String(window.activeChatSessionId || '').trim()) {
+    announceSourcePanelFileChanges(sessionId);
   }
-  const targetSession = window.chatSessions?.find(s => s.id === sessionId);
-  if (!targetSession) return;
-  if (!isActiveTarget) {
-    // Inactive chat: append to its stored history only; the server-side
-    // transcript stays authoritative when that chat is reopened.
-    const h = Array.isArray(targetSession.history) ? targetSession.history : [];
-    let idx = -1;
-    for (let i = h.length - 1; i >= 0; i--) {
-      if (h[i].role === 'ai' || h[i].role === 'assistant') { idx = i; break; }
-    }
-    if (idx === -1) return;
-    const prior = String(h[idx].content || '');
-    if (/background agent response:/i.test(prior)) return;
-    h[idx] = { ...h[idx], content: prior.trim() + '\n\nBackground agent response:\n' + String(msg.result || '') };
-    targetSession.history = h;
-    saveChatSessions();
-    return;
-  }
-  const history = targetSession.history || [];
-  // Find the last AI message
-  let lastAiIdx = -1;
-  for (let i = history.length - 1; i >= 0; i--) {
-    if (history[i].role === 'ai' || history[i].role === 'assistant') { lastAiIdx = i; break; }
-  }
-  if (lastAiIdx === -1) return;
-  const lastMsg = history[lastAiIdx];
-  const existingContent = String(lastMsg.content || '');
-  const nextFileChanges = mergeFileChangesWithBackground(lastMsg.fileChanges || null, window.activeChatSessionId) || lastMsg.fileChanges;
-  // Don't double-inject text, but still allow late file-change metadata to attach.
-  if (/background agent response:/i.test(existingContent)) {
-    if (nextFileChanges && nextFileChanges !== lastMsg.fileChanges) {
-      history[lastAiIdx] = { ...lastMsg, fileChanges: nextFileChanges };
-      persistActiveChat();
-      renderChatMessages();
-      announceSourcePanelFileChanges(window.activeChatSessionId);
-    }
-    return;
-  }
-  // Append the background agent inner panel marker
-  history[lastAiIdx] = {
-    ...lastMsg,
-    content: existingContent.trim() + '\n\nBackground agent response:\n' + String(msg.result || ''),
-    fileChanges: nextFileChanges,
-  };
-  persistActiveChat();
-  renderChatMessages();
-  if (nextFileChanges) announceSourcePanelFileChanges(window.activeChatSessionId);
-  addProcessEntry('info', `Background Agent ${msg.bgId}: result injected into reply.`, { actor: 'Background Agent' });
 });
 
 // ─── Coordinator progress: show team coordinator activity in process log ───

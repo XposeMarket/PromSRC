@@ -593,9 +593,49 @@ function targetFromArgs(args = {}) {
   return firstValue(args, ['title', 'window', 'windowTitle', 'app', 'url', 'href', 'query', 'q', 'pattern', 'text', 'label', 'selector', 'ref', 'name', 'id'], 90);
 }
 
-function describeTool(actionRaw, argsRaw = {}) {
+const CONNECTOR_APP_LABELS = Object.freeze({
+  github: 'GitHub', gmail: 'Gmail', gdrive: 'Google Drive', google_drive: 'Google Drive', ga4: 'Google Analytics',
+  hubspot: 'HubSpot', linkedin: 'LinkedIn', instagram: 'Instagram', notion: 'Notion', reddit: 'Reddit',
+  salesforce: 'Salesforce', slack: 'Slack', vercel: 'Vercel', obsidian: 'Obsidian', x: 'X', xai: 'xAI',
+});
+const CONNECTOR_WORD_LABELS = Object.freeze({ api: 'API', prs: 'PRs', pr: 'PR', url: 'URL', id: 'ID', crm: 'CRM' });
+
+function connectorAppLabel(app) {
+  const key = normalizeAction(app);
+  return CONNECTOR_APP_LABELS[key] || titleCase(key);
+}
+
+function connectorOperationLabel(op) {
+  return String(op || '')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .split(' ')
+    .map((word) => CONNECTOR_WORD_LABELS[word] || word)
+    .join(' ');
+}
+
+// Connected-app / MCP tool names -> "GitHub · list PRs". Returns null for names
+// that do not follow a connector naming convention.
+function connectorToolParts(action) {
+  let match = /^connector_([a-z0-9]+)_(.+)$/.exec(action);
+  if (match) {
+    if (match[1] === 'google' && match[2].startsWith('drive_')) return { app: connectorAppLabel('gdrive'), op: connectorOperationLabel(match[2].slice(6)) };
+    return { app: connectorAppLabel(match[1]), op: connectorOperationLabel(match[2]) };
+  }
+  match = /^mcp__([^_].*?)__(.+)$/.exec(action);
+  if (match) return { app: connectorAppLabel(match[1]), op: connectorOperationLabel(match[2]) };
+  return null;
+}
+
+function describeTool(actionRaw, argsRaw = {}, depth = 0) {
   let action = normalizeAction(actionRaw);
   const args = parseArgs(argsRaw);
+  // tool_call wraps every connected-app/MCP/composite call; label the real tool.
+  if (action === 'tool_call' && depth < 2) {
+    const innerName = normalizeAction(firstValue(args, ['name', 'tool', 'tool_name', 'toolName'], 160));
+    if (innerName && innerName !== 'tool_call') return describeTool(innerName, parseArgs(args.arguments ?? args.args ?? args.input ?? {}), depth + 1);
+  }
   const subAction = normalizeAction(args.action || args.operation || args.mode);
   if ((/^browser_(act|observe|session|extract)$/.test(action) || /^desktop_(act|observe|input|window|screen|apps|background|window_control)$/.test(action)) && subAction) {
     action = `${action.split('_')[0]}_${subAction}`;
@@ -724,13 +764,31 @@ function describeTool(actionRaw, argsRaw = {}) {
   if (/^(?:generate_image|image_gen|imagegen)$/.test(action)) return make('media.image', 'image generation', 'Preparing image generation…', 'Generating image', 'Generated image', { family: 'media', target: firstValue(args, ['prompt'], 80), countNoun: 'image generation' });
   if (/^(?:generate_video|video_gen)$/.test(action)) return make('media.video', 'video generation', 'Preparing video generation…', 'Generating video', 'Generated video', { family: 'media', target: firstValue(args, ['prompt'], 80), countNoun: 'video generation' });
 
+  if (action === 'tool_search') {
+    const q = firstValue(args, ['query', 'q'], 72);
+    return make('tool.discover', 'tool search', 'Preparing tool search…', q ? `Searching tools for ${quote(q)}` : 'Searching tools', q ? `Searched tools for ${quote(q)}` : 'Searched tools', { target: q, countNoun: 'tool search' });
+  }
+  if (action === 'tool_describe') {
+    const name = firstValue(args, ['name'], 90);
+    return make('tool.describe', 'tool check', 'Preparing tool check…', name ? `Checking tool ${name}` : 'Checking tool', name ? `Checked tool ${name}` : 'Checked tool', { target: name, countNoun: 'tool check' });
+  }
+  if (action === 'tool_call') {
+    // Wrapper without a readable inner tool name.
+    return make('tool.call', 'connected tool', 'Preparing connected tool…', 'Using a connected tool', 'Used a connected tool', { target: '', countNoun: 'connected tool call' });
+  }
+  const connector = connectorToolParts(action);
+  if (connector) {
+    const label = connector.op ? `${connector.app} · ${connector.op}` : connector.app;
+    return make(`connector.${normalizeAction(connector.app)}`, `${connector.app} call`, `Preparing ${connector.app}…`, `Using ${label}`, `Used ${label}`, { target, countNoun: `${connector.app} call` });
+  }
+
   if (!action) {
     // A result whose call (and tool name) was lost to a replay gap. Never show
     // a bare "Tool" / "Tool completed"; say something neutral and readable.
     return make('tool.unknown', 'step', 'Preparing a step…', target ? `Running a step · ${target}` : 'Running a step', 'Finished a step', { target, countNoun: 'step' });
   }
   const friendly = titleCase(action);
-  return make(`tool.${action || 'unknown'}`, friendly.toLowerCase(), `Preparing ${friendly.toLowerCase()}…`, target ? `${friendly} · ${target}` : friendly, `${friendly} completed`, { target, countNoun: friendly.toLowerCase() });
+  return make(`tool.${action || 'unknown'}`, friendly.toLowerCase(), `Preparing ${friendly.toLowerCase()}…`, target ? `${friendly} · ${target}` : friendly, target ? `${friendly} completed · ${target}` : `${friendly} completed`, { target, countNoun: friendly.toLowerCase() });
 }
 
 function failureLabel(description, result) {

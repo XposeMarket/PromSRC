@@ -35,7 +35,9 @@ router.get(`${GATEWAY_OAUTH_CALLBACK_PREFIX}:id`, async (req, res) => {
   if (!/^[a-z0-9_]{1,40}$/.test(id)) return res.status(404).type('html').send(page(false, 'Not found', 'Unknown connector.'));
   try {
     const result = await completeGatewayOAuthCallback(id, req.query as any);
-    if (!result) return res.status(404).type('html').send(page(false, 'No authorization in progress', 'Start the connection again from Prometheus.'));
+    // No pending flow almost always means the sign-in link outlived its 10-minute
+    // window (or was already used / the gateway restarted). Say so plainly.
+    if (!result) return res.status(404).type('html').send(page(false, 'This sign-in link expired', 'Sign-in links only work for 10 minutes and only once. Your account was not changed. Go back to Prometheus and tap Connect again to get a fresh link.'));
     if (result.success) return res.type('html').send(page(true, 'Connected!', result.account_email ? `Signed in as ${result.account_email}` : 'Authorization complete.'));
     return res.status(400).type('html').send(page(false, 'Connection failed', result.error || 'Unknown error'));
   } catch {

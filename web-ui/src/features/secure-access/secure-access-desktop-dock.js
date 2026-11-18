@@ -18,6 +18,9 @@ window.promProtectedPlugin = Object.freeze({
 /** Accidental-paste guard on the real desktop composer only. No standing Add secret button:
  *  protected entry opens when the guard catches a key; arbitrary keys go through Settings > Saved access. */
 export function installDesktopProtectedEntry(doc = document) {
+  // Older renderer/composer clones may still carry the retired affordance.
+  // Remove only that button; protected cards and the paste guard stay intact.
+  doc.querySelectorAll('.chat-input-area [data-add-secret]').forEach((button) => button.remove());
   const input = doc.getElementById('chat-input');
   if (!input) return null;
   const fetchJson = (path, opts = {}) => api(path, opts);

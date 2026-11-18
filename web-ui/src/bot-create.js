@@ -55,7 +55,7 @@ function installStyles() {
     }
     #${CREATE_BUTTON_ID}:hover { background:var(--panel);border-color:color-mix(in srgb,var(--brand) 42%,var(--line)); }
     #${CREATE_BUTTON_ID}:active { transform:translateY(1px); }
-    #${CREATE_BUTTON_ID} iconify-icon { color:var(--brand); }
+    #${CREATE_BUTTON_ID} svg { color:var(--brand); }
 
     #${SIDEBAR_CREATE_BUTTON_ID} {
       position:absolute;right:6px;top:5px;z-index:2;width:26px;height:26px;padding:0;
@@ -163,7 +163,7 @@ function ensureModal() {
           <div class="prom-bot-create-title" id="prom-bot-create-title">Create a Bot</div>
           <div class="prom-bot-create-copy">Create the identity first. Tools, skills, memory, schedules, and run policy can be configured later without asking Prometheus to architect the Bot.</div>
         </div>
-        <button class="prom-bot-create-close" type="button" data-bot-create-close aria-label="Close"><iconify-icon icon="solar:close-circle-linear" width="19" height="19"></iconify-icon></button>
+        <button class="prom-bot-create-close" type="button" data-bot-create-close aria-label="Close"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
       </div>
 
       <form id="prom-bot-create-form">
@@ -344,11 +344,13 @@ function makeCreateButton(id, compact = false) {
   const button = document.createElement('button');
   button.id = id;
   button.type = 'button';
-  if (!compact) button.innerHTML = '<iconify-icon icon="solar:add-circle-bold" width="17" height="17"></iconify-icon><span>New Bot</span>';
+  // Inline SVG: the iconify web component is lazy-loaded and may never register here.
+  const plusIcon = '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/></svg>';
+  if (!compact) button.innerHTML = `${plusIcon}<span>New Bot</span>`;
   else {
     button.title = 'Create Bot';
     button.setAttribute('aria-label', 'Create Bot');
-    button.innerHTML = '<iconify-icon icon="solar:add-circle-linear" width="17" height="17"></iconify-icon>';
+    button.innerHTML = plusIcon;
   }
   button.addEventListener('click', (event) => {
     event.preventDefault();

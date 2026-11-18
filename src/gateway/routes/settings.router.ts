@@ -1,4 +1,7 @@
 import { requireProtectedOwner } from './secure-access.router';
+import { requirePluginSetup } from './plugin-setup-access';
+import { nativeAppSetup } from '../../connections/native-app-setup';
+import { getConnectionRuntime as getPluginConnectRuntime } from '../../connections/runtime';
 import { setPluginCredentialState } from '../../security/plugin-credential-state';
 // src/gateway/routes/settings.router.ts
 // Settings, Credentials, Model, Auth, Memory, Hooks routes
@@ -1793,6 +1796,20 @@ router.post('/api/settings/security', requireGatewayAuth, (req, res) => {
   }
 });
 
+// Revision requests reject the old grant; the origin must prepare and request again.
+router.post('/api/approvals/:id/content-changes', requireGatewayAuth, (req, res) => {
+  const queue = getApprovalQueue();
+  const approval = queue.get(req.params.id);
+  if (!approval) { res.status(404).json({ success: false, error: 'Approval not found' }); return; }
+  if (approval.status !== 'pending') { res.status(409).json({ success: false, error: 'Approval already resolved' }); return; }
+  if (approval.approvalKind !== 'final_action' || !approval.finalAction?.contentReview) { res.status(400).json({ success: false, error: 'This request has no editable content preview' }); return; }
+  const feedback = req.body?.feedback;
+  if (typeof feedback !== 'string' || !feedback.trim() || feedback.length > 32000) { res.status(400).json({ success: false, error: 'Feedback must contain 1–32000 characters' }); return; }
+  queue.update(approval.id, { contentReviewFeedback: feedback });
+  const result = resolveApprovalDecision({ approvalId: approval.id, decision: 'rejected', resolvedBy: 'content_changes' });
+  res.status(result.statusCode).json(result.statusCode === 200 ? { success: true, approval: result.approval } : { success: false, error: result.error });
+});
+
 router.patch('/api/approvals/:id', requireGatewayAuth, (req, res) => {
   try {
     const queue = getApprovalQueue();
@@ -2690,16 +2707,18 @@ router.get('/api/auth/x-api/status', (_req, res) => {
   res.json({ success: true, ...getXApiOAuthStatus(CONFIG_DIR_PATH) });
 });
 
-router.post('/api/auth/x-api/credentials', (req, res, next) => requireProtectedOwner(req, res, next), (req, res) => {
-  if (Object.keys(req.body || {}).some(key => !['clientId', 'clientSecret'].includes(key))) {
+router.post('/api/auth/x-api/credentials', (req, res, next) => requirePluginSetup(req, res, next), (req, res) => {
+  if (Object.keys(req.body || {}).some(key => !['clientId', 'clientSecret', 'attemptId'].includes(key))) {
     res.status(400).json({ success: false, error: 'X_OAUTH_APP_FIELDS_REQUIRED' }); return;
   }
   try {
+    if (req.body?.attemptId) nativeAppSetup(getPluginConnectRuntime().orchestrator, String(req.body.attemptId), 'x');
     const credentials = saveXApiCredentials(CONFIG_DIR_PATH, {
       clientId: req.body?.clientId,
       clientSecret: req.body?.clientSecret,
 
     });
+    if (req.body?.attemptId) getPluginConnectRuntime().orchestrator.confirmPreparedInputSaved(String(req.body.attemptId));
     res.json({
       success: true,
       redirect_uri: credentials.redirect_uri,

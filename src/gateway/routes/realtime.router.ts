@@ -5,6 +5,7 @@ import { buildSystemPrompt, loadSkills } from '../../config/soul-loader.js';
 import { loadVoiceAgentMemory } from '../prompt-context.js';
 import { getCodexRealtimeBridge } from '../realtime/codex-app-server-bridge.js';
 import { classifyCodexRealtimeStartError } from '../realtime/codex-realtime-errors.js';
+import { budgetRealtimeInstructions, REALTIME_AGENT_INSTRUCTIONS_MAX } from './chat/voice/realtime.js';
 
 export const router = express.Router();
 
@@ -194,8 +195,12 @@ function clampText(text: string, maxChars: number): string {
   return `${value.slice(0, Math.max(0, limit - 18)).trimEnd()}\n...[truncated]`;
 }
 
+// Client-supplied instructions come from the voice bootstrap, which already
+// budgets them to REALTIME_AGENT_INSTRUCTIONS_MAX. Use the same section-aware
+// budget here: a smaller head-only clamp cut the prompt in half and dropped
+// tool routing, conversation continuity and the current time.
 function sanitizeRealtimeInstructions(value: unknown): string {
-  return clampText(String(value || ''), Math.max(2000, REALTIME_INSTRUCTIONS_MAX_CHARS));
+  return budgetRealtimeInstructions(String(value || ''), REALTIME_AGENT_INSTRUCTIONS_MAX);
 }
 
 function buildSkillCatalogDigest(maxChars = 4500): string {
@@ -470,6 +475,19 @@ router.post('/api/realtime/codex-bridge/stop', async (req, res) => {
   res.json({ success: true, stopped });
 });
 
+// Connected sessions that do not poll events (Voice Room standby connections)
+// send this so the bridge idle sweep does not treat them as abandoned.
+router.post('/api/realtime/codex-bridge/keepalive', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  const raw = Array.isArray(req.body?.sessionIds) ? req.body.sessionIds : [req.body?.sessionId];
+  const sessionIds = raw.map((id: unknown) => String(id || '').trim()).filter(Boolean).slice(0, 32);
+  if (!sessionIds.length) {
+    res.status(400).json({ success: false, error: 'sessionIds is required.' });
+    return;
+  }
+  res.json({ success: true, alive: getCodexRealtimeBridge().touchRealtimeSessions(sessionIds) });
+});
+
 // The ChatGPT OAuth AVAS transport exposes transcripts through app-server
 // notifications, not reliably through the browser's WebRTC data channel. The
 // UI polls this small per-session buffer to keep its visible chat in sync with
@@ -482,9 +500,13 @@ router.get('/api/realtime/codex-bridge/events', async (req, res) => {
     return;
   }
   const afterId = Number(req.query?.afterId || 0);
-  const events = await getCodexRealtimeBridge().waitForRealtimeEvents(sessionId, afterId);
+  const bridge = getCodexRealtimeBridge();
+  const events = await bridge.waitForRealtimeEvents(sessionId, afterId);
   res.json({
     success: true,
+    // True once the bridge no longer has this session (stopped, expired, or the
+    // app-server restarted). Clients stop polling instead of spinning on [].
+    ended: !bridge.hasRealtimeSession(sessionId),
     events,
     latestId: events.length ? events[events.length - 1].id : (Number.isFinite(afterId) ? afterId : 0),
   });

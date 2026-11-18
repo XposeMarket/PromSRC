@@ -1,3 +1,5 @@
+import { normalizeContentReview, type ContentReview } from '../content-review.js';
+
 /**
  * proposal-store.ts
  *
@@ -82,6 +84,7 @@ export interface ProposalExecutionStep {
 }
 
 export interface ProposalContentSnapshot {
+  contentReview?: ContentReview;
   executionMode?: ProposalExecutionMode;
   type: ProposalType;
   priority: ProposalPriority;
@@ -130,6 +133,7 @@ export interface ProposalApprovalSnapshot {
 }
 
 export interface Proposal {
+  contentReview?: ContentReview;
   id: string;
   executionMode?: ProposalExecutionMode;
   type: ProposalType;
@@ -168,6 +172,7 @@ export interface Proposal {
 }
 
 export interface ProposalUpdateInput {
+  contentReview?: ContentReview;
   executionMode?: ProposalExecutionMode;
   type?: ProposalType;
   priority?: ProposalPriority;
@@ -380,6 +385,7 @@ function normalizeProposalTeamExecution(raw: any): ProposalTeamExecution | undef
 
 function buildProposalContentSnapshot(proposal: Pick<Proposal, keyof ProposalContentSnapshot>): ProposalContentSnapshot {
   return {
+    contentReview: normalizeContentReview(proposal.contentReview),
     executionMode: normalizeProposalExecutionMode((proposal as any).executionMode),
     type: proposal.type,
     priority: proposal.priority,
@@ -404,6 +410,7 @@ function buildProposalContentSnapshot(proposal: Pick<Proposal, keyof ProposalCon
 function normalizeRevision(raw: any): ProposalRevision {
   const snapshotRaw = (raw && typeof raw.snapshot === 'object') ? raw.snapshot : {};
   const snapshot: ProposalContentSnapshot = {
+    contentReview: normalizeContentReview(snapshotRaw.contentReview),
     executionMode: normalizeProposalExecutionMode(snapshotRaw.executionMode || snapshotRaw.execution_mode),
     type: (snapshotRaw.type || 'general') as ProposalType,
     priority: (snapshotRaw.priority || 'medium') as ProposalPriority,
@@ -435,6 +442,7 @@ function normalizeRevision(raw: any): ProposalRevision {
 function normalizeProposal(raw: Proposal): Proposal {
   const normalized: Proposal = {
     ...raw,
+    contentReview: normalizeContentReview(raw.contentReview),
     executionMode: normalizeProposalExecutionMode((raw as any).executionMode || (raw as any).execution_mode),
     type: (raw.type || 'general') as ProposalType,
     priority: (raw.priority || 'medium') as ProposalPriority,
@@ -631,12 +639,28 @@ export function listProposals(statusFilter?: ProposalStatus | ProposalStatus[]):
     for (const file of fs.readdirSync(dir)) {
       if (!file.endsWith('.json')) continue;
       try {
-        const p = normalizeProposal(JSON.parse(fs.readFileSync(path.join(dir, file), 'utf-8')) as Proposal);
+        const p = readProposalFileCached(path.join(dir, file));
+        if (!p) continue;
         if (!seen.has(p.id)) { seen.add(p.id); results.push(p); }
       } catch { /* skip */ }
     }
   }
   return results.sort((a, b) => b.createdAt - a.createdAt);
+}
+
+// Needs-You polls listProposals('pending') every few seconds; re-reading and
+// re-parsing every proposal file each time showed up as ~1s main-thread stalls.
+// A stat is far cheaper than read+parse, so reuse the parsed record until the
+// file's mtime/size changes. Callers get a fresh clone so they can mutate it.
+const proposalFileCache = new Map<string, { mtimeMs: number; size: number; proposal: Proposal }>();
+function readProposalFileCached(filePath: string): Proposal | null {
+  const st = fs.statSync(filePath);
+  const hit = proposalFileCache.get(filePath);
+  if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) return structuredClone(hit.proposal);
+  const proposal = normalizeProposal(JSON.parse(fs.readFileSync(filePath, 'utf-8')) as Proposal);
+  if (proposalFileCache.size > 2_000) proposalFileCache.clear();
+  proposalFileCache.set(filePath, { mtimeMs: st.mtimeMs, size: st.size, proposal });
+  return structuredClone(proposal);
 }
 
 export function updatePendingProposal(
@@ -651,6 +675,7 @@ export function updatePendingProposal(
   const before = buildProposalContentSnapshot(proposal);
   const next: Proposal = { ...proposal };
 
+  if (updates.contentReview !== undefined) next.contentReview = normalizeContentReview(updates.contentReview);
   if (updates.type !== undefined) next.type = updates.type;
   if (updates.executionMode !== undefined || (updates as any).execution_mode !== undefined) {
     next.executionMode = normalizeProposalExecutionMode(updates.executionMode || (updates as any).execution_mode);

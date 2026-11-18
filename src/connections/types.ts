@@ -139,6 +139,9 @@ export interface ConnectionPlan {
 
 export interface ConnectionDiscoveryMatch {
   serviceId: string;
+  /** Kind-qualified selector; raw IDs can collide (connector:github / mcp_preset:github). */
+  selector?: string;
+  pluginKind?: string;
   serviceName: string;
   pluginId?: string;
   score: number;
@@ -410,6 +413,7 @@ export interface ConnectionAdapter {
   verify?(context: ConnectionAdapterContext, connection: ConnectionRecord): Promise<ConnectionVerificationResult[]>;
   repair?(context: ConnectionAdapterContext, connection: ConnectionRecord): Promise<ConnectionAdapterResult>;
   disconnect?(context: ConnectionAdapterContext, connection: ConnectionRecord): Promise<void>;
+  cancel?(context: ConnectionAdapterContext): Promise<void> | void;
 }
 
 export type ConnectionActivityType =

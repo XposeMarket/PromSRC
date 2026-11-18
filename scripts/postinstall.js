@@ -113,3 +113,20 @@ function run() {
 }
 
 run();
+ensurePublicWebUi();
+
+// generated/public-web-ui is untracked build output. A fresh clone has none, and the
+// gateway falls back to it for vendor assets, so build it once when it is missing.
+// Packaged installs ship it prebuilt, so this is a no-op there. Never fails install.
+function ensurePublicWebUi() {
+  const index = path.join(ROOT, 'generated', 'public-web-ui', 'index.html');
+  if (fs.existsSync(index)) return;
+  if (!fs.existsSync(path.join(ROOT, 'web-ui', 'index.html'))) return;
+  if (!fs.existsSync(path.join(ROOT, 'scripts', 'prepare-public-build.js'))) return;
+  console.log(dim('  Building web UI bundle (generated/public-web-ui)...'));
+  try {
+    execSync('npm run -s prepare:public-web', { cwd: ROOT, stdio: 'inherit' });
+  } catch (error) {
+    console.warn(`  ${yellow('Warning:')} web UI bundle build failed. Run: npm run sync:web-ui`);
+  }
+}

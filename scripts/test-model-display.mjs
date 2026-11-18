@@ -26,3 +26,11 @@ assert.equal(formatModelWithReasoning('gpt-5.5', 'openai', 'high'), 'GPT 5.5 Hig
 assert.equal(formatModelWithReasoning('gpt-5.3-codex-spark', 'openai_codex', 'xhigh'), '5.3 Spark Extra High');
 
 console.log('model display contract passed');
+
+for (const model of ['gpt-6.2-astra', 'gpt-6.2-sol']) {
+  for (const provider of ['openai', 'openai_codex']) {
+    assert.deepEqual(reasoningSelectorOptions(provider, model), ['low', 'medium', 'high', 'xhigh', 'max']);
+    assert.equal(supportsFastSpeed(provider, model), true);
+    assert.ok(formatModelDisplayName(model, provider).includes('6.2'));
+  }
+}

@@ -21,6 +21,9 @@ const desktop = [
   declaration(desktopSource, '_renderDesktopSwitcherModels', '_renderDesktopSwitcherEffort'),
 ].join('\n');
 const mobile = declaration(mobileSource, '_renderModelList', '_renderEffortList');
+const mobileCatalogLiteral = mobileSource.match(/const BUILTIN_STATIC_MODELS = (\{[\s\S]*?\n\});/);
+assert.ok(mobileCatalogLiteral, 'Read the actual mobile badge catalog, not a fixture');
+const mobileCatalog = Function(`return (${mobileCatalogLiteral[1]});`)();
 assert.match(desktopSource, /import\s*\{\s*groupModelsByFamily\s*\}\s*from\s*['"]\.\/model-family-grouping\.js['"]/);
 assert.match(mobileSource, /import\s*\{\s*groupModelsByFamily\s*\}\s*from\s*['"]\.\.\/model-family-grouping\.js['"]/);
 const openai = ['gpt-5.9', 'gpt-6', 'gpt-5.10', 'gpt-6.1', 'gpt-6.1-sol', 'gpt-6.1-astra', 'chatgpt-6.1', 'custom<&"model'];
@@ -102,6 +105,23 @@ try {
     const families = () => page.locator(`[${familyAttr}]`);
     const models = () => page.locator(`[${modelAttr}]`);
     const values = locator => locator.evaluateAll((nodes, attr) => nodes.map(n => n.getAttribute(attr)), locator === undefined ? '' : modelAttr);
+    // Regression: Settings and backend catalogs do not feed the mobile chat badge.
+    // Exercise its actual catalog through both renderers, without changing a real route.
+    for (const provider of ['openai', 'openai_codex']) {
+      const catalog = mobileCatalog[provider];
+      for (const [family, model] of [['astra', 'gpt-6.2-astra'], ['gpt-6.2', 'gpt-6.2-sol']]) {
+        assert.ok(catalog.includes(model), `${provider} badge catalog missing ${model}`);
+        await page.evaluate(({ catalog, provider }) => window.setup(catalog, { provider, model: 'gpt-6-astra', reasoningEffort: 'high', speed: 'fast' }), { catalog, provider });
+        await page.evaluate(provider => window.reopen(provider), provider);
+        await page.locator(`[${familyAttr}="${family}"]`).click();
+        await models().first().waitFor();
+        assert.equal(await models().first().getAttribute(modelAttr), model);
+        await page.locator(`[${modelAttr}="${model}"]`).click();
+        await page.waitForFunction(() => window.saved !== null);
+        if (surface === 'desktop') await page.waitForFunction(model => window.reloaded?.model === model && window.effortState?.model === model, model);
+        assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('route'))), { provider, model, reasoningEffort: 'high', speed: 'fast' });
+      }
+    }
     for (const [provider, catalog] of [['openai', openai], ['openai_codex', openai], ['anthropic', anthropic]]) {
       const current = provider === 'anthropic' ? 'claude-sonnet-4-5' : 'gpt-6';
       await page.evaluate(({ catalog, provider, current }) => window.setup(catalog, { provider, model: current, reasoningEffort: 'high', speed: 'fast' }), { catalog, provider, current });

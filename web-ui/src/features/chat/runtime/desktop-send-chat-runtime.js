@@ -1155,6 +1155,7 @@ export function createDesktopSendChatRuntime(resolveContext = () => ({})) {
                   // Treat every transport delta as part of the single replaceable status slot;
                   // classifying individual chunks leaks markdown/token boundaries into the UI.
                   setDesktopLiveProgressNarration(streamState, chunk, appendLiveTrace, { source: 'reasoning_summary', delta: event.type !== 'reasoning_summary', replace: event.type === 'reasoning_summary' });
+                  scheduleStreamingRenderFor(thisSessionId, renderIfViewingThisSession);
 	              }
 	            }
 	            break;
@@ -1168,6 +1169,7 @@ export function createDesktopSendChatRuntime(resolveContext = () => ({})) {
                 // Treat every transport delta as part of the single replaceable status slot;
                 // classifying individual chunks leaks markdown/token boundaries into the UI.
                 setDesktopLiveProgressNarration(streamState, chunk, appendLiveTrace, { source: 'reasoning_summary', delta: event.type !== 'reasoning_summary', replace: event.type === 'reasoning_summary' });
+                  scheduleStreamingRenderFor(thisSessionId, renderIfViewingThisSession);
 	            }
 	            break;
 	          }

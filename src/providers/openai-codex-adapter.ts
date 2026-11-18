@@ -17,6 +17,7 @@ import fs from 'fs';
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'path';
 import type { LLMProvider, ChatMessage, ContentPart, ChatOptions, ChatResult, GenerateOptions, GenerateResult, ModelInfo, ModelUsage } from './LLMProvider';
+import { pruneHistoryImages } from './history-image-prune';
 import { loadTokens, getValidToken, refreshTokens, buildCodexCloudflareHeaders } from '../auth/openai-oauth';
 import { isRetryableAccountFailure } from '../auth/provider-account-pool';
 import { contentToString, stripCacheMarker, splitOnCacheMarker } from './content-utils';
@@ -59,6 +60,19 @@ export class CodexIncompleteStreamError extends Error {
   }
 }
 
+// Never include provider-controlled messages, identifiers, or arbitrary values in errors.
+const knownTerminalReasons = new Set(['server_error', 'internal_server_error', 'service_unavailable', 'rate_limit_exceeded', 'insufficient_quota', 'invalid_request_error', 'context_length_exceeded', 'max_output_tokens', 'content_filter', 'model_not_found', 'invalid_prompt']);
+class CodexTerminalEventError extends Error {
+  readonly code = 'CODEX_TERMINAL_EVENT';
+  readonly retryable: boolean;
+  constructor(type: string, value: unknown) {
+    const reason = typeof value === 'string' && knownTerminalReasons.has(value) ? value : 'unspecified';
+    super(`openai_codex reported ${type}: ${reason}.`);
+    this.name = 'CodexTerminalEventError';
+    this.retryable = type !== 'response.incomplete' && ['server_error', 'internal_server_error', 'service_unavailable'].includes(reason);
+  }
+}
+
 // Transport-level failures from the response body reader (socket closed mid-stream).
 // Matches only recognized socket/terminated signatures; generic errors are not transient.
 export function isTransientCodexReadError(err: unknown): boolean {
@@ -73,6 +87,8 @@ export function isTransientCodexReadError(err: unknown): boolean {
 // Model access depends on the connected account's provisioning.
 export const CODEX_MODELS = [
   CHATGPT_WEB_MODEL,
+  'gpt-6.2-astra',
+  'gpt-6.2-sol',
   'gpt-6.1-terra',
   'gpt-6.1-sol',
   'gpt-6-astra',
@@ -427,14 +443,25 @@ export class OpenAICodexAdapter implements LLMProvider {
       // The Codex endpoint accepts input_image with image_url as a string —
       // either an HTTPS URL or a data URL (data:image/...;base64,...).
       if (Array.isArray(m.content)) {
-        const parts: any[] = m.content.map((part: ContentPart) => {
-          if (part.type === 'text') return { type: 'input_text', text: part.text };
-          if (part.type === 'image_url') {
-            const url = part.image_url.url;
+        const parts: any[] = m.content.map((part: ContentPart | any) => {
+          if (part?.type === 'text') return { type: 'input_text', text: String(part.text ?? '') };
+          if (part?.type === 'image_url') {
+            const url = String(part.image_url?.url || '');
             // Codex endpoint accepts image_url as a string (data URL or HTTPS URL).
-            return { type: 'input_image', image_url: url };
+            if (url) return { type: 'input_image', image_url: url };
           }
-          return { type: 'input_text', text: '' };
+          // Legacy Anthropic-shaped image block ({type:'image', source:{type:'base64'}}).
+          // Older producers emitted this when the global provider was Anthropic; the
+          // Codex route must still see the pixels instead of an empty string.
+          if (part?.type === 'image' && part.source?.type === 'base64' && part.source?.data) {
+            const mediaType = String(part.source.media_type || 'image/png');
+            return { type: 'input_image', image_url: `data:${mediaType};base64,${part.source.data}` };
+          }
+          if (part?.type === 'image' && typeof part.source?.url === 'string' && part.source.url) {
+            return { type: 'input_image', image_url: part.source.url };
+          }
+          console.warn(`[openai-codex] dropped unsupported content part type=${String(part?.type || 'unknown')}`);
+          return { type: 'input_text', text: `[attachment omitted: unsupported content part ${String(part?.type || 'unknown')}]` };
         });
         input.push({ role: m.role, content: parts });
         continue;
@@ -467,7 +494,7 @@ export class OpenAICodexAdapter implements LLMProvider {
     const _cfgRootCodex = getConfig().getConfig() as any;
     const _codexToolChoiceCfg = String(_cfgRootCodex?.llm?.providers?.openai_codex?.tool_choice || '').trim();
     const toolChoice = hasTools ? (_codexToolChoiceCfg === 'required' ? 'required' : 'auto') : 'auto';
-    const input = this.buildInput(messages);
+    const input = this.buildInput(pruneHistoryImages(messages).messages);
     const latestUser = input.map(item => item.role).lastIndexOf('user');
     if (stable.trim() && volatile.trim() && latestUser >= 0) {
       instructions = stripCacheMarker(stable).trim();
@@ -659,6 +686,9 @@ export class OpenAICodexAdapter implements LLMProvider {
         if (controller.signal.aborted || err?.name === 'AbortError') {
           throw new Error(abortReason || 'openai_codex request aborted');
         }
+        if (err instanceof CodexTerminalEventError && err.retryable && allowIncompleteStreamRetry) {
+          return runRequest(requestedModel, allowFallback, fallbackFrom, fallbackReason, false, accountIndex);
+        }
         if (err instanceof CodexIncompleteStreamError && allowIncompleteStreamRetry) {
           options?.onModelEvent?.({
             type: 'provider_event',
@@ -784,14 +814,18 @@ export class OpenAICodexAdapter implements LLMProvider {
         buffer = lines.pop() || '';
 
         for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          const data = line.slice(6).trim();
+          if (!line.startsWith('data:')) continue;
+          const data = line.slice(5).trim();
           if (data === '[DONE]') continue;
 
           try {
             const event = JSON.parse(data);
             const type = event.type as string;
             if (type && eventTypes.length < 40 && !eventTypes.includes(type)) eventTypes.push(type);
+            if (!sawCompleted && (type === 'error' || type === 'response.failed' || type === 'response.incomplete')) {
+              const reason = type === 'response.incomplete' ? event.response?.incomplete_details?.reason : event.response?.error?.code ?? event.error?.code ?? event.code;
+              throw new CodexTerminalEventError(type, reason);
+            }
 
             if (type === 'response.output_item.added' && event.item?.type === 'message') {
               assistantPhase = event.item.phase === 'commentary' || event.item.phase === 'final_answer'
@@ -969,7 +1003,8 @@ export class OpenAICodexAdapter implements LLMProvider {
                 },
               });
             }
-          } catch {
+          } catch (err) {
+            if (err instanceof CodexTerminalEventError) throw err;
             // Skip malformed SSE lines
           }
         }

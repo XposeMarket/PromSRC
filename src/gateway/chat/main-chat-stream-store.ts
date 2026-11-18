@@ -17,6 +17,8 @@ export type MainChatStreamState = {
   updatedAt: number;
   lastSemanticProgressAt: number;
   lastSemanticEvent?: string;
+  /** Live background-join keepalive time; liveness only, never semantic progress. */
+  lastBackgroundWaitAt?: number;
   blockingWaits?: BlockingWait[];
   runtimeId?: string;
   admissionLeaseId?: string;
@@ -175,6 +177,7 @@ function appendMainChatStreamEvent(sessionId: string, streamId: string, type: st
       stream.events.splice(0, stream.events.length - MAIN_CHAT_STREAM_MAX_EVENTS);
     }
   }
+  if (frame.type === 'background_wait' && !(frame.data as any)?.finished) stream.lastBackgroundWaitAt = frame.at;
   stream.blockingWaits = updateBlockingWaits(stream.blockingWaits || [], frame.type, frame.data, frame.at);
   stream.updatedAt = frame.at;
   if (isMainChatSemanticProgressEvent(frame.type)) {

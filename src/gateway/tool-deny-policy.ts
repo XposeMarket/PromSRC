@@ -295,7 +295,7 @@ export function evaluateHardToolDeny(input: HardToolDenyInput): HardToolDenyDeci
       return deny('owner_approval_window', 'The owner approval window cannot be operated by tools.', 'Never target the Prometheus owner approval window.', 'Ask the owner to complete the approval themselves.');
     }
   }
-  if (/^(browser_|web_fetch|http_request|fetch_url)/.test(toolName) && /\/api\/(secure-access|connection-secure-input|connections\/credentials|auth\/x-api\/credentials|protected-plugins|owner-consent|pairing\/(approve|devices))/.test(argsText)) {
+  if (/^(browser_|web_fetch|http_request|fetch_url)/.test(toolName) && /\/api\/(secure-access|connection-attempts\/[^/]+\/connect|connection-secure-input|connections\/credentials|auth\/x-api\/credentials|protected-plugins|owner-consent|pairing\/(approve|devices))/.test(argsText)) {
     return deny('owner_surface_automation', 'Saved access and pairing owner endpoints are not available to browser or HTTP tools.', 'Use the secure_access tool; owner approvals happen only in the desktop app or on a paired phone.', 'Ask the owner to approve in the Prometheus desktop app or on their paired phone.');
   }
 

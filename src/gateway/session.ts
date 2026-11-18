@@ -547,11 +547,13 @@ let sessionSnapshotDrainActive = false;
 let sessionIndexRevision = 0;
 const sessionMutationScopes = new Map<string, SessionMutationScope>();
 let sessionIndexCache: SessionIndex | null = null;
-let sessionIndexCommandTitleRebuildAttempted = false;
 // A legacy-format repair is allowed once per process. Rechecking every sidebar
 // poll made one stale summary turn into a full transcript-corpus rebuild on
 // every request/restart, which is catastrophic on large workspaces.
 let sessionIndexRepairCheckAttempted = false;
+// mtime of _index.json when it was last loaded from disk. Transcripts written
+// after it may have missed their index commit (crash between the two renames).
+let sessionIndexDiskMtimeMs = 0;
 let sidebarOrderSequence = 0;
 
 function allocateSidebarOrder(): number {
@@ -1250,6 +1252,11 @@ function loadSessionIndex(): SessionIndex {
         if (normalized) summaries[normalized.id] = normalized;
       }
     }
+    try {
+      sessionIndexDiskMtimeMs = fs.statSync(p).mtimeMs;
+    } catch {
+      sessionIndexDiskMtimeMs = 0;
+    }
     sessionIndexCache = {
       summaries,
       updatedAt: Number.isFinite(Number(parsed?.updatedAt)) ? Number(parsed.updatedAt) : Date.now(),
@@ -1577,7 +1584,16 @@ function buildSessionSummaryFromFile(sessionId: string): SessionSummary | null {
   const filePath = getSessionPath(sessionId);
   if (!fs.existsSync(filePath)) return null;
   try {
-    const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    return buildSessionSummaryFromData(sessionId, JSON.parse(fs.readFileSync(filePath, 'utf-8')));
+  } catch {
+    return null;
+  }
+}
+
+function buildSessionSummaryFromData(sessionId: string, data: any): SessionSummary | null {
+  if (!isSafeStorageId(sessionId)) return null;
+  if (INTERNAL_SESSION_ID_RE.test(sessionId)) return null;
+  try {
     const history = Array.isArray(data?.history) ? data.history : [];
     const title = String(data?.title || '').trim() || getSessionTitleFromHistory(history);
     const lastMessageAt = getLastMessageTimestamp(history);
@@ -1648,6 +1664,125 @@ function rebuildSessionIndex(): SessionIndex {
   return index;
 }
 
+let sessionIndexRepairPromise: Promise<void> | null = null;
+
+function isStaleIndexedSummary(summary: SessionSummary): boolean {
+  if (isCommandTitleText(summary.title)) return true;
+  if (!(summary.messageCount > 0)) return false;
+  const preview = String(summary.preview || '').trim();
+  return summary.lastModel === undefined
+    || !summary.lastMessageAt
+    || !preview
+    // Legacy rows copied the title into the preview. A one-message chat
+    // legitimately matches once both are cut to 60 chars on load, so that
+    // alone must not count as stale (it used to force a rebuild every boot).
+    || (summary.messageCount > 1 && preview === String(summary.title || '').trim());
+}
+
+function shouldIndexSummary(summary: SessionSummary): boolean {
+  return summary.messageCount > 0 || !!summary.pinnedAt || !!summary.voiceRoom;
+}
+
+function scheduleSessionIndexReconcile(index: SessionIndex): void {
+  if (sessionIndexRepairPromise) return;
+  const staleIds = Object.values(index.summaries).filter(isStaleIndexedSummary).map((summary) => summary.id);
+  sessionIndexRepairPromise = reconcileSessionIndex(staleIds, sessionIndexDiskMtimeMs)
+    .catch((err) => {
+      console.warn('[Session] Background session index reconcile failed:', err);
+    })
+    .finally(() => {
+      sessionIndexRepairPromise = null;
+    });
+}
+
+const yieldToEventLoop = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+/** Summary for one chat without blocking: in-memory session first, else an async file read. */
+async function readSessionSummaryAsync(id: string): Promise<SessionSummary | null> {
+  const cached = sessions.get(id);
+  if (cached) return buildSessionSummary(cached);
+  let raw: string;
+  try {
+    raw = await fs.promises.readFile(getSessionPath(id), 'utf-8');
+  } catch {
+    return null;
+  }
+  try {
+    return buildSessionSummaryFromData(id, JSON.parse(raw));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Background index reconcile, one transcript at a time with event-loop yields:
+ * 1. Rehydrate only the stale rows. A row rewritten by a live save while its
+ *    file was being read is left alone (that write is newer). Rows whose
+ *    transcript is missing or unreadable are kept as-is.
+ * 2. Re-add chats whose transcript is newer than the index we loaded but have
+ *    no row (a crash between the transcript and index renames). Older
+ *    unindexed files (empty chats) are skipped by mtime, never read.
+ * The final index write waits until the snapshot drain is idle, then saves
+ * synchronously, so no in-flight async index rename can overwrite it.
+ */
+async function reconcileSessionIndex(staleIds: string[], indexMtimeMs: number): Promise<void> {
+  let changed = false;
+  for (const id of staleIds) {
+    await yieldToEventLoop();
+    const before = loadSessionIndex().summaries[id];
+    if (!before) continue;
+    const summary = await readSessionSummaryAsync(id);
+    if (!summary) continue;
+    const current = loadSessionIndex();
+    if (current.summaries[id] !== before) continue;
+    if (shouldIndexSummary(summary)) {
+      current.summaries[id] = { ...summary, sidebarOrder: summary.sidebarOrder ?? before.sidebarOrder };
+    } else {
+      delete current.summaries[id];
+    }
+    changed = true;
+  }
+
+  if (indexMtimeMs > 0) {
+    let names: string[] = [];
+    try {
+      names = await fs.promises.readdir(SESSION_DIR);
+    } catch {
+      names = [];
+    }
+    for (const name of names) {
+      if (!name.endsWith('.json') || name === '_index.json') continue;
+      const id = name.slice(0, -5);
+      if (!isSafeStorageId(id) || INTERNAL_SESSION_ID_RE.test(id)) continue;
+      if (loadSessionIndex().summaries[id]) continue;
+      let mtimeMs = 0;
+      try {
+        mtimeMs = (await fs.promises.stat(getSessionPath(id))).mtimeMs;
+      } catch {
+        continue;
+      }
+      if (mtimeMs <= indexMtimeMs) continue;
+      const summary = await readSessionSummaryAsync(id);
+      if (!summary || !shouldIndexSummary(summary)) continue;
+      const current = loadSessionIndex();
+      if (current.summaries[id]) continue; // a live save indexed it meanwhile
+      current.summaries[id] = summary;
+      changed = true;
+    }
+  }
+
+  if (!changed) return;
+  while (sessionSnapshotDrainActive || sessionSnapshotDrainScheduled || pendingSessionSnapshots.size) {
+    await new Promise<void>((resolve) => sessionPersistenceIdleWaiters.add(resolve));
+  }
+  saveSessionIndex(loadSessionIndex());
+}
+
+/** Resolves once any in-flight background index repair has finished. */
+export function waitForSessionIndexRepair(): Promise<void> {
+  return sessionIndexRepairPromise || Promise.resolve();
+}
+
 function getSortedSessionSummaries(
   channel?: Session['channel'],
   includeAutomated?: boolean,
@@ -1657,22 +1792,22 @@ function getSortedSessionSummaries(
 ): SessionSummary[] {
   ensureSessionDir();
   let index = loadSessionIndex();
-  const hasSessionFiles = fs.readdirSync(SESSION_DIR).some((f) => f.endsWith('.json') && f !== '_index.json');
-  if (hasSessionFiles && !sessionIndexRepairCheckAttempted) {
-    sessionIndexRepairCheckAttempted = true;
-    if (Object.keys(index.summaries).length === 0) {
-      index = rebuildSessionIndex();
-    } else if (
-      !sessionIndexCommandTitleRebuildAttempted
-      && Object.values(index.summaries).some((summary) => isCommandTitleText(summary.title))
-    ) {
-      sessionIndexCommandTitleRebuildAttempted = true;
-      index = rebuildSessionIndex();
-    } else if (Object.values(index.summaries).some((summary) => (
-      summary.messageCount > 0
-      && (summary.lastModel === undefined || !summary.lastMessageAt || !String(summary.preview || '').trim() || String(summary.preview || '').trim() === String(summary.title || '').trim())
-    ))) {
-      index = rebuildSessionIndex();
+  if (!sessionIndexRepairCheckAttempted) {
+    const hasSessionFiles = fs.readdirSync(SESSION_DIR).some((f) => f.endsWith('.json') && f !== '_index.json');
+    if (hasSessionFiles) {
+      sessionIndexRepairCheckAttempted = true;
+      if (Object.keys(index.summaries).length === 0) {
+        // No usable index at all (missing/corrupt): a synchronous rebuild is
+        // the only way this request can return any chats.
+        index = rebuildSessionIndex();
+      } else {
+        // Never rebuild the whole transcript corpus on the request path for a
+        // handful of stale rows. On large installs that is a 20s+ synchronous
+        // read that stalls boot past the supervisor health probe; a row whose
+        // preview legitimately starts with its title used to retrigger it on
+        // every boot. Stale rows are rehydrated individually in the background.
+        scheduleSessionIndexReconcile(index);
+      }
     }
   }
   // Automated sessions remain system-owned on disk. Callers can opt into
@@ -1900,6 +2035,17 @@ export function searchSessionSummaries(
   }
 
   return results;
+}
+
+/**
+ * Indexed summary for one chat, without loading its history. Null when the
+ * index does not carry it (no messages yet, or an unknown id).
+ */
+export function getSessionSummaryById(id: string): SessionSummary | null {
+  const sessionId = String(id || '').trim();
+  if (!sessionId) return null;
+  const summaries = loadSessionIndex().summaries;
+  return Object.prototype.hasOwnProperty.call(summaries, sessionId) ? summaries[sessionId] : null;
 }
 
 export function sessionExists(id: string): boolean {
@@ -3560,7 +3706,9 @@ export function consolidateLegacyAutomatedSessions(): number {
   for (const file of files) {
     const id = file.slice(0, -5);
     if (!isSafeStorageId(id)) continue;
-    const m = /^auto_(.+)_(\d{10,})$/i.exec(id);
+    // Legacy heartbeat runs (heartbeat_<agentId>_<ms>) fold into the agent's
+    // single heartbeat thread auto_heartbeat_<agentId>.
+    const m = /^auto_(.+)_(\d{10,})$/i.exec(id) || /^(heartbeat_.+)_(\d{10,})$/i.exec(id);
     if (!m) continue;
     const jobId = m[1];
     const ts = Number(m[2]) || 0;
@@ -3572,6 +3720,7 @@ export function consolidateLegacyAutomatedSessions(): number {
   for (const [jobId, runs] of legacyByJob) {
     runs.sort((a, b) => a.ts - b.ts);
     const stableId = `auto_${jobId}`;
+    const heartbeatAgent = /^heartbeat_(.+)$/i.exec(jobId)?.[1];
     const stable = getSession(stableId);
     if (!Array.isArray(stable.history)) stable.history = [];
     const seen = new Set(
@@ -3600,6 +3749,7 @@ export function consolidateLegacyAutomatedSessions(): number {
       // Sort merged history chronologically and persist the stable thread.
       stable.history.sort((a, b) => Number(a.timestamp || 0) - Number(b.timestamp || 0));
       stable.channel = stable.channel || inferChannelFromSessionId(stableId);
+      if (heartbeatAgent && !String(stable.title || '').trim()) stable.title = `💓 ${heartbeatAgent} heartbeat`;
       stable.autoTitleLocked = true;
       flushSession(stableId);
     }

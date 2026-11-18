@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import vm from 'node:vm';
 import assert from 'node:assert/strict';
-import { foldMobileReasoningSummaryGroups, mobileReasoningSummaryTitle } from '../web-ui/src/mobile/mobile-reasoning-summary-fold.js';
+import { foldMobileReasoningSummaryGroups, isMobileReasoningSummaryEntry, mobileReasoningSummaryKey, mobileReasoningSummaryTitle } from '../web-ui/src/mobile/mobile-reasoning-summary-fold.js';
 
 const desktopPath = new URL('../web-ui/src/pages/ChatPage.js', import.meta.url);
 const desktop = fs.readFileSync(desktopPath, 'utf8');
@@ -75,6 +75,9 @@ const renderContext = {
   waitCountdownHtml: () => '',
   foldMobileReasoningSummaryGroups,
   mobileReasoningSummaryTitle,
+  isMobileReasoningSummaryEntry,
+  mobileReasoningSummaryKey,
+  rememberLazyTraceBody: () => 'lazy-test',
   liveTraceGroups(entries) {
     const groups = [];
     let activeToolGroup = null;
@@ -223,7 +226,8 @@ for (const text of [desktopSendRuntime, generatedDesktopSendRuntime]) {
 assert.match(desktop, /function isDesktopMutableProgressTraceEntry\(entry\)/);
 assert.doesNotMatch(desktop, /const pendingSummary = previous\?\.kind === 'thought-summary'/,
   'the first tool event must not absorb and erase a preceding thought group');
-assert.match(desktop, /const progressSummary = mobileReasoningSummaryTitle\(group\.reasoningEntries\) \|\| desktopTraceProgressSummary\(group\.entries\)/);
+assert.match(desktop, /const reasoningTitle = isLiveCurrent \? mobileReasoningSummaryTitle\(group\.reasoningEntries\) : '';/);
+assert.match(desktop, /const progressSummary = reasoningTitle \|\| desktopTraceProgressSummary\(group\.entries\.filter\(\(entry\) => !isMobileReasoningSummaryEntry\(entry\)\)\)/);
 assert.match(desktop, /visibleEntries\.filter\(\(entry\) => !isDesktopMutableProgressTraceEntry\(entry\)\)/);
 assert.doesNotMatch(desktop, /if \(duplicatesVisibleReasoning\) return 'Reasoning';/);
 assert.doesNotMatch(desktop, /groups = groups\.filter\(\(group\) => !\([\s\S]{0,220}activeProgressSummary/,

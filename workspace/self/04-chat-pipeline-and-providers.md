@@ -105,6 +105,7 @@ Provider request failures must retain their native evidence: HTTP status, struct
 - **429 is not Anthropic 529:** Anthropic overload is a separate capacity condition with its own retry policy. Don't blanket-treat every 429/5xx identically.
 - **OAuth/account pool:** credentials may belong to selected account IDs and live in secure vault storage. Do not log request auth headers or assume factory has one static token.
 - **Partial stream is not complete answer:** inspect stop reason/incomplete cause and tool block termination. Avoid committing malformed tool args or treating missing message-stop as normal completion.
+- Codex reports explicit stream `error`, `response.failed` and `response.incomplete` frames separately from a stream ending without a final event. Only known reason codes are surfaced; raw messages are not. Recognized transient server failures share the one-retry budget with interrupted streams.
 - **Provider differences matter:** OpenAI Codex, ChatGPT web, regular OpenAI API, local OpenAI-compatible endpoints and native Anthropic are not one identical adapter behind a URL string.
 - **Parallelism:** do not parallelize side-effecting tools without reviewing the safety classifier/approval semantics. Preserve tool-call/result association and deterministic history order.
 - **Provider fallback:** fallback changes cost/account/model and capability assumptions. Keep actual route and fallback reason visible in `ModelUsage`/logs, and rebuild prompt context if it changes.

@@ -237,7 +237,53 @@ function buildNativeBrowserResourceRecord({
   };
 }
 
+const NATIVE_BROWSER_DEFAULT_IDLE_CLOSE_HOURS = 24;
+
+// Hours a hidden tab may sit untouched before it is closed. 0 disables idle
+// closing; anything unparsable uses the default. The default matches the
+// pending-approval max age, so a page prepared for an approval is not closed
+// while that approval can still be answered.
+function resolveNativeBrowserIdleCloseMs(rawHours) {
+  const text = String(rawHours ?? '').trim();
+  const hours = text === '' ? NATIVE_BROWSER_DEFAULT_IDLE_CLOSE_HOURS : Number(text);
+  if (!Number.isFinite(hours) || hours < 0) return NATIVE_BROWSER_DEFAULT_IDLE_CLOSE_HOURS * 60 * 60 * 1000;
+  return Math.floor(hours * 60 * 60 * 1000);
+}
+
+// Idle age, never a resource sample, decides this. The presented tab and any
+// tab holding an activity lease are always kept.
+function shouldCloseIdleNativeBrowserView({ presented, leaseActive, lastActivityAt, now, idleCloseMs } = {}) {
+  const limit = Number(idleCloseMs);
+  if (!Number.isFinite(limit) || limit <= 0) return false;
+  if (presented === true || leaseActive === true) return false;
+  const last = Number(lastActivityAt);
+  const current = Number(now);
+  if (!Number.isFinite(last) || last <= 0 || !Number.isFinite(current)) return false;
+  return current - last >= limit;
+}
+
+// A presented tab repeats its pressure line on the short interval. A hidden
+// tab logs when its own pressure level changes and otherwise only on the long
+// interval, so app-wide pressure cannot make every idle tab log every minute.
+function shouldLogNativeBrowserResource({
+  presented, pressureLevel, processPressureLevel, lastPressureKey, lastLogAt, now, visibleIntervalMs, hiddenIntervalMs,
+} = {}) {
+  const own = String(pressureLevel || 'normal');
+  const processLevel = String(processPressureLevel || 'normal');
+  if (own === 'normal' && processLevel === 'normal') return false;
+  const elapsed = Number(now) - Number(lastLogAt || 0);
+  if (presented === true) {
+    return String(lastPressureKey || '') !== `${own}:${processLevel}` || elapsed >= Number(visibleIntervalMs);
+  }
+  const lastOwn = String(lastPressureKey || 'normal').split(':')[0];
+  return (own !== 'normal' && own !== lastOwn) || elapsed >= Number(hiddenIntervalMs);
+}
+
 module.exports = {
+  NATIVE_BROWSER_DEFAULT_IDLE_CLOSE_HOURS,
+  resolveNativeBrowserIdleCloseMs,
+  shouldCloseIdleNativeBrowserView,
+  shouldLogNativeBrowserResource,
   NATIVE_BROWSER_RESOURCE_THRESHOLDS,
   buildNativeBrowserProcessBreakdown,
   buildNativeBrowserResourceRecord,

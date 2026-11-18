@@ -39,8 +39,8 @@ const ICON = {
   chrome: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="12" cy="12" r="3.4" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 8.6h8.2M9.1 13.7 5 6.6M14.9 13.7 10.8 20.9" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
 };
 
-async function post(path, body, timeoutMs = 10000) {
-  return mobileGatewayFetch(path, { method: 'POST', body: JSON.stringify(body), timeoutMs });
+async function post(path, body, timeoutMs = 10000, fetchJson = viewer?.fetchJson || mobileGatewayFetch) {
+  return fetchJson(path, { method: 'POST', body: JSON.stringify(body), timeoutMs });
 }
 
 function toast(state, text, ms = 2600) {
@@ -88,7 +88,7 @@ async function loadFrame(state) {
   const t0 = Date.now();
   try {
     const width = Math.round(Math.min(1300, (window.innerWidth || 390) * Math.min(3, window.devicePixelRatio || 2)));
-    const data = await mobileGatewayFetch(
+    const data = await state.fetchJson(
       `/api/browser/login-frame?sessionId=${encodeURIComponent(state.sessionId)}&maxWidth=${width}`,
       { timeoutMs: 12000 },
     );
@@ -120,7 +120,7 @@ async function loadFrame(state) {
 async function loadState(state) {
   if (state.closed) return;
   try {
-    const data = await mobileGatewayFetch(`/api/browser/login-state?sessionId=${encodeURIComponent(state.sessionId)}`, { timeoutMs: 8000 });
+    const data = await state.fetchJson(`/api/browser/login-state?sessionId=${encodeURIComponent(state.sessionId)}`, { timeoutMs: 8000 });
     if (state.closed) return;
     state.editables = Array.isArray(data?.editables) ? data.editables : [];
     state.back.disabled = !data?.canGoBack;
@@ -305,7 +305,7 @@ async function useMyChrome(state) {
 // The on/off toggle lives in Settings (desktop browser settings, mobile Security).
 async function offerAlwaysChromeSignins(state) {
   let grant;
-  try { grant = await mobileGatewayFetch('/api/browser/chrome-signin-sync', { timeoutMs: 6000 }); } catch { return; }
+  try { grant = await state.fetchJson('/api/browser/chrome-signin-sync', { timeoutMs: 6000 }); } catch { return; }
   if (!grant || grant.enabled) return;
   const toolbar = state.root.querySelector('.pm-lh-toolbar');
   if (!toolbar || state.root.querySelector('.pm-lh-always')) return;
@@ -345,7 +345,7 @@ function closeViewer() {
   state.closed = true;
   clearTimeout(state.frameTimer);
   clearTimeout(state.stateTimer);
-  post('/api/browser/login-view', { sessionId: state.sessionId, mode: 'off' }).catch(() => {});
+  post('/api/browser/login-view', { sessionId: state.sessionId, mode: 'off' }, 10000, state.fetchJson).catch(() => {});
   // Blur BEFORE removing the sheet. Removing a still-focused input makes iOS
   // dismiss the keyboard without resizing the layout viewport back, which
   // leaves every fixed element (tab bar, composer, launcher) floating mid-
@@ -358,6 +358,7 @@ function closeViewer() {
   setTimeout(() => {
     state.root.remove();
     settleViewportAfterKeyboard();
+    state.onClose?.();
   }, 320);
 }
 
@@ -369,7 +370,7 @@ async function finishLogin(questionId) {
   await window._submitMobileQuestion?.(questionId);
 }
 
-export function openMobileLoginHandoff(questionId, sessionId, site = '') {
+export function openMobileLoginHandoff(questionId, sessionId, site = '', options = {}) {
   closeViewer();
   const sid = String(sessionId || '').trim();
   if (!sid) return;
@@ -411,7 +412,8 @@ export function openMobileLoginHandoff(questionId, sessionId, site = '') {
   requestAnimationFrame(() => requestAnimationFrame(() => root.classList.add('is-open')));
   const state = viewer = {
     root, img, input, stage, host, lock, progress, back, fwd, chrome, toast: toastEl,
-    sessionId: sid, closed: false, frameTimer: 0, stateTimer: 0, toastTimer: 0,
+    sessionId: sid, fetchJson: options.fetchJson || mobileGatewayFetch, onClose: options.onClose,
+    closed: false, frameTimer: 0, stateTimer: 0, toastTimer: 0,
     frameInFlight: false, lastInputAt: Date.now(), viewportWidth: 0, viewportHeight: 0,
     editables: [], pendingWheel: null, wheelRaf: 0,
   };
@@ -423,7 +425,7 @@ export function openMobileLoginHandoff(questionId, sessionId, site = '') {
     scheduleState(state, delay + 200);
   };
   done.addEventListener('click', closeViewer);
-  finish.addEventListener('click', () => { finishLogin(questionId); });
+  finish.addEventListener('click', () => { if (questionId) finishLogin(questionId); else closeViewer(); });
   back.addEventListener('click', () => nav('back', 250));
   fwd.addEventListener('click', () => nav('forward', 250));
   reload.addEventListener('click', () => nav('reload', 400));
@@ -440,6 +442,7 @@ export function openMobileLoginHandoff(questionId, sessionId, site = '') {
   }).then((res) => {
     if (res && res.chromePaired === false) chrome.classList.add('is-unpaired');
   }).catch(() => {}).finally(() => { loadFrame(state); loadState(state); });
+  return { close: () => { if (viewer === state) closeViewer(); } };
 }
 
 if (typeof window !== 'undefined') {

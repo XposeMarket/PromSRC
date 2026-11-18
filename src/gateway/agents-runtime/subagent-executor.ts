@@ -1628,6 +1628,22 @@ export function resolveTaskForSession(sessionId: string) {
   }
 }
 
+/**
+ * The task that owns a restart requested from this session, if any.
+ *
+ * A main chat that once hosted a scheduled task run (e.g. an X Editor job bound
+ * to the chat) keeps that task's sessionId forever. Treating a COMPLETE/FAILED
+ * task as the restart owner made BOOT skip the chat (`suppressStandaloneRestartMessage`)
+ * while task recovery had nothing to relaunch, so the user's turn was never
+ * resumed and no reply ever arrived after the restart. Only a live task owns it.
+ */
+export function resolveRestartOwningTask(sessionId: string) {
+  const task = resolveTaskForSession(sessionId);
+  if (!task) return null;
+  const { isLiveRestartOwnerStatus } = require('../tasks/restart-owner') as typeof import('../tasks/restart-owner');
+  return isLiveRestartOwnerStatus((task as any).status) ? task : null;
+}
+
 function shouldStartTeamStatusTaskMirror(phase: string, currentTask: string, blockedReason: string): boolean {
   const normalizedPhase = String(phase || '').trim().toLowerCase();
   const taskText = String(currentTask || '').trim();

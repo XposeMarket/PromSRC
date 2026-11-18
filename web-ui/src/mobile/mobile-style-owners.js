@@ -24,7 +24,7 @@ const STYLE_DEFINITIONS = Object.freeze({
       id: 'pm-mobile-surfaces-style',
       file: 'mobile-surfaces.css',
       layer: 'shell',
-      version: 'pm-v2-2026-10-22-approval-sheet',
+      version: 'pm-v3-2026-11-15-approval-sheet-authority',
       attribute: 'data-prom-mobile-surfaces-style',
     }),
   ]),
@@ -62,6 +62,13 @@ const STYLE_DEFINITIONS = Object.freeze({
       layer: 'route',
       version: 'pm-v1-2026-08-24-route-owner',
       attribute: 'data-prom-mobile-settings-route-style',
+    }),
+    Object.freeze({
+      id: 'pm-mobile-agents-imports-style',
+      file: 'agents-imports.css',
+      layer: 'route',
+      version: 'pm-v1-2026-11-14-agents-imports',
+      attribute: 'data-prom-mobile-agents-imports-style',
     }),
   ]),
 });

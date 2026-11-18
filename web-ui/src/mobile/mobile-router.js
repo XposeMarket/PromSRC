@@ -26,7 +26,12 @@ import {
 } from './mobile-gateway-catalog.js';
 import { connectWS, ensureWSConnected } from '../ws.js';
 import { buildMobileSettingsHandoffUrl } from '../settings-return.js';
-import { agentOwnedMobileRoute } from './mobile-session-route.js';
+import {
+  agentOwnedMobileRoute,
+  forgetMobileChatTabRoute,
+  rememberMobileChatTabRoute,
+  resolveMobileChatTabRoute,
+} from './mobile-session-route.js';
 
 let mobileRenderGeneration = 0;
 const mobileRouteOwnerPromises = new Map();
@@ -201,6 +206,16 @@ export function mobileDeepLink(route = 'chat', arg = '', extra = [], opts = {}) 
 export function mobileNavigate(route) {
   if (!route) return;
   if (!route.startsWith('#')) route = '#' + (route.replace(/^\//, '').startsWith('mobile') ? route.replace(/^\//, '') : 'mobile/' + route.replace(/^\//, ''));
+  // Leaving a chat for another page: remember it from the live URL. A new
+  // chat's first send swaps the URL to its real id via replaceState without a
+  // route render, so the hash is the only reliable source here.
+  if (!/^#mobile\/chat(?:\/|$)/.test(route)) {
+    const current = String(window.location.hash || '').match(/^#mobile\/chat\/([^/?#]+)/);
+    if (current) rememberMobileChatTabRoute(current[1]);
+  }
+  // "Go to Chat" (tab bar, back buttons) returns to the conversation the user
+  // was last in. New Chat clears that memory before it navigates here.
+  route = resolveMobileChatTabRoute(route);
   // A pair URL is a one-time transport envelope. Once the pairing page leaves
   // the pair route, remove it so a successful approval cannot be replayed by
   // the router on the next render. Keep all unrelated PWA query state.
@@ -362,6 +377,7 @@ function render() {
       } catch {}
     }
   }
+  if (page === 'chat' && arg) rememberMobileChatTabRoute(arg);
   const pairCode = _pairCodeFromUrl();
   const scannerPairCode = page === 'pair' && arg === 'add' ? getPendingGatewayPair() : '';
   const activePairCode = pairCode || scannerPairCode;
@@ -410,6 +426,7 @@ function render() {
     onNewChat: () => {
       try {
         localStorage.removeItem('pm_mobile_last_chat_session');
+        forgetMobileChatTabRoute();
         const chat = window.__pmChat;
         if (chat && typeof chat === 'object') {
           chat.activeSessionId = 'mobile_default';

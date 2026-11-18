@@ -28,13 +28,14 @@ export interface ConnectorOAuthVerification {
 export interface ConnectorOAuthBridge {
   id: string;
   name: string;
-  start(expectedAccountId?: string, requestedScopes?: string[]): OAuthStartResult | Promise<OAuthStartResult>;
-  poll(): Promise<OAuthCallbackResult | null>;
+  start(expectedAccountId?: string, requestedScopes?: string[], attemptId?: string): OAuthStartResult | Promise<OAuthStartResult>;
+  poll(attemptId?: string): Promise<OAuthCallbackResult | null>;
   /** Tokens already stored (e.g. callback result was consumed or expired before continue ran). */
   isConnected?(): boolean;
   metadata(): OAuthConnectorMetadata | Promise<OAuthConnectorMetadata>;
   verify(): Promise<ConnectorOAuthVerification>;
   clear(): void | Promise<void>;
+  cancel?(attemptId?: string): void | Promise<void>;
   revoke?(): void | Promise<void>;
   credentialReference?(): string;
 }
@@ -119,15 +120,48 @@ export class ConnectorOAuthConnectionAdapter implements ConnectionAdapter {
     return strategy.adapter === this.id || strategy.adapter === 'connector-oauth';
   }
 
+  async prepare(context: ConnectionAdapterContext): Promise<ConnectionAdapterResult> {
+    const bridge = this.bridgeFor(context);
+    if (!(await bridge.metadata()).clientIdConfigured) {
+      return { state: 'awaiting_secure_input', configuration: { protectedPluginSetup: bridge.id } };
+    }
+    return { state: context.attempt.state };
+  }
+
   async connect(context: ConnectionAdapterContext): Promise<ConnectionAdapterResult> {
     const strategy = context.attempt.plan?.strategy;
     if (!strategy) return this.planRequired();
     const bridge = this.bridgeFor(context);
     const expectedAccountId = String(context.attempt.metadata?.expectedAccountId || '').trim() || undefined;
-    const requestedScopes = Array.isArray(strategy.authentication?.scopes)
+    const planScopes = Array.isArray(strategy.authentication?.scopes)
       ? strategy.authentication.scopes.map(String)
       : undefined;
-    const started = await bridge.start(expectedAccountId, requestedScopes);
+    // Reconnecting must never silently downgrade access the user already granted.
+    // Plugins Connect plans read-only by default, so without this a Gmail reconnect
+    // replaced a send-capable token with a gmail.readonly one and every send then
+    // failed with 403 insufficient scopes (2026-11-16). New write scopes still need
+    // an explicit request; this only carries forward scopes already on the token.
+    // Based on the STORED token's metadata, not current usability: an expired or
+    // reauth-required token is exactly when users reconnect. Only carried forward
+    // for the same account; switching accounts never inherits another account's grants.
+    let alreadyGranted: string[] = [];
+    if (planScopes) {
+      const stored = await bridge.metadata();
+      const storedIds = [stored.account?.providerAccountId, stored.account?.email]
+        .map((value) => String(value || '').trim().toLowerCase()).filter(Boolean);
+      const sameAccount = !expectedAccountId || storedIds.includes(expectedAccountId.toLowerCase());
+      if (sameAccount) {
+        alreadyGranted = (stored.grantedScopes || [])
+          .flatMap((scope) => String(scope || '').split(/[\s,]+/))
+          .map((scope) => scope.trim())
+          .filter(Boolean);
+      }
+    }
+    const requestedScopes = planScopes ? [...new Set([...planScopes, ...alreadyGranted])] : undefined;
+    const started = await bridge.start(expectedAccountId, requestedScopes, context.attempt.id);
+    if ((started as any).needsCredentials || (started.error && !bridge.isConnected?.() && !(await bridge.metadata()).clientIdConfigured)) {
+      return { state: 'awaiting_secure_input', configuration: { protectedPluginSetup: bridge.id } };
+    }
     if (started.error || !started.authUrl) {
       return {
         state: 'failed',
@@ -146,24 +180,36 @@ export class ConnectorOAuthConnectionAdapter implements ConnectionAdapter {
         type: 'oauth',
         label: `Sign in with ${bridge.name}`,
         authorizationUrl: started.authUrl,
-        scopes: strategy.authentication?.scopes,
+        scopes: requestedScopes,
         opensExternalBrowser: true,
+        // Web-client flows return through the public gateway callback, so any device can finish them.
+        ...((started as any).web ? { desktopRequired: false } : {
         desktopRequired: true,
         desktopReason: /google|gmail|drive|ga4/i.test(bridge.id)
           ? 'The authorization code returns to a loopback callback owned by the local desktop gateway. Google rejects sign-in from embedded/automated browsers ("Couldn\'t sign you in"), so open this URL in the system Chrome on the PC (Start-Process), where the user is already signed in, and complete consent there with desktop tools. Do not use the in-app browser for Google.'
           : 'The authorization code returns to a loopback callback owned by the local desktop gateway. From a phone, ask Prom to open this sign-in in the in-app browser (it runs on the PC, so the callback works) and hand you the login card.',
         preferSystemBrowser: /google|gmail|drive|ga4/i.test(bridge.id),
+        }),
       },
     };
   }
 
   async continue(context: ConnectionAdapterContext): Promise<ConnectionAdapterResult> {
     const bridge = this.bridgeFor(context);
-    let result = await bridge.poll();
+    if (context.attempt.state === 'awaiting_secure_input') return this.connect(context);
+    let result = await bridge.poll(context.attempt.id);
     // The one-shot callback result can be gone (consumed by another poller,
     // expired, or lost to a gateway restart) while the tokens are stored.
     if (!result && bridge.isConnected?.()) result = { success: true };
-    if (!result) return { state: 'awaiting_oauth' };
+    if (!result) {
+      // Pending polls must retain the action: applyResult replaces it on every result.
+      // Older attempts may already have lost it; rebuild only their bound OAuth flow.
+      const action = context.attempt.requiredUserAction;
+      if (action?.type === 'oauth' && action.authorizationUrl) {
+        return { state: 'awaiting_oauth', userAction: action };
+      }
+      return this.connect(context);
+    }
     if (!result.success) {
       return {
         state: 'reauth_required',
@@ -225,6 +271,8 @@ export class ConnectorOAuthConnectionAdapter implements ConnectionAdapter {
     return checks;
   }
 
+  async cancel(context: ConnectionAdapterContext): Promise<void> { await this.bridgeFor(context).cancel?.(context.attempt.id); }
+
   async repair(context: ConnectionAdapterContext): Promise<ConnectionAdapterResult> {
     return this.connect(context);
   }
@@ -232,8 +280,8 @@ export class ConnectorOAuthConnectionAdapter implements ConnectionAdapter {
   async disconnect(context: ConnectionAdapterContext, _connection: ConnectionRecord): Promise<void> {
     const bridge = this.bridgeFor(context);
     try {
-      await bridge.revoke?.();
-      context.emitProgress?.('Provider revocation completed or was not required.', { remoteRevocation: 'completed' });
+      if (bridge.revoke) { await bridge.revoke(); context.emitProgress?.('Provider revocation completed.', { remoteRevocation: 'completed' }); }
+      else context.emitProgress?.('Remote revocation is unavailable; disconnect clears local access only.', { remoteRevocation: 'unavailable' });
     } catch (error: any) {
       // The local vault must still be cleared. The progress detail makes the
       // provider-side failure visible without returning credentials or tokens.

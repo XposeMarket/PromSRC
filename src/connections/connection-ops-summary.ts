@@ -1,4 +1,4 @@
-function isLegacyCompatibilityConnection(record: any): boolean {
+export function isLegacyCompatibilityConnection(record: any): boolean {
   return record?.adapterId === 'legacy'
     || record?.contractVersion === 1
     || record?.strategyId === 'legacy-compatibility';
@@ -100,18 +100,28 @@ export function summarizeConnectionOps(
   const legacy = isLegacyCompatibilityConnection(connection);
   const liveKnown = typeof options.live?.connected === 'boolean';
   const liveConnected = options.live?.connected === true;
+  // A canonical record keeps its stored lifecycle gate, but a live connector that
+  // reports "not connected" (revoked or expired grant) outranks the stored state.
+  // The connector overlay is matched by service id, so it only speaks for a canonical
+  // record that the built-in connector runtime actually backs. That is decided from
+  // the record's own adapter, never from whether an MCP status happens to exist:
+  // MCP-backed and other adapters keep their stored state and are judged by mcpStatus.
+  const canonicalLiveApplies = !legacy && liveKnown
+    && String(connection?.adapterId || '') === 'connector-oauth';
+  const liveRevoked = canonicalLiveApplies && !runtimeInvalid && !liveConnected
+    && Boolean(connection?.enabled && connection?.authenticated);
   const connected = runtimeInvalid
     ? false
     : legacy
       ? Boolean(connection?.enabled) && (liveKnown ? liveConnected : Boolean(connection?.authenticated))
-      : Boolean(connection?.enabled && connection?.authenticated && connection?.registered);
+      : Boolean(connection?.enabled && connection?.authenticated && connection?.registered) && !liveRevoked;
 
   const summary: ConnectionOpsSummary = {
     id: String(connection?.id || ''),
     serviceId: String(connection?.serviceId || ''),
     serviceName: String(connection?.serviceName || ''),
     connected,
-    authState: runtimeInvalid ? 'reauth_required' : String(connection?.authState || 'none'),
+    authState: runtimeInvalid || liveRevoked ? 'reauth_required' : String(connection?.authState || 'none'),
     health: runtimeInvalid
       ? 'unavailable'
       : liveConnected
@@ -119,11 +129,13 @@ export function summarizeConnectionOps(
         : liveKnown
           ? 'unavailable'
           : String(connection?.health || 'unknown'),
+    // A legacy stub has no stored verification, so the live runtime decides. A
+    // canonical record must have passed verify AND still be live.
     verified: runtimeInvalid
       ? false
-      : liveKnown
-        ? liveConnected
-        : Boolean(connection?.verified),
+      : legacy
+        ? (liveKnown ? liveConnected : Boolean(connection?.verified))
+        : Boolean(connection?.verified) && (!canonicalLiveApplies || liveConnected),
     toolCount: typeof options.live?.toolCount === 'number' ? options.live.toolCount : storedToolCount(connection),
     autoExposedToolCount: Array.isArray(connection?.exposedTools) ? connection.exposedTools.length : 0,
   };
@@ -134,6 +146,10 @@ export function summarizeConnectionOps(
   }
   if (runtimeInvalid) {
     summary.error = String(options.mcpStatus?.error || 'MCP runtime unavailable').slice(0, 240);
+    summary.action = 'reauthenticate';
+  }
+  if (liveRevoked) {
+    summary.error = 'The connector runtime reports this account is not connected.';
     summary.action = 'reauthenticate';
   }
   return summary;

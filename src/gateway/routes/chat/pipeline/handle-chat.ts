@@ -1,3 +1,5 @@
+import { findResumableChatPlan } from '../../../tasks/planned-chat-runs';
+
 
 import { inferReferenceImageMimeType } from './context-preparation';
 import { recordSessionToolCeiling } from '../../../agents-runtime/tool-ceiling';
@@ -1134,6 +1136,7 @@ export async function handleChatUntraced(
   };
 
   let declaredPlanSummary = '';
+  let resumedPlanContext = '';
   const emitProgressState = (reason: string) => {
     const payload = {
       taskSummary: declaredPlanSummary,
@@ -1525,6 +1528,20 @@ export async function handleChatUntraced(
   };
   if (seedProgressFromStoredGoalPlan()) {
     tools = buildProviderToolSurface(initialGenerationOverride).provider;
+  } else if (!backgroundPlanToolsActive && !hasDurableTaskPlan) {
+    const prior = findResumableChatPlan(sessionId, message);
+    if (prior) {
+      declaredPlanSummary = prior.title;
+      resumedPlanContext = `Continue this saved plan without repeating completed steps:\n${prior.runtimeProgress.items.map((item, i) => `${i + 1}. [${item.status}] ${item.text}`).join('\n')}`;
+      progressState.source = 'declared';
+      progressState.items = prior.runtimeProgress.items.map((item, index) => ({ id: `resumed_${index}`, text: item.text, status: item.status === 'completed' ? 'done' : item.status === 'failed' ? 'pending' : item.status as RuntimeProgressItem['status'] }));
+      progressState.activeIndex = progressState.items.findIndex(item => !['done', 'skipped'].includes(item.status));
+      stepCursor = Math.max(0, progressState.activeIndex);
+      progressState.manualStepAdvance = true;
+      planStepToolsActive = true;
+      emitProgressState('plan_resumed');
+      tools = buildProviderToolSurface(initialGenerationOverride).provider;
+    }
   }
 
   // Tools that gather information â€” do NOT advance the step cursor.
@@ -2702,7 +2719,7 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
   const messages: any[] = [
     {
       role: 'system',
-      content: buildSystemPrompt('full'),
+      content: buildSystemPrompt('full') + (resumedPlanContext ? `\n\n[SAVED_PLAN]\n${resumedPlanContext}\n[/SAVED_PLAN]` : ''),
     },
   ];
 
@@ -4338,6 +4355,7 @@ Do not produce prose. Use the canonical thread tool now.` });
         if (err?.code === 'CODEX_INCOMPLETE_STREAM' || err?.providerCode === 'CODEX_INCOMPLETE_STREAM' || err?.name === 'CodexIncompleteStreamError') {
           return {
             type: 'chat',
+            noResultFailure: preservedToolResults ? undefined : 'provider_failure',
             text: preservedToolResults && !abortSignal?.aborted
               ? await finishDegradedTurn('CODEX_INCOMPLETE_STREAM', String(err?.message || '').slice(0, 140), lastPartialText)
               : 'No final response was generated. Please retry.',
@@ -4348,6 +4366,7 @@ Do not produce prose. Use the canonical thread tool now.` });
         }
         return {
           type: 'chat',
+          noResultFailure: preservedToolResults ? undefined : 'provider_failure',
           text: preservedToolResults && !abortSignal?.aborted
             ? await finishDegradedTurn('provider_failure', String(err?.message || err).slice(0, 140), lastPartialText,
               isUsageLimitError(err) || [401, 403, 429].includes(Number(err?.status || err?.statusCode || err?.response?.status))
@@ -4399,6 +4418,7 @@ Do not produce prose. Use the canonical thread tool now.` });
     if (recovery.action === 'exhausted') {
       return {
         type: 'execute',
+        noResultFailure: allToolResults.length ? undefined : 'missing_final',
         text: await finishDegradedTurn(recovery.reason, recovery.cause, response?.content || lastPartialText),
         reasoningSummary: normalizeReasoningSummary(allReasoningSummary),
         toolResults: allToolResults.length ? allToolResults : undefined,
@@ -4818,7 +4838,9 @@ Do not produce prose. Use the canonical thread tool now.` });
       if (isGrokGeneration) {
         finalText = trimGrokRunawayRepetition(finalText);
       }
+      let missingModelFinal = false;
       if (!finalText.trim()) {
+        missingModelFinal = true;
         finalText = 'No final response was generated. The task may still be unfinished; completed tool results have been saved.';
       }
       if (greetingLikeTurn && finalText.length > 220) {
@@ -4827,12 +4849,16 @@ Do not produce prose. Use the canonical thread tool now.` });
       if (grokGreetingLikeTurn && finalText.length > 220) {
         finalText = finalText.split(/\n+/)[0].slice(0, 220).trim();
       }
-      finalText = sanitizeFinalReply(finalText, { preflightReason: preflightReasonForTurn }) || emptyModelFinalFallback;
+      finalText = sanitizeFinalReply(finalText, { preflightReason: preflightReasonForTurn });
       if (isGrokGeneration) {
-        finalText = trimGrokRunawayRepetition(finalText) || emptyModelFinalFallback;
+        finalText = trimGrokRunawayRepetition(finalText);
+      }
+      if (!finalText) {
+        missingModelFinal = true;
+        finalText = emptyModelFinalFallback;
       }
       console.log(`[v2] FINAL: ${finalText.slice(0, 150)}`);
-      if (progressState.items.length >= 2) {
+      if (!progressState.manualStepAdvance && progressState.items.length >= 2) {
         for (const item of progressState.items) {
           if (item.status === 'in_progress') item.status = 'done';
           else if (item.status === 'pending') item.status = 'skipped';
@@ -4875,22 +4901,11 @@ Do not produce prose. Use the canonical thread tool now.` });
           30_000,
           Math.max(...spawnedBgRuns.map((run) => run.timeoutMs || 15 * 60_000)),
         );
-        const resultBlocks = joinedResults
-          .map((r, i) => {
-            if (!r) return null;
-            const state = r.state === 'completed' ? 'âœ“' : r.state === 'timed_out' ? 'â± timed out' : 'âœ— failed';
-            const body = r.state === 'completed' ? (r.result || '(no output)') : (r.error || r.state);
-            return `[Background Agent ${spawnedBgIds[i]} â€” ${state}]\n${body}`;
-          })
-          .filter(Boolean);
-        if (resultBlocks.length > 0) {
-	          sendSSE('info', { message: 'Background agents complete - merging results...' });
-	          const backgroundText = `Background agent response:\n${resultBlocks.join('\n\n')}`;
-	          finalText = [finalText, backgroundText]
-	            .map((part) => String(part || '').trim())
-	            .filter(Boolean)
-	            .join('\n\n');
-	          console.log(`[v2] BG MERGE: ${finalText.slice(0, 150)}`);
+        // Results belong to the internal inbox and worker details. The synthesis
+        // gate above consumes them; exhausting its guard must never concatenate
+        // unreviewed worker output into the parent's user-facing answer.
+        if (joinedResults.some(Boolean)) {
+          sendSSE('info', { message: 'Background agents settled; results available in agent details.' });
         }
       }
       // â”€â”€ End background agent finalization gate â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -5026,6 +5041,7 @@ Do not produce prose. Use the canonical thread tool now.` });
       setImmediate(registerTurnOutputs);
       return {
         type: allToolResults.length > 0 ? 'execute' : 'chat',
+        noResultFailure: !allToolResults.length && missingModelFinal ? 'missing_final' : undefined,
         text: finalTextWithSkillOffer,
         thinking: allThinking || undefined,
         reasoningSummary: normalizeReasoningSummary(allReasoningSummary),
@@ -5141,6 +5157,10 @@ Do not produce prose. Use the canonical thread tool now.` });
         ));
       }
     };
+    // Snapshot before the up-front parallel batch: that batch dispatches every
+    // call of the round, and the ordered loop below only reuses its results.
+    // Snapshotting after it made fully parallel rounds look idle.
+    const toolDispatchCountAtRoundStart = toolDispatchCount;
     if (canRunParallelBatch) {
       for (const entry of parallelCallEntries) {
         preDispatchedCalls.add(entry.sourceCall);
@@ -5179,7 +5199,6 @@ Do not produce prose. Use the canonical thread tool now.` });
 
     const batchCreatedFiles = new Set<string>();
     let roundHadProgress = false;
-    const toolDispatchCountAtRoundStart = toolDispatchCount;
     resetProgressRoundStats();
 
     for (const call of toolCalls) {

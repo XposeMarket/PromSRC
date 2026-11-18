@@ -48,14 +48,14 @@ assert.match(
 );
 assert.match(
   desktopPage,
-  /function backgroundAgentEventsToLiveTraceEntries\(events = \[\]\) \{[\s\S]*?if \(eventType === 'reasoning_summary' \|\| eventType === 'reasoning_summary_delta' \|\| eventType === 'reasoning_delta'\) \{\s*const text = String\(extra\.thinking \|\| extra\.text \|\| extra\.message \|\| entry\.content \|\| ''\)\.trim\(\);\s*mergeBackgroundReasoningSummary\(trace, text, \{\s*\.\.\.extra,\s*source: 'agent_progress',\s*visibility: 'summary',\s*reasoningKind: 'summary'/,
+  /function backgroundAgentEventsToLiveTraceEntries\(events = \[\]\) \{[\s\S]*?if \(eventType === 'reasoning_summary' \|\| eventType === 'reasoning_summary_delta' \|\| eventType === 'reasoning_delta'\) \{\s*const text = String\(extra\.thinking \|\| extra\.text \|\| extra\.message \|\| entry\.content \|\| ''\)\.trim\(\);\s*mergeBackgroundReasoningSummary\(trace, text, \{\s*\.\.\.extra,\s*source: 'reasoning_summary',\s*visibility: 'summary',\s*reasoningKind: 'summary'/,
   'summary deltas must be tagged mutable so they cannot become a second stream row',
 );
 assert.match(read('web-ui/src/background-stream-summary.js'), /function backgroundSpawnCollapsedDetail\(/, 'background summaries need a stable dock detail selector');
 assert.match(desktopPage, /const detail = backgroundSpawnCollapsedDetail\(lane, backgroundAgentPreview\)/, 'reasoning summary updates must not replace the collapsed background-agent header preview');
 assert.match(
   desktopPage,
-  /case 'reasoning_summary_delta':[\s\S]{0,450}eventType,\s*source: 'agent_progress',\s*visibility: 'summary',\s*reasoningKind: 'summary'/,
+  /case 'reasoning_summary_delta':[\s\S]{0,450}eventType,\s*source: 'reasoning_summary',\s*visibility: 'summary',\s*reasoningKind: 'summary'/,
   'summary event metadata must survive websocket ingestion and reopen replay normalization',
 );
 
