@@ -1944,7 +1944,7 @@ export async function handleWorkspaceTool(ctx: handleWorkspaceToolContext): Prom
               streamToSse = false;
               if (captured.yielded) return yieldedCommandResult(captured);
               const output = [captured.stdout, captured.stderr].filter(Boolean).join('\n').trim();
-              const outcome = classifyCommandTermination(captured);
+              const outcome = classifyCommandTermination(captured, normalizedCmd);
               return {
                 name, args,
                 result: `${normalizedCmd} [${outcome.label}] run=${captured.runId || 'n/a'} cwd=${commandCwd.displayCwd}\n${capCommandOutput(output, { maxChars: args.maxChars ?? args.max_chars, runId: captured.runId }) || '(no output)'}`,
@@ -1994,7 +1994,7 @@ export async function handleWorkspaceTool(ctx: handleWorkspaceToolContext): Prom
               streamToSse = false;
               if (captured.yielded) return yieldedCommandResult(captured);
               const output = [captured.stdout, captured.stderr].filter(Boolean).join('\n').trim();
-              const outcome = classifyCommandTermination(captured);
+              const outcome = classifyCommandTermination(captured, normalizedCmd);
               return {
                 name, args,
                 result: `${normalizedCmd} [${outcome.label}] run=${captured.runId || 'n/a'} cwd=${commandCwd.displayCwd}\n${capCommandOutput(output, { maxChars: args.maxChars ?? args.max_chars, runId: captured.runId }) || '(no output)'}`,

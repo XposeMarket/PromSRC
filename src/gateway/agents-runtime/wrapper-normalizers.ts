@@ -1,4 +1,5 @@
 import fs from 'fs';
+import { literalCommand, ARGV_SUFFIX } from '../process/literal-command';
 import path from 'path';
 import { normalizeDevSourcePatchsetArgs } from './../dev-source-patchset';
 import { hasBrowserStructuredCollectionInput } from './../browser-tools';
@@ -521,6 +522,11 @@ export function normalizeWorkspaceWrapperTool(name: string, rawArgs: any, worksp
   }
 
   if (name === 'workspace_run') {
+    if (args.program != null || args.argv != null || args.search != null) {
+      if (action !== 'run' || args.command || args.elevated || args.visible || args.pty || args.stdin || (args.shell && args.shell !== 'auto') || process.platform !== 'win32') return { name, args, error: 'Literal arguments require a captured Windows run without command, explicit shell, elevation or PTY.' };
+      try { args.command = literalCommand(args) + ARGV_SUFFIX; } catch (e) { return {name,args,error:String(e)}; }
+      delete args.program; delete args.argv; delete args.search;
+    }
     if (action === 'telemetry' || action === 'benchmark_summary') return { name: 'tool_benchmark_summary', args };
     if (['run', 'start', 'status', 'log', 'wait', 'kill', 'submit'].includes(action)) {
       const runArgs = {

@@ -1659,7 +1659,7 @@ export async function handleMiscTool(ctx: handleMiscToolContext): Promise<Awaite
         }
         const exit = observation.value;
         const output = [exit.stdout, exit.stderr].filter(Boolean).join('\n').trim();
-        const outcome = classifyCommandTermination({ code: exit.exitCode, timedOut: exit.timedOut, reason: exit.reason, signal: exit.exitSignal });
+        const outcome = classifyCommandTermination({ code: exit.exitCode, timedOut: exit.timedOut, reason: exit.reason, signal: exit.exitSignal }, supervisor.get(runId)?.command);
         return {
           name,
           args,

@@ -123,7 +123,10 @@ export function getFileWebMemoryTools(): any[] {
           required: ['action'],
           properties: {
             action: { type: 'string', enum: ['run', 'start', 'status', 'log', 'wait', 'kill', 'submit', 'test', 'lint', 'format', 'typecheck', 'telemetry', 'benchmark_summary'], description: 'Command/process/check/telemetry action.' },
-            command: { type: 'string', description: 'Command to run, or explicit check command.' },
+            command: { type: 'string', description: 'Raw shell command or explicit check. Simple Windows batches report per-step exits. Do not combine with program/argv or search.' },
+            program: { type: 'string', enum: ['git','node','rg'], description: 'Windows captured run: native executable with literal argv. Prefer for paths, spaces, nested quotes or inline code.' },
+            argv: { type:'array', items:{type:'string'}, description:'Exact arguments to program; no shell escaping.' },
+            search: {type:'object', required:['text'], additionalProperties:false, properties:{ text:{type:'string'}, directory:{type:'string'}, glob:{type:'string'}, regex:{type:'boolean'} }, description:'Windows captured run: search with rg. Literal text by default. Directory and filename glob are separate.' },
             parallel_safe: { type: 'boolean', description: 'For independent, non-elevated run/start calls only. Set true with a distinct parallel_key when the command does not depend on another result or compete for the same mutable resource.' },
             parallel_key: { type: 'string', description: 'Logical resource touched by an independent run/start call, such as repo-a or service-b. Calls with the same key stay serial.' },
             cwd: { type: 'string', description: 'Working directory relative to the workspace, or an absolute computer path. Outside-workspace paths require approval in default permissions and run directly in Lite permissions.' },
