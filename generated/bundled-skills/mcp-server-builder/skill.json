@@ -3,9 +3,8 @@
   "id": "mcp-server-builder",
   "name": "mcp-server-builder",
   "description": "Build or register a local or remote MCP server with typed tools and a Prometheus MCP preset. Use when creating an MCP server, wrapping a local service as MCP, or defining its transport and security boundary; do not use merely to connect an already-defined integration.",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "entrypoint": "SKILL.md",
-  "implicitInvocation": true,
   "triggers": [
     "wrap local service as mcp",
     "mcp server transport",
@@ -26,11 +25,12 @@
     "integration_admin",
     "workspace_write"
   ],
+  "implicitInvocation": true,
   "permissions": {
     "workspaceRead": true,
     "workspaceWrite": true,
     "shell": true,
     "externalSideEffects": true
   },
-  "lifecycle": "active"
+  "resources": []
 }

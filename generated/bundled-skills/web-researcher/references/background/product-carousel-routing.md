@@ -1,4 +1,4 @@
-# Product Carousel Routing — 2026-05-23
+# Product Carousel Routing - 2026-05-23
 
 When web research produces a curated set of purchasable products, product recommendations, or shopping comparison items, prefer displaying them with `show_product_carousel` after source discovery/extraction.
 

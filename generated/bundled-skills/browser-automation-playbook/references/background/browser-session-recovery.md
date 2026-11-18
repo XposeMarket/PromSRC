@@ -1,4 +1,4 @@
-# Browser Session Recovery Guardrail — 2026-05-22
+# Browser Session Recovery Guardrail - 2026-05-22
 
 Use this when a browser workflow hits no-session, user-Chrome debugger, `about:blank`, or screenshot-before-open errors.
 
@@ -19,6 +19,6 @@ Use this when a browser workflow hits no-session, user-Chrome debugger, `about:b
 
 ## Evidence
 
-- `Brain/skill-gardener/2026-05-22/workflow-episodes.jsonl:11` — browser tab cleanup recovered after no-session, user-Chrome debugger, and `about:blank` failures.
-- `Brain/skill-gardener/2026-05-22/workflow-episodes.jsonl:18` — X/browser screenshot flow attempted screenshot before a browser session existed.
-- `audit/chats/transcripts/telegram_1799053599_1779461849625.md:137-144` — user correction after screenshot flow attempted send/open in the wrong order.
+- `Brain/skill-gardener/2026-05-22/workflow-episodes.jsonl:11` - browser tab cleanup recovered after no-session, user-Chrome debugger, and `about:blank` failures.
+- `Brain/skill-gardener/2026-05-22/workflow-episodes.jsonl:18` - X/browser screenshot flow attempted screenshot before a browser session existed.
+- `audit/chats/transcripts/telegram_1799053599_1779461849625.md:137-144` - user correction after screenshot flow attempted send/open in the wrong order.

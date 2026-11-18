@@ -1,4 +1,4 @@
-# X Media Extraction Escalation — 2026-06-07
+# X Media Extraction Escalation - 2026-06-07
 
 ## Context
 When working with X/Twitter status URLs, the standard fetch workflow is `web_fetch` (non-browser). However, browser-adjacent tools like `download_media` (using yt-dlp) can be more reliable for video extraction when `web_fetch` doesn't fully capture media.

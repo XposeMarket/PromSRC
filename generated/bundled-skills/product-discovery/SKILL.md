@@ -12,10 +12,10 @@ Reduce uncertainty before committing implementation effort.
 1. Define the user, situation, unmet need, desired outcome, and current alternatives.
 2. Separate observed evidence from assumptions.
 3. Write a falsifiable hypothesis and the riskiest assumption behind it.
-4. Choose the smallest validation method that can change the decision: interviews, prototype test, concierge test, data analysis, demand test, or technical spike.
+4. Choose the smallest validation method that can change the decision: interviews, prototype test, concierge test, data analysis, demand test, or technical spike. Use `spike-and-prototype` for technical or interaction feasibility spikes; capture its verdict as evidence.
 5. Size impact and effort using one consistent framework such as RICE or ICE; do not mix scoring systems without explanation.
 6. Decide: advance, revise, defer, or reject.
-7. For approved work, produce a concise brief with scope, non-goals, user stories, acceptance criteria, success measures, dependencies, and open questions.
+7. For approved work, produce a concise brief with scope, non-goals, user stories, acceptance criteria, success measures, dependencies, and open questions. After the "build it" decision, hand design decisions to `requirements-grilling`; discovery alone does not determine the solution.
 
 Do not manufacture user evidence or treat stakeholder enthusiasm as validation. State confidence and what evidence would reverse the decision.
 

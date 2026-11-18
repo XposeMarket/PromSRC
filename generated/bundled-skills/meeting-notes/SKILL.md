@@ -13,7 +13,7 @@ Turn messy meeting input into clean, structured, actionable output.
 
 | Input | What you do |
 |---|---|
-| Raw transcript (speaker-labeled) | Full extraction — decisions, actions, discussion |
+| Raw transcript (speaker-labeled) | Full extraction - decisions, actions, discussion |
 | Rough bullet dump | Organize, clarify, identify actions |
 | Voice note summary (from audio) | Clean and structure the summary |
 | Paste of key points | Format into standard template |
@@ -35,16 +35,16 @@ Read the input and extract these 5 things in order:
 ### 2. Decisions Made
 Decisions = things that were agreed upon with no more discussion needed.
 - State them as completed facts: "Decided to X" not "We might X"
-- Include who owns the decision if mentioned
+- Include who owns the decision if mentioned. Attach a source quote or timestamp to every claimed decision; if evidence is insufficient, list it as proposed or unresolved rather than decided.
 - If a decision reverses a previous one, note that
 
 ### 3. Action Items
 Each action item needs:
-- **What** — specific deliverable, not vague ("send invoice to client" not "handle billing")
-- **Who** — owner (use initials or name if given; "Unassigned" if nobody claimed it)
-- **When** — deadline (if given; "No deadline set" if not)
+- **What** - specific deliverable, not vague ("send invoice to client" not "handle billing")
+- **Who**: owner (use initials or name only if explicit; "unassigned" if nobody claimed it, never "the team")
+- **When**: due date if explicit, otherwise "no date"; never infer one from context.
 
-Format: `- [ ] [OWNER] [Action] — [Deadline]`
+Format: `- [ ] [OWNER] [Action] - [Deadline]`
 
 ### 4. Key Discussion Points
 Points that were discussed but didn't result in a decision or action. These are context for people who weren't in the meeting.
@@ -63,7 +63,7 @@ Unresolved items that need to be revisited:
 ## 3. Output Template
 
 ```markdown
-# Meeting Notes — [Meeting Title]
+# Meeting Notes - [Meeting Title]
 
 **Date:** [date]
 **Type:** [Standup / 1:1 / Kickoff / Retrospective / Sales Call / etc.]
@@ -74,7 +74,7 @@ Unresolved items that need to be revisited:
 
 ## Decisions
 
-- ✅ [Decision 1] — agreed by [who]
+- ✅ [Decision 1] - agreed by [explicit person if stated]; evidence: [exact quote or timestamp]
 - ✅ [Decision 2]
 - ✅ [Decision 3]
 
@@ -82,11 +82,15 @@ Unresolved items that need to be revisited:
 
 ## Action Items
 
-- [ ] **[Name/Role]** — [Specific action] — _Due: [date/timeframe]_
-- [ ] **[Name/Role]** — [Specific action] — _Due: [date/timeframe]_
-- [ ] **Unassigned** — [Action nobody claimed] — _Due: TBD_
+- [ ] **[explicit owner or unassigned]** - [Specific action] - _Due: [explicit date or no date]_ - [Source document/timestamp and matched or new ticket link]
+- [ ] **[explicit owner or unassigned]** - [Specific action] - _Due: [explicit date or no date]_ - [Source document/timestamp and matched or new ticket link]
+- [ ] **unassigned**: [Action nobody claimed] - _Due: no date_ - [Source document link, timestamp, and existing/new ticket link if available]
 
 ---
+
+## Proposed (not decided)
+
+- [Proposal and source quote or timestamp]
 
 ## Key Discussion Points
 
@@ -100,13 +104,13 @@ Unresolved items that need to be revisited:
 
 | Question / Topic | Owner | Target date |
 |---|---|---|
-| [Unresolved question] | [name or TBD] | [date or next meeting] |
+| [Unresolved question] | [explicit name or unassigned] | [explicit date or no date] |
 
 ---
 
 ## Notes
 
-[Any other context worth preserving — tone, mood, off-agenda items, parking lot topics]
+[Any other context worth preserving - tone, mood, off-agenda items, parking lot topics]
 ```
 
 ---
@@ -133,7 +137,7 @@ Emphasize:
 - **Pain points expressed:** [their words, in quotes ideally]
 - **Interest level:** [hot / warm / cold]
 - **Objections raised:** [and any responses given]
-- **Agreed next step:** [specific — "send proposal by Friday" not "follow up"]
+- **Agreed next step:** [specific - "send proposal by Friday" not "follow up"]
 
 ### 1:1
 - **Topics discussed**
@@ -145,9 +149,12 @@ Emphasize:
 
 ## 5. Quality Rules
 
-- **Be specific** — "John will send the contract by Friday 5pm" not "someone handles the contract"
-- **Active voice** — "Sarah owns this" not "this was owned by Sarah"
-- **Flag ambiguity** — if you can't tell who owns something, mark as [Unassigned] and note in open questions
-- **No padding** — if a topic wasn't covered, omit that section rather than write "N/A"
+- **Be specific** - "John will send the contract by Friday 5pm" not "someone handles the contract"
+- **Active voice** - "Sarah owns this" not "this was owned by Sarah"
+- **Flag ambiguity**: if the owner or date is unclear, mark it unassigned or no date and add it to open questions; never invent either.
+- **No padding** - if a topic wasn't covered, omit that section rather than write "N/A"
 - **Quote exact language** for decisions and important commitments (avoids misinterpretation)
-- **Separate discussion from action** — discussion is context, action items are commitments
+- **Separate decisions, proposals, open questions, and actions**: a suggestion is not a commitment, and only a source-backed agreement is a decision.
+- **Reconcile with a tracker before writing**: search existing tasks/tickets by project and meeting topic, distinguish creates from updates, and cross-link each action item to its source document and matched or new ticket. For non-transcript documents, use `document-to-action-items` for extraction and provenance.
+- **Approve before publishing**: draft follow-up messages and tickets, obtain explicit authorization before sending or creating/updating, then read back the resulting records and verify their links.
+- **Separate discussion from action**: discussion is context, action items are commitments.

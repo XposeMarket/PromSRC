@@ -1,4 +1,4 @@
-# Design Operating System Research Pattern — 2026-05-10
+# Design Operating System Research Pattern - 2026-05-10
 
 ## Evidence
 - Skill gardener candidate `sg_fdf5852351339491` / workflow episode `sg_1b5c987a469650ee` captured the user asking how TypeUI, Lazyweb, and related design tools are useful for Prometheus website/UI work.

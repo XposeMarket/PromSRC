@@ -46,6 +46,10 @@ When risk warrants it, test one invalid input, failed dependency, empty result, 
 
 Stop at the first broken boundary and report the exact evidence. If two consecutive layers produce no signal, report the limitation and ask for the missing evidence rather than repeating the same check. Do not declare success from elapsed time, a successful click, a 200 response alone, or absence of console errors alone.
 
+## Evidence before claims
+
+Before saying "done", "fixed", "passing", or "works", name the command or check that proves the claim, re-run it fresh in the same turn, read its full output and exit code, then show that output with the claim. "Should work", stale results, and subagent success reports do not count as evidence. If the check cannot run, report the limitation instead of claiming success.
+
 ## Report
 
 Return:

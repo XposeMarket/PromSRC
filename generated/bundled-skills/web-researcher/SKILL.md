@@ -13,7 +13,7 @@ Start from the decision or question, not from a tool sequence.
 4. Evaluate publication date, event date, authority, methodology, incentives, and direct support.
 5. Triangulate material or disputed claims across independent sources.
 6. Separate sourced fact from inference and name uncertainty.
-7. Synthesize the answer and place citations next to supported claims.
+7. Synthesize the answer and place citations next to supported claims. For fact-checks or high-stakes cited deliverables, switch to `cited-claim-verification` for a source ledger, verbatim supporting quotes, and a pre-delivery citation audit.
 
 Use browser tools only when a site requires interaction, authentication, or dynamic UI unavailable through fetch. Do not cite search snippets as if they were the underlying source.
 

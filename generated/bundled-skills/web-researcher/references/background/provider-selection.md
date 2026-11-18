@@ -1,4 +1,4 @@
-# Provider Selection / Google Search Follow-up — 2026-05-08
+# Provider Selection / Google Search Follow-up - 2026-05-08
 
 ## Correction: do not misuse `site:` as a Google-provider test
 

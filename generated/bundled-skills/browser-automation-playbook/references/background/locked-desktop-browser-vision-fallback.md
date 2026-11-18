@@ -1,4 +1,4 @@
-# Locked desktop browser/vision fallback — 2026-05-26
+# Locked desktop browser/vision fallback - 2026-05-26
 
 ## Evidence
 - the user asked Prometheus to test Chrome/browser tools while the Windows desktop was locked (`audit/chats/transcripts/mobile_mpmztala_z35di6.md:1-21`).

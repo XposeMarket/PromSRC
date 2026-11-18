@@ -12,9 +12,9 @@ Build a curated carousel from verified product records. Empty, decorative, or br
 1. Start with `shopping_search_products` using the user's query, optional merchant, and roughly 6–10 candidates.
 2. If discovery is insufficient, use web search/fetch for readable product pages. Use browser extraction only for live shopping pages whose fields cannot be obtained through fetch.
 3. Gather more candidates than needed, then remove duplicates and weak records.
-4. Curate 3–8 choices around the user's constraints. Prefer useful distinctions such as best overall, budget, premium, or a requested feature—not arbitrary variety.
+4. Curate 3–8 choices around the user's constraints. Prefer useful distinctions such as best overall, budget, premium, or a requested feature, not arbitrary variety.
 5. Use the carousel emitted by `shopping_search_products`, or call `show_product_carousel` for manually curated records.
-6. State price/availability caveats when relevant.
+6. State price/availability caveats when relevant. If the user wants a future price-drop, release, or listing notification after the comparison, hand the recurring watch to `change-and-price-watch`; this carousel is a one-off snapshot.
 
 ## Card eligibility
 

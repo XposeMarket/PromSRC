@@ -3,9 +3,8 @@
   "id": "context-pack-builder",
   "name": "context-pack-builder",
   "description": "Assemble reusable Prometheus briefing packs from memory, project and team context, sessions, files, and cited sources. Use only when the user explicitly asks for a context pack, briefing pack, or reusable agent handoff; do not invoke for ordinary prompt context.",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "entrypoint": "SKILL.md",
-  "implicitInvocation": false,
   "triggers": [
     "context pack builder",
     "client briefing pack",
@@ -24,6 +23,7 @@
     "agents_and_teams",
     "workspace_write"
   ],
+  "implicitInvocation": false,
   "permissions": {
     "workspaceRead": true,
     "workspaceWrite": true
@@ -34,6 +34,5 @@
       "type": "doc",
       "description": "Add workflow recipe to context-pack-builder"
     }
-  ],
-  "lifecycle": "active"
+  ]
 }

@@ -8,18 +8,12 @@ description: "Create or edit a precise standalone SVG diagram, architecture visu
 Build a semantic visual system, not a pile of absolute coordinates.
 
 1. Define audience, message, entities, relationships, hierarchy, dimensions, and output context.
-2. Choose a layout model and establish viewBox, spacing, typography, color, markers, and reusable symbols.
-3. Group related elements and give meaningful IDs/classes.
-4. Route connectors clearly, avoid crossings, and preserve label readability.
+2. Choose a layout model and establish viewBox, spacing, typography, color, markers, and reusable symbols. In a themed Prometheus surface inherit `--prom-bg`, `--prom-surface`, `--prom-border`, `--prom-text`, `--prom-muted`, and `--prom-accent` rather than hardcoding an outer canvas. For standalone deliverables use a neutral editorial palette or consult `theme-application`; do not default to dark slate/cyan or purple-blue-cyan gradient "AI SaaS" aesthetics unless brand-required.
+3. Group related elements and give meaningful IDs/classes. Draw connectors before boxes so they sit behind nodes; use opaque under-rectangles beneath translucent fills.
+4. Route connectors through gaps, avoid crossings, and preserve label readability. Maintain at least 40 px between unrelated boxes where possible; place message buses in gaps and the legend outside all grouped boundaries. Use consistent arrowheads and dashed styles for security groups or regions.
 5. Add accessibility title/description when the artifact is user-facing.
 6. Validate XML, inspect the rendered SVG at target sizes, and check clipping, contrast, font fallback, and responsive scaling.
 
-Prometheus mounts SVG in a transparent inline surface. Leave the root background
-transparent, keep the root responsive with a `viewBox`, and prefer `currentColor`
-or the injected `--prom-*` tokens for fills, strokes, labels, and markers. Internal
-surfaces are allowed when they communicate grouping or state; the host should not
-need an extra panel around the visual.
-
-Do not embed untrusted scripts or external assets without need. Prefer semantic edits over full regeneration when modifying an existing SVG.
+Do not embed untrusted scripts or external assets without need. Prefer semantic edits over full regeneration when modifying an existing SVG. For offline viewing, offer a standalone HTML wrapper with inline SVG and no external dependencies, while retaining the standalone SVG as the source artifact.
 
 Read [detailed-guide.md](references/detailed-guide.md) for layout recipes, marker/filter patterns, annotation styles, and code templates.

@@ -1,4 +1,4 @@
-# Product Carousel Browser Extraction — 2026-05-23
+# Product Carousel Browser Extraction - 2026-05-23
 
 Use this note when browser automation is used to gather product/listing cards for a user-facing carousel.
 

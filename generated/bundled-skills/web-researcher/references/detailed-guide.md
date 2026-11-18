@@ -18,9 +18,9 @@ Do **not** use browser automation for normal reading unless the page is interact
 
 `web_search` runs multiple configured providers in parallel and returns a provider banner, e.g. `[Multi-engine: tinyfish+tavily+brave]`. Durable rules:
 
-- Treat the banner as an operational signal for breadth/freshness, not as proof of any single provider's contribution — blended output does not label which provider produced which result.
-- Never use a Google-owned `site:` restriction (`site:google.com`, `site:googleblog.com`, etc.) to test whether the Google provider is active. `site:<domain>` only proves the search system *can* return pages from that domain — it does not prove which provider powered the search. To check provider behavior, run a normal broad query with no domain restriction and read the returned banner/tool metadata instead.
-- Result domains are never provider proof in either direction — any provider can return any domain.
+- Treat the banner as an operational signal for breadth/freshness, not as proof of any single provider's contribution - blended output does not label which provider produced which result.
+- Never use a Google-owned `site:` restriction (`site:google.com`, `site:googleblog.com`, etc.) to test whether the Google provider is active. `site:<domain>` only proves the search system *can* return pages from that domain - it does not prove which provider powered the search. To check provider behavior, run a normal broad query with no domain restriction and read the returned banner/tool metadata instead.
+- Result domains are never provider proof in either direction - any provider can return any domain.
 - Snippets are for triage only; fetch the actual page before making a factual claim, whenever the source is fetchable.
 
 Full historical test notes (TinyFish rollout observations, specific query examples) are archived in `references/background/tested-tool-behavior-snapshot.md` if deeper context is ever needed.
@@ -39,6 +39,20 @@ Full historical test notes (TinyFish rollout observations, specific query exampl
 | JS-heavy page/app | Browser tools (`browser_get_page_text`, snapshot, extraction) | Use `web_fetch` only if it can read the static content |
 | Structured extraction/listings | `browser_extract_structured` or `browser_scroll_collect` | Use scraper scripts only if native tools are insufficient |
 | Download/analyze files/media from known URLs | media/download tools | Do not use browser if direct URL works |
+
+
+## Multi-platform source sweep
+
+For broad claims, sweep the relevant platforms without treating reposts as independent confirmation:
+
+| Surface | What to inspect | Evidence boundary |
+|---|---|---|
+| Web | Official documentation and reporting through `web_search` and `web_fetch` | Confirm dates and read the page, not only its snippet |
+| Community | Forums and discussion threads | Community posts are reported sentiment, not fact |
+| Changelogs | Product release notes and dated change logs | Confirm version and publication date at the publisher |
+| X connector | Posts and surrounding thread when material | Attribute to the author; corroborate claims elsewhere |
+| GitHub | Repository releases, issues, commits, and tags | Separate observed repository state from inferred product impact |
+
 
 ---
 
