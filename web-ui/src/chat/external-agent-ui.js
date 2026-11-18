@@ -1,5 +1,4 @@
 // Live connected agents (stage 3: the user's own Codex) — shared UI.
-import { agentLogoHtml } from './external-agent-logos.js';
 //
 // One module for desktop and mobile:
 //   - agent list + the new-chat choice (Prometheus is always first),
@@ -135,28 +134,12 @@ export function agentStatusFor(id) {
 
 // ---- request cards ----------------------------------------------------------
 
-function cardHtml(req) {
-  const d = req.detail || {};
-  const rows = [];
-  if (d.command) rows.push(`<pre class="ea-card-cmd">${esc(d.command)}</pre>`);
-  if (d.cwd) rows.push(`<div class="ea-card-meta">in ${esc(d.cwd)}</div>`);
-  if (Array.isArray(d.files) && d.files.length) rows.push(`<ul class="ea-card-files">${d.files.slice(0, 12).map((f) => `<li>${esc(f)}</li>`).join('')}${d.files.length > 12 ? `<li>…and ${d.files.length - 12} more</li>` : ''}</ul>`);
-  if (Array.isArray(d.grants) && d.grants.length) rows.push(`<div class="ea-card-meta">Allow grants exactly this:</div><ul class="ea-card-files ea-card-grants">${d.grants.map((g) => `<li>${esc(g)}</li>`).join('')}</ul>`);
-  if (d.reason) rows.push(`<div class="ea-card-reason">${esc(d.reason)}</div>`);
-  if (Array.isArray(d.questions)) {
-    for (const q of d.questions) {
-      const opts = Array.isArray(q.options) && q.options.length
-        ? `<div class="ea-card-choices">${q.options.map((o) => `<label class="ea-card-choice"><input type="${q.multi ? 'checkbox' : 'radio'}" name="ea-q-${esc(req.requestId)}-${esc(q.id)}" value="${esc(o.id)}"><span>${esc(o.label)}</span></label>`).join('')}</div>`
-        : `<input class="ea-card-input" type="text" data-ea-q="${esc(q.id)}" autocomplete="off">`;
-      rows.push(`<div class="ea-card-q" data-ea-qid="${esc(q.id)}"><div class="ea-card-q-prompt">${esc(q.prompt)}</div>${opts}</div>`);
-    }
-  }
-  const buttons = (req.options || []).map((o) => `<button type="button" class="ea-card-btn ea-card-btn-${esc(o.kind)}" data-ea-option="${esc(o.id)}">${esc(o.label)}</button>`).join('');
-  return `<div class="ea-card-head">${agentLogoHtml(req.agentId)}<strong>${esc(req.title)}</strong></div>
-    ${rows.join('')}
-    <div class="ea-card-actions">${buttons}</div>
-    <div class="ea-card-note">Your answer goes to ${esc(agentName(req.agentId))} only. Prometheus's own permissions are not changed.</div>
-    <div class="ea-card-error" hidden></div>`;
+// The card markup (external-agent-card.js) loads only when a harness actually asks something,
+// so ordinary chats do not carry it.
+let cardModule = null;
+function loadCard() {
+  if (!cardModule) cardModule = import('./external-agent-card.js').catch((error) => { cardModule = null; throw error; });
+  return cardModule;
 }
 
 function collectAnswers(el, req) {
@@ -170,25 +153,11 @@ function collectAnswers(el, req) {
   return answers;
 }
 
-function cardHost() {
-  let host = document.getElementById('ea-request-dock');
-  if (!host) {
-    host = document.createElement('div');
-    host.id = 'ea-request-dock';
-    host.className = `ea-request-dock ${document.body.classList.contains('pm-mobile-active') ? 'ea-mobile' : 'ea-desktop'}`;
-    host.setAttribute('aria-live', 'polite');
-    document.body.appendChild(host);
-  }
-  return host;
-}
-
 export function showExternalAgentRequest(req, sessionId) {
   if (!req?.requestId || st.cards.has(req.requestId)) return;
   const el = document.createElement('section');
-  el.className = 'ea-card';
   el.setAttribute('role', 'dialog');
   el.setAttribute('aria-label', req.title || 'Agent request');
-  el.innerHTML = cardHtml(req);
   el.addEventListener('click', async (event) => {
     const btn = event.target.closest('[data-ea-option]');
     if (!btn) return;
@@ -207,9 +176,20 @@ export function showExternalAgentRequest(req, sessionId) {
       if (err) { err.hidden = false; err.textContent = String(error?.message || error).replace(/^API \d+:\s*/, ''); }
     }
   });
-  cardHost().appendChild(el);
+  // Claimed before the card markup loads, so the same request is never shown twice.
   st.cards.set(req.requestId, { request: req, el });
+  loadCard().then((card) => {
+    // Answered or replaced while the markup was loading.
+    if (st.cards.get(req.requestId)?.el !== el) return;
+    el.className = card.cardClass();
+    el.innerHTML = card.cardHtml(req);
+    card.cardHost().appendChild(el);
+  }).catch(() => {
+    // Not shown: forget it so the next sync (reconnect, chat switch) tries again.
+    if (st.cards.get(req.requestId)?.el === el) st.cards.delete(req.requestId);
+  });
 }
+
 
 export function removeExternalAgentRequest(requestId) {
   const entry = st.cards.get(requestId);
@@ -238,21 +218,31 @@ function showMissingSession(sessionId) {
   const section = document.createElement('section');
   section.id = id;
   section.dataset.eaRecoverySession = sessionId;
-  section.className = 'ea-card';
-  section.innerHTML = '<p>The original agent session could not be found. Your chat history is still here.</p><button type="button">Start a new agent session in this chat</button><p role="status"></p>';
-  section.querySelector('button').addEventListener('click', async (event) => {
-    event.target.disabled = true;
-    try {
-      const data = await call(`/api/external-agents/sessions/${encodeURIComponent(sessionId)}/new-upstream`, { method: 'POST', body: {} });
-      if (data?.success === false) throw new Error(data.error || 'Could not start fresh.');
-      st.bindings.delete(String(sessionId));
-      section.remove();
-      await loadSessionBinding(sessionId, true);
-      notify();
-    } catch (error) { section.querySelector('[role=status]').textContent = error.message; event.target.disabled = false; }
-  });
-  cardHost().appendChild(section);
+  section.setAttribute('role', 'dialog');
+  section.setAttribute('aria-label', 'Agent session ended');
+  // Claimed before the card markup loads, so a second event cannot add a second notice.
+  section.hidden = true;
+  document.body.appendChild(section);
+  loadCard().then((card) => {
+    if (!section.isConnected) return;
+    section.className = card.cardClass();
+    section.innerHTML = card.missingHtml();
+    section.querySelector('button').addEventListener('click', async (event) => {
+      event.target.disabled = true;
+      try {
+        const data = await call(`/api/external-agents/sessions/${encodeURIComponent(sessionId)}/new-upstream`, { method: 'POST', body: {} });
+        if (data?.success === false) throw new Error(data.error || 'Could not start fresh.');
+        st.bindings.delete(String(sessionId));
+        section.remove();
+        await loadSessionBinding(sessionId, true);
+        notify();
+      } catch (error) { section.querySelector('[role=status]').textContent = error.message; event.target.disabled = false; }
+    });
+    card.cardHost().appendChild(section);
+    section.hidden = false;
+  }).catch(() => { section.remove(); });
 }
+
 
 /** Stream hook: returns true when the event was an external-agent event. */
 export function handleExternalAgentStreamEvent(event, sessionId) {
