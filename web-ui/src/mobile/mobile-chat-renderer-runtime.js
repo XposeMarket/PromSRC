@@ -20,6 +20,7 @@ import { mergeBackgroundAgentSteerMessages } from '../features/chat/core/backgro
 import { isSteerFrozenRow } from './mobile-restart-continuity.js';
 import { agentModelLabel, agentAvatarHtml } from '../components/provider-logo.js';
 import { buildMobileAttachmentInlineUrl as _aSrc } from './mobile-api.js';
+import { MOBILE_TOOL_PROGRESS_STALE_MS, clearMobileToolProgressState, readMobileToolProgressState, setMobileToolProgressState } from './mobile-tool-progress-state.js';
 
 function _imageGenerationToolName(value) {
   const raw = typeof value === 'string'
@@ -3420,36 +3421,24 @@ function _applyMobileMainPlanProgress(evt = {}, sessionId = __pmChat.activeSessi
 }
 
 function _setMobileToolProgress(sessionId, evt = {}) {
-  if (evt.show_pill !== true) return false;
+  if (!setMobileToolProgressState(__pmChat.toolProgressBySession, sessionId, evt)) return false;
   const sid = String(sessionId || '').trim();
-  const message = String(evt.message || '').trim();
-  if (!sid || !message) return false;
-  __pmChat.toolProgressBySession[sid] = {
-    action: String(evt.action || evt.name || evt.toolName || 'tool').trim(),
-    message: message.slice(0, 180),
-    phase: String(evt.phase || 'working').trim(),
-    current: Number.isFinite(Number(evt.current)) ? Number(evt.current) : null,
-    total: Number.isFinite(Number(evt.total)) ? Number(evt.total) : null,
-    updatedAt: Date.now(),
-  };
+  // Repaint once updates stop arriving so a stale pill retires itself.
+  setTimeout(() => {
+    if (sid === String(__pmChat.activeSessionId || '').trim()) _renderMobileToolProgressDock(null, sid);
+  }, MOBILE_TOOL_PROGRESS_STALE_MS + 500);
   return true;
 }
 
-function _clearMobileToolProgress(sessionId, action = '') {
-  const sid = String(sessionId || '').trim();
-  const state = __pmChat.toolProgressBySession?.[sid];
-  if (!state) return false;
-  const expected = String(action || '').trim();
-  if (expected && state.action && expected !== state.action) return false;
-  delete __pmChat.toolProgressBySession[sid];
-  return true;
+function _clearMobileToolProgress(sessionId, action = '', toolCallId = '') {
+  return clearMobileToolProgressState(__pmChat.toolProgressBySession, sessionId, action, toolCallId);
 }
 
 function _renderMobileToolProgressDock(dock, sessionId = __pmChat.activeSessionId) {
   const host = dock || document.getElementById('pm-tool-progress-dock');
   if (!host) return;
   const sid = String(sessionId || '').trim();
-  const state = __pmChat.toolProgressBySession?.[sid];
+  const state = readMobileToolProgressState(__pmChat.toolProgressBySession, sid);
   const activeTurn = [...(Array.isArray(__pmChat.threads?.[sid]) ? __pmChat.threads[sid] : [])]
     .reverse()
     .find((message) => message?.role === 'ai' && message?.streaming === true);

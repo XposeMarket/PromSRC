@@ -144,14 +144,16 @@ export async function readIndexedSessionUsage(file: string, session: string, att
   } finally { await handle.close(); }
 }
 
-/** Reverse reader assumes ledger timestamps are appended chronologically; not a hard byte bound. */
-export async function readRecentUsage(file: string, cutoff: number): Promise<ModelUsageEvent[]> {
+/**
+ * Visit every row at or after `cutoff`, newest first, without keeping any of them.
+ * Reverse reader assumes ledger timestamps are appended chronologically; not a hard byte bound.
+ */
+export async function scanRecentUsage(file: string, cutoff: number, visit: (event: ModelUsageEvent) => void): Promise<void> {
   const handle = await fs.promises.open(file, 'r');
   try {
     let position = (await handle.stat()).size;
     let remainder = Buffer.alloc(0);
     let trailing = true;
-    const result: ModelUsageEvent[] = [];
     while (position > 0) {
       const start = Math.max(0, position - CHUNK);
       const buffer = Buffer.allocUnsafe(position - start);
@@ -166,7 +168,7 @@ export async function readRecentUsage(file: string, cutoff: number): Promise<Mod
         try {
           const event = JSON.parse(lines[i]) as ModelUsageEvent;
           const time = Date.parse(event.timestamp);
-          if (time >= cutoff) result.push(event);
+          if (time >= cutoff) visit(event);
           else if (Number.isFinite(time)) older = true;
         } catch {}
       }
@@ -175,8 +177,14 @@ export async function readRecentUsage(file: string, cutoff: number): Promise<Mod
       position = start;
       await yieldLoop();
     }
-    return result.reverse();
   } finally { await handle.close(); }
+}
+
+/** Every row at or after `cutoff`, oldest first. Holds each row in memory: prefer scanRecentUsage for sums. */
+export async function readRecentUsage(file: string, cutoff: number): Promise<ModelUsageEvent[]> {
+  const result: ModelUsageEvent[] = [];
+  await scanRecentUsage(file, cutoff, (event) => { result.push(event); });
+  return result.reverse();
 }
 
 export function resetSessionUsageIndexes(): void { indexes.clear(); }

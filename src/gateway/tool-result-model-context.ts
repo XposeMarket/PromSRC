@@ -61,7 +61,7 @@ export function boundToolTextForModelContext(
   rawRef?: string,
 ): string {
   const value = String(text || '');
-  if (!value || value.length <= maxChars) return value;
+  if (!value || !rawRef || value.length <= maxChars) return value;
   const summarized = summarizeLargeJsonToolResultForModel(value, toolName, maxChars);
   if (summarized) {
     return `${summarized}\n${modelToolResultRecoveryHint(rawRef)}`;
@@ -84,7 +84,7 @@ export function boundToolMessageContentForModelContext(content: any, toolName: s
   // next reasoning round. skill_read already returns one chosen skill plus a
   // resource index, so preserve that result in full. Bundle resources remain
   // progressive and are fetched individually with skill_resource_read.
-  if (toolName === 'skill_read') return content;
+  if (toolName === 'skill_read' || toolName === 'tool_result_read') return content;
   if (typeof content === 'string') return boundToolTextForModelContext(content, toolName, MODEL_TOOL_RESULT_MAX_CHARS, rawRef);
   if (!Array.isArray(content)) return content;
   return content.map((part: any) => {

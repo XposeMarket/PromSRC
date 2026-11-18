@@ -1885,7 +1885,6 @@ import {
 } from '../agents-runtime/agent-builder-integration';
 
 
-import { elideStaleToolResults, TOOL_RESULT_ELISION_BATCH_MIN_CHARS } from './tool-result-elision';
 
 import {
   buildTurnContextPacket,
@@ -2150,6 +2149,9 @@ router.post('/api/chat', async (req, res) => {
   }
   // Agent choice (stage 3 live agents): fixed on the first message of a new
   // chat, immutable after. A different agent later is 409 agent_locked.
+  // This block only validates. The binding is saved at the admission boundary
+  // below, once this request owns the turn.
+  let agentRequest: Parameters<typeof bindExternalAgentForRequest>[1] = null;
   {
     const rawAgent = req.body?.agent;
     const requestedAgent = rawAgent && typeof rawAgent === 'object'
@@ -2159,7 +2161,8 @@ router.post('/api/chat', async (req, res) => {
       res.status(400).json({ success: false, code: 'unknown_agent', error: 'Unknown agent.' });
       return;
     }
-    const bound = bindExternalAgentForRequest(resolvedSessionId, requestedAgent && (requestedAgent.id === 'prometheus' || isExternalAgentId(requestedAgent.id)) ? { ...requestedAgent, id: requestedAgent.id } : null);
+    agentRequest = requestedAgent && (requestedAgent.id === 'prometheus' || isExternalAgentId(requestedAgent.id)) ? { ...requestedAgent, id: requestedAgent.id } : null;
+    const bound = bindExternalAgentForRequest(resolvedSessionId, agentRequest, { dryRun: true });
     if (!bound.ok) {
       res.status(bound.status).json({ success: false, code: bound.code, error: bound.error, sessionId: resolvedSessionId });
       return;
@@ -2358,6 +2361,17 @@ router.post('/api/chat', async (req, res) => {
       recovery: current.runtime ? 'resume_or_interrupt' : 'reconcile_then_retry',
     });
     return;
+  }
+
+  // Save the agent choice only now that this request owns the turn. A request
+  // that was refused as busy, or is a replay of an earlier one, changes nothing.
+  if (admission.kind !== 'duplicate') {
+    const bound = bindExternalAgentForRequest(resolvedSessionId, agentRequest);
+    if (!bound.ok) {
+      mainChatTurnCoordinator.release(admissionLease);
+      res.status(bound.status).json({ success: false, code: bound.code, error: bound.error, sessionId: resolvedSessionId });
+      return;
+    }
   }
 
   const startSseResponse = () => {

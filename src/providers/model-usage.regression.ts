@@ -111,6 +111,33 @@ async function main(): Promise<void> {
     let totals = await usage.readModelUsageLifetimeTotals();
     assert.equal(internalTokens('test-provider', recentRows, 'one', totals).total, 1200);
     assert.equal(internalTokens('test-provider', recentRows, 'one', totals).monthTotal, 200);
+    // The usage card sums the month window while scanning: same answer, no rows held,
+    // and overlapping polls (every open tab and phone) share one scan of the ledger.
+    const { usageMonthStartMs } = await import('./provider-usage-limits');
+    const parse = JSON.parse;
+    let parsed = 0;
+    JSON.parse = ((...args: Parameters<typeof JSON.parse>) => { parsed++; return parse(...args); }) as typeof JSON.parse;
+    let polls: Awaited<ReturnType<typeof usage.readModelUsageTotalsSince>>[];
+    try {
+      polls = await Promise.all(Array.from({ length: 8 }, () => usage.readModelUsageTotalsSince(usageMonthStartMs())));
+    } finally { JSON.parse = parse; }
+    const windowTotals = polls[0];
+    assert.ok(polls.every(result => result === windowTotals), 'overlapping polls share one scan');
+    assert.ok(parsed <= 6, `eight polls must not scan the ledger eight times (${parsed} rows parsed, one scan is 3)`);
+    assert.deepEqual(windowTotals.map(t => [t.accountId, t.totalTokens, t.calls]).sort(), [['one', 200, 1], ['two', 90, 1]]);
+    assert.equal(internalTokens('test-provider', windowTotals, 'one', totals).monthTotal, 200);
+    assert.equal(internalTokens('test-provider', windowTotals, 'one', totals).total, 1200);
+    // A row appended late with an earlier timestamp must not end the scan before this month's rows.
+    const ledgerBefore = fs.readFileSync(logPath, 'utf-8');
+    const padded = { ...recent, accountId: 'late', totalTokens: 1, traceId: 'x'.repeat(600) };
+    const backdated = { ...padded, timestamp: new Date(usageMonthStartMs() - 86400000).toISOString() };
+    fs.writeFileSync(logPath, Array.from({ length: 200 }, () => JSON.stringify(padded) + '\n').join('') + JSON.stringify(backdated) + '\n');
+    usage.resetModelUsageIndexForTests();
+    const lateTotals = await usage.readModelUsageTotalsSince(usageMonthStartMs());
+    assert.deepEqual(lateTotals.map(t => [t.accountId, t.totalTokens, t.calls]), [['late', 200, 200]], 'backdated row is excluded but does not hide the 200 rows before it');
+    fs.writeFileSync(logPath, ledgerBefore);
+    usage.resetModelUsageIndexForTests();
+    totals = await usage.readModelUsageLifetimeTotals();
     assert.equal(totals.find(t => t.accountId === 'one')?.totalCostMicros, 10);
     fs.appendFileSync(logPath, JSON.stringify(recent) + '\n');
     totals = await usage.readModelUsageLifetimeTotals();

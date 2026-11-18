@@ -180,3 +180,6 @@ The shared setup controller now verifies the registered OAuth account after call
 
 ### Connection runtime identity (Nov9 hotfix)
 `src/connections/runtime.ts` stores its runtime in a process-global Symbol registry keyed by configuration directory. tsx may evaluate static/extensionless and dynamic `.js` imports separately; module-local singletons split HTTP from tool-created attempts and ephemeral secure-input sessions. Both import paths now share the same runtime; `resetConnectionRuntime` clears that shared registry. No credential transport or permission changes. Regression: `node --import tsx scripts/test-connection-runtime-identity.cjs` uses temporary runtime/workspace roots and no real accounts.
+
+## GitHub list tools: ordering and paging (Nov 2026)
+`connector_github_list_prs` lists newest first (`sort=created`, `direction=desc`) and accepts `sort`, `direction`, `page`, `base` and `head`; each row shows `head -> base` and whether it merged. `list_issues` and `list_commits` accept `page`. Before this the tool sent `sort=updated` with no direction, which GitHub sorts ascending, so `state: all` returned the oldest pull requests in the repo and nothing newer could be reached. The path is built by `pullsListPath` in `src/integrations/connectors/github.ts` (test: `github-list-prs.regression.ts`).

@@ -8,6 +8,10 @@
 
 const rowText = (row) => String(row?.body?.text || row?.content || '').trim();
 const hasEntries = (value) => Array.isArray(value) && value.length > 0;
+// delivery_send side messages appended mid-turn; never a question host and
+// never a turn boundary.
+const isDeliveryRow = (row) => (row?.role === 'ai' || row?.role === 'assistant')
+  && (String(row.messageKind || '').trim() === 'delivery' || String(row.channelLabel || '').trim() === 'delivery');
 const isChatSteerUser = (row) => row?.role === 'user'
   && String(row.workflowPart || '') === 'interruption'
   && /^chat_steer_/i.test(String(row.workflowGroupId || ''));
@@ -38,6 +42,7 @@ const questionIds = (question) => ({
  * finder and the explicit-host check so both always agree.
  */
 function classifyQuestionHostCandidate(row, { qid, qcid }) {
+  if (isDeliveryRow(row)) return 'skip';
   if (row._pmFinalReceived === true || row._pmServerAuthoredFinal === true || row._pmAbortAcknowledged === true) return 'stop';
   if (row._steerFrozenTrace === true || String(row.workflowPart || '') === 'before_interruption') return 'skip';
   const otherQuestion = String(row.questionRequest?.id || '').trim();
@@ -81,6 +86,7 @@ function explicitHostInCurrentTurn(thread, host) {
   for (let i = index + 1; i < thread.length; i += 1) {
     const item = thread[i];
     if (item?.role === 'user' && !isChatSteerUser(item)) return false;
+    if (isDeliveryRow(item)) continue;
     if (item?.role === 'ai' && (item._pmFinalReceived === true || item._pmServerAuthoredFinal === true
       || item._pmAbortAcknowledged === true)) return false;
   }

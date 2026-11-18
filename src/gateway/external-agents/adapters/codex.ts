@@ -596,15 +596,32 @@ export class CodexAdapter implements ExternalAgentAdapter {
     }
   }
 
-  /** Stop: `turn/interrupt` to Codex, keep what streamed, wait briefly for Codex's own turn/completed. */
+  /**
+   * Stop: `turn/interrupt` to Codex, keep what streamed, wait briefly for Codex's own turn/completed.
+   * Stop has to mean stopped. If Codex refuses the interrupt or never confirms it, the app-server may
+   * still be running commands, so the process is ended instead of only marking the turn as stopped.
+   */
   private interrupt(ctx: TurnContext, client: JsonRpcStdioClient): void {
     if (ctx.done) return;
     if (!ctx.graceTimer) {
-      ctx.graceTimer = setTimeout(() => ctx.finish('interrupted'), this.options.interruptGraceMs ?? 5_000);
+      ctx.graceTimer = setTimeout(() => this.forceStop(ctx, client), this.options.interruptGraceMs ?? 5_000);
     }
     if (ctx.interruptSent || !ctx.turnId) return; // turnId arrives with the turn/start answer; retried there.
     ctx.interruptSent = true;
-    client.request('turn/interrupt', { threadId: ctx.threadId, turnId: ctx.turnId }, 10_000).catch(() => undefined);
+    client.request('turn/interrupt', { threadId: ctx.threadId, turnId: ctx.turnId }, 10_000).catch(() => this.forceStop(ctx, client));
+  }
+
+  /** Codex did not confirm the stop: end the app-server so nothing keeps running behind a chat that says "Stopped". */
+  private forceStop(ctx: TurnContext, client: JsonRpcStdioClient): void {
+    if (ctx.done) return;
+    ctx.finish('interrupted');
+    if (this.client === client) {
+      this.client = null;
+      this.loadedThreads.clear();
+      // Other chats share this app-server. Their turns end with a plain reason instead of hanging.
+      for (const other of [...this.turns.values()]) other.finish('failed', 'Codex did not confirm a stop request, so Prometheus restarted it. Send the message again.');
+    }
+    void client.stop().catch(() => undefined);
   }
 
   private finalText(ctx: TurnContext): string {
@@ -647,6 +664,36 @@ const LEGACY_DECISION_OPTIONS: CardInput['options'] = [
 
 function pick(options: CardInput['options'], id: string, fallback: string): string {
   return options.some((option) => option.id === id) ? id : fallback;
+}
+
+const PERMISSION_LABELS: Record<string, string> = { network: 'Network', fileSystem: 'Files' };
+const MAX_GRANT_LINES = 40;
+
+/** Every leaf of a Codex permission request as one readable line, so the card shows exactly what Allow grants. */
+function describePermissionGrant(requested: unknown): { lines: string[]; complete: boolean } {
+  const lines: string[] = [];
+  let complete = true;
+  const add = (line: string): void => { if (lines.length < MAX_GRANT_LINES) lines.push(line); else complete = false; };
+  const walk = (value: unknown, label: string, depth: number): void => {
+    if (value === null || value === undefined) return;
+    if (depth > 6) { complete = false; return; }
+    if (Array.isArray(value)) {
+      if (!value.length) add(`${label}: none`);
+      for (const entry of value) walk(entry, label, depth + 1);
+      return;
+    }
+    if (typeof value === 'object') {
+      for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+        walk(entry, label ? `${label} ${key}` : (PERMISSION_LABELS[key] || key), depth + 1);
+      }
+      return;
+    }
+    const text = String(value);
+    if (text.length > 400) complete = false;
+    add(`${label}: ${short(text, 400)}`);
+  };
+  walk(requested, '', 0);
+  return { lines, complete };
 }
 
 function legacyDecision(optionId: string): any {
@@ -731,12 +778,17 @@ export function mapCodexServerRequest(method: string, params: any, fileChangePat
       const requested: any = {};
       if (p.permissions?.network) requested.network = p.permissions.network;
       if (p.permissions?.fileSystem) requested.fileSystem = p.permissions.fileSystem;
+      // The card lists every item Allow would grant. A request too large to list in full can only be declined.
+      const grant = describePermissionGrant(requested);
       const options: CardInput['options'] = [
-        { id: 'turn', label: 'Allow for this turn', kind: 'allow_once' },
-        { id: 'session', label: 'Allow for this Codex session', kind: 'allow_session' },
+        ...(grant.complete ? [
+          { id: 'turn', label: 'Allow for this turn', kind: 'allow_once' as const },
+          { id: 'session', label: 'Allow for this Codex session', kind: 'allow_session' as const },
+        ] : []),
         { id: 'deny', label: 'Decline', kind: 'deny' },
       ];
-      const asks = [requested.network ? 'network access' : '', requested.fileSystem ? 'extra file access' : ''].filter(Boolean).join(' and ');
+      const asks = [requested.network ? 'network access' : '', requested.fileSystem ? 'extra file access' : ''].filter(Boolean).join(' and ')
+        + (grant.complete ? '' : ' (too much to show in full, so it can only be declined here)');
       return {
         card: {
           kind: 'permissions',
@@ -744,6 +796,7 @@ export function mapCodexServerRequest(method: string, params: any, fileChangePat
           detail: {
             ...(p.cwd ? { cwd: short(p.cwd, 1000) } : {}),
             ...(p.reason ? { reason: short(p.reason, 1000) } : {}),
+            grants: grant.lines,
             raw: requested,
           },
           options,

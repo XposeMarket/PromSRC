@@ -101,8 +101,12 @@ function hasConversation(sessionId: string): boolean {
 /**
  * Decide the agent for this request. Binding happens once, on the first
  * message of a NEW chat. A different agent later gets 409 agent_locked.
+ *
+ * `dryRun` runs every check and saves nothing. The chat route validates with it
+ * first and saves the binding only once the request owns the turn, so a request
+ * refused as busy or replayed as a duplicate never changes who runs the chat.
  */
-export function bindExternalAgentForRequest(sessionId: string, requested: ExternalAgentRequestInput | null | undefined): BindOutcome {
+export function bindExternalAgentForRequest(sessionId: string, requested: ExternalAgentRequestInput | null | undefined, options: { dryRun?: boolean } = {}): BindOutcome {
   const existing = getSessionExternalAgent(sessionId);
   const wantedId = requested?.id ? String(requested.id) : '';
   if (existing) {
@@ -111,6 +115,7 @@ export function bindExternalAgentForRequest(sessionId: string, requested: Extern
     }
     if (requested?.model || requested?.effort !== undefined) {
       if (activeExternalSessions.has(sessionId)) return { ok: false, status: 409, code: 'agent_locked', error: 'Wait for this turn to finish before changing models.' };
+      if (options.dryRun) return { ok: true, binding: existing, created: false };
       const next: ExternalAgentBinding = { ...existing, ...(requested.model ? { selectedModel: requested.model.slice(0, 200) } : {}) };
       const effort = cleanEffort(requested.effort);
       if (effort) next.selectedEffort = effort; else if (requested.effort !== undefined || requested.model) delete next.selectedEffort;
@@ -134,6 +139,7 @@ export function bindExternalAgentForRequest(sessionId: string, requested: Extern
   }
   const cwd = resolveExternalAgentCwd(sessionId, requested?.cwd);
   if (!cwd.ok) return { ok: false, status: 400, code: 'bad_cwd', error: cwd.error };
+  if (options.dryRun) return { ok: true, binding: null, created: false };
   const binding = setSessionExternalAgent(sessionId, {
     version: 1,
     agentId: adapter.id,

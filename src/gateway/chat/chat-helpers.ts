@@ -1,3 +1,4 @@
+import { ARGV_SUFFIX } from '../process/literal-command';
 /**
  * chat/chat-helpers.ts — B5 Refactor
  *
@@ -264,7 +265,8 @@ function hasUriScheme(value: string): boolean {
 }
 
 function normalizeWorkspacePathAliases(rawCmd: string, workspacePath: string): string {
-  if (!isWindows) return rawCmd;
+  // Literal data (including an argument containing 'cd /workspace') is not a shell alias.
+  if (!isWindows || rawCmd.endsWith(ARGV_SUFFIX)) return rawCmd;
   return rawCmd.replace(/cd\s+(?:\/d\s+)?(["']?)\/workspace\1/ig, `cd /d "${workspacePath}"`);
 }
 
@@ -1352,6 +1354,8 @@ export function evaluateBrowserSnapshotQuality(snapshot: string, snapshotElement
 }
 
 export interface HandleChatResult {
+  /** Diagnostic-only reply: no model final or completed tool results to report. */
+  noResultFailure?: 'provider_failure' | 'missing_final';
   type: 'chat' | 'execute';
   text: string;
   thinking?: string;

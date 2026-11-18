@@ -141,6 +141,7 @@ function cardHtml(req) {
   if (d.command) rows.push(`<pre class="ea-card-cmd">${esc(d.command)}</pre>`);
   if (d.cwd) rows.push(`<div class="ea-card-meta">in ${esc(d.cwd)}</div>`);
   if (Array.isArray(d.files) && d.files.length) rows.push(`<ul class="ea-card-files">${d.files.slice(0, 12).map((f) => `<li>${esc(f)}</li>`).join('')}${d.files.length > 12 ? `<li>…and ${d.files.length - 12} more</li>` : ''}</ul>`);
+  if (Array.isArray(d.grants) && d.grants.length) rows.push(`<div class="ea-card-meta">Allow grants exactly this:</div><ul class="ea-card-files ea-card-grants">${d.grants.map((g) => `<li>${esc(g)}</li>`).join('')}</ul>`);
   if (d.reason) rows.push(`<div class="ea-card-reason">${esc(d.reason)}</div>`);
   if (Array.isArray(d.questions)) {
     for (const q of d.questions) {
