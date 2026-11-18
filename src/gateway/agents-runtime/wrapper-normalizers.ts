@@ -545,7 +545,7 @@ export function normalizeWorkspaceWrapperTool(name: string, rawArgs: any, worksp
       // The same command written in both forms (command === program + argv) means one thing: run the literal form,
       // which passes each argument exactly and still goes through the same deny and approval checks.
       if (commandUsed && args.search == null && typeof args.program === 'string' && Array.isArray(args.argv) && args.argv.length
-        && args.argv.every((a: any) => typeof a === 'string') && String(args.command).trim() === [args.program, ...args.argv].join(' ')) delete args.command;
+        && args.argv.every((a: unknown) => typeof a === 'string') && String(args.command).trim() === [args.program, ...args.argv].join(' ')) delete args.command;
     }
 
     if (args.program != null || args.argv != null || args.search != null) {
