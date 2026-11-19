@@ -283,6 +283,25 @@ async function main(): Promise<void> {
       await refused.shutdown();
     }
 
+    // ── The one retry starts, then fails: its own error, answer and turn are what the user gets ──
+    {
+      fs.writeFileSync(logFile, '');
+      const retryFails = makeAdapter('ready');
+      const result = await retryFails.runTurn({
+        sessionId: 's2f', cwd: workspace, text: 'BADMODEL RETRYFAIL please', signal: new AbortController().signal,
+        emit: () => undefined, requestUser: async () => ({ optionId: 'cancel' }),
+      });
+      const turns = readLog().filter((m) => m.method === 'turn/start');
+      assert.strictEqual(turns.length, 2, 'exactly one retry');
+      assert.strictEqual(turns[1].params.model, 'gpt-6-astra');
+      assert.strictEqual(result.status, 'failed');
+      assert.match(String(result.error), /retry usage limit with gpt-6-astra/, "the retry's error, not the first attempt's refusal");
+      assert.strictEqual(result.finalText, 'retry partial gpt-6-astra');
+      assert.strictEqual(result.upstreamTurnId, 'turn-2', "the retry's turn");
+      assert.strictEqual(result.fallbackModel, 'gpt-6-astra', 'the retry did work, so the model was accepted');
+      await retryFails.shutdown();
+    }
+
 
     // ── Stop while a command runs: Codex confirms the stop but leaves the command going, so its process tree is ended ──
     {

@@ -98,6 +98,20 @@ async function main(): Promise<void> {
   assert.strictEqual(written.files[0].displayPath, 'hello.txt');
   assert.ok(written.files[0].insertions > 0);
 
+  // ── paths outside the chat folder, and secret files ──
+  fs.writeFileSync(path.join(root, 'outside-secret.txt'), 'top secret\n');
+  const escaped = buildHarnessFileChanges([{ path: '../outside-secret.txt', status: 'modified' }], project)!;
+  assert.strictEqual(escaped.files.length, 1, 'an outside path is listed with its status');
+  assert.strictEqual(escaped.files[0].status, 'modified');
+  assert.strictEqual(escaped.files[0].diffPreview, undefined, 'no diff is read from outside the chat folder');
+  assert.strictEqual(escaped.files[0].insertions, 0);
+  fs.writeFileSync(path.join(project, '.env'), 'TOKEN=abc\n');
+  const env = buildHarnessFileChanges([{ path: '.env', status: 'modified', diff: '@@\n-OLD=1\n+TOKEN=abc' }], project)!;
+  assert.deepStrictEqual([env.files[0].insertions, env.files[0].deletions], [1, 1], 'a secret file keeps its counts');
+  assert.strictEqual(env.files[0].diffPreview, undefined, 'a secret file diff is not saved');
+  const envUndiffed = buildHarnessFileChanges([{ path: '.env' }], project)!;
+  assert.strictEqual(envUndiffed.files[0].diffPreview, undefined, 'the native collector never reads a secret file');
+
   // ── a whole turn through the runner ──
   const sessions = await import('../session');
   const store = await import('./store');

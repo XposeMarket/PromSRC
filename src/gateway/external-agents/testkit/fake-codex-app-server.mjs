@@ -134,6 +134,13 @@ async function runTurn(threadId, turnId, text, model) {
       notify('turn/completed', { threadId, turn: turnObject(turnId, 'failed', [], error) });
       return;
     }
+    if (text.includes('RETRYFAIL')) {
+      // A model that is accepted but whose turn then fails after some text (the retry's own failure).
+      notify('item/agentMessage/delta', { ...base, itemId: 'm1', delta: `retry partial ${model}` });
+      const error = { message: `retry usage limit with ${model}`, codexErrorInfo: null, additionalDetails: null, misalignment: null };
+      notify('turn/completed', { threadId, turn: turnObject(turnId, 'failed', [], error) });
+      return;
+    }
     notify('item/completed', { ...base, item: { type: 'agentMessage', id: 'm1', text: `ok with ${model}`, phase: null, memoryCitation: null, delivery: null, questions: null } });
     notify('turn/completed', { threadId, turn: turnObject(turnId, 'completed') });
     return;
