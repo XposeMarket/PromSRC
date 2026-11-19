@@ -149,11 +149,23 @@ if (!/state\.tabs\.find\(\(tab\) => tab\.sessionId === sid\)/.test(addExplicitTa
 }
 
 const syncMainSession = extractFunction(multiChat, 'function syncMainSession()', 'function render()');
-if (/addExplicitTab\(|state\.tabs\.push\(/.test(syncMainSession)) {
-  throw new Error('ordinary main-session/sidebar navigation must not add a browser tab');
+if (/addExplicitTab\(|state\.tabs\.push\(/.test(syncMainSession) || !/placeMainTab\(sid, previous\)/.test(syncMainSession)) {
+  throw new Error('sidebar navigation must go through placeMainTab (reuse the current tab), not append a tab directly');
 }
 if (!/state\.mainSessionId = sid/.test(syncMainSession) || !/renderTabStrip\(\)/.test(syncMainSession)) {
-  throw new Error('ordinary sidebar navigation should only update the visible main-session marker');
+  throw new Error('main-session changes must update the visible main-session marker');
+}
+const placeMainTab = extractFunction(multiChat, 'function placeMainTab(', 'function tabNeighborAfterClose');
+if (!/consumeNewTabIntent\(sid\)/.test(placeMainTab) || !/canNavigateTabAway\(prev\)/.test(placeMainTab)
+  || !/state\.tabs\[prevIndex\] = tab/.test(placeMainTab)) {
+  throw new Error('browser-style tabs: navigation replaces the idle current tab; New chat / Ctrl-click open a new tab');
+}
+if (!/!isSessionRunning\(sid\)/.test(extractFunction(multiChat, 'function canNavigateTabAway(', 'function placeMainTab'))) {
+  throw new Error('navigation must never replace a tab whose chat is still working');
+}
+if (!/dispatchDesktopChatLifecycle\('chat-new-tab-intent'/.test(sourceChat)
+  || !/window\.reopenDesktopDraftChatSession = reopenDesktopDraftChatSession/.test(sourceChat)) {
+  throw new Error('New chat must announce a new tab and unsent draft tabs must be re-openable');
 }
 
 const activateMain = extractFunction(multiChat, 'function activateMain(', 'function openSide');
@@ -189,7 +201,7 @@ if (/prom-multi-chat-tab-role/.test(renderTabStrip) || />Side chat</.test(render
   throw new Error('tabs must display the session title only, never MAIN CHAT or SIDE CHAT labels');
 }
 
-const nativeLink = extractFunction(multiChat, 'function ensureNativeSideLink(', 'function patchPaneHeader');
+const nativeLink = extractFunction(multiChat, 'function ensureNativeSideLink(', 'function syncSplitBodyClass');
 if (!/window\.sideChatLinks/.test(nativeLink)
   || !/parentSessionId/.test(nativeLink)
   || !/__promMultiChatTab/.test(nativeLink)) {
@@ -218,13 +230,28 @@ const sessionMeta = extractFunction(multiChat, 'function sessionMeta(', 'functio
 if (!/projectName/.test(sessionMeta) || !/canvasProjectLabel/.test(sessionMeta)) {
   throw new Error('multi-chat session headers must retain project metadata from normal chat sessions');
 }
-const patchPaneHeader = extractFunction(multiChat, 'function patchPaneHeader(', 'function patchNativeSplitHeaders');
-if (!/side-chat-title/.test(patchPaneHeader) || /Project ·/.test(patchPaneHeader)) {
-  throw new Error('native split headers must preserve ChatPage\'s normal kicker/title hierarchy');
+// Pane headers are rendered once by ChatPage (no post-render patching that
+// fights keyed reconciliation): chat-tab panes show the chat title plus its
+// project, true side chats keep "Side chat · parent".
+if (/function patchPaneHeader\(|function patchNativeSplitHeaders\(/.test(multiChat)) {
+  throw new Error('multi-chat must not patch native split headers after render');
 }
-if (!/prom-multi-chat-session-header/.test(multiChatCss)
-  || !/prom-multi-chat-native-split/.test(multiChatCss)) {
-  throw new Error('native multi-chat split header styling is missing');
+const sidePaneRenderer = extractFunction(sourceChat, 'function renderSideChatPaneHtml(', 'function renderBackgroundAgentSidePaneHtml');
+if (!/const multiChat = isMultiChatSideLink\(link\)/.test(sidePaneRenderer)
+  || !/multiChat \? desktopSplitPaneKicker\(side\) : `Side chat · \$\{parentTitle\}`/.test(sidePaneRenderer)) {
+  throw new Error('chat-tab side panes must not be labelled as a child of the left chat');
+}
+if (!/if \(isMultiChatSideLink\(link\)\) \{\s*return String\(link\.id \|\| ''\) !== String\(window\.activeChatSessionId \|\| ''\) \? link : null;/.test(sourceChat)) {
+  throw new Error('a chat-tab right pane must survive left-tab switches');
+}
+if (!/const splitMainEmpty = splitActive/.test(sourceChat) || !/splitMainEmpty \? renderSplitPaneWelcomeHtml\(projectWelcome\)/.test(sourceChat)) {
+  throw new Error('a new chat on the left of a split must render its landing page, not a blank pane');
+}
+if (!/prom-multi-chat-native-split/.test(multiChatCss)) {
+  throw new Error('native multi-chat split styling is missing');
+}
+if (!/body:not\(\.pm-mobile-active\) #chat-view > #chat-messages\.side-chat-split-shell \{\s*padding: 0 !important;/.test(sourceComponents)) {
+  throw new Error('split panes must ignore theme clearance padding so both composers line up');
 }
 if (!/\.main-shell:has\(> \.prom-multi-chat-tabs:not\(\[hidden\]\)\) > #chat-context-header/.test(multiChatCss)
   || /:has\(\.prom-multi-chat-tabs:not\(\[hidden\]\)\) #chat-messages/.test(multiChatCss)) {
@@ -244,8 +271,12 @@ if (/body:not\(\.pm-mobile-active\) \.main-shell-wrap:has\(> \.topbar \+ \.main-
 if (!/function reorderTabs\(/.test(multiChat) || !/state\.tabs\.splice\(to,\s*0,\s*tab\)/.test(multiChat)) {
   throw new Error('chat tabs must support drag reordering');
 }
-if (!/function allSourceTabs\(\)/.test(multiChat) || !/return state\.tabs\.slice\(\)/.test(multiChat)) {
-  throw new Error('Sources selector must include every explicitly open tab and no incidental sidebar navigation');
+const allSourceTabs = extractFunction(multiChat, 'function allSourceTabs()', 'function showSourceSelector');
+if (!/currentMainSessionId\(\)/.test(allSourceTabs) || !/nativeSideOpenFor\(state\.sideSessionId\)/.test(allSourceTabs)) {
+  throw new Error('Sources selector must offer exactly the two visible panes; tabs in the background follow normal chat sources');
+}
+if (!/function clearSourceSelection\(\)/.test(multiChat) || !/globalThis\.__PROM_SOURCE_PANEL_SELECTED_SESSION_ID = ''/.test(multiChat)) {
+  throw new Error('closing the split or switching chats must release the pinned Sources chat');
 }
 if (!/showSourceSelector\(\{ openDrawerAfter: kind === 'drawer' \}\)/.test(multiChat)) {
   throw new Error('opening the Sources drawer without a selected chat must force the chat selector first');
@@ -263,4 +294,4 @@ if (/760px|52px/.test(sideParityBlock)) {
   throw new Error('side composer parity must not reintroduce the legacy 760px / 52px geometry');
 }
 
-console.log('desktop chat layout contract: explicit-only tabs, native split reuse, no iframe runtime, normal session headers, scoped Sources, and composer parity ok');
+console.log('desktop chat layout contract: browser-style tabs, native split reuse, no iframe runtime, native pane headers, split-scoped Sources, and composer parity ok');

@@ -9707,3 +9707,120 @@ p:has(> .prom-inline-figure + br + .prom-inline-figure) .prom-inline-media {
   color: var(--prom-muted, var(--muted, #8a8f98)) !important;
 }
 .live-turn-prose.is-reasoning-prose { font-size: 0.92em; line-height: 1.45; border-color: transparent; }
+
+/* ---------------------------------------------------------------------------
+   Desktop split view (chat tabs, side chats, background-agent panes).
+   Final authority, kept last on purpose:
+   - theme rules such as `.right-canvas-open #chat-view:not(.chat-empty) > #chat-messages`
+     add top/bottom clearance that shrank the panes and left the two composers
+     at different heights;
+   - equal columns so the main composer (centred at 25% of #chat-view) sits
+     exactly under the left pane;
+   - panes stay side by side at every desktop width: the old <=900px stack put
+     the main composer on top of the lower pane's composer.
+   --------------------------------------------------------------------------- */
+body:not(.pm-mobile-active) #chat-view > #chat-messages.side-chat-split-shell {
+  padding: 0 !important;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) !important;
+  grid-template-rows: minmax(0, 1fr) !important;
+  -webkit-mask-image: none !important;
+  mask-image: none !important;
+}
+
+body:not(.pm-mobile-active) #chat-view > #chat-messages.side-chat-split-shell > .side-chat-main-pane {
+  border-right: 1px solid var(--line) !important;
+  border-bottom: 0 !important;
+}
+
+body:not(.pm-mobile-active).side-chat-split-active #chat-view > .chat-input-area {
+  left: 25% !important;
+  width: min(var(--chat-content-max-width), calc(50% - var(--chat-content-inline-gutter) - var(--chat-content-inline-gutter))) !important;
+  max-width: none !important;
+}
+
+/* Background-agent cards belong to the left (main) chat in a split. */
+body:not(.pm-mobile-active).side-chat-split-active #chat-view .background-spawn-dock {
+  left: 25%;
+  max-width: calc(50% - 32px);
+}
+
+body:not(.pm-mobile-active) :is(.side-chat-pane-header, .side-chat-header) .side-chat-title-wrap {
+  min-width: 0;
+}
+
+body:not(.pm-mobile-active) :is(.side-chat-pane-header, .side-chat-header) :is(.side-chat-title, .side-chat-kicker) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* New chat on the left of a split: the regular landing page, sized for a pane. */
+body:not(.pm-mobile-active) .side-chat-main-messages > .chat-welcome-pane {
+  box-sizing: border-box;
+  width: min(100%, 560px);
+  margin: auto;
+  padding: 28px 12px 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  text-align: center;
+}
+
+body:not(.pm-mobile-active) #chat-view .side-chat-main-messages > .chat-welcome-pane h2 {
+  margin: 4px 0 0;
+  font-family: var(--font-display, inherit);
+  font-size: clamp(22px, 2.3vw, 30px);
+  letter-spacing: 0.02em;
+}
+
+body:not(.pm-mobile-active) #chat-view .side-chat-main-messages > .chat-welcome-pane p {
+  max-width: 46ch;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+body:not(.pm-mobile-active) .side-chat-main-messages > .chat-welcome-pane .chat-pulse-cards {
+  width: 100%;
+  margin-top: 8px;
+}
+
+/* The full-screen landing lifts quote/hint/cards 28px (themes.css); inside a
+   pane that pulls them over the heading. */
+body:not(.pm-mobile-active) #chat-view .side-chat-main-messages > .chat-welcome-pane > :is(p, .hint, .chat-pulse-cards) {
+  position: static !important;
+  top: auto !important;
+}
+
+body:not(.pm-mobile-active) #chat-view .side-chat-main-messages > .chat-welcome-pane .hint {
+  margin-top: -4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* Background-agent pill: name + model like mobile. */
+.background-spawn-main strong {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.background-spawn-main strong b {
+  overflow: hidden;
+  color: var(--background-agent-color, var(--text));
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.background-spawn-main strong small {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

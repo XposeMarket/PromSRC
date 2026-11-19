@@ -183,6 +183,23 @@ function messages(count, { rich = false } = {}) {
   assert.equal(root.querySelector('[data-chat-row-key="live"]').textContent, 'two');
 }
 
+{
+  // Switching the left tab must keep the right pane alive (rows, composer
+  // draft, scroll): only the pane whose chat changed is replaced.
+  const { document } = parseHTML('<!doctype html><html><body><main id="split"><section data-chat-pane-key="main:a"><header class="side-chat-pane-header">A</header><div class="side-chat-main-messages"><article data-chat-row-key="a1" data-chat-row-signature="1">a</article></div></section><section data-chat-pane-key="side:s"><header class="side-chat-header">S</header><div class="side-chat-messages"><article data-chat-row-key="s1" data-chat-row-signature="1">s</article></div><textarea id="side-chat-input">unsent draft</textarea></section></main></body></html>');
+  const root = document.getElementById('split');
+  const sidePane = root.children[1];
+  const sideDraft = root.querySelector('#side-chat-input');
+  const applied = reconcileKeyedTimelinePanes(root, '<section data-chat-pane-key="main:b"><header class="side-chat-pane-header">B</header><div class="side-chat-main-messages"><article data-chat-row-key="b1" data-chat-row-signature="1">b</article></div></section><section data-chat-pane-key="side:s"><header class="side-chat-header">S</header><div class="side-chat-messages"><article data-chat-row-key="s1" data-chat-row-signature="1">s</article></div><textarea id="side-chat-input"></textarea></section>');
+  assert.equal(applied, true, 'one changed pane must not force a whole split rebuild');
+  assert.equal(root.children[0].getAttribute('data-chat-pane-key'), 'main:b', 'the switched pane shows the new chat');
+  assert.equal(root.children[1], sidePane, 'the untouched pane keeps its DOM identity');
+  assert.equal(root.querySelector('#side-chat-input'), sideDraft, 'the untouched pane keeps its composer and unsent draft');
+  const both = reconcileKeyedTimelinePanes(root, '<section data-chat-pane-key="main:c"><div class="side-chat-main-messages"></div></section><section data-chat-pane-key="side:t"><div class="side-chat-messages"></div></section>');
+  assert.equal(both, false, 'when every pane changed the caller rebuilds the split');
+}
+
+
 class FakeDocument {
   constructor() { this.hidden = false; this.visibilityState = 'visible'; this.listeners = new Map(); }
   addEventListener(type, listener) { if (!this.listeners.has(type)) this.listeners.set(type, new Set()); this.listeners.get(type).add(listener); }

@@ -57,9 +57,20 @@ function requestMultiChatWorkspace() {
   });
 }
 
-// Session selection is ordinary chat navigation, not multi-pane intent. Actual
-// drag and explicit side/multi-chat actions are the activation signals.
+// Desktop chat tabs are always visible, but the workspace stays off the boot
+// critical path: it loads when the browser is idle after the first chat paint
+// (or immediately on drag / side-chat / persisted-tab intent).
+let idleLoadScheduled = false;
+function scheduleIdleWorkspaceLoad() {
+  if (idleLoadScheduled || workspacePromise) return;
+  if (window.__PROM_SHOULD_BOOT_MOBILE?.() || document.body?.classList?.contains('pm-mobile-active')) return;
+  idleLoadScheduled = true;
+  if (typeof globalThis.requestIdleCallback === 'function') globalThis.requestIdleCallback(requestMultiChatWorkspace, { timeout: 2000 });
+  else setTimeout(requestMultiChatWorkspace, 400);
+}
+
 document.addEventListener('dragstart', sessionIntent, true);
+window.addEventListener('prometheus:chat-rendered', scheduleIdleWorkspaceLoad, { once: true });
 window.addEventListener('prometheus:open-multi-chat', requestMultiChatWorkspace);
 window.addEventListener('prometheus:side-chat-state', (event) => {
   if (event?.detail?.open === true) requestMultiChatWorkspace();
@@ -67,3 +78,5 @@ window.addEventListener('prometheus:side-chat-state', (event) => {
 window.ensureMultiChatWorkspace = loadMultiChatWorkspace;
 
 if (hasPersistedWorkspace()) requestMultiChatWorkspace();
+// This module can arrive after the first chat paint already happened.
+else if (document.querySelector?.('#chat-messages > *')) scheduleIdleWorkspaceLoad();

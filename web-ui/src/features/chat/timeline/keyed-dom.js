@@ -322,11 +322,19 @@ export function reconcileKeyedTimelinePanes(root, html, options = {}) {
   const currentPanes = Array.from(root.children || []).filter((pane) => pane.hasAttribute('data-chat-pane-key'));
   const nextPanes = Array.from(template.content.children || []).filter((pane) => pane.hasAttribute('data-chat-pane-key'));
   const paneKey = (pane) => String(pane.getAttribute('data-chat-pane-key') || '');
-  if (!currentPanes.length || currentPanes.length !== nextPanes.length
-    || currentPanes.some((pane, index) => paneKey(pane) !== paneKey(nextPanes[index]))) return false;
+  if (!currentPanes.length || currentPanes.length !== nextPanes.length) return false;
+  if (currentPanes.every((pane, index) => paneKey(pane) !== paneKey(nextPanes[index]))) return false;
   for (let index = 0; index < currentPanes.length; index += 1) {
     const currentPane = currentPanes[index];
     const nextPane = nextPanes[index];
+    if (paneKey(currentPane) !== paneKey(nextPane)) {
+      // Only this pane switched chats (e.g. the left tab changed). Swap it in and
+      // keep the other pane's rows, composer draft and scroll position intact.
+      currentPane.replaceWith(nextPane);
+      const nextScroller = nextPane.querySelector('.side-chat-main-messages, .side-chat-messages');
+      if (nextScroller) nextScroller.scrollTop = nextScroller.scrollHeight;
+      continue;
+    }
     const currentMessages = currentPane.querySelector('.side-chat-main-messages, .side-chat-messages');
     const nextMessages = nextPane.querySelector('.side-chat-main-messages, .side-chat-messages');
     if (!currentMessages || !nextMessages) return false;

@@ -1,14 +1,14 @@
 import { renderContentReview } from '../components/ContentReview.js';
 
 import { foldMobileReasoningSummaryGroups, isMobileReasoningSummaryEntry, mobileReasoningSummaryKey, mobileReasoningSummaryTitle } from '../mobile/mobile-reasoning-summary-fold.js';
-import { agentAvatarHtml } from '../components/provider-logo.js';
+import { agentAvatarHtml, agentModelLabel } from '../components/provider-logo.js';
 import { liveTraceSummaryKey, desktopTraceProgressSummary as formatDesktopTraceProgressSummary } from '../features/chat/trace-summary-presentation.js';
 
 import { formatContextDurationLabel, formatContextToolDurationSuffix, formatContextTokenCount } from '../chat-context-formatters.js';
 import { OPENAI_PUBLIC_REALTIME_VOICE_IDS, CODEX_AVAS_REALTIME_VOICE_IDS, getSpeechRecognitionCtor, getStoredVoiceProvider, storeVoiceProvider, getStoredVoiceSetting, storeVoiceSetting, DESKTOP_VOICE_SETTINGS_KEY, normalizeDesktopVoiceMode, loadDesktopVoiceSettings, desktopVoiceParticipantKey, desktopVoiceParticipantLabel, normalizeDesktopVoiceParticipant, normalizeDesktopVoiceRoomState } from '../voice/desktop-voice-state.js';
 import { api } from '../api.js';
 import { renderAgentPet } from '../components/agent-pets.js';
-import { backgroundSpawnCollapsedDetail, mergeBackgroundReasoningSummary } from '../background-stream-summary.js';
+import { backgroundSpawnLaneSummary, backgroundSpawnStatusLabel, mergeBackgroundReasoningSummary } from '../background-stream-summary.js';
 import { dispatchDesktopChatLifecycle } from '../features/chat/lifecycle.js';
 import { animatePanelWidth } from '../features/shell/panel-motion.js';
 import { renderSourcePills } from '../cards/index.js';
@@ -621,7 +621,13 @@ function normalizeSideChatLink(link) {
     createdAt: Number(link?.createdAt || Date.now()) || Date.now(),
     updatedAt: Number(link?.updatedAt || link?.createdAt || Date.now()) || Date.now(),
     closed: link?.closed === true,
+    // Chat-tab panes (desktop split view) are independent chats, not children.
+    multiChat: link?.multiChat === true || link?.__promMultiChatTab === true,
   };
+}
+
+function isMultiChatSideLink(link) {
+  return link?.multiChat === true || link?.__promMultiChatTab === true;
 }
 
 function loadSideChatLinks() {
@@ -651,6 +657,7 @@ function getSideChatLinksForParent(parentSessionId = window.activeChatSessionId,
   const includeClosed = options.includeClosed === true;
   return (window.sideChatLinks || [])
     .filter((link) => String(link?.parentSessionId || '') === parent)
+    .filter((link) => !isMultiChatSideLink(link))
     .filter((link) => includeClosed || link.closed !== true)
     .sort((a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0));
 }
@@ -660,6 +667,11 @@ function getActiveSideChatLink() {
   if (!activeId) return null;
   const link = (window.sideChatLinks || []).find((item) => String(item?.id || '') === activeId) || null;
   if (!link) return null;
+  // A chat-tab pane stays beside whatever chat is on the left; it only closes
+  // when that same chat is opened on the left.
+  if (isMultiChatSideLink(link)) {
+    return String(link.id || '') !== String(window.activeChatSessionId || '') ? link : null;
+  }
   return String(link.parentSessionId || '') === String(window.activeChatSessionId || '') ? link : null;
 }
 
@@ -8849,7 +8861,32 @@ async function openTerminalSession(id, source = 'terminal') {
 }
 
 function newChatSession() {
-  const id = generateSessionId();
+  return startDesktopDraftChatSession(generateSessionId(), { newTab: true });
+}
+
+// Re-open an unsent "New chat" tab under its original id. Drafts are not in the
+// session registry yet, so openSession() would report them as missing.
+function reopenDesktopDraftChatSession(sessionId) {
+  const id = String(sessionId || '').trim();
+  if (!id) return false;
+  if (getChatSessionById(id)) {
+    openSession(id);
+    return true;
+  }
+  if (id === String(window.activeChatSessionId || '').trim()) return true;
+  startDesktopDraftChatSession(id, { newTab: false });
+  return true;
+}
+
+function startDesktopDraftChatSession(id, { newTab = false } = {}) {
+  // Desktop chat tabs: the New chat button and the tab strip "+" open a new tab
+  // instead of replacing the current one. Dispatched before the draft renders.
+  if (newTab) {
+    dispatchDesktopChatLifecycle('chat-new-tab-intent', {
+      sessionId: id,
+      previousSessionId: String(window.activeChatSessionId || '').trim(),
+    });
+  }
   if (realtimeVoiceRepliesEnabled || realtimeVoiceStarting || voiceAgentRealtimeConnection || voiceAgentRealtimeConnecting) {
     disableRealtimeVoiceMode();
   }
@@ -8872,6 +8909,7 @@ function newChatSession() {
   if (typeof window.renderChannelSessionsList === 'function') window.renderChannelSessionsList();
   renderChatMessages();
   if (chatResourcesState.open) loadChatResources({ sessionId: id });
+  return id;
 }
 
 function toggleSessionsEditMode() {
@@ -14877,13 +14915,31 @@ function renderSessionThinkingHtml(sessionId) {
     </div>`;
 }
 
+function desktopSplitPaneKicker(session) {
+  return String(session?.canvasProjectLabel || session?.projectName || '').trim();
+}
+
+function renderSplitPaneWelcomeHtml(projectWelcome = null) {
+  return `<div class="chat-welcome chat-welcome-pane${projectWelcome ? ' chat-welcome-project' : ''}" id="chat-welcome">
+      <div class="chat-welcome-icon"><img src="/assets/Prometheus.png" alt="" style="width:64px;height:64px;object-fit:contain;opacity:0.90;"></div>
+      <h2>Prometheus One</h2>
+      ${projectWelcome
+        ? `<p>${escHtml(projectWelcome.prompt)}</p>`
+        : `<p>"I whom you see am Prometheus, who gave fire to mankind."</p>
+          <div class="hint">c. 440–430 BCE, from Prometheus Bound.</div>
+          ${renderEmptyChatStarterCards()}`}
+    </div>`;
+}
+
 function renderSideChatPaneHtml(timelineBudget = null) {
   const link = getActiveSideChatLink();
   const side = getSideChatSession();
   if (!link || !side) return '';
-  const title = side.title || link.title || 'Side chat';
-  const parent = getSideChatParentSession(link);
+  const multiChat = isMultiChatSideLink(link);
+  const title = side.title || link.title || (multiChat ? 'New chat' : 'Side chat');
+  const parent = multiChat ? null : getSideChatParentSession(link);
   const parentTitle = parent?.title || 'Main chat';
+  const kicker = multiChat ? desktopSplitPaneKicker(side) : `Side chat · ${parentTitle}`;
   const entries = desktopTimelineEntries(side.history || [], side.id);
   const timeline = desktopTimelineController.select(`desktop:side:${side.id}`, entries, {
     ...(timelineBudget || {}), hidden: document.hidden === true,
@@ -14893,16 +14949,16 @@ function renderSideChatPaneHtml(timelineBudget = null) {
   });
   const thinkingHtml = renderSessionThinkingHtml(side.id);
   return `
-    <section class="side-chat-pane" data-chat-pane-key="side:${escHtml(side.id)}" aria-label="Side chat">
+    <section class="side-chat-pane" data-chat-pane-key="side:${escHtml(side.id)}"${multiChat ? ' data-multi-chat-pane="1"' : ''} aria-label="${escHtml(multiChat ? `${title} (right pane)` : 'Side chat')}">
       <div class="side-chat-header">
         <div class="side-chat-title-wrap">
-          <div class="side-chat-kicker">Side chat · ${escHtml(parentTitle)}</div>
+          ${kicker ? `<div class="side-chat-kicker">${escHtml(kicker)}</div>` : ''}
           <div class="side-chat-title">${escHtml(title)}</div>
         </div>
-        <button class="side-chat-close" type="button" onclick="closeSideChatSplit()" title="Close side chat" aria-label="Close side chat">×</button>
+        <button class="side-chat-close" type="button" onclick="closeSideChatSplit()" title="${multiChat ? 'Close split view' : 'Close side chat'}" aria-label="${multiChat ? 'Close split view' : 'Close side chat'}">×</button>
       </div>
       <div class="side-chat-messages" id="side-chat-messages">
-        ${historyHtml || '<div class="side-chat-empty">Start a side chat from the composer or message action.</div>'}
+        ${historyHtml || `<div class="side-chat-empty">${multiChat ? 'No messages yet. Send one below.' : 'Start a side chat from the composer or message action.'}</div>`}
         ${thinkingHtml}
       </div>
       ${renderUnifiedDesktopComposerHtml({
@@ -14911,7 +14967,9 @@ function renderSideChatPaneHtml(timelineBudget = null) {
         secondarySurface: 'side-chat',
         placeholder: 'Send Prometheus a message',
         composerClass: 'side-chat-composer',
-        attachAction: "showToast('Side chat attachments use the main chat context.', 'Attach files in the main composer before opening side context.', 'info')",
+        attachAction: multiChat
+          ? "showToast('Attach files from the left pane', 'Drag this chat onto the left side to attach files to it.', 'info')"
+          : "showToast('Side chat attachments use the main chat context.', 'Attach files in the main composer before opening side context.', 'info')",
         voiceAction: "toggleUnifiedDesktopComposerDictation('side-chat-input', this)",
         sendAction: 'sendSideChatMessage()',
         inputAttributes: 'oninput="handleSideChatInputResize(this)" onkeydown="handleSideChatInputKeydown(event)"',
@@ -15345,7 +15403,10 @@ function renderChatMessages() {
   }
 
   if (chatView) chatView.classList.remove('chat-empty');
-  const mainHtml = sessionLoadNotice
+  // A new chat on the left of a split still gets its landing page instead of a blank pane.
+  const splitMainEmpty = splitActive && visibleHistory.length === 0 && !voicePendingHtml && !sessionLoadNotice
+    && !isSessionThinking(window.activeChatSessionId);
+  const mainHtml = splitMainEmpty ? renderSplitPaneWelcomeHtml(projectWelcome) : sessionLoadNotice
     + renderDesktopTimelinePager(mainTimeline, window.activeChatSessionId)
     + renderVisibleChatHistoryHtml(window.chatHistory || [], { entries: mainTimeline.paintEntries, sessionId: window.activeChatSessionId })
     + voicePendingHtml + renderSessionThinkingHtml(window.activeChatSessionId)
@@ -15354,12 +15415,17 @@ function renderChatMessages() {
     const sideTimelineKey = sideActive
       ? `desktop:side:${getSideChatSession()?.id || ''}`
       : `desktop:side:background:${backgroundAgentRecord?.id || ''}`;
+    // Chat-tab splits label panes by chat (plus project); true side chats keep "Main chat".
+    const mainPaneSession = getChatSessionById(window.activeChatSessionId);
+    const tabSplit = sideActive && isMultiChatSideLink(getActiveSideChatLink());
+    const mainPaneKicker = tabSplit ? desktopSplitPaneKicker(mainPaneSession) : 'Main chat';
+    const mainPaneTitle = mainPaneSession?.title || (splitMainEmpty ? 'New chat' : 'Current chat');
     const splitHtml = `
-      <section class="side-chat-main-pane" data-chat-pane-key="main:${escHtml(window.activeChatSessionId)}" aria-label="Main chat">
+      <section class="side-chat-main-pane" data-chat-pane-key="main:${escHtml(window.activeChatSessionId)}" aria-label="${escHtml(tabSplit ? `${mainPaneTitle} (left pane)` : 'Main chat')}">
         <div class="side-chat-pane-header">
-          <div>
-            <div class="side-chat-kicker">Main chat</div>
-            <div class="side-chat-title">${escHtml(getChatSessionById(window.activeChatSessionId)?.title || 'Current chat')}</div>
+          <div class="side-chat-title-wrap">
+            ${mainPaneKicker ? `<div class="side-chat-kicker">${escHtml(mainPaneKicker)}</div>` : ''}
+            <div class="side-chat-title">${escHtml(mainPaneTitle)}</div>
           </div>
         </div>
         <div class="side-chat-main-messages">${mainHtml}</div>
@@ -19272,15 +19338,23 @@ function renderBackgroundSpawnDock() {
   // Desktop matches mobile: the cards can always fold into the "N Agents" pill.
   dock.innerHTML = `<button type="button" class="background-spawn-close" data-bg-collapse-all aria-label="Collapse background agents" title="Collapse to pill">×</button>${lanes.map((lane) => {
     const status = String(lane.status || 'running').toLowerCase();
-    const statusLabel = status === 'in_progress' ? 'running' : status;
-    const detail = backgroundSpawnCollapsedDetail(lane, backgroundAgentPreview);
+    const statusLabel = backgroundSpawnStatusLabel(lane);
+    // Same pill copy as mobile: approval, result/error, progress summary or the
+    // friendly current-tool label, then the task. Never the raw latest event.
+    const detail = backgroundSpawnLaneSummary(lane, {
+      entries: backgroundSpawnLaneLiveTrace(lane),
+      progressSummary: desktopTraceProgressSummary,
+      liveToolLabel: liveTraceCurrentToolLabel,
+      toolSummary: liveTraceToolSummary,
+    });
     const identity = resolveBackgroundAgentIdentity(lane.id, { existingName: lane.agentName, existingColor: lane.agentColor });
+    const modelLabel = agentModelLabel(lane);
     return `
       <section class="background-spawn-lane ${escHtml(status)}" data-bg-id="${escHtml(lane.id)}" style="--background-agent-color:${escHtml(identity.color)}">
         <button type="button" class="background-spawn-summary" data-bg-open-detail="${escHtml(lane.id)}" aria-label="Open ${escHtml(identity.name)} background work">
           <span class="background-spawn-avatar">${agentAvatarHtml(lane, identity.name)}</span>
           <span class="background-spawn-main">
-            <strong>${escHtml(identity.name)}</strong>
+            <strong><b>${escHtml(identity.name)}</b>${modelLabel ? `<small>${escHtml(modelLabel)}</small>` : ''}</strong>
             <em>${escHtml(detail)}</em>
           </span>
           <span class="background-spawn-status">${escHtml(statusLabel)}</span>
@@ -45310,6 +45384,7 @@ window.syncActiveChat = syncActiveChat;
 window.syncChatTopbarTitle = syncChatTopbarTitle;
 window.persistActiveChat = persistActiveChat;
 window.newChatSession = newChatSession;
+window.reopenDesktopDraftChatSession = reopenDesktopDraftChatSession;
 window.openTerminalSession = openTerminalSession;
 window.toggleSessionsEditMode = toggleSessionsEditMode;
 window.deleteChatSession = deleteChatSession;

@@ -48,3 +48,55 @@ export function mergeBackgroundReasoningSummary(trace, text, extra, index, { del
   previous.text = canAppend ? `${current}${needsSpace ? ' ' : ''}${next}`.replace(/\s+/g, ' ').trim() : next;
   previous.extra = { ...(previous.extra || {}), ...visibleExtra };
 }
+
+function oneLine(value, max = 220) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  return text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text;
+}
+
+function pendingApproval(lane) {
+  const request = lane?.approvalRequest || lane?.pendingApproval || null;
+  if (!request) return null;
+  return String(request.status || 'pending').toLowerCase() === 'pending' ? request : null;
+}
+
+// Pill status shared by the desktop dock and the mobile dock.
+export function backgroundSpawnStatusLabel(lane = {}) {
+  if (pendingApproval(lane)) return 'approval';
+  const status = String(lane?.status || 'running').toLowerCase();
+  if (status === 'in_progress' || status === 'queued' || status === 'starting') return 'running';
+  if (status === 'timed_out') return 'timed out';
+  return status || 'running';
+}
+
+// One-line pill copy, same precedence as the mobile background-agent dock:
+// pending approval -> final result -> error -> agent progress summary ->
+// friendly current tool (running) / tool summary (finished) -> task.
+// The formatters are injected so desktop and mobile keep their own trace
+// presentation; nothing here ever surfaces the raw latest event payload.
+export function backgroundSpawnLaneSummary(lane = {}, {
+  entries = [],
+  progressSummary = null,
+  liveToolLabel = null,
+  toolSummary = null,
+} = {}) {
+  const status = String(lane?.status || 'running').toLowerCase();
+  const running = !['completed', 'failed', 'timed_out', 'cancelled', 'canceled', 'stopped'].includes(status);
+  const approval = pendingApproval(lane);
+  if (approval) {
+    const title = oneLine(approval.title || approval.summary || approval.action || approval.toolName || '', 160);
+    return title ? `Approval needed: ${title}` : 'Approval needed';
+  }
+  if (status === 'completed' && oneLine(lane?.result)) return oneLine(lane.result);
+  if ((status === 'failed' || status === 'timed_out') && oneLine(lane?.error)) return oneLine(lane.error);
+  const traceEntries = Array.isArray(entries) ? entries : [];
+  if (traceEntries.length) {
+    const call = (fn) => {
+      if (typeof fn !== 'function') return '';
+      try { return oneLine(fn(traceEntries)); } catch { return ''; }
+    };
+    const progress = call(progressSummary) || (running ? call(liveToolLabel) : call(toolSummary));
+    if (progress) return progress;
+  }
+  return oneLine(lane?.task) || (running ? 'Working in parallel...' : (oneLine(lane?.result) || 'Finished'));
+}
