@@ -28,6 +28,9 @@ assert.equal(tierOf('browser_new_tab', { url: 'data:text/html,<script>1</script>
 assert.equal(tierOf('browser_scroll_collect_v2', { schema: { fields: [] } }), 'read');
 assert.equal(tierOf('browser_scroll_collect_v2', { save_as: 'jobs' }), 'propose');
 assert.equal(tierOf('browser_scroll_collect', { options: { remember_as: 'x' } }), 'propose');
+assert.equal(tierOf('browser_scroll_collect_v2', { save_as: 123 }), 'propose', 'non-string save alias still saves');
+assert.equal(tierOf('browser_scroll_collect', { saveAs: true }), 'propose');
+assert.equal(tierOf('browser_scroll_collect', { save_as: '' }), 'read', 'empty alias does not save');
 assert.equal(tierOf('inspect_console', { action: 'read' }), 'read');
 assert.equal(tierOf('inspect_console', { action: 'clear' }), 'propose');
 assert.equal(tierOf('schedule_job_outputs', { action: 'get' }), 'read');

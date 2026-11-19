@@ -285,8 +285,19 @@ export function resolveToolCapabilityMetadata(
   }
   // Extraction is a read; saving a named extraction schema writes site knowledge.
   if (name === 'browser_scroll_collect' || name === 'browser_scroll_collect_v2') {
-    let wantsSave = false;
-    try { wantsSave = /"(save_as|remember_as|saveAs)"\s*:\s*"[^"]+"/.test(JSON.stringify(args ?? {})); } catch { wantsSave = true; }
+    // Any non-empty save alias at any depth counts: the handler coerces values
+    // with String(...), so numbers/booleans/objects would still save.
+    const SAVE_KEYS = new Set(['save_as', 'remember_as', 'saveas', 'rememberas']);
+    const hasSave = (value: any, depth = 0): boolean => {
+      if (!value || typeof value !== 'object' || depth > 6) return false;
+      for (const [key, inner] of Object.entries(value)) {
+        if (SAVE_KEYS.has(key.toLowerCase()) && inner !== undefined && inner !== null && String(inner).trim() !== '') return true;
+        if (hasSave(inner, depth + 1)) return true;
+      }
+      return false;
+    };
+    let wantsSave = true;
+    try { wantsSave = hasSave(args); } catch { wantsSave = true; }
     return wantsSave ? LOCAL_WRITE : READ_ONLY;
   }
   // Reading console logs is a read; clearing them mutates diagnostics.
