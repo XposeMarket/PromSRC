@@ -35,6 +35,11 @@ if (mobileSurface) {
   window.__PROM_DESKTOP_MODULES_READY
     .then(() => import('./features/secure-access/secure-access-desktop-dock.js'))
     .catch(() => {});
+  // Live connected agents (Codex): agent switcher + request cards. Renders
+  // nothing unless the user turned an agent on in Settings > Agents & imports.
+  window.__PROM_DESKTOP_MODULES_READY
+    .then(() => import('./chat/external-agent-desktop.js'))
+    .catch(() => {});
 }
 
 // Mobile Settings intentionally crosses into the canonical desktop document.

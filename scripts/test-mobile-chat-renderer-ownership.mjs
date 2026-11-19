@@ -161,6 +161,19 @@ const measurements = {
 // #891 live hotfixes: queued-prompt menu survives re-renders (signature skip + reopen) and
 // media descriptor identity in keysFor (fixes 1,422-copy image freeze): measured 293808
 // gzip on main 38a80bc (+403 over #862 measure 293405). Retain ~0.1% allowance.
-assert(measurements.gzipBytes <= 294100, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
+// #899 connected agent harnesses: the new-chat Agent/Computer/Chat row, harness model
+// choices in the existing model badge, upstream approval cards, and the drawer's harness
+// filter and folder groups all render on the first mobile chat screen, so
+// external-agent-{ui,mobile,models,sidebar,logos,empty-state}.js (46.5 KB raw) ship in this
+// slice: measured 303143 gzip on main f8c3c9b45 (+9306 over main's 293837). This is the
+// largest single step since #522. Loading the harness UI only once a harness is turned on
+// is the follow-up that should bring it back down; the drawer and badge call these helpers
+// synchronously today. Retain ~0.1% compression allowance.
+// #903 Projects v2: the mobile project settings sheet (instructions plus the shared
+// folder field with its Allow/Remove access notice) and folder-linked project groups in the
+// drawer: measured 306022 gzip (+2879 over #899's 303143). Retain ~0.1% allowance.
+// #907 OpenAI Dots: dot chats in the drawer, the contact placeholder and logo on the mobile
+// chat page: measured 306575 gzip (+553 over #903's 306022). Retain ~0.1% allowance.
+assert(measurements.gzipBytes <= 306880, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
 console.log(JSON.stringify({ buildId: manifest.buildId, measurements, rendererOutput }, null, 2));
 console.log('Mobile Chat renderer ownership contract passed.');

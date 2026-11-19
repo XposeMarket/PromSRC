@@ -16,6 +16,7 @@ files:
   - bin/**/*
   - scripts/**/*
   - node_modules/**/*
+  - packages/claude-driver/**/*
   - package.json
   - tsconfig.json
   # Exclude runtime/private/local state and release artifacts.

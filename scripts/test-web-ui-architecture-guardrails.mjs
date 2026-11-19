@@ -12,7 +12,7 @@ const failures = [];
 // legacy surface, but raising it alone can never make a growth regression pass.
 // A ceiling change therefore appears as executable policy in review.
 const CODE_OWNED_LEGACY_CEILINGS = Object.freeze({
-  'web-ui/src/pages/ChatPage.js': 2354100, // Reviewed: #883 heartbeat single-thread fold (foldLegacyHeartbeatSessions + upsert history keep) on top of #891/#890: measured 2354083 LF bytes
+  'web-ui/src/pages/ChatPage.js': 2354240, // Reviewed: projects v2 New-project folder hook (3 one-line window.__pmProjectFolder calls, +153; logic lives in chat/project-folder-field.js); prior: #883 heartbeat single-thread fold (foldLegacyHeartbeatSessions + upsert history keep) on top of #891/#890: measured 2354083 LF bytes
   'web-ui/src/mobile/mobile-pages.js': 898464,
   // Reviewed against the 2026-10-01 main UI: these are tracked LF-byte
   // boundaries, not dynamic baselines. Future growth still fails CI.
