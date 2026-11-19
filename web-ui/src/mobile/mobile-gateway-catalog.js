@@ -350,12 +350,45 @@ function _migrateGatewayReferences(oldIds, nextGateway) {
   } catch {}
 }
 
-export function upsertGateway(entry, { token = '', deviceId = '' } = {}) {
+// An approved token can only be collected once. Publish the catalog last and
+// verify each write before migrating references or notifying subscribers.
+function commitApprovedPair(writes) {
+  const store = window.localStorage;
+  const old = writes.map(([key]) => store.getItem(key));
+  const commit = () => {
+    let i = 0;
+    try {
+      for (; i < writes.length; i++) {
+        const [key, value] = writes[i];
+        store.setItem(key, value);
+        if (store.getItem(key) !== value) throw new Error('Pairing was not saved.');
+      }
+    } catch (error) {
+      for (; i >= 0; i--) {
+        const [key, value] = writes[i];
+        if (store.getItem(key) !== value || old[i] === value) continue;
+        if (old[i] === null) store.removeItem(key); else store.setItem(key, old[i]);
+      }
+      throw error;
+    }
+  };
+  try { commit(); } catch (error) {
+    // Only drop rebuildable GET responses, never chats, drafts or pairings.
+    if (error?.name !== 'QuotaExceededError' || !store.getItem('pm_mobile_page_data_v1')) throw error;
+    store.removeItem('pm_mobile_page_data_v1');
+    commit();
+  }
+}
+
+export function upsertGateway(entry, { token = '', deviceId = '', approvedPair = false } = {}) {
   const normalized = normalizeGatewayDescriptor(entry);
   if (!normalized.gatewayId || !normalized.origin) throw new Error('Gateway identity and origin are required.');
 
   const catalog = loadGatewayCatalog();
   const exactPrevious = catalog.find((item) => item.gatewayId === normalized.gatewayId) || null;
+  if (approvedPair && (!token || (exactPrevious && exactPrevious.origin !== normalized.origin))) {
+    throw new Error('Pairing conflicts with an existing computer.');
+  }
   const replacedIds = new Set(_gatewayIdsAtOrigin(catalog, normalized.origin, normalized.gatewayId));
   const replacedEntries = catalog.filter((item) => replacedIds.has(item.gatewayId));
   const inherited = exactPrevious || replacedEntries[0] || null;
@@ -373,9 +406,17 @@ export function upsertGateway(entry, { token = '', deviceId = '' } = {}) {
     id: normalized.gatewayId,
     addedAt: inherited?.addedAt || normalized.addedAt,
   });
-  saveGatewayCatalog([...remaining, merged]);
-
-  if (inheritedToken) setGatewayToken(normalized.gatewayId, inheritedToken, inheritedDeviceId);
+  if (approvedPair) {
+    const id = normalized.gatewayId;
+    commitApprovedPair([
+      [gatewayTokenKey(id), inheritedToken],
+      ...(inheritedDeviceId ? [[DEVICE_PREFIX + encodeURIComponent(id), inheritedDeviceId]] : []),
+      [CATALOG_KEY, JSON.stringify([...remaining, merged])],
+    ]);
+  } else {
+    saveGatewayCatalog([...remaining, merged]);
+    if (inheritedToken) setGatewayToken(normalized.gatewayId, inheritedToken, inheritedDeviceId);
+  }
   for (const oldId of replacedIds) setGatewayToken(oldId, '');
   _migrateGatewayReferences(replacedIds, merged);
 
