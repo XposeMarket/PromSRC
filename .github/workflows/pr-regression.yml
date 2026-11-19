@@ -142,6 +142,11 @@ jobs:
           npx tsx src/gateway/external-agents/file-touches.regression.ts
           npx tsx src/gateway/external-agents/models.regression.ts
           npx tsx src/gateway/external-agents/scratch-folders.regression.ts
+      - name: Verify projects (instructions, notes, linked folders)
+        run: |
+          npx tsx src/gateway/projects/project-notes.regression.ts
+          npx tsx src/gateway/projects/project-folder-access.regression.ts
+          npx tsx src/gateway/projects/project-membership.regression.ts
       - name: Verify public web source sync
         run: |
           npm run check:web-ui

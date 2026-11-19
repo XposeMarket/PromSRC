@@ -169,6 +169,9 @@ const measurements = {
 // largest single step since #522. Loading the harness UI only once a harness is turned on
 // is the follow-up that should bring it back down; the drawer and badge call these helpers
 // synchronously today. Retain ~0.1% compression allowance.
-assert(measurements.gzipBytes <= 303450, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
+// #903 Projects v2: the mobile project settings sheet (instructions plus the shared
+// folder field with its Allow/Remove access notice) and folder-linked project groups in the
+// drawer: measured 306022 gzip (+2879 over #899's 303143). Retain ~0.1% allowance.
+assert(measurements.gzipBytes <= 306330, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
 console.log(JSON.stringify({ buildId: manifest.buildId, measurements, rendererOutput }, null, 2));
 console.log('Mobile Chat renderer ownership contract passed.');

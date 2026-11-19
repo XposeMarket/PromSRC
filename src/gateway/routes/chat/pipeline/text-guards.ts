@@ -1,4 +1,3 @@
-import { refreshProjectContextForSession } from '../../../projects/project-learning.js';
 import { snapshotMainChatGoal } from '../../../main-chat-goals';
 import { broadcastWS } from '../../../comms/broadcaster';
 import { normalizeForDedup, isGreetingLikeMessage } from '../../../comms/reply-processor';
@@ -7,17 +6,6 @@ import { isResumeIntent, isRerunIntent, isCancelIntent, parseTaskIdFromText } fr
 
 
 // â”€â”€â”€ SSE + Routes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
-export async function maybeRefreshProjectLearning(
-  sessionId: string,
-  extraTextBlocks?: string[],
-): Promise<void> {
-  try {
-    await refreshProjectContextForSession(sessionId, { extraTextBlocks });
-  } catch (err: any) {
-    console.warn(`[ProjectLearning] Refresh failed for session ${sessionId}:`, err?.message || err);
-  }
-}
 
 export const activeMainChatGoalRuns = new Set<string>();
 

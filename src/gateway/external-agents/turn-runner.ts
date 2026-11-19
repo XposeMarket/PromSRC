@@ -8,6 +8,7 @@
  * Approval cards go back to the exact upstream request (pending-requests.ts)
  * and never touch a Prometheus permission or approval store.
  */
+import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 
@@ -22,6 +23,7 @@ import {
   type TurnOrigin,
 } from '../session';
 import { expandHome } from './executable';
+import { buildHarnessProjectContext, fileSessionIntoFolderProject, HARNESS_PROJECT_CONTEXT_CLEARED } from '../projects/project-store';
 import { createPendingRequest } from './pending-requests';
 import { getExternalAgentAdapter, isExternalAgentUsable, registerLiveExternalTurn } from './registry';
 import type { ExternalAgentBinding, ExternalAgentEvent, ExternalAgentId, ExternalUserRequest } from './types';
@@ -301,13 +303,38 @@ export async function runExternalAgentTurn(params: ExternalTurnRunParams, bindin
       },
     });
 
+  // One project, any agent: a harness chat in a project's linked folder is filed into that project.
+  try { fileSessionIntoFolderProject(sessionId, binding.cwd || ''); } catch { /* filing never blocks the turn */ }
+
+  // The project's instructions and notes reach the agent too: once at the start of each upstream
+  // session and again when they change. The saved chat keeps the user's own text; a slash command
+  // is passed through untouched and the context goes with the next ordinary message.
+  let upstreamText = params.message;
+  let contextHash = '';
+  try {
+    const skipContext = /^\s*\//.test(params.message);
+    // Removing the instructions and notes is a change too: the agent is told to drop what it was given.
+    const block = skipContext ? null : (buildHarnessProjectContext(sessionId)
+      || (binding.upstreamSessionId && binding.projectContextHash ? HARNESS_PROJECT_CONTEXT_CLEARED : null));
+    if (block) {
+      const hash = crypto.createHash('sha256').update(block).digest('hex').slice(0, 32);
+      if (!binding.upstreamSessionId || binding.projectContextHash !== hash) {
+        upstreamText = `${block}\n\n${params.message}`;
+        contextHash = hash;
+        sendInfo(sendSSE, block === HARNESS_PROJECT_CONTEXT_CLEARED
+          ? `${agentName} was told this project's instructions and notes were removed.`
+          : `This project's instructions and notes were included for ${agentName}.`);
+      }
+    }
+  } catch { /* project context never blocks the turn */ }
+
   let result;
   try {
     result = await adapter.runTurn({
       sessionId,
       ...(binding.upstreamSessionId ? { upstreamSessionId: binding.upstreamSessionId } : {}),
       cwd: binding.cwd,
-      text: params.message,
+      text: upstreamText,
       ...(binding.selectedModel ? { model: binding.selectedModel } : {}),
       ...(binding.selectedEffort ? { effort: binding.selectedEffort } : {}),
       signal: controller.signal,
@@ -335,6 +362,8 @@ export async function runExternalAgentTurn(params: ExternalTurnRunParams, bindin
     ...(result.fallbackModel ? { selectedModel: result.fallbackModel } : {}),
     // A missing upstream session is kept so the user can explicitly start a new one.
     ...(result.upstreamSessionId ? { upstreamSessionId: result.upstreamSessionId } : {}),
+    // A failed turn may not have delivered the context, so it is sent again next time.
+    ...(contextHash && result.status !== 'failed' && !result.upstreamMissing ? { projectContextHash: contextHash } : {}),
     lastTurn: {
       status: result.status,
       ...(result.upstreamMissing ? { upstreamMissing: true } : {}),

@@ -13,6 +13,7 @@ import {
   setAgentChoice, setExternalAgentRequest,
 } from './external-agent-ui.js';
 import { agentLogoHtml } from './external-agent-logos.js';
+import './project-folder-field.js';
 
 const ORDER = ['prometheus', 'codex', 'claude-code', 'hermes', 'openclaw', 'cursor'];
 const FILTER_KEY = 'prometheus_harness_chat_filter';
@@ -89,9 +90,11 @@ function harnessGroups() {
   void refreshHarnessSessionMap();
   return knownHarnesses().filter(isHarnessVisible).map((id) => {
     const folders = new Map();
-    for (const f of cachedFolders(id)) if (f?.path) folders.set(normPath(f.path), { key: normPath(f.path), path: f.path, label: shortLabel(f.label, f.path), chats: [] });
+    // Folders linked to a Prometheus project (and chats filed in a project) live under
+    // that project instead: one project, any agent.
+    for (const f of cachedFolders(id)) if (f?.path && !f.projectId) folders.set(normPath(f.path), { key: normPath(f.path), path: f.path, label: shortLabel(f.label, f.path), chats: [] });
     for (const [sid, entry] of Object.entries(st.map)) {
-      if (entry?.agentId !== id) continue;
+      if (entry?.agentId !== id || entry.projectId) continue;
       const key = entry.cwd ? normPath(entry.cwd) : '~imported';
       if (!folders.has(key)) folders.set(key, { key, path: entry.cwd || '', label: entry.cwd ? baseName(entry.cwd) : 'Imported chats', chats: [] });
       folders.get(key).chats.push({ id: sid, title: entry.title, at: entry.at });
@@ -216,18 +219,37 @@ function openFilterMenu(anchor) {
 // When a harness runs the new chat, the Chat/Project popover lists THAT
 // harness's projects/folders (its own history) instead of Prometheus projects.
 const folderCache = new Map();
+const FOLDER_TTL_MS = 30_000; // projects get linked/unlinked; keep the lists fresh
 function cachedFolders(id) {
-  if (!folderCache.has(id)) {
-    folderCache.set(id, []);
-    loadAgentFolders(id).then((list) => { folderCache.set(id, Array.isArray(list) ? list : []); notify(); }).catch(() => {});
+  const hit = folderCache.get(id);
+  if (!hit || (!hit.loading && Date.now() - hit.at > FOLDER_TTL_MS)) {
+    const entry = { list: hit?.list || [], at: Date.now(), loading: true };
+    folderCache.set(id, entry);
+    loadAgentFolders(id, { fresh: !!hit }).then((list) => {
+      entry.list = Array.isArray(list) ? list : [];
+      entry.at = Date.now();
+      entry.loading = false;
+      notify();
+    }).catch(() => { entry.loading = false; });
   }
-  return folderCache.get(id);
+  return folderCache.get(id).list;
 }
+
+function folderName(f) { return f?.projectName || shortLabel(f?.label, f?.path); }
 
 function folderLabelFor(choice) {
   if (!choice.cwd) return 'Default folder';
   const hit = cachedFolders(choice.id).find((f) => normPath(f.path) === normPath(choice.cwd));
-  return shortLabel(hit?.label, choice.cwd);
+  return hit ? folderName(hit) : shortLabel('', choice.cwd);
+}
+
+// The Prometheus project picked in the native Chat/Project picker, if any.
+function nativeProjectName() {
+  const desk = document.getElementById('chat-new-context-trigger')?.getAttribute('aria-label') || '';
+  if (desk.startsWith('Directed chat: ')) { const n = desk.slice(15).trim(); return n === 'Chat' ? '' : n; }
+  const mob = document.querySelector('#pm-new-chat-project .pm-new-chat-context-value strong');
+  const n = String(mob ? (mob.dataset.eaNative ?? mob.textContent) : '').trim();
+  return n === 'Chat' ? '' : n;
 }
 
 function overrideLabel(el, text) {
@@ -243,14 +265,18 @@ function overrideLabel(el, text) {
 }
 
 function folderRowsHtml(id, choice) {
-  const options = [{ path: '', label: 'Default folder' }, ...cachedFolders(id).filter((f) => f?.path)];
+  const all = cachedFolders(id).filter((f) => f?.path);
+  const row = (f) => {
+    const selected = normPath(f.path) === normPath(choice.cwd);
+    return `<button type="button" class="ea-folder-option${selected ? ' is-active' : ''}" data-ea-folder-path="${esc(f.path)}" aria-selected="${selected}" title="${esc(f.path || 'The chat project folder, or the Prometheus workspace')}">
+        <span class="ea-harness-folder-icon">${FOLDER}</span><span class="ea-folder-name">${esc(f.path ? folderName(f) : f.label)}</span><span class="ea-folder-check" aria-hidden="true">${selected ? '✓' : ''}</span></button>`;
+  };
+  const projects = all.filter((f) => f.projectId);
+  const folders = all.filter((f) => !f.projectId);
   return `<div class="ea-folder-list">
-    <div class="ea-folder-title">${agentLogoHtml(id)}<span>${esc(agentName(id))} projects</span></div>
-    ${options.map((f) => {
-      const selected = normPath(f.path) === normPath(choice.cwd);
-      return `<button type="button" class="ea-folder-option${selected ? ' is-active' : ''}" data-ea-folder-path="${esc(f.path)}" aria-selected="${selected}" title="${esc(f.path || 'The chat project folder, or the Prometheus workspace')}">
-        <span class="ea-harness-folder-icon">${FOLDER}</span><span class="ea-folder-name">${esc(f.path ? shortLabel(f.label, f.path) : f.label)}</span><span class="ea-folder-check" aria-hidden="true">${selected ? '✓' : ''}</span></button>`;
-    }).join('')}
+    ${projects.length ? `<div class="ea-folder-title"><span>Projects</span></div>${projects.map(row).join('')}` : ''}
+    <div class="ea-folder-title">${agentLogoHtml(id)}<span>${esc(agentName(id))} folders</span></div>
+    ${[{ path: '', label: 'Default folder' }, ...folders].map(row).join('')}
   </div>`;
 }
 
@@ -286,7 +312,16 @@ function decoratePopover(pop, nativeChatSelector, choice) {
 }
 
 function syncFolderUi() {
-  const choice = getAgentChoice();
+  let choice = getAgentChoice();
+  // "+" on a Prometheus project, then a harness picked: run it in that project's folder.
+  if (choice.id !== 'prometheus' && !choice.cwd) {
+    const name = nativeProjectName();
+    const key = `${choice.id}|${name}`;
+    if (name && st.autoKey !== key) {
+      const hit = cachedFolders(choice.id).find((f) => f.projectId && f.projectName === name);
+      if (hit) { st.autoKey = key; setAgentChoice(choice.id, hit.path); choice = getAgentChoice(); }
+    }
+  }
   document.body?.classList.toggle('ea-folder-choice', choice.id !== 'prometheus');
   const text = choice.id !== 'prometheus' ? folderLabelFor(choice) : '';
   overrideLabel(document.getElementById('chat-new-context-label'), text);
@@ -370,10 +405,11 @@ const FOLDER_PREFIX = '__ea_folder__:';
 export function harnessFolderPickerOptions() {
   const choice = getAgentChoice();
   if (choice.id === 'prometheus') return null;
-  const options = [{ path: '', label: 'Default folder' }, ...cachedFolders(choice.id).filter((f) => f?.path)];
+  const all = cachedFolders(choice.id).filter((f) => f?.path);
+  const options = [...all.filter((f) => f.projectId), { path: '', label: 'Default folder' }, ...all.filter((f) => !f.projectId)];
   return options.map((f) => ({
     value: FOLDER_PREFIX + f.path,
-    label: f.path ? shortLabel(f.label, f.path) : f.label,
+    label: f.path ? folderName(f) : f.label,
     selected: normPath(f.path) === normPath(choice.cwd),
   }));
 }

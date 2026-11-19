@@ -8,7 +8,9 @@
  *   GET    /api/projects
  *   POST   /api/projects                            { name }
  *   GET    /api/projects/:id
- *   PATCH  /api/projects/:id                        { name?, instructions?, memorySnapshot? }
+ *   GET    /api/projects/:id/context                (project notes, CONTEXT.md)
+ *   PUT    /api/projects/:id/context                { content }
+ *   PATCH  /api/projects/:id                        { name?, workspacePath?, instructions?, pinned? } (memorySnapshot: legacy, stored but not used)
  *   DELETE /api/projects/:id?deleteSessions=true|false   (default false: chats are kept, only membership is removed)
  *   POST   /api/projects/:id/sessions               { isOnboarding? }
  *   POST   /api/projects/:id/sessions/attach        { sessionId } (moves an existing chat in; leaves any other project)
@@ -37,14 +39,18 @@ import {
   detachSessionFromProject,
   deleteSessionFromProject,
   resolveAllowedProjectDirectory,
+  describeProjectFolderAccess,
+  grantProjectFolderAccess,
+  revokeProjectFolderAccess,
   addKnowledgeFile,
   removeKnowledgeFile,
   listKnowledgeFiles,
   getKnowledgeFileContent,
   getProjectKnowledgeFilePath,
   getProjectContextContent,
+  pruneUnstartedProjectChats,
+  writeProjectNotes,
 } from '../projects/project-store.js';
-import { refreshProjectContextFromLatestPriorSession } from '../projects/project-learning.js';
 import { getSession, sessionExists, getSessionSummaryById } from '../session.js';
 import { hydrateProjectSessions as hydrateProjectSessionsFromIndex } from '../projects/project-session-hydration.js';
 import { isStorageBoundaryError } from '../storage/storage-paths.js';
@@ -52,7 +58,9 @@ import { isStorageBoundaryError } from '../storage/storage-paths.js';
 const router = Router();
 
 function sendProjectError(res: Response, err: any, fallback: string): void {
-  res.status(isStorageBoundaryError(err) ? 400 : 500).json({ error: err?.message || fallback });
+  // A folder outside the allowed paths is a user choice to fix, not a server fault.
+  const userError = isStorageBoundaryError(err) || err?.code === 'PROJECT_DIR_NOT_ALLOWED' || err?.code === 'PROJECT_DIR_NOT_GRANTABLE';
+  res.status(userError ? 400 : 500).json({ error: err?.message || fallback });
 }
 
 /** Strict boolean query parsing: only "true" or "false" are accepted. Returns null when invalid. */
@@ -66,7 +74,7 @@ function parseStrictBooleanQuery(value: unknown, fallback: boolean): boolean | n
 // Reads the session index only. Loading each chat in full here blocked the
 // gateway for seconds on every project list request.
 function hydrateProjectSessions(project: any): any {
-  return hydrateProjectSessionsFromIndex(project, getSessionSummaryById);
+  return hydrateProjectSessionsFromIndex(pruneUnstartedProjectChats(project), getSessionSummaryById);
 }
 
 router.get('/api/projects', (_req: Request, res: Response) => {
@@ -80,6 +88,23 @@ router.post('/api/projects', (req: Request, res: Response) => {
     if (!name) return res.status(400).json({ error: 'name is required' });
     res.status(201).json(createProject(name, resolveAllowedProjectDirectory(req.body?.workspacePath)));
   } catch (err: any) { sendProjectError(res, err, 'Failed to create project'); }
+});
+
+// Folder access for project links. Declared before /api/projects/:id so the path isn't
+// read as a project id. Granting adds the folder to the file-tool allowed paths.
+router.get('/api/projects/folder-access', (req: Request, res: Response) => {
+  try { res.json(describeProjectFolderAccess(req.query.path)); }
+  catch (err: any) { sendProjectError(res, err, 'Failed to check folder access'); }
+});
+
+router.post('/api/projects/folder-access', (req: Request, res: Response) => {
+  try { res.json({ ok: true, ...describeProjectFolderAccess(grantProjectFolderAccess(req.body?.path)) }); }
+  catch (err: any) { sendProjectError(res, err, 'Failed to allow folder access'); }
+});
+
+router.delete('/api/projects/folder-access', (req: Request, res: Response) => {
+  try { res.json({ ok: true, ...revokeProjectFolderAccess(req.body?.path ?? req.query.path) }); }
+  catch (err: any) { sendProjectError(res, err, 'Failed to remove folder access'); }
 });
 
 router.get('/api/projects/:id', (req: Request, res: Response) => {
@@ -96,6 +121,17 @@ router.get('/api/projects/:id/context', (req: Request, res: Response) => {
     if (content === null) return res.status(404).json({ error: 'Project context not found' });
     res.json({ filename: 'CONTEXT.md', content });
   } catch (err: any) { sendProjectError(res, err, 'Failed to read project context'); }
+});
+
+// PUT /api/projects/:id/context { content } — replace the project notes (CONTEXT.md)
+router.put('/api/projects/:id/context', (req: Request, res: Response) => {
+  try {
+    const content = req.body?.content;
+    if (typeof content !== 'string') return res.status(400).json({ error: 'content must be a string' });
+    if (content.length > 200_000) return res.status(400).json({ error: 'Notes are too long' });
+    if (!writeProjectNotes(req.params.id, content)) return res.status(404).json({ error: 'Project not found' });
+    res.json({ success: true });
+  } catch (err: any) { sendProjectError(res, err, 'Failed to save project notes'); }
 });
 
 router.patch('/api/projects/:id', (req: Request, res: Response) => {
@@ -134,10 +170,8 @@ router.post('/api/projects/:id/sessions', (req: Request, res: Response) => {
     if (!getProject(req.params.id)) return res.status(404).json({ error: 'Project not found' });
     const sessionId = crypto.randomUUID();
     const isOnboarding = req.body?.isOnboarding === true;
+    // The row is pruned automatically if the first message never arrives (failed send).
     addSessionToProject(req.params.id, sessionId, isOnboarding ? 'Getting started' : 'New chat');
-    void refreshProjectContextFromLatestPriorSession(req.params.id, sessionId).catch((err: any) => {
-      console.warn(`[Projects] Prior-session project context refresh failed for ${req.params.id}:`, err?.message || err);
-    });
     res.status(201).json({ sessionId, projectId: req.params.id });
   } catch (err: any) { sendProjectError(res, err, 'Failed to create session'); }
 });

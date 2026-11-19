@@ -99,8 +99,8 @@ export function agentFieldForNewChat() {
   return { id: st.choice.id, ...(st.choice.cwd.trim() ? { cwd: st.choice.cwd.trim() } : {}) };
 }
 
-export async function loadAgentFolders(id) {
-  if (st.folders.has(id)) return st.folders.get(id);
+export async function loadAgentFolders(id, { fresh = false } = {}) {
+  if (!fresh && st.folders.has(id)) return st.folders.get(id);
   let folders = [];
   try {
     const data = await call(`/api/external-agents/${encodeURIComponent(id)}/folders`);

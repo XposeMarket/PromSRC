@@ -1072,55 +1072,56 @@ window.openChatMoveToProjectPicker = function openChatMoveToProjectPicker(id) {
   hideSessionHoverPreview();
   _chatProjectsRequest('/api/projects').then((projects) => {
     const list = Array.isArray(projects) ? projects : [];
+    const owner = list.find((project) => (project.sessions || []).some((sess) => sess.id === sessionId));
     const overlay = document.createElement('div');
-    overlay.style.cssText = 'position:fixed;inset:0;z-index:99998;background:rgba(0,0,0,0.35);display:flex;align-items:center;justify-content:center';
+    overlay.className = 'pm-move-project-overlay';
     const box = document.createElement('div');
-    box.style.cssText = 'background:var(--panel);border:1.5px solid var(--line);border-radius:14px;padding:24px 24px 18px;max-width:420px;width:92%;max-height:70vh;overflow:auto;box-shadow:0 8px 40px rgba(0,0,0,0.18);font-family:var(--font)';
-    const heading = document.createElement('div');
-    heading.style.cssText = 'font-size:15px;font-weight:800;margin-bottom:10px';
-    heading.textContent = 'Move to project…';
-    const note = document.createElement('div');
-    note.style.cssText = 'font-size:13px;color:var(--muted);line-height:1.6;margin-bottom:14px';
-    note.textContent = `“${_chatTitleFor(sessionId) || 'this chat'}” keeps its history and leaves its current project.`;
-    box.append(heading, note);
-    const close = () => overlay.remove();
-    if (!list.length) {
-      const empty = document.createElement('div');
-      empty.style.cssText = 'font-size:13px;color:var(--muted);margin-bottom:14px';
-      empty.textContent = 'No projects yet. Create one on the Projects page first.';
-      box.append(empty);
-    }
-    list.forEach((project) => {
-      const option = document.createElement('button');
-      option.type = 'button';
-      option.className = 'chat-move-project-option';
-      option.style.cssText = 'display:block;width:100%;text-align:left;border:1px solid var(--line);background:var(--panel-2);color:var(--text);border-radius:8px;padding:8px 12px;margin-bottom:6px;font-size:13px;font-weight:700;cursor:pointer';
-      option.textContent = project.name || 'Untitled project';
-      option.addEventListener('click', async () => {
+    box.className = 'pm-move-project';
+    box.setAttribute('role', 'dialog');
+    box.setAttribute('aria-modal', 'true');
+    box.setAttribute('aria-label', 'Move to project');
+    const onKey = (event) => { if (event.key === 'Escape') { event.preventDefault(); close(); } };
+    const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey, true); };
+    const moveTo = async (projectId) => {
+      await _chatProjectsRequest(`/api/projects/${encodeURIComponent(projectId)}/sessions/attach`, 'POST', { sessionId });
+      close();
+      _refreshAfterChatProjectChange();
+      window.loadProjects?.();
+    };
+    const folderIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l1.7 2h7.3a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/></svg>';
+    const renderList = () => {
+      box.innerHTML = `<div class="pm-move-project-title">Move to project</div>
+        <div class="pm-move-project-sub">“${escHtml(_chatTitleFor(sessionId) || 'This chat')}” keeps its history.</div>
+        <div class="pm-move-project-list">
+          <button type="button" class="pm-move-option pm-move-option-new" data-move-new><span class="pm-move-option-icon" aria-hidden="true">+</span><span class="pm-move-option-name">New project</span><span class="pm-move-option-check" aria-hidden="true">›</span></button>
+          ${list.map((project) => `<button type="button" class="pm-move-option" data-move-project="${escHtml(project.id)}"${owner?.id === project.id ? ' aria-current="true" disabled' : ''}><span class="pm-move-option-icon">${folderIcon}</span><span class="pm-move-option-name">${escHtml(project.name || 'Untitled project')}</span><span class="pm-move-option-check" aria-hidden="true">${owner?.id === project.id ? '✓' : ''}</span></button>`).join('')}
+        </div>`;
+      box.querySelectorAll('[data-move-project]').forEach((option) => option.addEventListener('click', async () => {
         option.disabled = true;
-        try {
-          await _chatProjectsRequest(`/api/projects/${encodeURIComponent(project.id)}/sessions/attach`, 'POST', { sessionId });
-          close();
-          _refreshAfterChatProjectChange();
-        } catch (error) {
+        try { await moveTo(option.getAttribute('data-move-project')); } catch (error) {
           option.disabled = false;
           window.showToast?.('Could not move chat.', 'error');
           console.error(error);
         }
+      }));
+      box.querySelector('[data-move-new]')?.addEventListener('click', () => {
+        const form = window.__pmProjectFolder?.mountMoveNewProjectForm;
+        if (!form) return;
+        box.innerHTML = '<div class="pm-move-project-title">New project</div><div class="pm-move-project-body"></div>';
+        form(box.querySelector('.pm-move-project-body'), {
+          prefix: 'chat-move',
+          onCancel: renderList,
+          create: async ({ name, workspacePath }) => {
+            const project = await _chatProjectsRequest('/api/projects', 'POST', { name, ...(workspacePath ? { workspacePath } : {}) });
+            await moveTo(project?.id);
+          },
+        });
       });
-      box.append(option);
-    });
-    const cancelRow = document.createElement('div');
-    cancelRow.style.cssText = 'display:flex;justify-content:flex-end;margin-top:8px';
-    const cancel = document.createElement('button');
-    cancel.type = 'button';
-    cancel.style.cssText = 'border:1px solid var(--line);background:var(--panel-2);color:var(--muted);border-radius:8px;padding:7px 16px;font-size:12px;font-weight:700;cursor:pointer';
-    cancel.textContent = 'Cancel';
-    cancel.addEventListener('click', close);
-    cancelRow.append(cancel);
-    box.append(cancelRow);
+    };
+    renderList();
     overlay.append(box);
     overlay.addEventListener('click', (event) => { if (event.target === overlay) close(); });
+    document.addEventListener('keydown', onKey, true);
     document.body.append(overlay);
   }).catch((error) => {
     window.showToast?.('Could not load projects.', 'error');
