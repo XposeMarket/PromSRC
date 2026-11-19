@@ -14641,6 +14641,11 @@ function renderVisibleChatHistoryHtml(history = [], options = {}) {
       && options.readonly !== true
       && renderSessionId === String(window.activeChatSessionId || '').trim();
     if (suppressDockedQuestion && !msg.content && !msg.approvalRequest) return '';
+    // A finished approval leaves no row behind (no empty bubble and no
+    // "Worked for 0s" header) once its receipt has faded.
+    if (!isUser && msg.approvalRequest && !assistantApprovalHtml && !msg.questionRequest
+      && !String(msg.content || '').trim()
+      && !(msg.processEntries?.length || msg.liveTraceEntries?.length || msg.toolCalls?.length || msg.steps?.length || msg.attachments?.length)) return '';
     const assistantQuestionHtml = (!isUser && !suppressDockedQuestion) ? renderInlinePrometheusQuestion(msg.questionRequest) : '';
     const assistantContentHtml = !isUser
       ? `${assistantApprovalHtml}${assistantQuestionHtml}${msg.content ? renderAssistantContent(msg.content, msg) : ''}`
@@ -44579,10 +44584,55 @@ function summarizeApprovalForHumans(record = {}, fallback = {}) {
   }
 
   return {
-    title: toolName ? `${getApprovalToolLabel(toolName)} approval` : 'Approval required',
-    summary: String(record.reason || fallback.reason || record.summary || fallback.summary || record.action || '').trim(),
+    title: toolName ? approvalFriendlyTitle(toolName) : 'Approval required',
+    summary: humanizeApprovalReason(record.reason || fallback.reason || record.summary || fallback.summary || record.action || ''),
     detail: '',
   };
+}
+
+const APPROVAL_FRIENDLY_TITLES = {
+  write_note: 'Save a note',
+  memory_write: 'Save to memory',
+  write_file: 'Write a file',
+  create_file: 'Create a file',
+  append_file: 'Add to a file',
+  find_replace: 'Edit a file',
+  replace_lines: 'Edit a file',
+  delete_file: 'Delete a file',
+  timer: 'Set a timer',
+  delivery_send: 'Send a message',
+  background_spawn: 'Start a background agent',
+  spawn_subagent: 'Start a subagent',
+  generate_image: 'Generate an image',
+  clone_repo: 'Download a repository',
+  git_commit: 'Commit changes',
+  git_push: 'Push to GitHub',
+  update_heartbeat: 'Change heartbeat settings',
+  set_current_model: 'Switch the chat model',
+};
+
+function approvalFriendlyTitle(toolName = '') {
+  const tool = String(toolName || '').trim();
+  if (APPROVAL_FRIENDLY_TITLES[tool]) return APPROVAL_FRIENDLY_TITLES[tool];
+  const label = getApprovalToolLabel(tool);
+  return `Use ${label}`;
+}
+
+// Older gateways sent developer policy text ("failing closed to COMMIT").
+// Show the approver a plain sentence instead; the raw reason stays in
+// Technical details.
+function humanizeApprovalReason(reason = '') {
+  const text = String(reason || '').trim();
+  if (/no explicit capability metadata|failing closed/i.test(text)) {
+    return "This tool hasn't declared what it can change, so Prometheus asks before running it.";
+  }
+  if (/explicit tool capabilities require COMMIT/i.test(text)) {
+    return 'This can act outside this chat (send, post, delete or run programs), so it needs your OK.';
+  }
+  if (/explicit tool capabilities require PROPOSE/i.test(text)) {
+    return 'This saves or changes something on this computer, so it needs your OK.';
+  }
+  return text;
 }
 
 function renderSessionApprovalCard(item) {
@@ -44666,16 +44716,74 @@ function normalizeChatApprovalRecord(record = {}, fallback = {}) {
     finalAction: record.finalAction || fallback.finalAction || null,
     oneShot: record.oneShot === true || fallback.oneShot === true || approvalKind === 'elevated_command' || isDevSource || isFinalAction,
     status: status || 'pending',
+    resolvedAt: String(record.resolvedAt || fallback.resolvedAt || '').trim(),
   };
 }
 
+// Resolved approvals behave like mobile: a short receipt that fades, then the
+// card is gone from the conversation. Pending cards are never hidden.
+const DESKTOP_APPROVAL_RESOLVED_LINGER_MS = 4000;
+const DESKTOP_APPROVAL_RECEIPT_FADE_MS = 600;
+const desktopApprovalResolvedAt = new Map();
+
+function desktopApprovalResolvedTimestamp(approval = {}) {
+  const id = String(approval.id || '').trim();
+  const local = Number(desktopApprovalResolvedAt.get(id) || 0);
+  if (local) return local;
+  const server = Date.parse(String(approval.resolvedAt || ''));
+  return Number.isFinite(server) ? server : 0;
+}
+
+function noteDesktopApprovalResolved(id) {
+  const approvalId = String(id || '').trim();
+  if (!approvalId || desktopApprovalResolvedAt.has(approvalId)) return;
+  desktopApprovalResolvedAt.set(approvalId, Date.now());
+  setTimeout(() => {
+    // Flag the stored record so the row signature changes and the timeline
+    // reconciler actually drops the faded receipt row.
+    try {
+      for (const sess of (window.chatSessions || [])) {
+        for (const msg of (sess?.history || [])) {
+          if (String(msg?.approvalRequest?.id || '') === approvalId) msg.approvalRequest.receiptDone = true;
+        }
+        const pendingLive = getSessionStreamState(sess?.id)?.pendingApprovals;
+        if (Array.isArray(pendingLive)) {
+          for (const item of pendingLive) if (String(item?.id || '') === approvalId) item.receiptDone = true;
+        }
+      }
+    } catch {}
+    try { if (typeof renderChatMessages === 'function') renderChatMessages(); } catch {}
+  }, DESKTOP_APPROVAL_RESOLVED_LINGER_MS + 80);
+}
+
+function renderResolvedApprovalReceipt(approval, statusLabel) {
+  const resolvedAt = desktopApprovalResolvedTimestamp(approval);
+  const remaining = resolvedAt ? DESKTOP_APPROVAL_RESOLVED_LINGER_MS - (Date.now() - resolvedAt) : 0;
+  if (remaining <= 0) return '';
+  const verb = statusLabel === 'approved' ? 'Approved'
+    : statusLabel === 'denied' ? 'Denied'
+      : statusLabel === 'expired' ? 'Expired'
+        : statusLabel === 'failed' ? 'Failed'
+          : String(statusLabel || 'Done');
+  const delay = Math.max(0, remaining - DESKTOP_APPROVAL_RECEIPT_FADE_MS);
+  return `<div class="chat-approval-receipt chat-approval-receipt-${escHtml(statusLabel)}" data-approval-id="${escHtml(approval.id)}" style="animation-delay:${delay}ms" role="status">
+    <span class="chat-approval-receipt-mark" aria-hidden="true">${statusLabel === 'approved' ? '&#10003;' : '&#10005;'}</span>
+    <span>${escHtml(verb)}</span>
+    <span class="chat-approval-receipt-title">${escHtml(approval.title || '')}</span>
+  </div>`;
+}
+// Teams and Subagents chats reuse the same receipt so all desktop chats behave alike.
+window.promApprovalResolvedReceipt = renderResolvedApprovalReceipt;
+
 function renderInlineApprovalRequest(item) {
   if (!item || !item.id) return '';
+  if (item.receiptDone === true && String(item.status || 'pending').toLowerCase() !== 'pending') return '';
   const approval = normalizeChatApprovalRecord(item);
   const risk = getApprovalRiskLevel(approval.riskScore || 0);
   const systems = Array.isArray(approval.affectedSystems) ? approval.affectedSystems.filter(Boolean) : [];
   const pending = approval.status === 'pending';
   const statusLabel = approval.status === 'approved' ? 'approved' : approval.status === 'rejected' ? 'denied' : approval.status;
+  if (!pending) return renderResolvedApprovalReceipt(approval, statusLabel);
   const idArg = encodeInlineJsString(approval.id);
   const approveEndpoint = encodeInlineJsString(`/api/approvals/${approval.id}/approve`);
   const denyEndpoint = encodeInlineJsString(`/api/approvals/${approval.id}/deny`);
@@ -44710,7 +44818,7 @@ function renderInlineApprovalRequest(item) {
       </div>
       <div class="chat-approval-badges">
         <span class="chat-approval-status chat-approval-status-${escHtml(statusLabel)}">${escHtml(statusLabel)}</span>
-        ${pending ? `<span class="chat-approval-risk">risk ${escHtml(String(approval.riskScore ?? 0))}</span>` : ''}
+        ${pending ? `<span class="chat-approval-risk" title="Risk score ${escHtml(String(approval.riskScore ?? 0))} of 10">${escHtml(risk)} risk</span>` : ''}
       </div>
     </div>
     ${renderContentReview(approval)}
@@ -45124,7 +45232,8 @@ function updateStreamingApprovalStatus(sessionId, id, status = '', event = {}) {
 function renderStreamingApprovals(items = []) {
   const visible = (Array.isArray(items) ? items : []).filter((item) => item && item.id);
   if (!visible.length) return '';
-  return `<div class="chat-live-approvals">${visible.map((item) => renderInlineApprovalRequest(item)).join('')}</div>`;
+  const html = visible.map((item) => renderInlineApprovalRequest(item)).join('');
+  return html ? `<div class="chat-live-approvals">${html}</div>` : '';
 }
 
 async function showInlineApprovalFromEvent(event = {}) {
@@ -45148,6 +45257,7 @@ async function showInlineApprovalFromEvent(event = {}) {
 function updateInlineApprovalStatusFromEvent(event = {}, status = '') {
   const id = String(event.approvalId || event.id || event.approval?.id || '').trim();
   if (!id) return;
+  if (status && status !== 'pending') noteDesktopApprovalResolved(id);
   const sessionId = String(event.sessionId || event.approval?.sessionId || event.approval?.sourceSessionId || window.activeChatSessionId || '').trim();
   updateStreamingApprovalStatus(sessionId, id, status, event.approval || event);
   const targetSessions = sessionId ? [getChatSessionById(sessionId)].filter(Boolean) : (window.chatSessions || []);

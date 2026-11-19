@@ -170,6 +170,11 @@ function renderSubagentInlineApprovalCard(input = {}) {
   const status = String(approval.status || 'pending').toLowerCase();
   const pending = status === 'pending';
   const statusLabel = status === 'rejected' ? 'denied' : status;
+  if (!pending) {
+    return typeof window.promApprovalResolvedReceipt === 'function'
+      ? window.promApprovalResolvedReceipt({ ...approval, resolvedAt: approval.resolvedAt || input.resolvedAt }, statusLabel)
+      : '';
+  }
   const idArg = subagentChatJsArg(approval.id);
   const approveEndpoint = subagentChatJsArg(`/api/approvals/${approval.id}/approve`);
   const denyEndpoint = subagentChatJsArg(`/api/approvals/${approval.id}/deny`);
@@ -190,7 +195,7 @@ function renderSubagentInlineApprovalCard(input = {}) {
       </div>
       <div class="chat-approval-badges">
         <span class="chat-approval-status chat-approval-status-${escHtml(statusLabel)}">${escHtml(statusLabel)}</span>
-        ${pending ? `<span class="chat-approval-risk">risk ${escHtml(String(approval.riskScore ?? 0))}</span>` : ''}
+        ${pending ? `<span class="chat-approval-risk" title="Risk score ${escHtml(String(approval.riskScore ?? 0))} of 10">${Number(approval.riskScore || 0) >= 7 ? 'high' : Number(approval.riskScore || 0) >= 4 ? 'medium' : 'low'} risk</span>` : ''}
       </div>
     </div>
     ${approval.summary ? `<div class="chat-approval-detail">${escHtml(approval.summary)}</div>` : ''}

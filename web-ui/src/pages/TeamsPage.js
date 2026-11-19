@@ -166,6 +166,11 @@ function renderTeamInlineApprovalCard(input = {}) {
   const status = String(approval.status || 'pending').toLowerCase();
   const pending = status === 'pending';
   const statusLabel = status === 'rejected' ? 'denied' : status;
+  if (!pending) {
+    return typeof window.promApprovalResolvedReceipt === 'function'
+      ? window.promApprovalResolvedReceipt({ ...approval, resolvedAt: approval.resolvedAt || input.resolvedAt }, statusLabel)
+      : '';
+  }
   const idArg = encodeTeamInlineJsString(approval.id);
   const approveEndpoint = encodeTeamInlineJsString(`/api/approvals/${approval.id}/approve`);
   const denyEndpoint = encodeTeamInlineJsString(`/api/approvals/${approval.id}/deny`);
@@ -186,7 +191,7 @@ function renderTeamInlineApprovalCard(input = {}) {
       </div>
       <div class="chat-approval-badges">
         <span class="chat-approval-status chat-approval-status-${escHtml(statusLabel)}">${escHtml(statusLabel)}</span>
-        ${pending ? `<span class="chat-approval-risk">risk ${escHtml(String(approval.riskScore ?? 0))}</span>` : ''}
+        ${pending ? `<span class="chat-approval-risk" title="Risk score ${escHtml(String(approval.riskScore ?? 0))} of 10">${escHtml(teamApprovalRiskLevel(approval.riskScore))} risk</span>` : ''}
       </div>
     </div>
     ${renderContentReview(approval)}

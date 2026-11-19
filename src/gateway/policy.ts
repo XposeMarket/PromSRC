@@ -115,6 +115,19 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
   },
 ];
 
+// ─── User-facing reasons ─────────────────────────────────────────────────────
+// These strings reach the approval card verbatim, so they are written for the
+// person approving, not for developers.
+
+export const UNKNOWN_TOOL_REASON =
+  "This tool hasn't declared what it can change, so Prometheus asks before running it.";
+
+export function capabilityTierReason(tier: 'read' | 'propose' | 'commit'): string {
+  if (tier === 'commit') return 'This can act outside this chat (send, post, delete or run programs), so it needs your OK.';
+  if (tier === 'propose') return 'This saves or changes something on this computer, so it needs your OK.';
+  return 'This only looks things up and does not change anything.';
+}
+
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 export type PolicyTier = 'read' | 'propose' | 'commit';
@@ -192,7 +205,7 @@ class PolicyEngine {
       return {
         tier: 'commit',
         riskScore: 10,
-        reason: 'Tool has no explicit capability metadata — failing closed to COMMIT',
+        reason: UNKNOWN_TOOL_REASON,
         affectedSystems: [],
         matchedRule: null,
         capabilities,
@@ -212,7 +225,7 @@ class PolicyEngine {
         riskScore: Math.max(matchedRule.riskScore, tier === 'commit' ? 8 : tier === 'propose' ? 4 : 0),
         reason: tier === matchedRule.tier
           ? matchedRule.description
-          : `${matchedRule.description}; explicit capabilities require ${tier.toUpperCase()} handling`,
+          : `${matchedRule.description}. ${capabilityTierReason(tier)}`,
         affectedSystems: this.inferAffectedSystems(toolName, args),
         matchedRule,
         capabilities,
@@ -226,9 +239,7 @@ class PolicyEngine {
     return {
       tier,
       riskScore: tier === 'commit' ? 10 : tier === 'propose' ? 5 : 0,
-      reason: capabilities.known
-        ? `Explicit tool capabilities require ${tier.toUpperCase()} handling`
-        : 'Tool has no explicit capability metadata — failing closed to COMMIT',
+      reason: capabilities.known ? capabilityTierReason(tier) : UNKNOWN_TOOL_REASON,
       affectedSystems: [],
       matchedRule: null,
       capabilities,
