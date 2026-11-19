@@ -649,8 +649,9 @@ export class CodexAdapter implements ExternalAgentAdapter {
       if (!fallback) return first.result;
       input.emit({ type: 'notice', text: `Codex's configured model isn't available in this Codex version, so this chat is using ${fallback.label}. Update Codex or pick a model to change it.` });
       const retry = await this.sendTurn(input, held, threadId, text, { startModel: fallback.id, reportModel: fallback.id });
-      if (retry.result.status === 'failed') return first.result;
-      return retry.result.status === 'completed' ? { ...retry.result, fallbackModel: fallback.id } : retry.result;
+      // The retry ran, so its own answer is the result, even when it failed. The fallback model is marked
+      // as accepted once the retry completed or did any work.
+      return retry.result.status === 'completed' || retry.touched ? { ...retry.result, fallbackModel: fallback.id } : retry.result;
     } catch (error: any) {
       return {
         upstreamSessionId: threadId,

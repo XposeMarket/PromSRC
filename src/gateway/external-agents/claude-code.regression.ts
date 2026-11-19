@@ -63,6 +63,21 @@ async function main() {
   const bash = claudeRequestCard('Bash', { command: 'ls', description: 'List files' }, '/fixture');
   assert.equal(bash.kind, 'command'); assert.equal(bash.detail.command, 'ls'); assert.equal(bash.detail.reason, 'List files');
 
+  const notebookDelete = claudeRequestCard('NotebookEdit', { notebook_path: '/p/n.ipynb', cell_id: 'cell-7', edit_mode: 'delete' }, '/fixture');
+  assert.equal(notebookDelete.title, 'Claude Code wants to delete a notebook cell');
+  assert.ok(notebookDelete.detail.reason?.includes('Cell id: cell-7'), 'the cell id is shown');
+  assert.equal(notebookDelete.detail.preview, undefined, 'a delete has no preview');
+  assert.equal(notebookDelete.detail.files?.[0], '/p/n.ipynb');
+  const notebookInsert = claudeRequestCard('NotebookEdit', { notebook_path: '/p/n.ipynb', cell_id: 'c2', cell_type: 'code', edit_mode: 'insert', new_source: 'print(1)' }, '/fixture');
+  assert.equal(notebookInsert.title, 'Claude Code wants to insert a notebook cell');
+  assert.ok(notebookInsert.detail.reason?.includes('Cell type: code'));
+  assert.equal(notebookInsert.detail.preview, 'print(1)');
+  assert.equal(claudeRequestCard('NotebookEdit', { notebook_path: '/p/n.ipynb', new_source: 'x' }, '/fixture').title, 'Claude Code wants to edit a notebook cell', 'edit is the default');
+  const multi = claudeRequestCard('MultiEdit', { file_path: 'f', edits: [{ old_string: 'a', new_string: 'b' }], replace_all: true }, '/fixture');
+  assert.ok(/all occurrences/.test(multi.detail.reason || ''), 'MultiEdit with replace_all says so');
+  const extra = claudeRequestCard('Write', { file_path: 'f', content: 'x', mystery: { a: 1 } }, '/fixture');
+  assert.ok(extra.detail.reason?.includes('mystery: {"a":1}'), 'an unknown argument is listed in the reason line');
+  assert.equal(extra.detail.preview, 'x');
   console.log('claude-code regression: ok (fake SDK; real SDK module load only)');
 }
 main().catch((error) => { console.error(error); process.exitCode = 1; });
