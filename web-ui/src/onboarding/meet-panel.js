@@ -13,7 +13,7 @@ export function showMeetPanel() {
     root.innerHTML = `
       <div class="prom-onb-card" role="dialog" aria-modal="true" aria-label="Meet Prometheus">
         <div class="prom-onb-header">
-          <div class="prom-onb-step">Step · Meet Prom</div>
+          <div class="prom-onb-step">Step 2 of 3 · Meet Prom</div>
           <button class="prom-onb-skip" data-skip>Skip — I'll introduce myself later</button>
         </div>
         <div class="prom-onb-body">

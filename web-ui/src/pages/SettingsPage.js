@@ -3276,6 +3276,11 @@ async function loadChromeProfileSettings() {
   }
 }
 
+// The toggle already shows on/off; the hint under the label only explains what "on" does.
+function chromeSigninStatusText(data) {
+  return data?.enabled ? 'Opening a site copies its Chrome sign-in.' : '';
+}
+
 async function loadChromeSigninSync() {
   const toggle = document.getElementById('settings-chrome-signin-sync-toggle');
   const status = document.getElementById('settings-chrome-signin-sync-status');
@@ -3283,7 +3288,7 @@ async function loadChromeSigninSync() {
     // api() adds the paired-device token; raw fetch fails with 401 through the funnel/phone.
     const data = await api('/api/browser/chrome-signin-sync', { dedupe: false });
     if (toggle) toggle.checked = data?.enabled === true;
-    if (status) status.textContent = data?.enabled ? 'On: opening a site copies its Chrome sign-in.' : 'Off.';
+    if (status) status.textContent = chromeSigninStatusText(data);
   } catch (error) {
     if (status) status.textContent = `Could not read this setting: ${error?.message || error}`;
   }
@@ -3297,7 +3302,7 @@ async function setChromeSigninSync(enabled) {
       body: JSON.stringify({ enabled: enabled === true }),
     });
     if (data?.success === false) throw new Error(data?.error || 'Save failed');
-    if (status) status.textContent = data?.enabled ? 'On: opening a site copies its Chrome sign-in.' : 'Off.';
+    if (status) status.textContent = chromeSigninStatusText(data);
   } catch (error) {
     if (status) status.textContent = `Could not save: ${error?.message || error}`;
     await loadChromeSigninSync();
