@@ -33,6 +33,34 @@ const READ_ONLY_TOOLS = new Set([
   'desktop_pixel_watch', 'desktop_list_macros', 'desktop_list_apps',
   'desktop_list_windows', 'desktop_get_window_state', 'desktop_locate_text',
   'connector_list', 'automation_dashboard', 'diagnostic_packet', 'system_diagnostics',
+  // Conversation control: these only talk to the user in this chat, track the
+  // visible plan, or load tool schemas. Any real action they lead to (a tool
+  // loaded by request_tool_category, a tool reached through tool_call) is
+  // gated on its own name when it runs.
+  'ask_prometheus_questions', 'await_prometheus_question_response',
+  'declare_plan', 'complete_plan_step', 'step_complete', 'bg_plan_declare', 'bg_plan_advance',
+  'request_tool_category', 'tool_search', 'tool_describe', 'tool_result_read',
+  'switch_model', 'request_browser_login',
+  // Native UI cards: keyless lookups rendered in the chat.
+  'show_ui_card', 'show_sources', 'show_product_carousel', 'show_agent_work',
+  'show_market', 'show_stocks', 'show_weather', 'show_comparison', 'show_chart',
+  'show_run_result', 'show_prediction_market', 'show_map',
+  // Reading progress/results of work that was already approved to start.
+  'background_wait', 'background_progress', 'background_status', 'get_agent_result',
+  'get_agent_models', 'list_agent_model_templates', 'schedule_job_history',
+  'schedule_job_detail', 'schedule_job_outputs', 'schedule_job_log_search',
+  'list_entities', 'read_entity', 'list_composites', 'brain_activity_read',
+  'brain_context_search', 'memory_debug_search', 'memory_review_claims',
+  // Prometheus source reads (siblings of read_source/list_source above).
+  'read_webui_source', 'grep_source', 'grep_webui_source', 'list_webui_source',
+  'read_dev_sources', 'read_prom_file', 'grep_prom', 'list_prom', 'source_stats_batch',
+  'validate_source', 'validate_webui_source', 'scan_secrets', 'scan_large_files',
+  'operation_plan', 'tool_benchmark_summary',
+  // Browser reads and navigation. Clicking, typing and running page scripts
+  // stay in EXTERNAL_WRITE_TOOLS below.
+  'browser_open', 'browser_new_tab', 'browser_select_tab', 'browser_list_tabs',
+  'browser_scroll', 'browser_scroll_collect', 'browser_scroll_collect_v2',
+  'browser_wait', 'browser_doctor', 'inspect_console',
 ]);
 
 const LOCAL_WRITE_TOOLS = new Set([
@@ -52,6 +80,12 @@ const LOCAL_WRITE_TOOLS = new Set([
   'desktop_wait_for_change', 'desktop_diff_screenshot',
   'desktop_background_prepare_sandbox', 'desktop_record_macro', 'desktop_stop_macro',
   'trigger_ops',
+  // Local state changes: still approval-gated on Default permissions, but
+  // with an honest "changes something on this computer" label instead of the
+  // unknown-tool fallback.
+  'append_file', 'git_commit', 'timer', 'business_context_mode', 'update_heartbeat',
+  'set_current_model', 'background_spawn', 'background_steer', 'spawn_subagent',
+  'save_site_shortcut', 'browser_close', 'browser_close_tab',
 ]);
 
 const DESTRUCTIVE_TOOLS = new Set([
@@ -78,6 +112,9 @@ const EXTERNAL_WRITE_TOOLS = new Set([
   'desktop_window_type', 'desktop_window_press_key', 'desktop_window_scroll',
   'desktop_window_drag', 'desktop_screen', 'desktop_apps', 'desktop_window',
   'desktop_input', 'desktop_macro', 'desktop_background',
+  // Can reach Telegram/Discord/other channels or act inside logged-in pages.
+  'delivery_send', 'browser_run_js', 'browser_type', 'browser_drag',
+  'browser_vision_click', 'browser_vision_type',
 ]);
 
 const READ_ONLY: ToolCapabilityMetadata = Object.freeze({

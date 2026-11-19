@@ -5047,8 +5047,59 @@ body:not(.pm-mobile-active) :is(#model-switcher-popover, [data-model-switcher-po
   border: 0;
   color: #fff;
 }
-.chat-approval-approve { background: #16a34a; }
-.chat-approval-deny { background: #dc2626; }
+/* Theme-aware actions: the primary button uses the theme's own text/background
+   pair, and Reject is a quiet outlined button with a red hint, so cards match
+   every theme instead of shouting saturated green/red. */
+.chat-approval-approve {
+  background: var(--text);
+  color: var(--bg, var(--panel));
+}
+.chat-approval-approve:hover { filter: brightness(0.92); }
+.chat-approval-deny {
+  background: transparent;
+  border: 1px solid color-mix(in srgb, #ef4444 45%, var(--line));
+  color: color-mix(in srgb, #ef4444 70%, var(--text));
+}
+.chat-approval-deny:hover { background: color-mix(in srgb, #ef4444 12%, transparent); }
+.chat-approval-risk { text-transform: capitalize; }
+
+/* Resolved approvals: a one-line receipt that fades and collapses, matching
+   mobile, instead of a permanent "Approval result" card. */
+.chat-approval-receipt {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: min(460px, 100%);
+  margin: 2px 0 4px;
+  padding: 5px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--panel) 60%, transparent);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  overflow: hidden;
+  animation: chatApprovalReceiptOut 600ms ease forwards;
+}
+.chat-approval-receipt-title {
+  color: var(--text);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chat-approval-receipt-mark { font-size: 11px; }
+.chat-approval-receipt-approved .chat-approval-receipt-mark { color: color-mix(in srgb, #22c55e 75%, var(--text)); }
+.chat-approval-receipt-denied .chat-approval-receipt-mark,
+.chat-approval-receipt-failed .chat-approval-receipt-mark,
+.chat-approval-receipt-expired .chat-approval-receipt-mark { color: color-mix(in srgb, #ef4444 75%, var(--text)); }
+@keyframes chatApprovalReceiptOut {
+  from { opacity: 1; max-height: 40px; }
+  to { opacity: 0; max-height: 0; margin: 0; padding-top: 0; padding-bottom: 0; border-width: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-approval-receipt { animation-duration: 1ms; }
+}
 .chat-approval-link {
   border: 1px solid var(--line);
   background: transparent;
