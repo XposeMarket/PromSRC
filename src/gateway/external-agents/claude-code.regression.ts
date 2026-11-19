@@ -75,6 +75,8 @@ async function main() {
   assert.equal(claudeRequestCard('NotebookEdit', { notebook_path: '/p/n.ipynb', new_source: 'x' }, '/fixture').title, 'Claude Code wants to edit a notebook cell', 'edit is the default');
   const multi = claudeRequestCard('MultiEdit', { file_path: 'f', edits: [{ old_string: 'a', new_string: 'b' }], replace_all: true }, '/fixture');
   assert.ok(/all occurrences/.test(multi.detail.reason || ''), 'MultiEdit with replace_all says so');
+  const perEdit = claudeRequestCard('MultiEdit', { file_path: 'f', edits: [{ old_string: 'a', new_string: 'b', replace_all: true }, { old_string: 'c', new_string: 'd' }] }, '/fixture');
+  assert.equal((perEdit.detail.preview || '').match(/replaces all occurrences/g)?.length, 1, 'a per-edit replace_all is shown on that edit only');
   const extra = claudeRequestCard('Write', { file_path: 'f', content: 'x', mystery: { a: 1 } }, '/fixture');
   assert.ok(extra.detail.reason?.includes('mystery: {"a":1}'), 'an unknown argument is listed in the reason line');
   assert.equal(extra.detail.preview, 'x');

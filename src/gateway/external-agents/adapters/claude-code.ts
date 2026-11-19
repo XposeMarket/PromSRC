@@ -61,7 +61,13 @@ export function claudeRequestCard(name: string, args: Record<string, unknown>, c
     const edits: unknown[] = Array.isArray(args.edits) ? args.edits : [];
     detail.preview = edits.map((item) => {
       const edit: Record<string, unknown> = typeof item === 'object' && item !== null ? (item as Record<string, unknown>) : {};
-      return editBlock(rawText(edit.old_string), rawText(edit.new_string));
+      const block = editBlock(rawText(edit.old_string), rawText(edit.new_string));
+      // replace_all belongs to each edit: say it next to the edit it widens, with any other per-edit option.
+      const notes = [
+        ...(edit.replace_all === true ? ['(replaces all occurrences)'] : []),
+        ...Object.keys(edit).filter((key) => !['old_string', 'new_string', 'replace_all'].includes(key)).map((key) => `(${key}: ${JSON.stringify(edit[key])})`),
+      ];
+      return notes.length ? `${notes.join('\n')}\n${block}` : block;
     }).join('\n\n');
     replaceAll();
   } else if (name === 'NotebookEdit') {

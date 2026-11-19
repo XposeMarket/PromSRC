@@ -215,7 +215,7 @@ function placeFallback(el) {
 function fallbackNodes(name, retry) {
   const title = document.createElement('strong');
   title.className = 'ea-card-fallback-title';
-  title.textContent = `${name} needs your answer, but the card could not load.`;
+  title.textContent = `${name} needs your attention, but the card could not load.`;
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.className = 'ea-card-fallback-btn';
