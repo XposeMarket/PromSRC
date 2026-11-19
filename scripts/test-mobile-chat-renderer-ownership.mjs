@@ -174,6 +174,8 @@ const measurements = {
 // drawer: measured 306022 gzip (+2879 over #899's 303143). Retain ~0.1% allowance.
 // #907 OpenAI Dots: dot chats in the drawer, the contact placeholder and logo on the mobile
 // chat page: measured 306575 gzip (+553 over #903's 306022). Retain ~0.1% allowance.
-assert(measurements.gzipBytes <= 306880, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
+// Merge train 2026-11-19: #911 verified second-gateway save plus #912-#914 on top of #899/#903/#907:
+// measured 307294 gzip on the combined tree. Retain ~0.1% allowance.
+assert(measurements.gzipBytes <= 307600, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
 console.log(JSON.stringify({ buildId: manifest.buildId, measurements, rendererOutput }, null, 2));
 console.log('Mobile Chat renderer ownership contract passed.');
