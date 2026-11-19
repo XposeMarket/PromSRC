@@ -142,6 +142,7 @@ function loadCard() {
   return cardModule;
 }
 
+
 function collectAnswers(el, req) {
   const answers = {};
   for (const q of (req.detail?.questions || [])) {
@@ -178,17 +179,62 @@ export function showExternalAgentRequest(req, sessionId) {
   });
   // Claimed before the card markup loads, so the same request is never shown twice.
   st.cards.set(req.requestId, { request: req, el });
-  loadCard().then((card) => {
-    // Answered or replaced while the markup was loading.
-    if (st.cards.get(req.requestId)?.el !== el) return;
+  loadOrFallback(el, agentName(req.agentId), (card) => {
     el.className = card.cardClass();
     el.innerHTML = card.cardHtml(req);
     card.cardHost().appendChild(el);
     el.scrollIntoView?.({ block: 'nearest' });
-  }).catch(() => {
-    // Not shown: forget it so the next sync (reconnect, chat switch) tries again.
-    if (st.cards.get(req.requestId)?.el === el) st.cards.delete(req.requestId);
+  }, () => st.cards.get(req.requestId)?.el === el);
+}
+
+// The request stays claimed while the card loads or fails: a failed load shows a fallback
+// (no Allow button) instead of dropping the request the harness is waiting on.
+const CARD_RETRY_MS = [500, 1500];
+function loadCardWithRetry() {
+  return loadCard().catch(async (error) => {
+    let last = error;
+    for (const ms of CARD_RETRY_MS) {
+      await new Promise((resolve) => setTimeout(resolve, ms));
+      try { return await loadCard(); } catch (e) { last = e; }
+    }
+    throw last;
   });
+}
+
+// Same spots as the card host (phone: end of chat, desktop: top of composer, else body).
+function placeFallback(el) {
+  const phone = document.body.classList.contains('pm-mobile-active');
+  const chat = phone ? document.getElementById('pm-chat-body') : null;
+  const composer = phone ? null : document.querySelector('#chat-view > .chat-input-area:not([data-canonical-secondary-composer])');
+  if (chat) chat.appendChild(el);
+  else if (composer) composer.prepend(el);
+  else { el.classList.add('ea-card-fallback-float'); document.body.appendChild(el); }
+}
+
+// Built with createElement/textContent only: no request data goes through innerHTML.
+function fallbackNodes(name, retry) {
+  const title = document.createElement('strong');
+  title.className = 'ea-card-fallback-title';
+  title.textContent = `${name} needs your answer, but the card could not load.`;
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'ea-card-fallback-btn';
+  btn.textContent = 'Try again';
+  btn.addEventListener('click', () => { btn.disabled = true; retry(); });
+  return [title, btn];
+}
+
+function loadOrFallback(el, name, paint, isCurrent) {
+  const run = () => loadCardWithRetry().then((card) => {
+    if (isCurrent()) paint(card);
+  }, () => {
+    if (!isCurrent()) return;
+    el.hidden = false;
+    el.className = 'ea-card-fallback';
+    el.replaceChildren(...fallbackNodes(name, run));
+    placeFallback(el);
+  });
+  return run();
 }
 
 
@@ -224,8 +270,7 @@ function showMissingSession(sessionId) {
   // Claimed before the card markup loads, so a second event cannot add a second notice.
   section.hidden = true;
   document.body.appendChild(section);
-  loadCard().then((card) => {
-    if (!section.isConnected) return;
+  loadOrFallback(section, agentName(st.bindings.get(String(sessionId))?.agentId), (card) => {
     section.className = card.cardClass();
     section.innerHTML = card.missingHtml();
     section.querySelector('button').addEventListener('click', async (event) => {
@@ -241,8 +286,9 @@ function showMissingSession(sessionId) {
     });
     card.cardHost().appendChild(section);
     section.hidden = false;
-  }).catch(() => { section.remove(); });
+  }, () => section.isConnected);
 }
+
 
 
 /** Stream hook: returns true when the event was an external-agent event. */
