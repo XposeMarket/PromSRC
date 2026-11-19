@@ -88,14 +88,17 @@ export function renderReasoningSelector({
   advancedLabel = 'Advanced',
   advancedAriaLabel = 'Open Advanced model, provider, speed, and reasoning controls',
   className = '',
+  // Connected agents report their own levels and model names.
+  options: optionsOverride,
+  modelLabel = '',
 } = {}) {
-  const options = reasoningSelectorOptions(provider, model);
+  const options = optionsOverride !== undefined ? (optionsOverride?.length ? optionsOverride : null) : reasoningSelectorOptions(provider, model);
   const current = String(effort || '').trim().toLowerCase();
   const selectedIndex = Math.max(0, options ? Math.max(0, options.indexOf(current)) : 0);
   const selectedProgress = options && options.length > 1 ? selectedIndex / (options.length - 1) : 0;
   const selectedFillWidth = options && options.length ? reasoningSliderFillWidth(selectedProgress, options.length) : '0px';
   const selectedWheelRotation = wheelRotation(selectedProgress, options?.length || 1);
-  const modelName = model ? formatModelDisplayName(model, provider) : 'Default model';
+  const modelName = modelLabel || (model ? formatModelDisplayName(model, provider) : 'Default model');
   const effortName = options ? formatReasoningSelectorLabel(options[selectedIndex], provider, model) : 'Default';
   const rootId = safeId(selectorId);
   const safeControlId = safeId(controlId, `${rootId}-control`);

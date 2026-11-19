@@ -134,6 +134,21 @@ jobs:
         run: npx tsx src/gateway/tools/composite-tools.regression.ts
       - name: Verify provider-neutral connector policy
         run: npx tsx src/gateway/connector-tool-capabilities.regression.ts && npx tsx src/extensions/runtime-registry.performance.regression.ts
+      - name: Verify connected agent harnesses
+        run: |
+          npx tsx src/gateway/external-agents/external-agents.regression.ts
+          npx tsx src/gateway/external-agents/acp.regression.ts
+          npx tsx src/gateway/external-agents/claude-code.regression.ts
+          npx tsx src/gateway/external-agents/file-touches.regression.ts
+          npx tsx src/gateway/external-agents/models.regression.ts
+          npx tsx src/gateway/external-agents/scratch-folders.regression.ts
+          npx tsx src/gateway/external-agents/native-tool-map.regression.ts
+          npx tsx src/gateway/dots/dots.regression.ts
+      - name: Verify projects (instructions, notes, linked folders)
+        run: |
+          npx tsx src/gateway/projects/project-notes.regression.ts
+          npx tsx src/gateway/projects/project-folder-access.regression.ts
+          npx tsx src/gateway/projects/project-membership.regression.ts
       - name: Verify public web source sync
         run: |
           npm run check:web-ui

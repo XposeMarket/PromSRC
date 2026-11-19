@@ -13,7 +13,9 @@ let drawerMorphModule;
 const loadDrawerMorph = () => drawerMorphModule ||= import('./mobile-drawer-search-morph.js').catch(error => { drawerMorphModule = null; throw error; });
 import { resolveDrawerActiveRun } from './mobile-turn-lifecycle.js';
 import { initMobileModelBadge, mobileModelBadgeSeedLabel, attachMobileButtonHaptic, attachMobileHapticGestureSurface, disposeMobileHapticGestureSurfaces, pmHaptic } from './mobile-model-badge.js';
-import { mobileGatewayFetch, buildWorkspaceCanvasUrl, attachMobileSessionToProject, detachMobileSessionFromProject } from './mobile-api.js';
+import { mobileGatewayFetch, buildWorkspaceCanvasUrl, attachMobileSessionToProject, detachMobileSessionFromProject, createMobileProject, updateMobileProject } from './mobile-api.js';
+import { mountMoveNewProjectForm, projectFolderFieldHtml, wireProjectFolderField, readProjectFolder } from '../chat/project-folder-field.js';
+import { initHarnessSidebar, harnessProjectsHtml, harnessFilterButtonHtml, isSessionVisibleForHarnessFilter, isHarnessVisible } from '../chat/external-agent-sidebar.js';
 import {
   getGateway,
   getGatewayFilter,
@@ -1790,6 +1792,12 @@ function _mountDrawerGatewayFilterPanel() {
 export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSession, loadSessions, searchSessions }) {
   const root = document.getElementById('mobile-root');
   _shellOnNavigate = onNavigate;
+  initHarnessSidebar({
+    surface: 'mobile',
+    request: mobileGatewayFetch,
+    rerender: () => { if (_drawerEl?.isConnected && _drawerCallbacks) _renderDrawerSessions({ ..._drawerCallbacks, preserveScroll: true }).catch(() => {}); },
+    newChat: async () => { closeDrawer(); await _drawerCallbacks?.onNewChat?.(); },
+  });
   const existingApp = root?.querySelector(':scope > #pm-app');
   const existingPage = existingApp?.querySelector(':scope > #pm-page');
   const existingTabbar = existingApp?.querySelector(':scope > .pm-tabbar');
@@ -2199,7 +2207,7 @@ function _sessionPageHtml(pageState, emptyText) {
   if (!sessions.length && pageState?.error) return '<div class="pm-session-empty">Could not load sessions.</div>';
   // Filter out pinned sessions — they appear in the dedicated pinned section above
   const projectSessionIds = new Set(_drawerProjects.flatMap((project) => (project.sessions || []).map((session) => String(session?.id || ''))));
-  const visibleSessions = sessions.filter((session) => !_isDrawerHiddenRuntimeSession(session));
+  const visibleSessions = sessions.filter((session) => !_isDrawerHiddenRuntimeSession(session) && isSessionVisibleForHarnessFilter(session));
   const unpinned = _drawerSessionView === 'settled'
     ? visibleSessions.filter((session) => !projectSessionIds.has(String(session?.id || '')) && !session?.projectId && session?.source !== 'project')
     : visibleSessions.filter((session) => !_isPinned(session?.id) && !projectSessionIds.has(String(session?.id || '')) && !session?.projectId && session?.source !== 'project');
@@ -2208,7 +2216,7 @@ function _sessionPageHtml(pageState, emptyText) {
   // final click simply confirms there is no additional page.
   const showLoadMore = pageState?.hasMore === true || Number(pageState?.lastPageSize || 0) >= PM_DRAWER_SESSION_PAGE_SIZE;
   if (!unpinned.length && !showLoadMore && !pageState?.loading) {
-    return `<div class="pm-session-empty">${emptyText}</div>` + (_drawerSessionView === 'settled'
+    return `<div class="pm-session-empty">${emptyText}</div>` + harnessFilterButtonHtml() + (_drawerSessionView === 'settled'
       ? '<button class="pm-session-load-more pm-settled-back" type="button" data-active-session-view>Back to chats</button>'
       : '<button class="pm-session-load-more pm-settled-entry" type="button" data-settled-session-view>Settled</button>');
   }
@@ -2217,6 +2225,7 @@ function _sessionPageHtml(pageState, emptyText) {
     pageState?.error ? '<div class="pm-session-empty">Could not load more chats.</div>' : '',
     showLoadMore ? `<button class="pm-session-load-more" type="button" data-session-load-more>${_drawerSessionView === 'settled' ? 'Load more settled chats' : 'Load more chats'}</button>` : '',
     pageState?.loading ? '<div class="pm-session-empty pm-session-loading">Loading more...</div>' : '',
+    harnessFilterButtonHtml(),
     _drawerSessionView === 'settled'
       ? '<button class="pm-session-load-more pm-settled-back" type="button" data-active-session-view>Back to chats</button>'
       : '<button class="pm-session-load-more pm-settled-entry" type="button" data-settled-session-view>Settled</button>',
@@ -2365,7 +2374,7 @@ function _renderDrawerPinnedSessions(pageState, pinnedOverride = null) {
   var sessions = _hydrateDrawerSessionStates(sourceSessions);
   var localOrder = _getPinnedSessionIds();
   var pinnedSessions = sessions.filter(function(session) {
-    return !_isDrawerHiddenRuntimeSession(session) && _isPinned(session && session.id);
+    return !_isDrawerHiddenRuntimeSession(session) && _isPinned(session && session.id) && isSessionVisibleForHarnessFilter(session);
   });
   pinnedSessions.sort(function(a, b) {
     // Server sidebarOrder (shared with desktop drag) beats pin time.
@@ -2624,11 +2633,17 @@ function _renderDrawerProjects() {
   const projectsEl = _drawerEl?.querySelector('#pm-drawer-project-list');
   if (!projectsEl) return;
   if (_drawerSessionView === 'settled') { projectsEl.innerHTML = ''; return; }
-  const projects = _drawerProjects;
-  projectsEl.innerHTML = projects.length
+  const projects = isHarnessVisible('prometheus') ? _drawerProjects : [];
+  // After the last Prometheus project: one collapsible section per connected harness.
+  const pageSessions = _drawerPageStateFor().sessions || [];
+  const harness = harnessProjectsHtml({
+    surface: 'mobile',
+    chatRow: (c) => _sessionButtonHtml({ id: c.id, title: c.title, lastMessageAt: c.lastMessageAt, ...(pageSessions.find((s) => String(s?.id || '') === c.id) || {}) }, { projectChild: true }),
+  });
+  projectsEl.innerHTML = (projects.length || harness)
     ? '<div class="pm-drawer-project-section">' +
       '<button class="pm-drawer-section-title pm-drawer-project-toggle" type="button" data-drawer-project-toggle aria-expanded="' + String(!_drawerProjectsCollapsed) + '" aria-controls="pm-drawer-project-content"><span>Projects</span><span class="pm-drawer-pinned-chevron" aria-hidden="true">' + ICONS.chev + '</span></button>' +
-      '<div class="pm-drawer-project-content" id="pm-drawer-project-content"' + (_drawerProjectsCollapsed ? ' hidden' : '') + '>' + projects.map(_projectButtonHtml).join('') + '</div>' +
+      '<div class="pm-drawer-project-content" id="pm-drawer-project-content"' + (_drawerProjectsCollapsed ? ' hidden' : '') + '>' + projects.map(_projectButtonHtml).join('') + harness + '</div>' +
       '</div>'
     : '';
   _wireDrawerLongPress(_sessLongCallbacks || {});
@@ -2711,7 +2726,8 @@ function _mobileSessionModelLogo(session) {
   const source = explicit.providerId && explicit.model ? explicit : (session?.lastModel || {});
   const provider = String(source.providerId || source.provider || '').toLowerCase();
   const model = String(source.model || '').toLowerCase();
-  const brand = provider === 'anthropic' || model.includes('claude') ? MOBILE_IMPORTED_SOURCE_BRANDS.claude
+  const brand = /(?:^|[^A-Za-z0-9])dot_[A-Za-z0-9]{8,}$/.test(String(session?.id || '')) ? MOBILE_IMPORTED_SOURCE_BRANDS.openai
+    : provider === 'anthropic' || model.includes('claude') ? MOBILE_IMPORTED_SOURCE_BRANDS.claude
     : provider === 'openai_codex' || model.includes('codex') ? MOBILE_IMPORTED_SOURCE_BRANDS.openai
     : provider === 'openai' || model.startsWith('gpt-') ? MOBILE_IMPORTED_SOURCE_BRANDS.chatgpt
     : provider === 'xai' || model.includes('grok') ? { label: 'xAI', asset: '/static/assets/import-sources/xai.svg', key: 'xai' }
@@ -2875,7 +2891,7 @@ function _openSessionContextSheet(sessionId, sessionTitle, callbacks, anchor = n
           '<span class="pm-sess-action-icon pm-i">' + settleIconSvg + '</span>' +
           '<span class="pm-msheet-row-label">' + (settled ? 'Unsettle chat' : 'Settle chat') + '</span>' +
         '</button>' +
-        (isProject ? '' : '<button type="button" class="pm-msheet-row pm-sess-action-row" data-sess-action="move-project"><span class="pm-msheet-row-label">Move to project\u2026</span></button>') +
+        (isProject ? '<button type="button" class="pm-msheet-row pm-sess-action-row" data-sess-action="project-settings"><span class="pm-msheet-row-label">Instructions & folder\u2026</span></button>' : '<button type="button" class="pm-msheet-row pm-sess-action-row" data-sess-action="move-project"><span class="pm-msheet-row-label">Move to project\u2026</span></button>') +
         (owningProject ? '<button type="button" class="pm-msheet-row pm-sess-action-row" data-sess-action="remove-project"><span class="pm-msheet-row-label">Remove from project</span></button>' : '') +
         '<button type="button" class="pm-msheet-row pm-sess-action-row pm-sess-action-delete" data-sess-action="delete">' +
           '<span class="pm-sess-action-icon pm-i">' + trashIconSvg + '</span>' +
@@ -2902,6 +2918,12 @@ function _openSessionContextSheet(sessionId, sessionTitle, callbacks, anchor = n
     pmHaptic(10);
     _closeSessionSheetImmediate();
     _openSessionRenameSheet(sessionId, sessionTitle, cb, itemType);
+  });
+
+  var projectSettingsBtn = sheet.querySelector('[data-sess-action="project-settings"]');
+  if (projectSettingsBtn) projectSettingsBtn.addEventListener('click', function() {
+    pmHaptic(10);
+    _openProjectSettingsSheet(project || { id: sessionId, name: sessionTitle });
   });
 
   var pinBtn = sheet.querySelector('[data-sess-action="pin"]');
@@ -3132,6 +3154,69 @@ function _openSessionRenameSheet(sessionId, currentTitle, callbacks, itemType = 
   });
 }
 
+// Project Instructions + linked folder (mobile parity with the desktop project panel).
+function _openProjectSettingsSheet(project) {
+  _closeSessionSheetImmediate();
+  var scrim = document.createElement('div');
+  scrim.id = 'pm-sess-sheet-scrim';
+  scrim.className = 'pm-msheet-scrim';
+  var sheet = document.createElement('div');
+  sheet.id = 'pm-sess-sheet';
+  sheet.className = 'pm-msheet pm-project-settings-sheet';
+  sheet.setAttribute('role', 'dialog');
+  sheet.setAttribute('aria-modal', 'true');
+  sheet.innerHTML =
+    '<div class="pm-msheet-handle"></div>' +
+    '<div class="pm-msheet-head">' +
+      '<div class="pm-msheet-title">' + escapeHtml(project.name || 'Project') + '</div>' +
+      '<button type="button" class="pm-msheet-close" aria-label="Close">&times;</button>' +
+    '</div>' +
+    '<div class="pm-msheet-body" id="pm-sess-sheet-body">' +
+      '<form class="pm-move-new-project pm-project-settings-form" novalidate>' +
+        '<label class="pm-project-folder-label" for="pm-project-instructions">Instructions</label>' +
+        '<textarea id="pm-project-instructions" class="pm-project-folder-input pm-project-instructions-input" rows="6" placeholder="Rules every chat in this project follows. Prometheus never edits these.">' + escapeHtml(project.instructions || '') + '</textarea>' +
+        projectFolderFieldHtml('pm-settings', project.workspacePath || '') +
+        '<div class="pm-move-new-project-error" role="alert" hidden></div>' +
+        '<div class="pm-move-new-project-actions">' +
+          '<button type="button" class="pm-move-btn" data-settings-cancel>Cancel</button>' +
+          '<button type="submit" class="pm-move-btn pm-move-btn-primary">Save</button>' +
+        '</div>' +
+      '</form>' +
+    '</div>';
+  document.body.appendChild(scrim);
+  document.body.appendChild(sheet);
+  requestAnimationFrame(function() { scrim.classList.add('open'); sheet.classList.add('open'); });
+  var close = function() { _closeSessionSheet(); };
+  scrim.addEventListener('click', close);
+  sheet.querySelector('.pm-msheet-close').addEventListener('click', close);
+  sheet.querySelector('[data-settings-cancel]').addEventListener('click', close);
+  wireProjectFolderField(sheet);
+  var form = sheet.querySelector('form');
+  var errorEl = sheet.querySelector('.pm-move-new-project-error');
+  form.addEventListener('submit', async function(event) {
+    event.preventDefault();
+    var save = form.querySelector('[type="submit"]');
+    save.disabled = true;
+    errorEl.hidden = true;
+    try {
+      await updateMobileProject(project.id, {
+        instructions: String(sheet.querySelector('#pm-project-instructions').value || ''),
+        workspacePath: readProjectFolder(sheet) || '',
+      });
+      close();
+      if (_drawerEl && _drawerCallbacks) {
+        _resetDrawerPageState();
+        _renderDrawerSessions(_drawerCallbacks).catch(function() {});
+      }
+      try { if (window.pmToast) window.pmToast('Project saved', 'success'); } catch(e) {}
+    } catch (err) {
+      save.disabled = false;
+      errorEl.textContent = (err && err.message) || 'Could not save project';
+      errorEl.hidden = false;
+    }
+  });
+}
+
 // Project picker for "Move to project…". Reuses the session action sheet markup.
 async function _openProjectPickerSheet(sessionId, sessionTitle) {
   _closeSessionSheetImmediate();
@@ -3148,11 +3233,10 @@ async function _openProjectPickerSheet(sessionId, sessionTitle) {
   sheet.setAttribute('aria-modal', 'true');
 
   var titleSafe = escapeHtml(sessionTitle || 'This chat');
-  var rows = projects.length
-    ? projects.map(function(project) {
-        return '<button type="button" class="pm-msheet-row pm-sess-action-row" data-project-id="' + escapeHtml(String(project.id)) + '"><span class="pm-msheet-row-label">' + escapeHtml(project.name || 'Untitled project') + '</span></button>';
-      }).join('')
-    : '<p class="pm-sess-delete-msg">No projects yet. Create one first.</p>';
+  var rows = '<button type="button" class="pm-msheet-row pm-sess-action-row pm-move-new-row" data-move-new-project><span class="pm-msheet-row-label">+ New project</span></button>' +
+    projects.map(function(project) {
+      return '<button type="button" class="pm-msheet-row pm-sess-action-row" data-project-id="' + escapeHtml(String(project.id)) + '"><span class="pm-msheet-row-label">' + escapeHtml(project.name || 'Untitled project') + '</span></button>';
+    }).join('');
   sheet.innerHTML =
     '<div class="pm-msheet-handle"></div>' +
     '<div class="pm-msheet-head">' +
@@ -3172,6 +3256,33 @@ async function _openProjectPickerSheet(sessionId, sessionTitle) {
   scrim.addEventListener('click', close);
   var closeBtn = sheet.querySelector('.pm-msheet-close');
   if (closeBtn) closeBtn.addEventListener('click', close);
+
+  var refreshAfterMove = function() {
+    if (_drawerEl && _drawerCallbacks) {
+      _resetDrawerPageState();
+      _renderDrawerSessions(_drawerCallbacks).catch(function() {});
+    }
+    try { if (window.pmToast) window.pmToast('Chat moved to project', 'success'); } catch(e) {}
+  };
+  var newBtn = sheet.querySelector('[data-move-new-project]');
+  if (newBtn) newBtn.addEventListener('click', function() {
+    pmHaptic(10);
+    var title = sheet.querySelector('.pm-msheet-title');
+    if (title) title.textContent = 'New project';
+    var body = sheet.querySelector('#pm-sess-sheet-body');
+    mountMoveNewProjectForm(body, {
+      prefix: 'pm-move',
+      onCancel: function() { _openProjectPickerSheet(sessionId, sessionTitle); },
+      create: async function(input) {
+        var created = await createMobileProject(input.name, input.workspacePath);
+        var project = (created && created.project) || created;
+        if (!project || !project.id) throw new Error('Prometheus did not return the new project.');
+        await attachMobileSessionToProject(project.id, sessionId);
+        close();
+        refreshAfterMove();
+      },
+    });
+  });
 
   sheet.querySelectorAll('[data-project-id]').forEach(function(btn) {
     btn.addEventListener('click', async function() {
@@ -4491,7 +4602,10 @@ function _prioritySessionPageHtml(pageState) {
     .filter((session) => !_isDrawerHiddenRuntimeSession(session) && !_isPinned(session?.id));
   if (!sessions.length && pageState?.loading) return '<div class="pm-session-empty">Loading...</div>';
   if (!sessions.length && pageState?.error) return '<div class="pm-session-empty">Could not load sessions.</div>';
-  const sorted = sessions.slice().sort((a, b) => _drawerSessionTime(b) - _drawerSessionTime(a));
+  // Connected agents (OpenAI dots) sit at the top of Priority mode next to Prometheus chats.
+  // Drawer ids may be gateway-scoped (gw_<gateway>...), so match the dot_<room> suffix.
+  const agentContacts = sessions.filter((session) => /(?:^|[^A-Za-z0-9])dot_[A-Za-z0-9]{8,}$/.test(String(session?.id || '')));
+  const sorted = sessions.filter((session) => !agentContacts.includes(session)).sort((a, b) => _drawerSessionTime(b) - _drawerSessionTime(a));
   const attention = [];
   const rest = [];
   sorted.forEach((session) => (_drawerSessionNeedsAttention(session) ? attention : rest).push(session));
@@ -4513,6 +4627,7 @@ function _prioritySessionPageHtml(pageState) {
     : '<div class="pm-session-empty pm-drawer-priority-empty">Nothing needs you right now.</div>';
   const showLoadMore = pageState?.hasMore === true || Number(pageState?.lastPageSize || 0) >= PM_DRAWER_SESSION_PAGE_SIZE;
   return [
+    agentContacts.length ? section('agents', 'Agents', agentContacts.map((session) => _sessionButtonHtml(session)).join('')) : '',
     section('priority', 'Priority', priorityBody, { count: attention.length, attentionSection: true }),
     ...Array.from(groups.entries()).map(([label, list]) => section(label, label, list.map((session) => _sessionButtonHtml(session)).join(''))),
     pageState?.error ? '<div class="pm-session-empty">Could not load more chats.</div>' : '',

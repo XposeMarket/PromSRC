@@ -269,7 +269,7 @@ body:not(.pm-mobile-active) .sidebar.collapsed ~ .workspace .page-view { left: 6
 /* One menu surface contract. Keep positioning and visibility owned by each
    menu; search/priority and Prom Bot use the same surface without pretending
    their richer content is a list of actions. */
-body:not(.pm-mobile-active) :is(.model-switcher-panel, .chat-attach-menu, .chat-header-menu, .chat-session-context-menu, .session-context-menu, #sidebar-priority-panel, .sidebar-search, #prom-bot-sidebar-section, .more-popover, #chat-text-selection-popover, #chat-new-context-popover, #voice-settings-popover) {
+body:not(.pm-mobile-active) :is(.model-switcher-panel, .chat-attach-menu, .chat-header-menu, .chat-session-context-menu, .session-context-menu, #sidebar-priority-panel, .sidebar-search, .sidebar.collapsed #prom-bot-sidebar-section, .more-popover, #chat-text-selection-popover, #chat-new-context-popover, #voice-settings-popover) {
   box-sizing: border-box; padding: 6px; border-radius: 13px;
   border: 1px solid color-mix(in srgb, var(--text) 8%, transparent) !important;
   background: var(--panel) !important; color: var(--text);

@@ -5,7 +5,8 @@ import { createTurnTimingRecorder, type TurnTimingRecorder } from '../../../chat
 import { enqueuePostTurnJob } from '../../../chat/post-turn-queue';
 import { getConfig } from '../../../../config/config';
 import { captureModelUsageLogCursor, readModelUsageEventsForSession, readModelUsageEventsSince } from '../../../../providers/model-usage';
-import { getSession, addMessage, getHistory, recordWorkingContextPacket, persistToolLog, getWorkspace, type TurnOrigin } from '../../../session';
+import { getSession, addMessage, getHistory, recordWorkingContextPacket, persistToolLog, getWorkspace, getSessionExternalAgent, type TurnOrigin } from '../../../session';
+import { externalAgentRefusal, runExternalAgentTurn } from '../../../external-agents/turn-runner';
 import { buildDurableChatTraceFromFrames, buildDurableChatTraceFromProcessEntries } from '../../../durable-chat-trace';
 import { type BrainRunBudgetOptions } from '../../../agents-runtime/brain-run-budget';
 import { type TurnRouteSnapshot } from '../../../chat/turn-route-snapshot';
@@ -39,7 +40,6 @@ interface InteractiveTurnDependencies {
   startMainChatGoalRunner: typeof import('./goal-runner').startMainChatGoalRunner;
   CONTEXT_COMPACTION_TOOL_NAME: typeof import('../../chat.router').CONTEXT_COMPACTION_TOOL_NAME;
   handleChat: typeof import('./handle-chat').handleChat;
-  maybeRefreshProjectLearning: typeof import('./text-guards').maybeRefreshProjectLearning;
   shouldCheckBlockedTaskFollowup: typeof import('./text-guards').shouldCheckBlockedTaskFollowup;
   formatTurnOriginContext: typeof import('../../chat.router').formatTurnOriginContext;
   collectTurnFileChanges: typeof import('../../chat.router').collectTurnFileChanges;
@@ -62,7 +62,6 @@ let broadcastMainChatGoalState: InteractiveTurnDependencies['broadcastMainChatGo
 let startMainChatGoalRunner: InteractiveTurnDependencies['startMainChatGoalRunner'];
 let CONTEXT_COMPACTION_TOOL_NAME: InteractiveTurnDependencies['CONTEXT_COMPACTION_TOOL_NAME'];
 let handleChat: InteractiveTurnDependencies['handleChat'];
-let maybeRefreshProjectLearning: InteractiveTurnDependencies['maybeRefreshProjectLearning'];
 let shouldCheckBlockedTaskFollowup: InteractiveTurnDependencies['shouldCheckBlockedTaskFollowup'];
 let formatTurnOriginContext: InteractiveTurnDependencies['formatTurnOriginContext'];
 let collectTurnFileChanges: InteractiveTurnDependencies['collectTurnFileChanges'];
@@ -73,7 +72,7 @@ let isPlannedRestartToolName: InteractiveTurnDependencies['isPlannedRestartToolN
 let maybeAutoNameChatSession: InteractiveTurnDependencies['maybeAutoNameChatSession'];
 let finishMainChatStream: InteractiveTurnDependencies['finishMainChatStream'];
 export function configureInteractiveTurnDependencies(deps: InteractiveTurnDependencies): void {
-  ({ normalizeTurnOrigin, persistTurnOriginChannelHint, getMainChatStream, beginMainChatStream, findSessionMainChatRuntime, announceRestartContinuityResumed, normalizeClientRequestId, appendMainChatStreamEvent, broadcastMainChatGoalState, startMainChatGoalRunner, CONTEXT_COMPACTION_TOOL_NAME, handleChat, maybeRefreshProjectLearning, shouldCheckBlockedTaskFollowup, formatTurnOriginContext, collectTurnFileChanges, buildDurableToolStreamTrace, describeTurnAbortCause, editRerunAbortResetSessions, isPlannedRestartToolName, maybeAutoNameChatSession, finishMainChatStream } = deps);
+  ({ normalizeTurnOrigin, persistTurnOriginChannelHint, getMainChatStream, beginMainChatStream, findSessionMainChatRuntime, announceRestartContinuityResumed, normalizeClientRequestId, appendMainChatStreamEvent, broadcastMainChatGoalState, startMainChatGoalRunner, CONTEXT_COMPACTION_TOOL_NAME, handleChat, shouldCheckBlockedTaskFollowup, formatTurnOriginContext, collectTurnFileChanges, buildDurableToolStreamTrace, describeTurnAbortCause, editRerunAbortResetSessions, isPlannedRestartToolName, maybeAutoNameChatSession, finishMainChatStream } = deps);
 }
 
 
@@ -136,6 +135,40 @@ export async function runInteractiveTurn(
     waitMs: Date.now() - admissionWaitStartedAt,
     queueWaitMs: runtimeAdmissionLease.waitMs,
   });
+  // Live connected agent (stage 3: the user's own Codex). Branch BEFORE any
+  // Prometheus model route, slash/goal command, skill match, prompt, memory,
+  // compaction or tool. Prometheus only sends the user's text and stores the
+  // transcript. A bound chat never falls back to a native turn.
+  const externalBinding = getSessionExternalAgent(sessionId);
+  if (externalBinding) {
+    const automaticNativeTurn = flags?.syntheticGoalContinuation === true
+      || flags?.syntheticSubagentCompletion === true
+      || flags?.syntheticThreadSupervisionReview === true
+      || flags?.supervisionLoop === true
+      || flags?.syntheticInternalWatch === true
+      || flags?.syntheticRestartRecovery === true
+      || flags?.directSubagentChat === true
+      || /^\s*\[Timer fired\]/i.test(String(message || ''))
+      || isMainChatGoalContinuation(message)
+      || turnOriginInput?.channel === 'system';
+    if (automaticNativeTurn) {
+      const text = externalAgentRefusal(externalBinding, 'Automatic Prometheus turns (goals, timers, wakes, recovery)');
+      console.warn(`[ExternalAgent] Refused an automatic native turn for session ${sessionId} (bound to ${externalBinding.agentId}).`);
+      try { sendSSE('info', { message: text, source: 'external_agent' }); } catch {}
+      return { type: 'chat', text };
+    }
+    const externalResult = await runExternalAgentTurn({
+      sessionId,
+      message,
+      sendSSE,
+      abortSignal,
+      turnOrigin: normalizeTurnOrigin(turnOriginInput, sessionId),
+      clientRequestId: normalizeClientRequestId(requestMeta?.clientRequestId) || undefined,
+      attachmentCount: Array.isArray(attachments) ? attachments.length : 0,
+      attachmentPreviews,
+    }, externalBinding);
+    return externalResult as unknown as HandleChatResult;
+  }
   // Admission boundary: an explicit chatModelRoute or the current Main Chat
   // default is captured once and stays immutable through this whole turn.
   let turnRouteSnapshot: TurnRouteSnapshot;
@@ -479,7 +512,6 @@ export async function runInteractiveTurn(
           { role: 'assistant', content: compactResult.text, timestamp: Date.now() },
           { disableMemoryFlushCheck: true, disableCompactionCheck: true },
         );
-        await maybeRefreshProjectLearning(sessionId, [compactResult.text]);
         sendSSE('tool_result', {
           action: CONTEXT_COMPACTION_TOOL_NAME,
           result: 'Thread compacted before continuing.',
@@ -586,7 +618,6 @@ export async function runInteractiveTurn(
   if (followupHandled) {
     if (!abortSignal?.aborted) {
       addMessage(sessionId, { role: 'assistant', ...assistantRequestIdentity, content: followupHandled, timestamp: Date.now() });
-      await maybeRefreshProjectLearning(sessionId);
     }
     const followupResult = { type: 'chat' as const, text: followupHandled };
     completeLocalMainChatStream(followupResult);
@@ -981,21 +1012,6 @@ export async function runInteractiveTurn(
       turnTiming.mark('tool_log_persisted', { durationMs: Date.now() - toolLogPersistStartedAt });
     }
     }
-    if (!isSubagentChatSession && !isSyntheticThreadSupervisionReview) {
-      enqueuePostTurnJob({
-        sessionId,
-        label: 'interrupted_project_learning',
-        run: async () => {
-          const projectLearningStartedAt = Date.now();
-          await maybeRefreshProjectLearning(sessionId, [visibleCheckpointText, checkpointPacket]);
-          turnTiming.mark('project_learning_done', {
-            durationMs: Date.now() - projectLearningStartedAt,
-            deferred: true,
-          });
-        },
-      });
-      turnTiming.mark('post_turn_work_enqueued', { kind: 'interrupted_project_learning' });
-    }
   } else {
     if (!isSilentSupervisionLoop) {
     const assistantPersistStartedAt = Date.now();
@@ -1045,15 +1061,8 @@ export async function runInteractiveTurn(
     if (!isSubagentChatSession && !isSyntheticThreadSupervisionReview) {
       enqueuePostTurnJob({
         sessionId,
-        label: 'project_learning_and_auto_title',
+        label: 'auto_title',
         run: async () => {
-          const projectLearningStartedAt = Date.now();
-          await maybeRefreshProjectLearning(sessionId);
-          turnTiming.mark('project_learning_done', {
-            durationMs: Date.now() - projectLearningStartedAt,
-            deferred: true,
-          });
-
           const autoTitleStartedAt = Date.now();
           const generatedSessionTitle = await maybeAutoNameChatSession(sessionId);
           turnTiming.mark('auto_title_done', {
@@ -1071,7 +1080,7 @@ export async function runInteractiveTurn(
           }
         },
       });
-      turnTiming.mark('post_turn_work_enqueued', { kind: 'project_learning_and_auto_title' });
+      turnTiming.mark('post_turn_work_enqueued', { kind: 'auto_title' });
     }
   }
 

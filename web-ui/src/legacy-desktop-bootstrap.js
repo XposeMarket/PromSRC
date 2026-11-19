@@ -294,6 +294,7 @@ function _priorityAttentionSessions() {
 }
 
 function syncPriorityBell() {
+  window.renderPromBotBots?.();
   const button = document.getElementById('sidebarPriorityToggle');
   const dot = document.getElementById('sidebarUnreadDot');
   const priorityCount = _priorityAttentionSessions().length;
@@ -642,7 +643,7 @@ function _renderChannelDrill(channelKey) {
   <div class="job-item-head job-item-head--pinned">
     <div class="job-item-title-wrap">
       ${unreadDot}
-      ${renderImportedSourceLogo(s)}
+      ${renderImportedSourceLogo(s) || renderContactAgentLogo(s)}
       <div class="job-item-title">${escHtml(s.title || 'Untitled')}</div>
     </div>
   </div>
@@ -672,7 +673,7 @@ function _renderChannelDrill(channelKey) {
   <div class="job-item-head job-item-head--pinned">
     <div class="job-item-title-wrap">
       ${unreadDot}
-      ${renderImportedSourceLogo(s)}
+      ${renderImportedSourceLogo(s) || renderContactAgentLogo(s)}
       <div class="job-item-title">${title}</div>
       ${roster ? `<div class="job-item-subtitle">${escHtml(roster)}</div>` : ''}
     </div>
@@ -1072,55 +1073,56 @@ window.openChatMoveToProjectPicker = function openChatMoveToProjectPicker(id) {
   hideSessionHoverPreview();
   _chatProjectsRequest('/api/projects').then((projects) => {
     const list = Array.isArray(projects) ? projects : [];
+    const owner = list.find((project) => (project.sessions || []).some((sess) => sess.id === sessionId));
     const overlay = document.createElement('div');
-    overlay.style.cssText = 'position:fixed;inset:0;z-index:99998;background:rgba(0,0,0,0.35);display:flex;align-items:center;justify-content:center';
+    overlay.className = 'pm-move-project-overlay';
     const box = document.createElement('div');
-    box.style.cssText = 'background:var(--panel);border:1.5px solid var(--line);border-radius:14px;padding:24px 24px 18px;max-width:420px;width:92%;max-height:70vh;overflow:auto;box-shadow:0 8px 40px rgba(0,0,0,0.18);font-family:var(--font)';
-    const heading = document.createElement('div');
-    heading.style.cssText = 'font-size:15px;font-weight:800;margin-bottom:10px';
-    heading.textContent = 'Move to project…';
-    const note = document.createElement('div');
-    note.style.cssText = 'font-size:13px;color:var(--muted);line-height:1.6;margin-bottom:14px';
-    note.textContent = `“${_chatTitleFor(sessionId) || 'this chat'}” keeps its history and leaves its current project.`;
-    box.append(heading, note);
-    const close = () => overlay.remove();
-    if (!list.length) {
-      const empty = document.createElement('div');
-      empty.style.cssText = 'font-size:13px;color:var(--muted);margin-bottom:14px';
-      empty.textContent = 'No projects yet. Create one on the Projects page first.';
-      box.append(empty);
-    }
-    list.forEach((project) => {
-      const option = document.createElement('button');
-      option.type = 'button';
-      option.className = 'chat-move-project-option';
-      option.style.cssText = 'display:block;width:100%;text-align:left;border:1px solid var(--line);background:var(--panel-2);color:var(--text);border-radius:8px;padding:8px 12px;margin-bottom:6px;font-size:13px;font-weight:700;cursor:pointer';
-      option.textContent = project.name || 'Untitled project';
-      option.addEventListener('click', async () => {
+    box.className = 'pm-move-project';
+    box.setAttribute('role', 'dialog');
+    box.setAttribute('aria-modal', 'true');
+    box.setAttribute('aria-label', 'Move to project');
+    const onKey = (event) => { if (event.key === 'Escape') { event.preventDefault(); close(); } };
+    const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey, true); };
+    const moveTo = async (projectId) => {
+      await _chatProjectsRequest(`/api/projects/${encodeURIComponent(projectId)}/sessions/attach`, 'POST', { sessionId });
+      close();
+      _refreshAfterChatProjectChange();
+      window.loadProjects?.();
+    };
+    const folderIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l1.7 2h7.3a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/></svg>';
+    const renderList = () => {
+      box.innerHTML = `<div class="pm-move-project-title">Move to project</div>
+        <div class="pm-move-project-sub">“${escHtml(_chatTitleFor(sessionId) || 'This chat')}” keeps its history.</div>
+        <div class="pm-move-project-list">
+          <button type="button" class="pm-move-option pm-move-option-new" data-move-new><span class="pm-move-option-icon" aria-hidden="true">+</span><span class="pm-move-option-name">New project</span><span class="pm-move-option-check" aria-hidden="true">›</span></button>
+          ${list.map((project) => `<button type="button" class="pm-move-option" data-move-project="${escHtml(project.id)}"${owner?.id === project.id ? ' aria-current="true" disabled' : ''}><span class="pm-move-option-icon">${folderIcon}</span><span class="pm-move-option-name">${escHtml(project.name || 'Untitled project')}</span><span class="pm-move-option-check" aria-hidden="true">${owner?.id === project.id ? '✓' : ''}</span></button>`).join('')}
+        </div>`;
+      box.querySelectorAll('[data-move-project]').forEach((option) => option.addEventListener('click', async () => {
         option.disabled = true;
-        try {
-          await _chatProjectsRequest(`/api/projects/${encodeURIComponent(project.id)}/sessions/attach`, 'POST', { sessionId });
-          close();
-          _refreshAfterChatProjectChange();
-        } catch (error) {
+        try { await moveTo(option.getAttribute('data-move-project')); } catch (error) {
           option.disabled = false;
           window.showToast?.('Could not move chat.', 'error');
           console.error(error);
         }
+      }));
+      box.querySelector('[data-move-new]')?.addEventListener('click', () => {
+        const form = window.__pmProjectFolder?.mountMoveNewProjectForm;
+        if (!form) return;
+        box.innerHTML = '<div class="pm-move-project-title">New project</div><div class="pm-move-project-body"></div>';
+        form(box.querySelector('.pm-move-project-body'), {
+          prefix: 'chat-move',
+          onCancel: renderList,
+          create: async ({ name, workspacePath }) => {
+            const project = await _chatProjectsRequest('/api/projects', 'POST', { name, ...(workspacePath ? { workspacePath } : {}) });
+            await moveTo(project?.id);
+          },
+        });
       });
-      box.append(option);
-    });
-    const cancelRow = document.createElement('div');
-    cancelRow.style.cssText = 'display:flex;justify-content:flex-end;margin-top:8px';
-    const cancel = document.createElement('button');
-    cancel.type = 'button';
-    cancel.style.cssText = 'border:1px solid var(--line);background:var(--panel-2);color:var(--muted);border-radius:8px;padding:7px 16px;font-size:12px;font-weight:700;cursor:pointer';
-    cancel.textContent = 'Cancel';
-    cancel.addEventListener('click', close);
-    cancelRow.append(cancel);
-    box.append(cancelRow);
+    };
+    renderList();
     overlay.append(box);
     overlay.addEventListener('click', (event) => { if (event.target === overlay) close(); });
+    document.addEventListener('keydown', onKey, true);
     document.body.append(overlay);
   }).catch((error) => {
     window.showToast?.('Could not load projects.', 'error');
@@ -1480,6 +1482,15 @@ function _isImportedSession(session) {
   return !!(session?.externalImport && typeof session.externalImport === 'object');
 }
 
+function _isAgentContactSession(s) {
+  return /^dot_[A-Za-z0-9]+$/.test(String(s?.id || ''));
+}
+
+// OpenAI dot chats show the OpenAI mark in front of their title ("Dot").
+function renderContactAgentLogo(s) {
+  return _isAgentContactSession(s) ? '<img class="imported-source-logo imported-source-logo--openai" src="/static/assets/import-sources/openai.svg" alt="OpenAI" width="26" height="26" decoding="async">' : '';
+}
+
 function renderImportedSourceLogo(session) {
   const imported = session?.externalImport;
   if (!imported || typeof imported !== 'object') return '';
@@ -1506,6 +1517,7 @@ const PRIORITY_PROVIDER_BRANDS = Object.freeze({
 });
 
 function _prioritySessionProvider(session) {
+  if (/^dot_[A-Za-z0-9]+$/.test(String(session?.id || ''))) return 'openai';
   const route = session?.chatModelRoute && typeof session.chatModelRoute === 'object' ? session.chatModelRoute : null;
   const provider = route?.effective?.providerId || route?.providerId || session?.providerId || session?.provider;
   if (provider) return String(provider).trim().toLowerCase();
@@ -1818,6 +1830,7 @@ function _prioritySessionPreview(session) {
 }
 
 function _prioritySessionModel(session) {
+  if (/^dot_[A-Za-z0-9]+$/.test(String(session?.id || ''))) return 'OpenAI Dots';
   const route = session?.chatModelRoute && typeof session.chatModelRoute === 'object' ? session.chatModelRoute : null;
   return String(route?.model || session?.model || session?.modelName || (String(session?.id || '') === String(window.activeChatSessionId || '') ? window._activeModel : '') || 'Prometheus').trim();
 }
@@ -1874,7 +1887,7 @@ function renderPriorityChatSessionCard(s, options = {}) {
     <div class="priority-chat-card${nestedClass} ${s.id === window.activeChatSessionId ? 'active' : ''}${isWorking ? ' is-working' : ''}${s.unread && !isWorking ? ' unread' : ''}${isPinned ? ' pinned-chat' : ''}${isSettled ? ' settled-chat' : ''}${_isImportedSession(s) ? ' imported-session-card' : ''}" data-session-hover-preview data-session-id="${escHtml(s.id)}" data-session-channel="${escHtml(String(s.channel || 'web'))}" data-session-title="${escHtml(title)}" onclick="if (consumeSidebarClick(event)) return; ${openHandler}">
       <div class="priority-chat-topline">
         <div class="priority-chat-title-wrap">
-          ${renderImportedSourceLogo(s)}
+          ${renderImportedSourceLogo(s) || renderContactAgentLogo(s)}
           <span class="priority-chat-title">${escHtml(title)}</span>
         </div>
         <span class="priority-chat-time" title="Last activity">${timeAgo(sessionTimestamp)}</span>
@@ -1941,7 +1954,7 @@ function renderChatSessionCard(s, options = {}) {
       <div class="job-item-head job-item-head--pinned">
         <div class="job-item-title-wrap">
           ${unreadDot}
-          ${renderImportedSourceLogo(s)}
+          ${renderImportedSourceLogo(s) || renderContactAgentLogo(s)}
           <div class="job-item-title">${escHtml(s.title || 'New chat')}</div>
         </div>
       </div>
@@ -2048,8 +2061,9 @@ function _renderPriorityPanel(el) {
   if (projectsSection) projectsSection.style.display = 'none';
   if (sessionsSection) sessionsSection.style.display = 'none';
 
+  // Connected bots (OpenAI dots) are listed by Prom Bot mode (robot button), not here.
   const activeSessions = (window.chatSessions || [])
-    .filter(_isPrioritySession)
+    .filter((s) => _isPrioritySession(s) && !_isAgentContactSession(s))
     .sort((a, b) => _prioritySessionActivityTime(b) - _prioritySessionActivityTime(a));
   ensureSidebarBranchMetadata(activeSessions.slice(0, 80));
   // Priority attention is not paginated behind newer ordinary chats. Every
@@ -2239,6 +2253,9 @@ function renderSessionsList() {
       return title.includes(_sessionSearchQuery) || msgs.includes(_sessionSearchQuery) || indexedMatchIds.has(String(s.id));
     });
   }
+  // Agents filter (bottom of the list): Prometheus and/or connected harnesses.
+  const harnessSidebar = window.__promHarnessSidebar;
+  if (harnessSidebar) sorted = sorted.filter((s) => harnessSidebar.visible(s));
 
   const pinned = sorted.filter(s => _pinnedChats.includes(s.id));
   const unpinned = sorted.filter(s => !_pinnedChats.includes(s.id));
@@ -2260,9 +2277,14 @@ function renderSessionsList() {
     }
   }
 
-  const projectRows = typeof window.renderProjectChatRows === 'function'
+  const promProjectRows = (!harnessSidebar || harnessSidebar.isVisible('prometheus')) && typeof window.renderProjectChatRows === 'function'
     ? window.renderProjectChatRows({ query: _sessionSearchQuery })
     : '';
+  // After the last Prometheus project: one collapsible section per connected harness.
+  const harnessRows = harnessSidebar && !_sessionSearchQuery
+    ? harnessSidebar.projectsHtml({ chatRow: (c) => renderChatSessionCard({ id: c.id, title: c.title, lastMessageAt: c.lastMessageAt, channel: 'web', history: [], ...((window.chatSessions || []).find((s) => String(s?.id) === c.id) || {}) }, { projectNested: true }) })
+    : '';
+  const projectRows = promProjectRows + harnessRows;
   const projectsSection = document.getElementById('sidebar-projects-section');
   const projectsListEl = document.getElementById('sidebar-projects-list');
   if (projectsSection && projectsListEl) {
@@ -2294,6 +2316,7 @@ function renderSessionsList() {
     </button>`;
   }
 
+  content += harnessSidebar?.filterButtonHtml?.() || '';
   content += `<button class="sessions-show-more-btn settled-entry-btn" onclick="toggleSettledSessionsView()" style="width:100%;margin-top:8px;padding:8px 12px;background:transparent;border:1px solid var(--line);color:var(--sidebar-muted, var(--muted));border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;font-family:'Manrope',sans-serif;transition:all 0.15s ease" onmouseover="this.style.background='color-mix(in srgb, var(--pm-gold, var(--brand)) 10%, transparent)'" onmouseout="this.style.background='transparent'">
     Settled
   </button>`;
@@ -2395,6 +2418,7 @@ function _documentedReasoningCapability(provider, model) {
 }
 
 function _supportsFastSpeed(provider, model) {
+  if (window.__promAgentModelSwitcher?.active()) return false; // harnesses own their speed
   const name = String(model || '').trim().toLowerCase().split('/').filter(Boolean).pop() || '';
   // Fast mode is Claude Opus 5 / Opus 4.8 only (removed on Opus 4.7).
   if (provider === 'anthropic') return /^claude-opus-(?:5|4-8)(?:-|$)/.test(name);
@@ -2445,6 +2469,8 @@ function _supportsAnthropicXHigh(model) {
 }
 
 function _effortLevelsForProvider(provider, model) {
+  // A connected agent (Codex, Claude Code...) owns this chat: its own levels only.
+  if (window.__promAgentModelSwitcher?.active()) return window.__promAgentModelSwitcher.levels(model);
   if (provider === 'openai' || provider === 'openai_codex') {
     const cap = _documentedReasoningCapability(provider, model);
     return [{ v: '', label: 'Provider Default', desc: cap.defaultEffort ? `Model default: ${cap.defaultEffort}` : 'Use provider default' }]
@@ -2757,6 +2783,7 @@ async function _refreshActiveChatModelRouteNow(sessionId) {
 }
 
 async function setActiveChatModelRoute(route, sessionIdOverride = '') {
+  if (window.__promAgentModelSwitcher?.active()) return window.__promAgentModelSwitcher.setRoute(route);
   const sessionId = getActiveChatModelRouteSessionId(sessionIdOverride);
   if (!sessionId) throw new Error('No active chat');
   const data = await api(`/api/sessions/${encodeURIComponent(sessionId)}/model-route`, {
@@ -2830,6 +2857,7 @@ function _desktopSwitcherProviderLabel(id, catalog = []) {
 }
 
 async function _desktopSwitcherModelsFor(provider, state) {
+  if (Array.isArray(state.agentModels)) return state.agentModels.map((item) => item.id);
   const models = [];
   const add = (value) => {
     const name = String(value?.name || value || '').trim();
@@ -2880,6 +2908,7 @@ function _desktopSwitcherBuildState(route, llm, catalog = [], credentialed = [])
 }
 
 function _desktopSwitcherStateFromCache(sessionId = '') {
+  if (window.__promAgentModelSwitcher?.active()) return window.__promAgentModelSwitcher.cached();
   return _desktopSwitcherBuildState(
     _desktopSwitcherCachedRouteForSession(sessionId),
     window._llmSettingsCache || _desktopSwitcherSettingsCache,
@@ -2933,6 +2962,7 @@ function _desktopSwitcherLoadCredentialedProviders() {
 }
 
 async function _loadDesktopSwitcherState(sessionId = '') {
+  if (window.__promAgentModelSwitcher?.active()) return window.__promAgentModelSwitcher.load();
   const [route, settings, catalogData, credentialData] = await Promise.all([
     refreshActiveChatModelRoute(sessionId),
     _desktopSwitcherLoadSettings(),
@@ -3001,7 +3031,7 @@ function _renderDesktopSwitcherMain(state, controller = _desktopSwitcherControll
   const effort = levels.find((item) => item.v === state.reasoningEffort) || levels[0];
   const speedCapable = _supportsFastSpeed(state.provider, state.model);
   const speed = state.speed === 'fast' ? 'fast' : 'standard';
-  const source = state.route?.mode === 'explicit' ? 'This chat' : 'Main Chat default';
+  const source = state.agentName ? `${state.agentName} runs this chat` : state.route?.mode === 'explicit' ? 'This chat' : 'Main Chat default';
   main.innerHTML = `
     <div class="model-switcher-heading">Chat settings</div>
     <button type="button" class="model-switcher-row" data-switcher-view="providers"><span>Providers</span><strong>${escHtml(_desktopSwitcherProviderLabel(state.provider, state.catalog))}</strong><i>›</i></button>
@@ -3144,7 +3174,7 @@ async function _renderDesktopSwitcherModels(state, provider, controller = _deskt
   _desktopSwitcherShowDetail('Model', '<div class="model-switcher-empty">Loading models…</div>', controller);
   const allModels = await _desktopSwitcherModelsFor(provider, state);
   const groups = groupModelsByFamily(provider, allModels, provider === state.provider ? state.model : '');
-  const grouped = ['openai', 'openai_codex', 'anthropic'].includes(provider);
+  const grouped = !state.agentModels && ['openai', 'openai_codex', 'anthropic'].includes(provider);
   const family = grouped ? groups.find((group) => group.key === familyKey) : { label: 'Model', models: allModels };
   if (!family) {
     _desktopSwitcherShowDetail('Model families', groups.length ? groups.map((group) => _desktopSwitcherOption(
