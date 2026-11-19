@@ -12,10 +12,26 @@ for (const name of [
   'complete_plan_step', 'bg_plan_declare', 'bg_plan_advance', 'request_tool_category',
   'tool_search', 'tool_describe', 'tool_result_read', 'switch_model', 'request_browser_login',
   'show_ui_card', 'show_weather', 'show_chart', 'background_wait', 'background_status',
-  'get_agent_result', 'read_webui_source', 'grep_source', 'browser_open', 'browser_list_tabs',
+  'get_agent_result', 'read_webui_source', 'grep_source', 'browser_list_tabs',
 ]) {
   assert.equal(tierOf(name), 'read', `${name} is read-only conversation/lookup work`);
 }
+
+// Argument-aware tools (Astra review on #913): reads stay reads, mutating modes are gated.
+assert.equal(tierOf('browser_open', { url: 'https://example.com' }), 'read');
+assert.equal(tierOf('browser_open', { url: 'example.com/path' }), 'read');
+assert.equal(tierOf('browser_open', { url: 'javascript:alert(1)' }), 'commit');
+assert.equal(tierOf('browser_open', { url: 'file:///C:/Users' }), 'commit');
+assert.equal(tierOf('browser_open', {}), 'commit', 'missing url fails closed');
+assert.equal(tierOf('browser_new_tab', {}), 'read');
+assert.equal(tierOf('browser_new_tab', { url: 'data:text/html,<script>1</script>' }), 'commit');
+assert.equal(tierOf('browser_scroll_collect_v2', { schema: { fields: [] } }), 'read');
+assert.equal(tierOf('browser_scroll_collect_v2', { save_as: 'jobs' }), 'propose');
+assert.equal(tierOf('browser_scroll_collect', { options: { remember_as: 'x' } }), 'propose');
+assert.equal(tierOf('inspect_console', { action: 'read' }), 'read');
+assert.equal(tierOf('inspect_console', { action: 'clear' }), 'propose');
+assert.equal(tierOf('schedule_job_outputs', { action: 'get' }), 'read');
+assert.equal(tierOf('schedule_job_outputs', { action: 'set', confirm: true }), 'propose', 'agent-supplied confirm is not approval');
 
 // Things that change state stay gated, now with an honest classification.
 for (const name of ['timer', 'append_file', 'background_spawn', 'set_current_model', 'git_commit', 'browser_close']) {
