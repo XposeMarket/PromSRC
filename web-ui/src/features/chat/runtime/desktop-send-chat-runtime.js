@@ -994,11 +994,14 @@ export function createDesktopSendChatRuntime(resolveContext = () => ({})) {
           'Accept': 'text/event-stream'
         },
 	      signal: turnAbortController.signal,
-	      body: JSON.stringify({ message: messageWithFiles, history: historyForAPI, useTools: window.useAgentMode, sessionId: thisSessionId, clientRequestId, attachments: visionAttachments.length > 0 ? visionAttachments : undefined, attachmentPreviews: uploadedAttachmentPreviews.length ? uploadedAttachmentPreviews.map(sanitizeAttachmentPreviewForDurableStorage) : undefined, reasoning: buildReasoningPayload(), callerContext: turnCallerContext, excludedSkillIds: excludedSkillIds.length ? excludedSkillIds : undefined, selectedSkillIds: selectedSkillIds.length ? selectedSkillIds : undefined, origin: { channel: 'web', surface: 'desktop_app', device: 'computer', label: 'Desktop app', source: 'chat_page' } })
+	      body: JSON.stringify({ message: messageWithFiles, history: historyForAPI, useTools: window.useAgentMode, sessionId: thisSessionId, clientRequestId, attachments: visionAttachments.length > 0 ? visionAttachments : undefined, attachmentPreviews: uploadedAttachmentPreviews.length ? uploadedAttachmentPreviews.map(sanitizeAttachmentPreviewForDurableStorage) : undefined, reasoning: buildReasoningPayload(), callerContext: turnCallerContext, excludedSkillIds: excludedSkillIds.length ? excludedSkillIds : undefined, selectedSkillIds: selectedSkillIds.length ? selectedSkillIds : undefined, origin: { channel: 'web', surface: 'desktop_app', device: 'computer', label: 'Desktop app', source: 'chat_page' }, agent: window.__promExternalAgent?.fieldForSend?.(thisSessionId) })
       });
 
       if (!res.ok) {
-        throw new Error(`HTTP ${res.status}`);
+        // Live-agent refusals (409 agent_locked / agent_unavailable, 400 bad_cwd) carry a plain line.
+        let refusal = '';
+        if (res.status === 409 || res.status === 400) { try { const body = await res.clone().json(); if (/^(agent_|bad_cwd|imported_chat|unknown_agent)/.test(String(body?.code || ''))) refusal = String(body.error || ''); } catch {} }
+        throw new Error(refusal || `HTTP ${res.status}`);
       }
       chatRequestAccepted = true;
 
@@ -1043,6 +1046,8 @@ export function createDesktopSendChatRuntime(resolveContext = () => ({})) {
 	          if (event.clientRequestId) runPatch.clientRequestId = String(event.clientRequestId);
 	          rememberDesktopActiveChatRun(thisSessionId, runPatch);
 	        }
+	        // Live connected agent: request cards + binding refresh (display only).
+	        try { if (window.__promExternalAgent?.onStreamEvent?.(event, thisSessionId)) continue; } catch {}
 	        if (event.type === 'final') sawFinalStreamEvent = true;
 	        if (event.type === 'done' || event.type === 'error') sawTerminalStreamEvent = true;
 	        if (event.type === 'done' || event.type === 'error') {

@@ -36,6 +36,13 @@ const STYLE_DEFINITIONS = Object.freeze({
       version: 'pm-v310-2026-11-02-question-card-keyboard',
       attribute: 'data-prom-mobile-composer-stack-style',
     }),
+    Object.freeze({
+      id: 'pm-mobile-external-agents-style',
+      file: 'external-agents.css',
+      layer: 'components',
+      version: 'pm-v1-2026-11-17-live-agents',
+      attribute: 'data-prom-mobile-external-agents-style',
+    }),
   ]),
   voice: Object.freeze([
     Object.freeze({
@@ -69,6 +76,13 @@ const STYLE_DEFINITIONS = Object.freeze({
       layer: 'route',
       version: 'pm-v1-2026-11-14-agents-imports',
       attribute: 'data-prom-mobile-agents-imports-style',
+    }),
+    Object.freeze({
+      id: 'pm-mobile-external-agents-settings-style',
+      file: 'external-agents.css',
+      layer: 'route',
+      version: 'pm-v1-2026-11-17-live-agents',
+      attribute: 'data-prom-mobile-external-agents-settings-style',
     }),
   ]),
 });

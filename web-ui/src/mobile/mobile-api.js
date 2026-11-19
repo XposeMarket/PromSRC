@@ -1795,13 +1795,21 @@ export async function createMobileChatSession(sessionId, { title = 'New Chat' } 
   });
 }
 
-export async function createMobileProject(name) {
+export async function createMobileProject(name, workspacePath = '') {
   const projectName = String(name || '').trim();
   if (!projectName) throw new Error('Project name required');
+  const folder = String(workspacePath || '').trim();
   return mfetch('/api/projects', {
     method: 'POST',
-    body: JSON.stringify({ name: projectName }),
+    body: JSON.stringify({ name: projectName, ...(folder ? { workspacePath: folder } : {}) }),
   });
+}
+
+/** Update a project's Instructions and/or linked folder (folder '' unlinks). */
+export async function updateMobileProject(projectId, updates = {}) {
+  const pid = String(projectId || '').trim();
+  if (!pid) throw new Error('Project id required');
+  return mfetch(`/api/projects/${encodeURIComponent(pid)}`, { method: 'PATCH', body: JSON.stringify(updates) });
 }
 
 export async function createMobileProjectChatSession(projectId, { title = 'New Chat' } = {}) {
@@ -2507,7 +2515,7 @@ export async function requestMobileUpdate({ action = 'check', confirm = false, s
  *
  * Returns an { abort } controller.
  */
-export function streamChat({ message, sessionId = MOBILE_CHAT_SESSION_ID, attachments, attachmentPreviews, signal, callerContext, clientRequestId, excludedSkillIds, selectedSkillIds, idleTimeoutMs = MOBILE_STREAM_IDLE_TIMEOUT_MS }, handlers = {}) {
+export function streamChat({ message, sessionId = MOBILE_CHAT_SESSION_ID, attachments, attachmentPreviews, signal, callerContext, clientRequestId, excludedSkillIds, selectedSkillIds, agent, idleTimeoutMs = MOBILE_STREAM_IDLE_TIMEOUT_MS }, handlers = {}) {
   const ctrl = new AbortController();
   // A caller/Stop abort is a stop. The idle watchdog's internal abort is a
   // transport stall and must reach onError as a recoverable disconnect.
@@ -2561,6 +2569,8 @@ export function streamChat({ message, sessionId = MOBILE_CHAT_SESSION_ID, attach
         callerContext: typeof callerContext === 'string' && callerContext.trim() ? callerContext.trim() : undefined,
         excludedSkillIds: Array.isArray(excludedSkillIds) && excludedSkillIds.length ? excludedSkillIds : undefined,
         selectedSkillIds: Array.isArray(selectedSkillIds) && selectedSkillIds.length ? selectedSkillIds : undefined,
+        // Live connected agent chosen on the new-chat dock (first message only).
+        agent: agent && typeof agent === 'object' && agent.id ? agent : undefined,
       }),
       signal: ctrl.signal,
     };

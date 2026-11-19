@@ -4,8 +4,8 @@ import { isCompactionSummaryMessage, extractLastCompactionSummary, formatCompact
 export { isCompactionSummaryMessage, extractLastCompactionSummary, formatCompactionMessageBody, formatCompactionMessages, formatCompactionToolResults, formatCompactionArtifactPaths, ContextCompactorRunInput, buildContextCompactionPrompt, runContextCompactor, maybeRunMidWorkflowCompaction } from './chat/pipeline/compaction';
 import { handleChat, handleChatUntraced, editRerunAbortResetSessions, configureHandleChatDependencies } from './chat/pipeline/handle-chat';
 export { handleChatUntraced, editRerunAbortResetSessions } from './chat/pipeline/handle-chat';
-import { maybeRefreshProjectLearning, activeMainChatGoalRuns, broadcastMainChatGoalState, delayMs, isGrokGenerationOverride, isGrokGreetingLikeMessage, INVISIBLE_FILLER_RUN, hasRunawayInvisibleTail, stripInvisibleFillerRuns, trimGrokRunawayRepetition, getParentheticalRuns, isLikelyGrokInlineLoop, trimGrokInlineLoop, shouldCheckBlockedTaskFollowup } from './chat/pipeline/text-guards';
-export { maybeRefreshProjectLearning, activeMainChatGoalRuns, broadcastMainChatGoalState, delayMs, isGrokGenerationOverride, isGrokGreetingLikeMessage, INVISIBLE_FILLER_RUN, hasRunawayInvisibleTail, stripInvisibleFillerRuns, trimGrokRunawayRepetition, getParentheticalRuns, isLikelyGrokInlineLoop, trimGrokInlineLoop, shouldCheckBlockedTaskFollowup } from './chat/pipeline/text-guards';
+import { activeMainChatGoalRuns, broadcastMainChatGoalState, delayMs, isGrokGenerationOverride, isGrokGreetingLikeMessage, INVISIBLE_FILLER_RUN, hasRunawayInvisibleTail, stripInvisibleFillerRuns, trimGrokRunawayRepetition, getParentheticalRuns, isLikelyGrokInlineLoop, trimGrokInlineLoop, shouldCheckBlockedTaskFollowup } from './chat/pipeline/text-guards';
+export { activeMainChatGoalRuns, broadcastMainChatGoalState, delayMs, isGrokGenerationOverride, isGrokGreetingLikeMessage, INVISIBLE_FILLER_RUN, hasRunawayInvisibleTail, stripInvisibleFillerRuns, trimGrokRunawayRepetition, getParentheticalRuns, isLikelyGrokInlineLoop, trimGrokInlineLoop, shouldCheckBlockedTaskFollowup } from './chat/pipeline/text-guards';
 import { startMainChatGoalRunner, resumeMainChatGoalsInterruptedForRestart, configureGoalRunnerDependencies } from './chat/pipeline/goal-runner';
 export { startMainChatGoalRunner, resumeMainChatGoalsInterruptedForRestart } from './chat/pipeline/goal-runner';
 import { cleanGeneratedSessionTitle, sessionTitleTranscript, maybeAutoNameChatSession } from './chat/pipeline/session-title';
@@ -129,6 +129,8 @@ import { normalizeReasoningEffort } from '../../providers/reasoning-capabilities
 import { getSession, addMessage, getHistory, getHistoryForApiCall, getActiveHistoryForApiCall, getActiveHistoryForPersistence, getRecentToolObservationsForContext, getWorkingContextForContext, recordWorkingContextPacket, persistToolLog, getWorkspace, setWorkspace, cleanupSessions, listSessionSummaries, searchSessionSummaries, recordSessionCompaction, deleteSession, renameSession, setSessionPinned, reorderSessionSidebar, autoNameSession, replaceHistory, touchSession, flushSession, markSessionReadForMobile, markSessionUnreadForMobile, getCreativeMode, getCreativeReferences, formatCreativeReferencesForPrompt, getActivatedToolCategories, activateToolCategory, captureToolCategoryActivationState, restoreToolCategoryActivationState, getActivatedSkillIds, getActivatedSkillResources, activateSkillForSession, activateSkillResourceForSession, getSessionDisplayTitle, isBusinessContextEnabled, getSessionPersistenceStatus, type TurnOrigin, type VoiceRoomMetadata, type VoiceRoomParticipant } from '../session';
 import { SessionSettlementError, settleSessionWithGuards, unsettleSessionSafely } from '../session-settlement';
 import { clearChatModelRoute, setChatModelRoute } from '../session';
+import { bindExternalAgentForRequest } from '../external-agents/turn-runner';
+import { isExternalAgentId } from '../external-agents/types';
 import { mergeHistoryWithExistingMessageMetadata } from '../history-reconciliation';
 import { buildDurableChatTraceFromFrames, buildDurableChatTraceFromProcessEntries } from '../durable-chat-trace';
 import { extractTurnFileTouches, mergeTurnFileTouches, type TurnFileTouch } from '../file-change-summary';
@@ -166,7 +168,6 @@ import { loadWorkspaceHooks } from '../hook-loader';
 import { runBootMd } from '../boot';
 import { ensurePrometheusThreadOpsForSupervision, getAgentTeamScheduleTools } from '../tools/defs/agent-team-schedule';
 import { buildCisContextBlock } from '../business/cis-context-builder.js';
-import { refreshProjectContextForSession } from '../projects/project-learning.js';
 import { buildProjectContextBlock, findProjectBySessionId, listProjects } from '../projects/project-store.js';
 import { assertSafeStorageId, isStorageBoundaryError } from '../storage/storage-paths.js';
 import { bgPlanDeclare, bgPlanAdvance, backgroundJoin, backgroundStatus, backgroundAbort, backgroundSteer, listActiveBackgroundIdsForSession, registerBackgroundCompletionWake } from '../tasks/task-runner';
@@ -2146,6 +2147,27 @@ router.post('/api/chat', async (req, res) => {
     res.status(400).json({ error: err?.message || 'Invalid session id.' });
     return;
   }
+  // Agent choice (stage 3 live agents): fixed on the first message of a new
+  // chat, immutable after. A different agent later is 409 agent_locked.
+  // This block only validates. The binding is saved at the admission boundary
+  // below, once this request owns the turn.
+  let agentRequest: Parameters<typeof bindExternalAgentForRequest>[1] = null;
+  {
+    const rawAgent = req.body?.agent;
+    const requestedAgent = rawAgent && typeof rawAgent === 'object'
+      ? { id: String(rawAgent.id || '').trim().toLowerCase(), cwd: typeof rawAgent.cwd === 'string' ? rawAgent.cwd : undefined, model: typeof rawAgent.model === 'string' ? rawAgent.model : undefined, effort: typeof rawAgent.effort === 'string' ? rawAgent.effort : undefined }
+      : (typeof rawAgent === 'string' && rawAgent.trim() ? { id: rawAgent.trim().toLowerCase() } : null);
+    if (requestedAgent && requestedAgent.id !== 'prometheus' && !isExternalAgentId(requestedAgent.id)) {
+      res.status(400).json({ success: false, code: 'unknown_agent', error: 'Unknown agent.' });
+      return;
+    }
+    agentRequest = requestedAgent && (requestedAgent.id === 'prometheus' || isExternalAgentId(requestedAgent.id)) ? { ...requestedAgent, id: requestedAgent.id } : null;
+    const bound = bindExternalAgentForRequest(resolvedSessionId, agentRequest, { dryRun: true });
+    if (!bound.ok) {
+      res.status(bound.status).json({ success: false, code: bound.code, error: bound.error, sessionId: resolvedSessionId });
+      return;
+    }
+  }
   const turnTiming = createTurnTimingRecorder(resolvedSessionId, {
     startedAt: Date.now(),
     phase: 'http_admission',
@@ -2339,6 +2361,17 @@ router.post('/api/chat', async (req, res) => {
       recovery: current.runtime ? 'resume_or_interrupt' : 'reconcile_then_retry',
     });
     return;
+  }
+
+  // Save the agent choice only now that this request owns the turn. A request
+  // that was refused as busy, or is a replay of an earlier one, changes nothing.
+  if (admission.kind !== 'duplicate') {
+    const bound = bindExternalAgentForRequest(resolvedSessionId, agentRequest);
+    if (!bound.ok) {
+      mainChatTurnCoordinator.release(admissionLease);
+      res.status(bound.status).json({ success: false, code: bound.code, error: bound.error, sessionId: resolvedSessionId });
+      return;
+    }
   }
 
   const startSseResponse = () => {
@@ -2866,6 +2899,6 @@ configureVoiceDependencies({ ROLLING_COMPACTION_SUMMARY_PREFIX, LEGACY_COMPACTIO
 // Wire pipeline dependencies after router-owned state has been initialized.
 configureCompactionDependencies({ ROLLING_COMPACTION_SUMMARY_PREFIX, LEGACY_COMPACTION_SUMMARY_PREFIX, resolveRollingCompactionPolicy, CONTEXT_COMPACTION_TOOL_NAME });
 configureGoalRunnerDependencies({ activeMainChatGoalRuns, broadcastMainChatGoalState, runInteractiveTurn, appendRuntimeNarrationBoundary, runtimeProcessEntryFromSseEvent, appendRuntimeFileTouch, attachRuntimeProcessEntriesToLatestAssistant, delayMs });
-configureInteractiveTurnDependencies({ normalizeTurnOrigin, persistTurnOriginChannelHint, getMainChatStream, beginMainChatStream, findSessionMainChatRuntime, announceRestartContinuityResumed, normalizeClientRequestId, appendMainChatStreamEvent, broadcastMainChatGoalState, startMainChatGoalRunner, CONTEXT_COMPACTION_TOOL_NAME, handleChat, maybeRefreshProjectLearning, shouldCheckBlockedTaskFollowup, formatTurnOriginContext, collectTurnFileChanges, buildDurableToolStreamTrace, describeTurnAbortCause, editRerunAbortResetSessions, isPlannedRestartToolName, maybeAutoNameChatSession, finishMainChatStream });
+configureInteractiveTurnDependencies({ normalizeTurnOrigin, persistTurnOriginChannelHint, getMainChatStream, beginMainChatStream, findSessionMainChatRuntime, announceRestartContinuityResumed, normalizeClientRequestId, appendMainChatStreamEvent, broadcastMainChatGoalState, startMainChatGoalRunner, CONTEXT_COMPACTION_TOOL_NAME, handleChat, shouldCheckBlockedTaskFollowup, formatTurnOriginContext, collectTurnFileChanges, buildDurableToolStreamTrace, describeTurnAbortCause, editRerunAbortResetSessions, isPlannedRestartToolName, maybeAutoNameChatSession, finishMainChatStream });
 configureRestartContinuityDependencies({ normalizeTurnOrigin, appendRuntimeNarrationBoundary, runtimeProcessEntryFromSseEvent, appendRuntimeFileTouch, runInteractiveTurn, appendMainChatStreamEvent });
 configureStreamDependencies({ getMainChatStream, router, requireSafeSessionParam, pruneMainChatStreams, reconcileMainChatTurn, storageAwareStatus });

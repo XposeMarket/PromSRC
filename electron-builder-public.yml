@@ -21,6 +21,7 @@ files:
   - generated/public-web-ui/**/*
   - assets/**/*
   - node_modules/**/*
+  - packages/claude-driver/**/*
   - runtime-dependencies.public.json
   - package.json
   - "!dist/**/*.regression.js"

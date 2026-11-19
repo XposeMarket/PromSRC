@@ -14416,6 +14416,7 @@ function renderDesktopNewProjectForm() {
     <form class="chat-new-project-form">
       <label class="chat-new-project-label" for="chat-new-project-name">Project name</label>
       <input id="chat-new-project-name" class="chat-new-project-input" type="text" maxlength="120" autocomplete="off" placeholder="e.g. Mobile app" />
+      ${window.__pmProjectFolder?.html('chat') || ''}
       <div class="chat-new-project-error" role="alert" hidden></div>
       <div class="chat-new-project-actions">
         <button type="button" class="chat-new-project-button chat-new-project-cancel">Cancel</button>
@@ -14426,6 +14427,7 @@ function renderDesktopNewProjectForm() {
   const input = popover.querySelector('.chat-new-project-input');
   const error = popover.querySelector('.chat-new-project-error');
   const submitButton = popover.querySelector('.chat-new-project-confirm');
+  window.__pmProjectFolder?.wire(popover);
   const setError = (message = '') => {
     if (!error) return;
     error.textContent = message;
@@ -14451,7 +14453,7 @@ function renderDesktopNewProjectForm() {
       const created = await api('/api/projects', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name }),
+        body: JSON.stringify({ name, workspacePath: window.__pmProjectFolder?.read(popover) }),
       });
       const project = created?.project || created;
       const projectId = String(project?.id || '').trim();

@@ -37,7 +37,7 @@ import { getOllamaClient } from '../../../../agents/ollama-client';
 import { parseProviderModelRef } from '../../../../agents/model-routing.js';
 import { captureModelUsageLogCursor, readModelUsageEventsSince, resolveProviderPromptTokens } from '../../../../providers/model-usage';
 import { estimateContextCostMicros, resolveModelPricing } from '../../../../providers/model-pricing';
-import { getHistory, persistBackgroundResultMessage, getActiveHistoryForApiCall, getRecentToolObservationsForContext, getWorkingContextForContext, getWorkspace, setWorkspace, getCreativeMode, getCreativeReferences, getActivatedToolCategories, activateToolCategory, captureToolCategoryActivationState, restoreToolCategoryActivationState, isBusinessContextEnabled } from '../../../session';
+import { getHistory, persistBackgroundResultMessage, getActiveHistoryForApiCall, getRecentToolObservationsForContext, getWorkingContextForContext, getWorkspace, setWorkspace, getCreativeMode, getCreativeReferences, getActivatedToolCategories, activateToolCategory, captureToolCategoryActivationState, restoreToolCategoryActivationState, isBusinessContextEnabled, getSessionExternalAgent } from '../../../session';
 import { BrainRunBudget, type BrainRunBudgetOptions } from '../../../agents-runtime/brain-run-budget';
 import { collectRichArtifacts, extractVisualArtifactsFromMarkdown, productCarouselToArtifact } from '../../../rich-artifacts';
 import { buildTurnSourcesArtifact } from '../../../turn-sources';
@@ -174,6 +174,14 @@ export function configureHandleChatDependencies(deps: HandleChatDependencies): v
  */
 export async function handleChat(...args: Parameters<typeof handleChatUntraced>): ReturnType<typeof handleChatUntraced> {
   const [message, sessionId, , , abortSignal, , , executionMode, , , , , , runtimeOptions] = args;
+  // Backstop: a chat bound to a live connected agent (Codex) never runs a
+  // native Prometheus turn, whoever calls (cron, heartbeat, triggers, teams,
+  // webhooks, channels). The interactive path branches before reaching here.
+  const boundAgent = getSessionExternalAgent(String(sessionId || ''));
+  if (boundAgent) {
+    console.warn(`[ExternalAgent] Refused a native handleChat turn for session ${sessionId} (bound to ${boundAgent.agentId}).`);
+    return { type: 'chat', text: `This chat is run by ${boundAgent.agentId === 'codex' ? 'Codex' : boundAgent.agentId}; Prometheus does not run its own turns here.` };
+  }
   return runInTrace({ sessionId: String(sessionId || 'default'), executionMode: String(executionMode || 'interactive'), personalReferenceAccess: runtimeOptions?.personalReferenceAccess }, async () => {
     const startedAt = Date.now();
     const trace = currentTrace();
