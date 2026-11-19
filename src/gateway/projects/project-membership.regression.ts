@@ -106,7 +106,7 @@ async function main(): Promise<void> {
 
     const created = await run({ action: 'create_project', title: 'Agent Made' });
     assert.ok(created.project.id && created.project.name === 'Agent Made', 'create_project makes a project');
-    await assert.rejects(run({ action: 'create_project', title: 'Outside', workspace: os.tmpdir() }), /outside the configured workspace/, 'create_project rejects paths outside the workspace');
+    await assert.rejects(run({ action: 'create_project', title: 'Outside', workspace: os.tmpdir() }), /outside the folders Prometheus can access/, 'create_project rejects paths outside the workspace');
 
     await assert.rejects(
       run({ action: 'move_to_project', session_id: 'chat_ops', project_id: unique.id }, { ownerSessionIdOverride: 'owner_main', supervisionIdOverride: 'sup_1' }),

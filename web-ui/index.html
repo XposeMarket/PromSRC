@@ -356,6 +356,7 @@
 <link rel="stylesheet" href="src/styles/themes.css?v=desktop-sidebar-priority-v2">
 <link rel="stylesheet" href="src/styles/settings.css?v=full-page-settings-v2">
 <link rel="stylesheet" href="src/styles/agents-imports.css?v=agents-imports-v1">
+<link rel="stylesheet" href="src/styles/external-agents.css?v=external-agents-v1">
 <link rel="stylesheet" href="src/styles/surfaces-polish.css?v=ui-polish-2026-10">
 <link rel="stylesheet" href="src/styles/refined-markdown.css?v=refined-markdown-v2">
 
@@ -3412,6 +3413,8 @@
       <div style="font-size:10px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.06em">Project workspace</div>
       <div id="project-workspace-name" style="margin-top:6px;font-size:13px;font-weight:800;color:var(--text)">Project</div>
       <div id="project-workspace-path" style="margin-top:4px;font-size:10px;color:var(--muted);line-height:1.5;overflow-wrap:anywhere">No linked path</div>
+      <button id="project-folder-edit-btn" type="button" onclick="editProjectFolder()" style="margin-top:6px;padding:0;border:0;background:none;font-size:11px;font-weight:700;color:var(--brand);cursor:pointer">Change folder</button>
+      <div id="project-folder-editor" style="margin-top:8px" hidden></div>
     </div>
     <button id="project-context-card" class="project-context-card" type="button" onclick="openProjectContextInCanvas()">
       <span class="project-context-card-icon" aria-hidden="true">↗</span>
@@ -3427,20 +3430,20 @@
     <div class="project-editors-wrap">
       <div id="project-instructions-editor" class="project-editor-block">
         <button class="project-editor-label" type="button" onclick="toggleProjectEditor('project-instructions-editor')">
-          <span>Project instructions</span><span class="project-editor-chevron">⌄</span>
+          <span>Instructions</span><span class="project-editor-chevron">⌄</span>
         </button>
         <div class="project-editor-body">
-          <textarea id="proj-instructions-ta" class="project-editor-textarea" placeholder="Instructions that should guide every chat in this project..."></textarea>
+          <textarea id="proj-instructions-ta" class="project-editor-textarea" placeholder="Rules every chat in this project follows. Prometheus never edits these."></textarea>
           <button class="project-editor-save-btn" type="button" onclick="saveProjectInstructions()">Save instructions</button>
         </div>
       </div>
       <div id="project-memory-editor" class="project-editor-block">
         <button class="project-editor-label" type="button" onclick="toggleProjectEditor('project-memory-editor')">
-          <span>Project memory</span><span class="project-editor-chevron">⌄</span>
+          <span>Notes</span><span class="project-editor-chevron">⌄</span>
         </button>
         <div class="project-editor-body">
-          <textarea id="proj-memory-ta" class="project-editor-textarea" placeholder="Keep durable facts, decisions, and useful context for this project..."></textarea>
-          <button class="project-editor-save-btn" type="button" onclick="saveProjectMemorySnapshot()">Save memory</button>
+          <textarea id="proj-memory-ta" class="project-editor-textarea" placeholder="Short notes Prometheus keeps for this project: decisions, status, key facts. You can edit them too."></textarea>
+          <button class="project-editor-save-btn" type="button" onclick="saveProjectNotes()">Save notes</button>
         </div>
       </div>
     </div>

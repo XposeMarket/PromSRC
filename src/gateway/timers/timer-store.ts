@@ -3,7 +3,7 @@ import path from 'path';
 import crypto from 'crypto';
 import { getConfig } from '../../config/config';
 import { quarantineCorruptStateFile, writeFileAtomicSync } from '../state-file-quarantine';
-import { getMainChatGoal } from '../session';
+import { getMainChatGoal, getSessionExternalAgent } from '../session';
 
 export type MainChatTimerStatus = 'pending' | 'due_waiting' | 'running' | 'completed' | 'cancelled' | 'failed';
 
@@ -132,6 +132,9 @@ export function createMainChatTimer(input: {
     ? { ...input.origin, goalId: goal.id } : input.origin;
   const sessionId = String(input.sessionId || '').trim();
   if (!sessionId) throw new Error('sessionId is required');
+  if (getSessionExternalAgent(sessionId)) {
+    throw new Error("Timers don't apply here: this chat is run by a connected agent (Codex), not Prometheus.");
+  }
   if (!instruction) throw new Error('instruction is required');
   if (!Number.isFinite(input.dueAt.getTime())) throw new Error('dueAt must be valid');
 

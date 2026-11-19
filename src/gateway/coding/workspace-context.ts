@@ -6,7 +6,7 @@ import path from 'path';
 import { execFileSync } from 'child_process';
 
 import { getConfig } from '../../config/config';
-import { findProjectBySessionId } from '../projects/project-store';
+import { findProjectBySessionId, usableProjectFolder } from '../projects/project-store';
 import { listProposals } from '../proposals/proposal-store';
 import { getSession, sessionExists } from '../session';
 import { listTaskSummaries } from '../tasks/task-store';
@@ -604,7 +604,8 @@ function rootForSession(sessionId: string | undefined, scope: CodingScope, rawRo
   const sid = String(sessionId || '').trim();
   const project = sid ? findProjectBySessionId(sid) : null;
   const session = sid && sessionExists(sid) ? getSession(sid) : null;
-  const projectRoot = String(project?.workspacePath || '').trim();
+  // Only while Prometheus is still allowed to use the linked folder (access can be removed later).
+  const projectRoot = usableProjectFolder(project);
   const selected = String(rawRoot || '').trim();
   if (selected) return { root: safeRoot(selected), projectId: project?.id };
   if (scope === 'project' && projectRoot) return { root: safeRoot(projectRoot), projectId: project?.id };
@@ -671,7 +672,7 @@ export function getCodingWorkspaceContext(input: { sessionId?: string; scope?: C
   const sessionWorkspace = String(session?.workspace || '').trim();
   const hasScopedRoot = Boolean(
     String(input.root || '').trim()
-    || String(project?.workspacePath || '').trim()
+    || usableProjectFolder(project)
     || String(session?.canvasProjectRoot || '').trim()
     || (sessionWorkspace && comparePath(sessionWorkspace) !== comparePath(configuredRoot)),
   );

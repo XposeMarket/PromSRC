@@ -395,6 +395,7 @@
     "@hyperframes/studio": "^0.6.20",
     "@iconify/iconify": "^3.1.1",
     "@lottiefiles/lottie-player": "^2.0.12",
+    "@prometheus/claude-driver": "file:packages/claude-driver",
     "@remotion/bundler": "^4.0.451",
     "@remotion/renderer": "^4.0.451",
     "@types/web-push": "^3.6.4",
