@@ -54,7 +54,7 @@ assert.doesNotMatch(read('src/settings/provider-accounts-list.js'), /Tap an acco
 assert.doesNotMatch(read('src/pages/SettingsPage.js'), /'Off\.'/);
 assert.doesNotMatch(read('src/mobile/mobile-settings.js'), /'Off\.'/);
 const settingsCss = read('src/styles/settings.css');
-assert.match(settingsCss, /\.settings-search-filter-empty\[hidden\]\s*\{\s*display:\s*none/);
+assert.match(settingsCss, /\.settings-search-filter-empty\[hidden\],\s*#settings-modal \.settings-chrome-profile-import-panel\[hidden\],\s*#settings-modal \.settings-chrome-profile-import-controls\[hidden\]\s*\{\s*display:\s*none/);
 const html = read('index.html');
 assert.match(html, /<h2>Browser<\/h2>/);
 assert.match(html, /settings-row-label-stack[\s\S]{0,200}id="settings-chrome-signin-sync-status"/, 'status sits inside its row');

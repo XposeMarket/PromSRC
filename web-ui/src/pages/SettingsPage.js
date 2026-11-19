@@ -3244,7 +3244,13 @@ function renderChromeProfileCatalog(catalog = chromeProfileCatalog) {
   if (!bridge) {
     if (toggle) toggle.disabled = true;
     if (defaultSelect) defaultSelect.disabled = true;
-    if (panel) { panel.hidden = false; panel.style.display = 'block'; }
+    if (panel) {
+      panel.hidden = false;
+      panel.style.display = 'block';
+      // No bridge outside the desktop app: show only the note, not a dead select + Import button.
+      const controls = panel.querySelector('.settings-chrome-profile-import-controls');
+      if (controls) controls.hidden = true;
+    }
     setChromeProfileImportStatus('Chrome profile import is available in the Prometheus desktop app.', 'muted');
     return;
   }
