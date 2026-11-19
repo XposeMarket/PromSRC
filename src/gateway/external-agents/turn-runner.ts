@@ -21,6 +21,7 @@ import {
   getSessionExternalAgent,
   setSessionExternalAgent,
   type TurnOrigin,
+  flushSession,
 } from '../session';
 import { expandHome } from './executable';
 import { buildHarnessProjectContext, fileSessionIntoFolderProject, HARNESS_PROJECT_CONTEXT_CLEARED } from '../projects/project-store';
@@ -68,7 +69,7 @@ export type BindOutcome =
   | { ok: true; binding: ExternalAgentBinding | null; created: boolean }
   | { ok: false; status: 400 | 409; code: 'agent_locked' | 'agent_unavailable' | 'bad_cwd' | 'imported_chat'; error: string };
 
-const AGENT_NAMES: Record<string, string> = { codex: 'Codex', 'claude-code': 'Claude Code', openclaw: 'OpenClaw', hermes: 'Hermes', cursor: 'Cursor' };
+const AGENT_NAMES: Record<string, string> = { codex: 'Codex', 'claude-code': 'Claude Code', openclaw: 'OpenClaw', hermes: 'Hermes', cursor: 'Cursor', 'openai-dots': 'OpenAI Dots' };
 
 export function externalAgentName(id: string): string {
   return AGENT_NAMES[id] || id;
@@ -139,6 +140,9 @@ export function bindExternalAgentForRequest(sessionId: string, requested: Extern
     return { ok: false, status: 409, code: 'agent_locked', error: 'This chat already runs on Prometheus. The agent can be chosen only for a new chat.' };
   }
   const adapter = getExternalAgentAdapter(wantedId as ExternalAgentId);
+  if (adapter?.kind === 'contact') {
+    return { ok: false, status: 409, code: 'agent_unavailable', error: `${adapter.name} has one ongoing conversation per dot. Open it from the sidebar instead of starting a new chat.` };
+  }
   const usable = adapter ? isExternalAgentUsable(adapter.id) : { ok: false };
   if (!adapter || !usable.ok) {
     return { ok: false, status: 409, code: 'agent_unavailable', error: `${externalAgentName(wantedId)} is not connected. Turn it on in Settings > Agents & imports.` };
@@ -246,6 +250,9 @@ export async function runExternalAgentTurn(params: ExternalTurnRunParams, bindin
   let segment = '';
 
   let streamed = '';
+  // Native tool name per upstream item, so the call and its result pair up like a
+  // Prometheus tool in the stream (same labels, same rows, same "Worked for").
+  const nativeTools = new Map<string, { name: string; args: Record<string, unknown> }>();
   const emit = (event: ExternalAgentEvent) => {
     if (event.type === 'item_started' && segment.trim()) { commentary.push(segment); segment = ''; }
     switch (event.type) {
@@ -262,19 +269,24 @@ export async function runExternalAgentTurn(params: ExternalTurnRunParams, bindin
         // the turn and is shown afterwards the same way.
         sendSSE('reasoning_summary_delta', { text: event.text, source: 'external', agentId: binding.agentId });
         return;
-      case 'item_started':
+      case 'item_started': {
+        const native = event.native || { name: '', args: event.title ? { title: event.title } : {} };
+        nativeTools.set(event.itemId, native);
         sendSSE('tool_call', {
-          action: event.title, name: event.title, args: event.detail ? { detail: event.detail } : {},
+          action: native.name, name: native.name, args: native.args,
           external: true, observed: true, agentId: binding.agentId, itemId: event.itemId, kind: event.kind,
         });
         return;
-      case 'item_completed':
+      }
+      case 'item_completed': {
+        const native = nativeTools.get(event.itemId) || { name: '', args: {} };
         sendSSE('tool_result', {
-          action: event.title || event.kind, result: event.summary, error: !event.ok,
+          action: native.name, name: native.name, args: native.args, result: event.output || event.summary, error: !event.ok,
           external: true, observed: true, agentId: binding.agentId, itemId: event.itemId, kind: event.kind,
           ...(event.exitCode !== undefined ? { exitCode: event.exitCode } : {}),
         });
         return;
+      }
       case 'usage':
         sendSSE('info', { source: 'external_agent_usage', agentId: binding.agentId, usedTokens: event.usedTokens, maxTokens: event.maxTokens });
         return;
@@ -312,7 +324,8 @@ export async function runExternalAgentTurn(params: ExternalTurnRunParams, bindin
   let upstreamText = params.message;
   let contextHash = '';
   try {
-    const skipContext = /^\s*\//.test(params.message);
+    // A contact (an OpenAI dot) is a conversation with someone else's agent: it gets the user's words only.
+    const skipContext = adapter.kind === 'contact' || /^\s*\//.test(params.message);
     // Removing the instructions and notes is a change too: the agent is told to drop what it was given.
     const block = skipContext ? null : (buildHarnessProjectContext(sessionId)
       || (binding.upstreamSessionId && binding.projectContextHash ? HARNESS_PROJECT_CONTEXT_CLEARED : null));
@@ -403,6 +416,12 @@ export async function runExternalAgentTurn(params: ExternalTurnRunParams, bindin
       ...(result.upstreamMissing ? { upstreamMissing: true } : {}),
     },
   } as any, { disableCompactionCheck: true, disableMemoryFlushCheck: true });
+
+  // The reply is saved before the adapter is told so (OpenAI Dots marks its messages mirrored only now).
+  if (result.afterPersist) {
+    // Only a reply that reached disk is marked handled. If the save failed, the adapter keeps it unmarked.
+    try { if (flushSession(sessionId)) result.afterPersist(); } catch { /* bookkeeping never fails the turn */ }
+  }
 
   return { type: 'chat', text, externalAgent: { agentId: binding.agentId, status: result.status }, ...(fileChanges ? { fileChanges } : {}) };
 }

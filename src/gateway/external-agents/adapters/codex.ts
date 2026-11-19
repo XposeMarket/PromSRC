@@ -13,6 +13,7 @@ import fs from 'fs';
 import path from 'path';
 
 import { JsonRpcStdioClient, type JsonRpcServerRequest } from '../jsonrpc-stdio';
+import { codexItemToNative } from '../native-tool-map';
 import { compareVersions, readProgramVersion, resolveCodexCommand, type ResolvedCommand } from '../executable';
 import { codexFileTouches } from '../file-touches';
 import {
@@ -483,15 +484,16 @@ export class CodexAdapter implements ExternalAgentAdapter {
       title = `Codex: ${short(type, 60) || 'step'}`;
       summary = 'Done';
     }
+    const native = codexItemToNative(type, item);
     if (!completed) {
       if (ctx.startedItems.has(itemId)) return;
       ctx.startedItems.add(itemId);
-      ctx.emit({ type: 'item_started', itemId, kind, title, ...(detail ? { detail } : {}) });
+      ctx.emit({ type: 'item_started', itemId, kind, title, native, ...(detail ? { detail } : {}) });
       return;
     }
     if (!ctx.startedItems.has(itemId)) {
       ctx.startedItems.add(itemId);
-      ctx.emit({ type: 'item_started', itemId, kind, title, ...(detail ? { detail } : {}) });
+      ctx.emit({ type: 'item_started', itemId, kind, title, native, ...(detail ? { detail } : {}) });
     }
     ctx.emit({ type: 'item_completed', itemId, kind, ok, summary, title, ...(exitCode !== undefined ? { exitCode } : {}) });
   }

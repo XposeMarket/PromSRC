@@ -381,15 +381,28 @@ export function mountAgentsImports(container, options = {}) {
       event.stopPropagation();
       const agentId = el.getAttribute('data-ea-agent') || '';
       const act = el.getAttribute('data-ea-act');
-      if (act === 'toggle') liveAction(agentId, live.agents.get(agentId)?.enabled ? 'disable' : 'enable');
+      if (act === 'toggle') {
+        const turningOn = !live.agents.get(agentId)?.enabled;
+        // OpenAI Dots is not a normal harness: say what turning it on does before it does it.
+        if (turningOn && agentId === 'openai-dots') {
+          const go = () => liveAction(agentId, 'enable');
+          if (typeof window.showConfirm === 'function') window.showConfirm(DOTS_ENABLE_NOTICE, go);
+          else if (window.confirm(DOTS_ENABLE_NOTICE)) go();
+          return;
+        }
+        liveAction(agentId, turningOn ? 'enable' : 'disable');
+      }
       else if (act === 'verify') liveAction(agentId, 'verify');
     };
     container.addEventListener('click', handle, true);
     container.addEventListener('keydown', handle, true);
   }
 
+  const DOTS_ENABLE_NOTICE = 'Turn on OpenAI Dots? This uses an unofficial ChatGPT connection with your OpenAI sign-in. OpenAI does not support it and can change or block it at any time. Your dots\' recent conversations are copied into Prometheus chats on this computer and kept up to date in the background, and messages you send in those chats are posted to the dot as you.';
+
   function liveStatusLine(snap) {
     if (!snap.detected) return snap.statusText || `${snap.name} isn't installed on this computer.`;
+    if (!snap.enabled && snap.id === 'openai-dots') return 'Off. Experimental: mirrors your dots\' ChatGPT conversations here through an unofficial connection.';
     if (!snap.enabled) return 'Off. Turn on to run new chats with your own ' + snap.name + '.';
     return snap.statusText || (snap.status === 'ready' ? 'Connected' : `Checking ${snap.name}…`);
   }

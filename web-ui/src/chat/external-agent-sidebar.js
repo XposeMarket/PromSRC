@@ -15,7 +15,9 @@ import {
 import { agentLogoHtml } from './external-agent-logos.js';
 import './project-folder-field.js';
 
-const ORDER = ['prometheus', 'codex', 'claude-code', 'hermes', 'openclaw', 'cursor'];
+const ORDER = ['prometheus', 'openai-dots', 'codex', 'claude-code', 'hermes', 'openclaw', 'cursor'];
+// Contacts have one ongoing chat each (shown in the chat list / Priority mode), no folders.
+const CONTACT_AGENTS = new Set(['openai-dots']);
 const FILTER_KEY = 'prometheus_harness_chat_filter';
 const OPEN_KEY = 'prometheus_harness_sections_open';
 const IMPORT_AGENT = {
@@ -88,7 +90,7 @@ function shortLabel(label, path) {
 
 function harnessGroups() {
   void refreshHarnessSessionMap();
-  return knownHarnesses().filter(isHarnessVisible).map((id) => {
+  return knownHarnesses().filter((id) => isHarnessVisible(id) && !CONTACT_AGENTS.has(id)).map((id) => {
     const folders = new Map();
     // Folders linked to a Prometheus project (and chats filed in a project) live under
     // that project instead: one project, any agent.

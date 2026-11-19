@@ -10,6 +10,7 @@ const LOGOS = {
   // Nous Research mark, same as Settings > Agents & imports.
   hermes: '/static/assets/import-sources/nous-research.png',
   openclaw: '/static/assets/import-sources/openclaw.svg',
+  'openai-dots': '/static/assets/import-sources/openai.svg',
 };
 
 export function agentLogoHtml(id = 'prometheus') {

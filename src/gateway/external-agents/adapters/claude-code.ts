@@ -1,4 +1,5 @@
 import { execFile } from 'child_process';
+import { claudeToolToNative, toolResultText } from '../native-tool-map';
 import crypto from 'crypto';
 import os from 'os';
 import path from 'path';
@@ -265,16 +266,14 @@ export class ClaudeCodeAdapter implements ExternalAgentAdapter {
           const event = message.event;
           if (event?.type === 'content_block_delta' && event.delta?.type === 'text_delta') { text += event.delta.text; input.emit({ type: 'text_delta', text: event.delta.text }); }
           if (event?.type === 'content_block_delta' && event.delta?.type === 'thinking_delta') input.emit({ type: 'reasoning_delta', text: event.delta.thinking });
-          if (event?.type === 'content_block_start' && event.content_block?.type === 'tool_use') {
-            const tool = event.content_block; tools.add(tool.id);
-            input.emit({ type: 'item_started', itemId: tool.id, kind: 'other', title: tool.name });
-          }
+          // Tool rows start from the full assistant block below: content_block_start
+          // carries an empty input, so the row would lose its command/file label.
         }
         if (message.type === 'assistant') {
           for (const block of message.message?.content || []) {
             if (block.type === 'tool_use') { const touch = claudeFileTouch(block.name, block.input); if (touch) edits.set(block.id, touch); }
             if (block.type === 'text') resultText += block.text;
-            if (block.type === 'tool_use' && !tools.has(block.id)) { tools.add(block.id); input.emit({ type: 'item_started', itemId: block.id, kind: 'other', title: block.name }); }
+            if (block.type === 'tool_use' && !tools.has(block.id)) { tools.add(block.id); input.emit({ type: 'item_started', itemId: block.id, kind: block.name === 'Bash' || block.name === 'PowerShell' ? 'command' : 'other', title: block.name, native: claudeToolToNative(block.name, block.input) }); }
           }
         }
         if (message.type === 'user') for (const block of message.message?.content || []) {
@@ -282,7 +281,9 @@ export class ClaudeCodeAdapter implements ExternalAgentAdapter {
           if (touch) { edits.delete(block.tool_use_id); input.emit({ type: 'file_change', files: [touch] }); }
         }
         if (message.type === 'user') for (const block of message.message?.content || []) {
-          if (block.type === 'tool_result') input.emit({ type: 'item_completed', itemId: block.tool_use_id, kind: 'other', ok: !block.is_error, summary: block.is_error ? 'Tool failed' : 'Completed in Claude Code' });
+          if (block.type !== 'tool_result') continue;
+          if (!tools.has(block.tool_use_id)) { tools.add(block.tool_use_id); input.emit({ type: 'item_started', itemId: block.tool_use_id, kind: 'other', title: 'Tool', native: { name: '', args: {} } }); }
+          input.emit({ type: 'item_completed', itemId: block.tool_use_id, kind: 'other', ok: !block.is_error, summary: block.is_error ? 'Tool failed' : 'Done', output: toolResultText(block.content) });
         }
         if (message.type === 'result') {
           completed = true; failed = message.is_error || message.subtype !== 'success';
