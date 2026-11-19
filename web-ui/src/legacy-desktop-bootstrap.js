@@ -3173,30 +3173,16 @@ async function _renderDesktopSwitcherProviders(state, controller = _desktopSwitc
 async function _renderDesktopSwitcherModels(state, provider, controller = _desktopSwitcherController(), familyKey = '') {
   _desktopSwitcherShowDetail('Model', '<div class="model-switcher-empty">Loading models…</div>', controller);
   const allModels = await _desktopSwitcherModelsFor(provider, state);
-  const groups = groupModelsByFamily(provider, allModels, provider === state.provider ? state.model : '');
-  const grouped = !state.agentModels && ['openai', 'openai_codex', 'anthropic'].includes(provider);
+  // A connected agent (Codex, Claude Code) groups its own models the same way; "Default" stays above the families.
+  const agentGroups = state.agentModels ? state.agentModelGroups : null;
+  const groups = agentGroups
+    ? agentGroups.groups.map((group) => ({ key: group.key, label: group.label, models: group.models.map((item) => item.id) }))
+    : groupModelsByFamily(provider, allModels, provider === state.provider ? state.model : '');
+  const topModels = agentGroups && groups.length ? agentGroups.top.map((item) => item.id) : [];
+  const grouped = agentGroups ? groups.length > 1 : ['openai', 'openai_codex', 'anthropic'].includes(provider);
   const family = grouped ? groups.find((group) => group.key === familyKey) : { label: 'Model', models: allModels };
-  if (!family) {
-    _desktopSwitcherShowDetail('Model families', groups.length ? groups.map((group) => _desktopSwitcherOption(
-      group.label, `${group.models.length} model${group.models.length === 1 ? '' : 's'}`, provider === state.provider && group.models.includes(state.model), `data-switcher-family="${escHtml(group.key)}"`,
-    )).join('') : '<div class="model-switcher-empty">No models are available for this provider.</div>', controller);
-    controller.detail?.querySelectorAll('[data-switcher-family]').forEach((button) => button.addEventListener('click', (event) => {
-      event.stopPropagation();
-      _renderDesktopSwitcherModels(state, provider, controller, button.getAttribute('data-switcher-family'));
-    }));
-    return;
-  }
-  const models = family.models;
-  _desktopSwitcherShowDetail(family.label, (grouped ? '<button type="button" class="model-switcher-option" data-switcher-family-back>‹ Model families</button>' : '') + (models.length ? models.map((model) => _desktopSwitcherOption(
-    typeof window.formatModelDisplayName === 'function' ? window.formatModelDisplayName(model, provider) : model,
-    '', provider === state.provider && model === state.model, `data-switcher-model="${escHtml(model)}"`,
-  )).join('') : '<div class="model-switcher-empty">No models are available for this provider.</div>'), controller);
-  controller.detail?.querySelector('[data-switcher-family-back]')?.addEventListener('click', (event) => {
-    event.stopPropagation();
-    _renderDesktopSwitcherModels(state, provider, controller);
-  });
-  controller.detail?.querySelectorAll('[data-switcher-model]').forEach((button) => button.addEventListener('click', async () => {
-    const model = button.getAttribute('data-switcher-model') || '';
+  const modelLabel = (model) => (typeof window.formatModelDisplayName === 'function' ? window.formatModelDisplayName(model, provider) : model);
+  const pickModel = async (model) => {
     if (!model) return;
     try {
       await setActiveChatModelRoute({ providerId: provider, model, reasoningEffort: provider === state.provider ? state.reasoningEffort || undefined : undefined, speed: provider === state.provider ? state.speed : undefined }, controller.sessionId);
@@ -3204,7 +3190,28 @@ async function _renderDesktopSwitcherModels(state, provider, controller = _deskt
       _renderDesktopSwitcherMain(next, controller);
       _renderDesktopSwitcherEffort(next, controller);
     } catch (err) { showToast('Could not switch model', String(err?.message || err), 'error'); }
-  }));
+  };
+  if (!family) {
+    const topHtml = topModels.map((model) => _desktopSwitcherOption(modelLabel(model), '', provider === state.provider && model === state.model, `data-switcher-model="${escHtml(model)}"`)).join('');
+    _desktopSwitcherShowDetail('Model families', groups.length ? topHtml + groups.map((group) => _desktopSwitcherOption(
+      group.label, `${group.models.length} model${group.models.length === 1 ? '' : 's'}`, provider === state.provider && group.models.includes(state.model), `data-switcher-family="${escHtml(group.key)}"`,
+    )).join('') : '<div class="model-switcher-empty">No models are available for this provider.</div>', controller);
+    controller.detail?.querySelectorAll('[data-switcher-family]').forEach((button) => button.addEventListener('click', (event) => {
+      event.stopPropagation();
+      _renderDesktopSwitcherModels(state, provider, controller, button.getAttribute('data-switcher-family'));
+    }));
+    controller.detail?.querySelectorAll('[data-switcher-model]').forEach((button) => button.addEventListener('click', () => pickModel(button.getAttribute('data-switcher-model') || '')));
+    return;
+  }
+  const models = family.models;
+  _desktopSwitcherShowDetail(family.label, (grouped ? '<button type="button" class="model-switcher-option" data-switcher-family-back>‹ Model families</button>' : '') + (models.length ? models.map((model) => _desktopSwitcherOption(
+    modelLabel(model), '', provider === state.provider && model === state.model, `data-switcher-model="${escHtml(model)}"`,
+  )).join('') : '<div class="model-switcher-empty">No models are available for this provider.</div>'), controller);
+  controller.detail?.querySelector('[data-switcher-family-back]')?.addEventListener('click', (event) => {
+    event.stopPropagation();
+    _renderDesktopSwitcherModels(state, provider, controller);
+  });
+  controller.detail?.querySelectorAll('[data-switcher-model]').forEach((button) => button.addEventListener('click', () => pickModel(button.getAttribute('data-switcher-model') || '')));
 }
 
 function _renderDesktopSwitcherEffort(state, controller = _desktopSwitcherController()) {

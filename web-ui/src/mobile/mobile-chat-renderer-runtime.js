@@ -1499,7 +1499,13 @@ export function createMobileChatRendererRuntime(context = {}) {
   
   function _renderMobileEmptyChatStarterCards() {
     const cards = _getMobileEmptyChatStarterCards();
+    // Same landing as desktop (#chat-welcome): P1 mark, title, quote, then the starter cards.
     return `<div class="pm-mobile-empty-chat" aria-label="Starter prompts">
+      <div class="pm-mobile-empty-hero">
+        <img class="pm-mobile-empty-hero-mark" src="/static/assets/prometheus-one/p1-mark-ring.png" alt="" aria-hidden="true" draggable="false">
+        <h2>Prometheus One</h2>
+        <p>"I whom you see am Prometheus, who gave fire to mankind."</p>
+      </div>
       <div class="pm-mobile-empty-chat-cards">
         ${cards.map((card, index) => `
           <button class="pm-mobile-empty-chat-card" type="button" aria-label="${escapeHtml(`${card.title}: ${card.body}`)}" data-mobile-starter-prompt="${index}">

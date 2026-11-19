@@ -4,7 +4,7 @@
 import { setAgentPlaceholder } from './external-agent-placeholder.js';
 import {
   setAgentModelContext, hasAgentModelContext, agentModelBadge, agentModelState, agentModelStateCached,
-  saveAgentModel, saveAgentEffort, agentModelForSend, agentEffortForSend, agentEffortLabel,
+  saveAgentModel, saveAgentEffort, agentModelForSend, agentEffortForSend, agentEffortLabel, agentModelGroups,
 } from './external-agent-models.js';
 const request = async (path, options = {}) => {
   if (window.api) return window.api(path, options);
@@ -58,6 +58,8 @@ function switcherState(state) {
     credentialed: [state.provider], provider: state.provider, model: state.model,
     providerConfig: { model: state.model }, reasoningEffort: state.effort, speed: 'standard',
     agentName: state.agentName, agentModels: state.models, agentEfforts: state.efforts,
+    // Families for the switcher's Model view, same grouping as Prometheus providers.
+    agentModelGroups: agentModelGroups(state),
   };
 }
 window.__promAgentModelSwitcher = {

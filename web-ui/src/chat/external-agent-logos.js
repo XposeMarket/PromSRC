@@ -13,6 +13,12 @@ const LOGOS = {
   'openai-dots': '/static/assets/import-sources/openai.svg',
 };
 
+/** Logo URL for a known agent id (import ids too: "claude"), or '' when there is none. */
+export function agentLogoSrc(id = '') {
+  const key = id === 'claude' ? 'claude-code' : id;
+  return Object.prototype.hasOwnProperty.call(LOGOS, key) ? LOGOS[key] : '';
+}
+
 export function agentLogoHtml(id = 'prometheus') {
   const key = Object.prototype.hasOwnProperty.call(LOGOS, id) ? id : 'prometheus';
   return `<img class="ea-logo ea-logo-${key}" src="${LOGOS[key]}" alt="" aria-hidden="true" draggable="false">`;

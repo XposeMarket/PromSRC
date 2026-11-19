@@ -3,6 +3,7 @@
 // it; this module only supplies the harness's own models and effort levels.
 import { agentName } from './external-agent-ui.js';
 import { setAgentPlaceholder } from './external-agent-placeholder.js';
+import { groupModelsByFamily } from '../model-family-grouping.js';
 let context = null;
 let revision = 0;
 let catalog = null;
@@ -38,9 +39,14 @@ export async function loadAgentModelCatalog(request) {
   })();
   return loading;
 }
+/** Harness labels in Prometheus's own style: "GPT-6.1-Sol" -> "GPT-6.1 Sol", "Default (recommended)" -> "Default". */
+export function cleanAgentModelLabel(label, id = '') {
+  const text = String(label || id || '').replace(/\s*\((?:recommended|default)\)\s*/ig, ' ').trim();
+  return text.replace(/^(GPT-\d+(?:\.\d+)*)-(?=[A-Za-z])/i, '$1 ').replace(/\s+/g, ' ') || String(id || 'Model');
+}
 function stateFrom(data) {
   if (!context || !data) return null;
-  const models = Array.isArray(data.models) ? data.models : [];
+  const models = (Array.isArray(data.models) ? data.models : []).map((item) => ({ ...item, label: cleanAgentModelLabel(item.label, item.id) }));
   const model = selected || data.currentModel || '';
   const entry = models.find((item) => item.id === model);
   const efforts = Array.isArray(entry?.efforts) ? entry.efforts.filter(Boolean) : [];
@@ -49,13 +55,36 @@ function stateFrom(data) {
     agentId: context.id,
     agentName: agentName(context.id),
     provider: PROVIDER_FOR_AGENT[context.id] || 'openai_codex',
+    // Family grouping only for harnesses whose model names follow a known provider's scheme.
+    groupProvider: PROVIDER_FOR_AGENT[context.id] || '',
     model,
-    label: entry?.label || model || 'Model',
+    label: entry?.label || cleanAgentModelLabel(model, model) || 'Model',
     models,
     efforts,
     effort: efforts.includes(selectedEffort) ? selectedEffort : fallback,
     unavailableReason: models.length ? '' : (context.id === 'openai-dots' ? 'OpenAI picks the model for your dot.' : (data.unavailableReason || `${agentName(context.id)} has not reported model choices.`)),
   };
+}
+/**
+ * The harness's models in the same families as the Prometheus picker (Astra, GPT 6.1, Opus, ...).
+ * `top` holds a harness "Default" entry shown above the families. `groups` is empty when the
+ * list is too small or unknown to group, so callers show one flat list.
+ */
+export function agentModelGroups(state) {
+  const models = Array.isArray(state?.models) ? state.models : [];
+  const top = models.filter((m) => /^default$/i.test(String(m.id)));
+  const rest = models.filter((m) => !top.includes(m));
+  if (!state?.groupProvider || rest.length < 2) return { top, groups: [], models };
+  // Group and sort by the display name: Claude reports aliases ("opus") whose version is only in the label.
+  const bySlug = new Map();
+  for (const m of rest) {
+    let slug = String(m.label || m.id).toLowerCase().trim().replace(/\s+/g, '-');
+    while (bySlug.has(slug)) slug += '~';
+    bySlug.set(slug, m);
+  }
+  const groups = groupModelsByFamily(state.groupProvider, [...bySlug.keys()])
+    .map((g) => ({ key: g.key, label: g.label, models: g.models.map((slug) => bySlug.get(slug)).filter(Boolean) }));
+  return { top, groups: groups.length > 1 ? groups : [], models };
 }
 /** Synchronous view from the cached catalog (null until it is loaded). */
 export function agentModelStateCached() { return stateFrom(catalog); }
