@@ -55,12 +55,13 @@ export function cardHtml(req) {
   const row = (label, value) => (mobile
     ? `<div class="${n.row}"><dt>${label}</dt><dd>${value}</dd></div>`
     : `<div class="${n.row}"><span>${label}</span>${value}</div>`);
-  const filesRow = shown.length ? row('Files', `<span class="ea-card-text">${esc(shown.join('\n'))}</span>`) : '';
+  const sub = d.command || files[0] || '';
+  // A single file is already the line under the title: do not list it twice.
+  const filesRow = shown.length && !(shown.length === 1 && shown[0] === sub) ? row('Files', `<span class="ea-card-text">${esc(shown.join('\n'))}</span>`) : '';
   const body = (d.cwd ? `<div class="ea-card-cwd">in ${esc(d.cwd)}</div>` : '')
     + (mobile && filesRow ? `<dl class="${n.params}">${filesRow}</dl>` : filesRow)
     + (grants.length ? `<div class="ea-card-cwd">Allow grants exactly this:</div><pre class="ea-card-grants">${esc(grants.join('\n'))}</pre>` : '')
     + (typeof d.preview === 'string' && d.preview ? `<pre class="ea-card-preview">${esc(d.preview)}</pre>` : '');
-  const sub = d.command || files[0] || '';
   const who = `${agentLogoHtml(req.agentId)}<span>${esc(agentName(req.agentId))} · ${req.kind === 'question' ? 'has a question' : 'needs your approval'}</span>`;
   const title = esc(req.title || 'Agent request');
   const head = mobile
@@ -84,9 +85,9 @@ export function missingHtml() {
     + '<p role="status" class="ea-card-note"></p>';
 }
 
-// Mount point, re-resolved on every show: the visible composer (the card rides with it and is never
-// inside the re-rendered message list), else just before the phone's mode launcher, else a fixed
-// fallback on body.
+// Mount point, re-resolved on every show. Phone: at the end of the scrolling chat, right under the
+// live turn, where Prometheus's own approval cards sit (a sibling of the re-rendered message list,
+// so a re-render never removes it). Desktop: the top of the composer area. Else a fixed fallback.
 let hostEl = null;
 
 export function cardHost() {
@@ -97,11 +98,11 @@ export function cardHost() {
     hostEl.className = 'ea-request-host';
     hostEl.setAttribute('aria-live', 'polite');
   }
-  const composer = mobile ? document.getElementById('pm-composer') : document.querySelector('#chat-view > .chat-input-area:not([data-canonical-secondary-composer])');
-  const launcher = mobile ? document.getElementById('pm-chat-mode-launcher') : null;
+  const chat = mobile ? document.getElementById('pm-chat-body') : null;
+  const composer = mobile ? null : document.querySelector('#chat-view > .chat-input-area:not([data-canonical-secondary-composer])');
   hostEl.classList.remove('ea-request-fallback');
-  if (composer && !(mobile && composer.classList.contains('pm-composer-mode-hidden'))) composer.prepend(hostEl);
-  else if (launcher) launcher.before(hostEl);
+  if (chat) chat.appendChild(hostEl);
+  else if (composer) composer.prepend(hostEl);
   else { hostEl.classList.add('ea-request-fallback'); document.body.appendChild(hostEl); }
   return hostEl;
 }
