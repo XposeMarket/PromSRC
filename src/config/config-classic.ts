@@ -490,14 +490,14 @@ function resolvePortableConfigPath(rawPath: unknown, fallback: string): string {
   return path.resolve(path.isAbsolute(raw) ? raw : path.join(CONFIG_DIR, raw));
 }
 
-// Replace a stale Windows path with a sensible cross-platform fallback.
-// workspace → WORKSPACE_DIR, skills → WORKSPACE_DIR/skills, memory → CONFIG_DIR/memory,
-// everything else → WORKSPACE_DIR (safe catch-all).
-function resolveStaleWindowsPath(p: string): string {
-  const lp = String(p || '').toLowerCase().replace(/\\/g, '/');
-  if (lp.includes('skill')) return path.join(WORKSPACE_DIR, 'skills');
-  if (lp.includes('memory')) return path.join(CONFIG_DIR, 'memory');
-  return WORKSPACE_DIR;
+// A blocked path copied from another OS (for example the default C:\Windows on
+// macOS/Linux) blocks nothing on this one, so drop it. Never substitute a
+// fallback here: every fallback is the workspace, and mapping a foreign blocked
+// path to it would block the workspace itself.
+function resolveBlockedConfigPath(rawPath: unknown): string {
+  const raw = expandHomePath(String(rawPath || '').trim().replace(/^file:\/\//i, ''));
+  if (!raw || isStaleWindowsPath(raw) || isStalePosixPath(raw)) return '';
+  return path.resolve(path.isAbsolute(raw) ? raw : path.join(CONFIG_DIR, raw));
 }
 
 function normalizeRuntimePathsInConfig(config: PrometheusConfig): PrometheusConfig {
@@ -513,7 +513,7 @@ function normalizeRuntimePathsInConfig(config: PrometheusConfig): PrometheusConf
     fallback: [workspacePath],
   });
   const rawBlockedPaths = Array.isArray(filePermissions.blocked_paths)
-    ? filePermissions.blocked_paths.map((candidate: unknown) => resolvePortableConfigPath(candidate, workspacePath))
+    ? filePermissions.blocked_paths.map((candidate: unknown) => resolveBlockedConfigPath(candidate))
     : [];
   const blockedPaths = normalizeConfiguredPathList(rawBlockedPaths);
 
@@ -590,12 +590,7 @@ function normalizeLegacyPathsInConfig(loaded: any): any {
     });
 
     const currentBlocked = Array.isArray(out.tools.permissions.files.blocked_paths)
-      ? out.tools.permissions.files.blocked_paths.map(
-          (p: string) => resolvePortableConfigPath(
-            isStaleWindowsPath(p) ? resolveStaleWindowsPath(p) : p,
-            WORKSPACE_DIR,
-          ),
-        )
+      ? out.tools.permissions.files.blocked_paths.map((p: string) => resolveBlockedConfigPath(p))
       : [];
     out.tools.permissions.files.blocked_paths = normalizeConfiguredPathList(currentBlocked);
   }

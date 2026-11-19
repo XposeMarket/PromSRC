@@ -19,7 +19,7 @@ import {
 } from '../../../providers/model-usage';
 import { getSession, addMessage, getHistory, getHistoryForApiCall, getActiveHistoryForApiCall, getActiveHistoryForPersistence, getRecentToolObservationsForContext, getWorkingContextForContext, recordWorkingContextPacket, persistToolLog, getWorkspace, setWorkspace, cleanupSessions, listSessionSummaries, searchSessionSummaries, recordSessionCompaction, deleteSession, renameSession, setSessionPinned, reorderSessionSidebar, autoNameSession, replaceHistory, touchSession, flushSession, markSessionReadForMobile, markSessionUnreadForMobile, getCreativeMode, getCreativeReferences, formatCreativeReferencesForPrompt, getActivatedToolCategories, activateToolCategory, captureToolCategoryActivationState, restoreToolCategoryActivationState, getActivatedSkillIds, getActivatedSkillResources, activateSkillForSession, activateSkillResourceForSession, getSessionDisplayTitle, isBusinessContextEnabled, getSessionPersistenceStatus, type TurnOrigin, type VoiceRoomMetadata, type VoiceRoomParticipant } from '../../session';
 import { SessionSettlementError, settleSessionWithGuards, unsettleSessionSafely } from '../../session-settlement';
-import { clearChatModelRoute, setChatModelRoute } from '../../session';
+import { clearChatModelRoute, setChatModelRoute, getSessionExternalAgent } from '../../session';
 import { isInternalBackgroundResult, mergeHistoryWithExistingMessageMetadata } from '../../history-reconciliation';
 import { buildContextBudget, estimateMessageTokenBreakdownForModel, estimateMessagesTokensForModel, estimateTextTokensForModel, resolveActiveModelContextProfile } from '../../context/model-context';
 import { captureChatTurnRouteSnapshot, ChatModelRouteUnavailableError, resolveChatModelRouteSource, validateChatModelRoute } from '../../chat/chat-model-route';
@@ -588,6 +588,10 @@ router.get('/api/sessions/:id/model-route', requireSafeSessionParam, (req, res) 
 router.put('/api/sessions/:id/model-route', requireSafeSessionParam, (req, res) => {
   try {
     const sessionId = String(req.params.id || '').trim();
+    if (getSessionExternalAgent(sessionId)) {
+      res.status(409).json({ success: false, code: 'external_agent_chat', error: "Model switching doesn't apply here: this chat is run by a connected agent with its own model setting." });
+      return;
+    }
     const requestedSpeed = String(req.body?.speed || '').trim().toLowerCase();
     const route = {
       providerId: String(req.body?.providerId || req.body?.provider || '').trim(),

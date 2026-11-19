@@ -18,7 +18,8 @@ async function run(): Promise<void> {
       permissions: {
         files: {
           allowed_paths: ['additional-files'],
-          blocked_paths: [],
+          // The shipped defaults mix OS roots; a foreign one must never turn into the workspace.
+          blocked_paths: ['/etc', '/System', 'C:\\Windows', '/usr', '/bin'],
         },
       },
     },
@@ -38,6 +39,14 @@ async function run(): Promise<void> {
     assert.equal(config.memory.path, path.join(configDir, 'memory'));
     assert.ok(config.tools.permissions.files.allowed_paths.includes(workspace));
     assert.ok(config.tools.permissions.files.allowed_paths.includes(path.join(configDir, 'additional-files')));
+    const blocked = config.tools.permissions.files.blocked_paths as string[];
+    const inside = (rootPath: string, candidate: string) => {
+      const rel = path.relative(path.resolve(rootPath), path.resolve(candidate));
+      return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+    };
+    assert.ok(!blocked.some((entry) => inside(entry, workspace)), `workspace must never be blocked (blocked: ${blocked.join(', ')})`);
+    if (process.platform !== 'win32') assert.ok(!blocked.some((entry) => /^[A-Za-z]:/.test(entry) || entry.includes('C:\\')), 'foreign Windows roots are dropped');
+    else assert.ok(blocked.some((entry) => entry.toLowerCase() === 'c:\\windows'), 'Windows keeps its own system root blocked');
 
     manager.ensureDirectories();
     assert.ok(fs.statSync(workspace).isDirectory());

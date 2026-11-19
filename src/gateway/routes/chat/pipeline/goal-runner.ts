@@ -1,4 +1,4 @@
-import { getHistory } from '../../../session';
+import { getHistory, getSessionExternalAgent } from '../../../session';
 import { type TurnFileTouch } from '../../../file-change-summary';
 import { buildMainChatGoalContinuationPrompt, getAllMainChatGoalRecords, handleMainChatGoalCommand, stopMainChatGoalByUser, canAutomaticallyResumeMainChatGoal, maybeSummarizeMainChatGoal, recordMainChatGoalRuntimeFailure, recordMainChatGoalContinuationBoundary, resolveMainChatGoalPolicy, snapshotMainChatGoal } from '../../../main-chat-goals';
 import { broadcastWS, setModelBusy } from '../../../comms/broadcaster';
@@ -32,6 +32,11 @@ export function configureGoalRunnerDependencies(deps: GoalRunnerDependencies): v
 export function startMainChatGoalRunner(sessionId: string, source = 'goal_command'): void {
   const sid = String(sessionId || '').trim();
   if (!sid || activeMainChatGoalRuns.has(sid)) return;
+  // Goal mode is a native Prometheus loop; a chat run by a connected agent never starts it.
+  if (getSessionExternalAgent(sid)) {
+    console.warn(`[ExternalAgent] Goal runner skipped for session ${sid}: bound to a connected agent.`);
+    return;
+  }
   const initial = snapshotMainChatGoal(sid);
   if (!initial || initial.status !== 'active') return;
   activeMainChatGoalRuns.add(sid);
