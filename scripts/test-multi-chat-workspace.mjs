@@ -30,7 +30,7 @@ assert.equal(run("tabNeighborAfterClose(state.tabs, 'c').sessionId"), 'b');
 assert.equal(run("tabNeighborAfterClose(state.tabs, 'missing')"), null);
 // Run the actual state transitions while isolating native rendering/navigation.
 run("render = () => {}; renderTabStrip = () => {}; callNativeSessionSwitcher = (sid) => { window.activeChatSessionId = sid; return true; }");
-run("removeTab('a')");
+run("removeTab('a'); syncMainSession()");
 assert.equal(window.activeChatSessionId, 'b');
 assert.deepEqual(snapshot().tabs.map((tab) => tab.sessionId), ['b', 'c']);
 run("reorderTabs('c', 'b')");
@@ -38,18 +38,90 @@ assert.deepEqual(snapshot().tabs.map((tab) => tab.sessionId), ['c', 'b']);
 run('persistState(); state.mainSessionId = ""; state.tabs = []; readStoredState()');
 assert.equal(snapshot().mainSessionId, 'b');
 assert.deepEqual(snapshot().tabs.map((tab) => tab.sessionId), ['c', 'b']);
-run("state.sideSessionId = 'c'; openSide('c'); openSide('b')");
-assert.deepEqual(focused, ['side-chat-input', 'chat-input']);
-assert.equal(snapshot().sideSessionId, 'c');
+
+// Dropping the visible right chat on its own pane focuses it; dragging the left
+// chat to the right swaps the panes (both chats stay tabs).
+run("state.sideSessionId = 'c'; openSide('c')");
+assert.deepEqual(focused, ['side-chat-input']);
+run("openSide('b')");
+assert.equal(window.activeChatSessionId, 'c', 'swap opens the old right chat on the left');
+assert.equal(snapshot().sideSessionId, 'b', 'swap keeps the old left chat on the right');
+run('syncMainSession()');
+assert.equal(snapshot().mainSessionId, 'c');
+assert.equal(snapshot().sideSessionId, 'b');
 assert.equal(snapshot().tabs.length, 2);
+
 let closed = 0;
-window.activeSideChatId = 'c'; window.sideChatSplitOpen = true;
+window.activeSideChatId = 'b'; window.sideChatSplitOpen = true;
 window.closeSideChatSplit = () => { closed++; window.sideChatSplitOpen = false; };
-run("state.sourceSessionId = 'c'; removeTab('c')");
+run("state.sourceSessionId = 'b'; removeTab('b')");
 assert.equal(closed, 1);
 assert.equal(snapshot().sideSessionId, '');
 assert.equal(snapshot().sourceSessionId, '');
-assert.ok(!snapshot().tabs.some((tab) => tab.sessionId === 'c'));
+assert.ok(!snapshot().tabs.some((tab) => tab.sessionId === 'b'));
+
+// Browser semantics: sidebar navigation reuses the current tab...
+window.chatSessions = [
+  { id: 'x', title: 'X chat', history: [{ role: 'user', content: 'hi' }] },
+  { id: 'y', title: 'Y chat', history: [{ role: 'user', content: 'hi' }] },
+  { id: 'z', title: 'Z chat', history: [{ role: 'user', content: 'hi' }] },
+  { id: 'w', title: 'W chat', history: [{ role: 'user', content: 'hi' }] },
+];
+run("state = { tabs: [{sessionId:'x', title:'X chat'}], mainSessionId:'x', sideSessionId:'', sourceSessionId:'' }");
+window.activeChatSessionId = 'y';
+run('syncMainSession()');
+assert.deepEqual(snapshot().tabs.map((tab) => tab.sessionId), ['y'], 'navigation replaces the idle current tab');
+// ...but never navigates a working chat away.
+window._sessionThinking = { y: true };
+window.activeChatSessionId = 'z';
+run('syncMainSession()');
+assert.deepEqual(snapshot().tabs.map((tab) => tab.sessionId), ['y', 'z'], 'a running tab stays and the new chat opens beside it');
+window._sessionThinking = {};
+// New chat (button or "+") opens a new tab right after the current one.
+run("newTabIntent = { sessionId: 'n1', previousSessionId: 'z', at: Date.now() }");
+window.activeChatSessionId = 'n1';
+run('syncMainSession()');
+assert.deepEqual(snapshot().tabs.map((tab) => tab.sessionId), ['y', 'z', 'n1']);
+assert.equal(snapshot().tabs[2].draft, true, 'unsent new chats are flagged as drafts');
+assert.equal(run("titleForSession('n1')"), 'New chat');
+// Pressing New chat again on an empty draft reuses that tab.
+run("newTabIntent = { sessionId: 'n2', previousSessionId: 'n1', at: Date.now() }");
+window.activeChatSessionId = 'n2';
+window.chatHistory = [];
+run('syncMainSession()');
+assert.deepEqual(snapshot().tabs.map((tab) => tab.sessionId), ['y', 'z', 'n2'], 'empty New chat tabs do not stack');
+// Unsent drafts reopen under their own id instead of the missing-chat error.
+const reopened = [];
+window.reopenDesktopDraftChatSession = (sid) => { reopened.push(sid); window.activeChatSessionId = sid; };
+run("callNativeSessionSwitcher = " + source.match(/function callNativeSessionSwitcher\([\s\S]*?\n}\n/)[0].replace('function callNativeSessionSwitcher', 'function'));
+run("callNativeSessionSwitcher('n2')");
+assert.deepEqual(reopened, ['n2']);
+run("callNativeSessionSwitcher = (sid) => { window.activeChatSessionId = sid; return true; }");
+// Switching to an existing tab never reshuffles tabs.
+window.activeChatSessionId = 'z';
+run('syncMainSession()');
+assert.deepEqual(snapshot().tabs.map((tab) => tab.sessionId), ['y', 'z', 'n2']);
+// Ctrl/middle-click intent opens a sidebar chat in a new tab next to the current one.
+run("openInNewTabSessionId = 'w'");
+window.activeChatSessionId = 'w';
+run('syncMainSession()');
+assert.deepEqual(snapshot().tabs.map((tab) => tab.sessionId), ['y', 'z', 'w', 'n2']);
+// Sources follow the visible chat; only a two-pane split asks which one.
+assert.equal(run('allSourceTabs().length'), 1);
+// Closing the left chat of a split promotes the right chat to the whole view.
+run("state = { tabs: [{sessionId:'p'}, {sessionId:'q'}], mainSessionId:'p', sideSessionId:'q', sourceSessionId:'' }");
+window.activeChatSessionId = 'p'; window.activeSideChatId = 'q'; window.sideChatSplitOpen = true;
+closed = 0;
+run("removeTab('p')");
+assert.equal(closed, 1);
+assert.equal(window.activeChatSessionId, 'q');
+assert.equal(snapshot().sideSessionId, '');
+// Closing the last tab leaves a fresh New chat tab, never an empty strip.
+let newChats = 0;
+window.newChatSession = () => { newChats++; };
+run("state = { tabs: [{sessionId:'q'}], mainSessionId:'q', sideSessionId:'', sourceSessionId:'' }");
+run("removeTab('q')");
+assert.equal(newChats, 1);
 // Cold lazy-load drag: preserve payload synchronously, replay only a live drag.
 const intent = fs.readFileSync('web-ui/src/features/chat/multi-chat-intent.js', 'utf8');
 const dragListeners = new Map();

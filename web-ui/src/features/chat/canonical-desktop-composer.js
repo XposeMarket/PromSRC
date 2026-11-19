@@ -361,10 +361,13 @@ function install() {
     desktopComposerResizeObserver = new ResizeObserver(queueDesktopComposerLayoutSync);
   }
   scan(document);
+  // Streaming adds many nodes per second; only subtrees that actually contain a
+  // composer need the selector scan (both selectors require .chat-input-area).
   const observer = new MutationObserver((records) => {
     for (const record of records) {
       for (const node of record.addedNodes) {
-        if (node instanceof Element) scan(node);
+        if (!(node instanceof Element)) continue;
+        if (node.classList.contains('chat-input-area') || node.getElementsByClassName('chat-input-area').length) scan(node);
       }
     }
   });

@@ -468,6 +468,12 @@ export function createDesktopSendChatRuntime(resolveContext = () => ({})) {
           markVoicePendingTurn(options.voicePendingTurnId, { state: 'queued' });
           renderIfViewingThisSession();
         }
+        // The right-hand pane sends through a prepared turn and has already
+        // cleared its input; queue it for that chat instead of dropping it.
+        if (options.sideChat === true && sessionQueue.length < MAX_QUEUED_PROMPTS) {
+          sessionQueue.push(queuedTurn);
+          addProcessEntry('info', 'Queued for after the current run in the right pane.');
+        }
         releaseChatSendLock(sendLock);
         forgetLocalMainChatRequest(thisSessionId, clientRequestId);
         return;

@@ -51,8 +51,30 @@ assert.match(
   /function backgroundAgentEventsToLiveTraceEntries\(events = \[\]\) \{[\s\S]*?if \(eventType === 'reasoning_summary' \|\| eventType === 'reasoning_summary_delta' \|\| eventType === 'reasoning_delta'\) \{\s*const text = String\(extra\.thinking \|\| extra\.text \|\| extra\.message \|\| entry\.content \|\| ''\)\.trim\(\);\s*mergeBackgroundReasoningSummary\(trace, text, \{\s*\.\.\.extra,\s*source: 'reasoning_summary',\s*visibility: 'summary',\s*reasoningKind: 'summary'/,
   'summary deltas must be tagged mutable so they cannot become a second stream row',
 );
-assert.match(read('web-ui/src/background-stream-summary.js'), /function backgroundSpawnCollapsedDetail\(/, 'background summaries need a stable dock detail selector');
-assert.match(desktopPage, /const detail = backgroundSpawnCollapsedDetail\(lane, backgroundAgentPreview\)/, 'reasoning summary updates must not replace the collapsed background-agent header preview');
+assert.match(read('web-ui/src/background-stream-summary.js'), /export function backgroundSpawnLaneSummary\(/, 'background summaries need a shared dock detail selector');
+assert.match(desktopPage, /const detail = backgroundSpawnLaneSummary\(lane, \{\s*entries: backgroundSpawnLaneLiveTrace\(lane\),\s*progressSummary: desktopTraceProgressSummary,\s*liveToolLabel: liveTraceCurrentToolLabel,\s*toolSummary: liveTraceToolSummary,/, 'desktop pills must use the mobile summary precedence, never the raw latest event');
+{
+  const { backgroundSpawnLaneSummary, backgroundSpawnStatusLabel } = await import('../web-ui/src/background-stream-summary.js');
+  const rawEventLane = { status: 'running', task: 'Audit the tabs', events: [{ type: 'tool_call', content: 'workspace_read {"action":"grep","pattern":"x"}' }] };
+  const liveEntries = [{ type: 'tool', text: 'workspace_read' }];
+  assert.equal(
+    backgroundSpawnLaneSummary(rawEventLane, { entries: liveEntries, liveToolLabel: () => 'Searching the code' }),
+    'Searching the code',
+    'running lanes show the friendly current-tool label',
+  );
+  assert.equal(
+    backgroundSpawnLaneSummary(rawEventLane, { entries: liveEntries, progressSummary: () => 'Checked 3 files', liveToolLabel: () => 'Searching' }),
+    'Checked 3 files',
+    'agent progress summaries win over tool labels',
+  );
+  assert.equal(backgroundSpawnLaneSummary(rawEventLane, {}), 'Audit the tabs', 'without trace entries the pill shows the task, not the raw event');
+  assert.equal(backgroundSpawnLaneSummary({ status: 'completed', result: 'Done:\n  all good' }, { entries: liveEntries, toolSummary: () => 'Used 2 tools' }), 'Done: all good');
+  assert.equal(backgroundSpawnLaneSummary({ status: 'failed', error: 'Model timed out' }, {}), 'Model timed out');
+  assert.equal(backgroundSpawnLaneSummary({ status: 'running', approvalRequest: { status: 'pending', title: 'Run npm test' } }, {}), 'Approval needed: Run npm test');
+  assert.equal(backgroundSpawnStatusLabel({ status: 'in_progress' }), 'running');
+  assert.equal(backgroundSpawnStatusLabel({ status: 'timed_out' }), 'timed out');
+  assert.equal(backgroundSpawnStatusLabel({ status: 'running', approvalRequest: { status: 'pending' } }), 'approval');
+}
 assert.match(
   desktopPage,
   /case 'reasoning_summary_delta':[\s\S]{0,450}eventType,\s*source: 'reasoning_summary',\s*visibility: 'summary',\s*reasoningKind: 'summary'/,
