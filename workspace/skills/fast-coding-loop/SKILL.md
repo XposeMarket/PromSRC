@@ -5,18 +5,19 @@ description: "Default coding workflow for Prometheus main chat and every coding 
 
 # Fast Coding Loop (default coding workflow)
 
-Every tool call is a full model round trip that re-sends the whole prompt (often 5-15 s each). A 120-call investigation is 10-20 minutes no matter how small each read is. Optimize for **fewest calls**, not fewest tokens per call.
+Every tool call is a full model round trip that re-sends the whole prompt, so wasted calls add up. Avoid them by batching, rather than making each call small.
 
-## Budget
-- Typical bug: <= 12 calls before the first edit, <= 25 total. Multi-area work (3+ subsystems): ~10 per area.
-- At ~20 calls with no edit: stop, write down exactly what is unknown, then do one targeted probe or ask.
+## No call limit
+- There is no tool-call limit, for main chat or for any agent. Use as many calls as the task needs to finish it and verify it. Never stop early, cut scope, or skip verification to stay under a call count.
+- The steps below exist to avoid wasted round trips (one-pattern searches, tiny repeated reads, a build after every hunk). They are not a reason to do less work.
+- If a long stretch of reading has produced no edit and no new finding, write down exactly what is still unknown and pick the probe that answers it.
 - Investigation agents: return a concise findings list (file:line + one-line cause + proposed fix). No exhaustive citation reports.
 
 ## 0. Before searching
 - If the task continues earlier work, use the RECENT_EDIT_LOG / notes first: it gives exact file:line sites. Go straight there.
 - Write the list of questions you need answered. Each search call should answer several of them.
 
-## 1. Locate (1-2 calls)
+## 1. Locate
 One shell search with several alternated patterns and line numbers across the likely dirs:
 ```
 rg -n "fnA|fnB|'event\.name'|CONST_X" src web-ui/src -g "*.ts" -g "*.js" | Select-Object -First 60
@@ -25,20 +26,20 @@ rg -n "fnA|fnB|'event\.name'|CONST_X" src web-ui/src -g "*.ts" -g "*.js" | Selec
 - Cap output instead of running narrower searches later.
 - Use `rg -c` first when a pattern may have hundreds of hits, to learn which file matters.
 
-## 2. Read big, in parallel (1-3 calls)
+## 2. Read big, in parallel
 - read_files_batch with several `{filename,start_line,num_lines}` windows in ONE call, `max_lines_per_file` up to 240, `inline:true`, `max_result_tokens` high enough (e.g. 12000-24000) so the batch is not cut after file 1.
 - Or one shell call printing several exact ranges with line numbers (see PowerShell helper below).
 - Never re-read the same region in 40-80 line slices.
 - Old tool results get elided later in long turns. Before moving on from a read, note the exact anchor lines you will edit (in your reasoning) so you never need to fetch them again.
 - Huge files (10k+ lines): find function boundaries first, then read the whole function at once.
 
-## 3. Edit (1-3 calls)
+## 3. Edit
 - Put every independent edit in the same assistant turn (parallel workspace_edit calls), or use one patchset call.
 - find_replace: parameters are `find` / `replace` (single edit). Anchors: 2-4 distinctive lines copied exactly. The tool returns post-edit context: trust it, do not re-read.
 - CSS in huge cascades (mobile.css): add one final-authority block at the end with the needed specificity (match any `#id` selectors that win today) rather than hunting every older override.
 - Add a regression test in the same batch when a test file exists.
 
-## 4. Verify once (1-2 calls)
+## 4. Verify once
 One combined command; start it in the background if slow and do docs/notes/skills while it runs:
 ```
 node --check changed.js; npx tsc --noEmit | Select-Object -Last 10; node scripts/test-x.mjs; npm run sync:web-ui; npm run check:web-ui; npm run build
@@ -46,7 +47,7 @@ node --check changed.js; npx tsc --noEmit | Select-Object -Last 10; node scripts
 Wait once. Restart the gateway only after the build step prints exit 0.
 
 ## Delegating (background agents)
-Spawn only when the work is genuinely parallel or long. A brief must contain: exact files/dirs, the concrete questions, the budget ("<= 20 tool calls"), the output shape ("<= 15 bullets, file:line + cause + fix"), and read-only vs edit scope. Never ask for a "full report with citations". Do useful foreground work while it runs instead of waiting in long blocks. For multi-lane implementation with worktrees see `background-coding-agent-lanes`.
+Spawn only when the work is genuinely parallel or long. A brief must contain: exact files/dirs, the concrete questions, the output shape ("<= 15 bullets, file:line + cause + fix"), and read-only vs edit scope. Do not put a tool-call limit in the brief: agents use as many calls as the task needs. Never ask for a "full report with citations". Do useful foreground work while it runs instead of waiting in long blocks. For multi-lane implementation with worktrees see `background-coding-agent-lanes`.
 
 ## Anti-patterns that cause 5+ minute turns
 - One pattern per grep, then another, then another.

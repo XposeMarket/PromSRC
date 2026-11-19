@@ -246,5 +246,15 @@ const report = {
   },
 };
 
+// The files block gives batching guidance only. It must not set a tool-call limit:
+// a call cap makes agents stop before the work is finished or verified.
+const filesBlock = String(TOOL_BLOCKS.files || '');
+assert.ok(filesBlock.includes('CODING SPEED'), 'files block keeps the batching guidance');
+assert.ok(filesBlock.includes('There is no tool-call limit'), 'files block says there is no tool-call limit');
+// Guard the two removed cap clauses by their wording. A general "number next to calls" pattern
+// either misses rewordings or rejects ordinary batching text, so it is not used here.
+assert.ok(!/calls before the first edit/i.test(filesBlock), 'files block must not bring back the calls-before-first-edit target');
+assert.ok(!/calls without editing/i.test(filesBlock), 'files block must not bring back the stop-after-N-calls rule');
+
 assert.equal(failures.length, 0, `category routing failures: ${JSON.stringify(failures.slice(0, 12))}`);
 console.log(JSON.stringify(report, null, 2));
