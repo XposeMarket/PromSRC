@@ -36,8 +36,7 @@ export function mountSavedAccessSettings(host, opts = {}) {
       el('div', { class: 'sa-hd' }, lockIcon(20), el('div', { style: 'display:grid;gap:2px' },
         el('h3', { text: 'Saved access' }),
         el('p', { text: 'Sign-ins and keys Prom can use for you on exact sites. Prom never sees the values, and posting, sending or buying still asks you separately.' }))),
-      statusLine, ownerHost, el('div', { class: 'sa-row' }, addBtn), addHost, msgLine),
-    list);
+      statusLine, ownerHost, el('div', { class: 'sa-row' }, addBtn), addHost, msgLine, list));
   const pluginHost = el('div', { 'data-protected-plugin-host': 'true' });
   root.append(pluginHost);
   host.replaceChildren(root);
@@ -199,7 +198,7 @@ export function mountSavedAccessSettings(host, opts = {}) {
         ? 'Remembered access is encrypted with this computer\'s protected key store. Programs already running as you on this computer are not blocked by it.'
         : 'This computer has no protected key store, so access is kept in memory only and cleared when Prometheus restarts.';
       const creds = Array.isArray(res?.credentials) ? res.credentials : [];
-      list.replaceChildren(...(creds.length ? creds.map(renderCredential) : [el('p', { class: 'sa-muted', text: 'No saved access yet.' })]));
+      list.replaceChildren(...(creds.length ? creds.map(renderCredential) : [el('p', { class: 'sa-muted sa-empty', text: 'No saved access yet.' })]));
     } catch {
       list.replaceChildren(el('p', { class: 'sa-err', text: 'Saved access is unavailable right now.' }));
     }

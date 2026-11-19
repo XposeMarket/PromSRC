@@ -13,7 +13,15 @@
  * /api/settings/provider-accounts/{update,remove}.
  */
 
+import { renderProviderLogo } from '../components/provider-logo.js';
+
 export const ACCOUNT_PROVIDER_ORDER = ['anthropic', 'openai_codex', 'openai', 'xai'];
+
+/** Brand mark for a provider, falling back to its initial when no logo is known. */
+export function providerBadgeHtml(providerId, meta = providerAccountMeta(providerId)) {
+  const logo = renderProviderLogo(providerId, '', 'spa-prov-logo');
+  return logo.includes('data-provider="generic"') ? esc(meta.letter) : logo;
+}
 
 const PROVIDER_META = {
   anthropic: { name: 'Anthropic', letter: 'A' },
@@ -88,7 +96,7 @@ function renderList(state) {
   const groupHtml = groups.map((group) => `
     <div class="spa-group" data-provider="${esc(group.providerId)}">
       <div class="spa-group-head">
-        <span class="spa-prov spa-prov-${esc(group.providerId)}" aria-hidden="true">${esc(group.letter)}</span>
+        <span class="spa-prov spa-prov-${esc(group.providerId)}" aria-hidden="true">${providerBadgeHtml(group.providerId, group)}</span>
         <span class="spa-group-name">${esc(group.name)}</span>
         <button class="spa-add" type="button" data-spa-add="${esc(group.providerId)}">+ Add account</button>
       </div>
@@ -108,14 +116,14 @@ function renderList(state) {
       ${addable.map((providerId) => {
         const meta = providerAccountMeta(providerId);
         return `<button class="spa-row" type="button" data-spa-add="${esc(providerId)}">
-          <span class="spa-prov spa-prov-${esc(providerId)}" aria-hidden="true">${esc(meta.letter)}</span>
+          <span class="spa-prov spa-prov-${esc(providerId)}" aria-hidden="true">${providerBadgeHtml(providerId, meta)}</span>
           <span class="spa-row-main"><span class="spa-row-label">${esc(meta.name)}</span></span>
           <span class="spa-chev" aria-hidden="true">+</span>
         </button>`;
       }).join('')}
     </div>` : '';
   return `<section class="spa-root" aria-label="Accounts">
-    <div class="spa-head"><h2>Accounts</h2><span class="spa-sub">Tap an account to rename, test, or remove it.</span></div>
+    <div class="spa-head"><h2>Accounts</h2><span class="spa-sub">Select an account to rename, test, or remove it.</span></div>
     ${groupHtml || '<div class="spa-empty">No provider accounts yet.</div>'}
     ${addableHtml}
   </section>`;

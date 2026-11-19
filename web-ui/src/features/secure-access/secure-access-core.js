@@ -48,7 +48,10 @@ const CSS = `
 .sa-dock-desktop{justify-items:center;width:100%;box-sizing:border-box}.sa-dock-desktop .sa-card{width:100%}
 .sa-dock-mobile{position:absolute;left:12px;right:12px;z-index:40;bottom:calc(var(--pm-tabbar-h,64px) + env(safe-area-inset-bottom) + 92px);max-height:50vh;max-height:min(62vh,calc(100dvh - 240px));overflow:auto;overscroll-behavior:contain;padding:0;justify-items:center;box-sizing:border-box}
 .sa-dock-mobile .sa-card{width:100%;background:var(--prom-surface,var(--pm-surface,Canvas))}
-.sa-settings{display:grid;gap:12px;max-width:720px}.sa-settings .sa-card{max-width:none}
+.sa-settings{display:grid;gap:12px;max-width:none}.sa-settings .sa-card{max-width:none}
+.sa-settings .sa-row>.sa-btn{flex:0 0 auto;min-height:36px;padding:0 14px;font-size:13px}
+.sa-settings .sa-btn.sa-pri{background:var(--prom-text,var(--text,CanvasText));color:var(--prom-bg,var(--bg,Canvas))}
+.sa-settings .sa-empty{padding:10px 12px;border:1px dashed var(--sa-b);border-radius:9px;text-align:center}
 .sa-cred-meta{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
 .sa-panel{display:grid;gap:8px;border-top:1px solid var(--sa-b);padding-top:10px}
 `;

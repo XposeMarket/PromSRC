@@ -1,4 +1,5 @@
 import { renderContentReview } from '../components/ContentReview.js';
+import { stripOnboardingControlBlock } from '../onboarding/onboarding-block.js';
 
 import { foldMobileReasoningSummaryGroups, isMobileReasoningSummaryEntry, mobileReasoningSummaryKey, mobileReasoningSummaryTitle } from '../mobile/mobile-reasoning-summary-fold.js';
 import { agentAvatarHtml, agentModelLabel } from '../components/provider-logo.js';
@@ -7284,6 +7285,11 @@ function assistantWorkStartedAt(msg) {
 
 function renderAssistantWorkTimer(msg, { active = false, startedAt = 0 } = {}) {
   if (msg?.suppressWorkTimer === true || ['goal_restart_notice', 'goal_continuation_notice'].includes(msg?.messageKind)) return '';
+  // A row that only carries a question/approval card did no work of its own:
+  // no "Worked for 0s" header above each answered card.
+  if (!active && msg && (msg.questionRequest || msg.approvalRequest)
+    && !String(msg.content || '').trim()
+    && !(msg.processEntries?.length || msg.liveTraceEntries?.length || msg.toolCalls?.length || msg.steps?.length)) return '';
   const start = Number(startedAt || assistantWorkStartedAt(msg) || 0);
   if (!start) return '';
   const endedAt = Number(msg?.workEndedAt || 0);
@@ -9418,7 +9424,7 @@ function toggleSteps(id) {
 }
 
 function renderAssistantContent(content, message = null) {
-  const text = String(content || '');
+  const text = stripOnboardingControlBlock(String(content || ''));
   const markdownOptions = { visualArtifacts: Array.isArray(message?.richArtifacts) ? message.richArtifacts : [], renderArtifact: (a) => renderRichArtifacts({ richArtifacts: [a] }) };
   const bgHeaderMatch = text.match(/\nBackground agent response:\s*\n?/i) || text.match(/^Background agent response:\s*\n?/i);
   if (bgHeaderMatch && typeof bgHeaderMatch.index === 'number') {

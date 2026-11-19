@@ -681,7 +681,7 @@ async function renderSecurity(content, page) {
     ${card('Chrome sign-ins', `
       <div class="pm-card-body">When on, opening a site copies that site's sign-in from your paired Personal Chrome. Cookie values stay on your computer.</div>
       ${toggleRow('pm-chrome-signin-sync', 'Always use my Chrome sign-ins', chromeOn)}
-      <div id="pm-chrome-signin-status" class="pm-settings-status muted">${chromeOn ? 'On: opening a site copies its Chrome sign-in.' : 'Off.'}</div>
+      <div id="pm-chrome-signin-status" class="pm-settings-status muted">${chromeOn ? 'Opening a site copies its Chrome sign-in.' : ''}</div>
     `, 'check')}
     ${card('File Access', `
       ${field('Workspace Path', input('pm-sec-workspace', paths.workspace_path || '', 'placeholder="%APPDATA%\\\\Prometheus\\\\workspace"'))}
@@ -701,7 +701,7 @@ async function renderSecurity(content, page) {
       const on = res?.enabled === true;
       chromeToggle.classList.toggle('on', on);
       chromeToggle.setAttribute('aria-pressed', on ? 'true' : 'false');
-      if (statusEl) statusEl.textContent = on ? 'On: opening a site copies its Chrome sign-in.' : 'Off.';
+      if (statusEl) statusEl.textContent = on ? 'Opening a site copies its Chrome sign-in.' : '';
     } catch (err) {
       if (statusEl) statusEl.textContent = `Could not save: ${err.message}`;
     } finally {

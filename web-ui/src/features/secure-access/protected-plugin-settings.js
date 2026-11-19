@@ -72,7 +72,7 @@ export function mountProtectedPluginSaved(host, opts = {}) {
       const rows = [];
       for (const cred of saved?.credentials || []) if (cred.configured || cred.connected || cred.stopped) rows.push(row(cred.name || 'X OAuth app', xCredentialLabel(cred), 'x', 'x', 'x', cred.history));
       for (const conn of saved?.connections || []) rows.push(row(String(conn.name || conn.serviceId || conn.id), connectionLabel(conn), 'connection', conn.id, conn.serviceId, conn.history));
-      list.replaceChildren(...(rows.length ? rows : [el('p', { class: 'sa-muted', text: 'No plugin keys yet.' })]));
+      list.replaceChildren(...(rows.length ? rows : [el('p', { class: 'sa-muted sa-empty', text: 'No plugin keys yet.' })]));
     } catch { list.replaceChildren(el('p', { class: 'sa-err', text: 'Plugin keys are unavailable right now.' })); }
   }
   refresh();

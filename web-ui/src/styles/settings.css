@@ -2645,6 +2645,15 @@
   font: inherit;
 }
 #settings-modal .settings-search-filter-empty { display: block; margin-top: 8px; color: var(--muted); font-size: 12px; }
+/* The display rule above must never beat [hidden] (it showed "No providers match." on an empty search). */
+#settings-modal .settings-search-filter-empty[hidden],
+#settings-modal .settings-chrome-profile-import-panel[hidden],
+#settings-modal .settings-chrome-profile-import-controls[hidden] { display: none; }
+/* A short state line under a row label (e.g. Chrome sign-ins). The toggle already shows on/off, so this stays empty when off. */
+#settings-modal .settings-row-label-stack { display: inline-flex; flex-direction: column; gap: 2px; min-width: 0; }
+#settings-modal .settings-row-hint { color: var(--muted); font-size: 11.5px; font-weight: 400; line-height: 1.35; }
+#settings-modal .settings-row-hint:empty { display: none; }
+#settings-modal .settings-browser-section { margin-top: 14px; }
 #settings-modal .settings-provider-meta {
   grid-column: 1 / -1;
   margin: -12px 0 2px;
@@ -2904,6 +2913,7 @@
   font-weight: 800;
 }
 
+#settings-modal .spa-prov .spa-prov-logo { width: 17px; height: 17px; display: block; }
 #settings-modal .spa-prov-anthropic { background: color-mix(in srgb, #d97757 28%, transparent); }
 #settings-modal .spa-prov-openai_codex,
 #settings-modal .spa-prov-openai { background: color-mix(in srgb, #10a37f 28%, transparent); }

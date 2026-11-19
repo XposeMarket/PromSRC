@@ -1,4 +1,5 @@
 import { renderContentReview } from '../components/ContentReview.js';
+import { stripOnboardingControlBlock } from '../onboarding/onboarding-block.js';
 
 // Chat and inline Voice route owner.
 import { mobileStreamOwner } from './mobile-stream-owner.js';
@@ -3848,7 +3849,7 @@ function _wrapMobileMarkdownTables(html) {
 }
 
 function _renderMobileMarkdown(text, message = null) {
-  const raw = String(text || '');
+  const raw = stripOnboardingControlBlock(String(text || ''));
   if (!raw.trim()) return '';
   if (typeof window !== 'undefined' && (!window.marked || typeof window.marked.parse !== 'function')) {
     Promise.resolve(window.__PROM_EXTERNAL_LIBS_READY || null)

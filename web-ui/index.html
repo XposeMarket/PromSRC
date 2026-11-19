@@ -4078,6 +4078,15 @@
               <option value="ddg">DuckDuckGo</option>
             </select>
           </div>
+        </div>
+      </section>
+
+      <section class="settings-section settings-browser-section">
+        <div class="settings-section-heading">
+          <h2>Browser</h2>
+          <span class="settings-help" tabindex="0" aria-label="Browser technical details" data-settings-help="How Prometheus's own browser signs in to sites: which profile it uses, importing Chrome profiles, and copying Chrome sign-ins.">?</span>
+        </div>
+        <div class="settings-section-panel settings-search-provider-panel">
           <div class="settings-search-row settings-browser-profile-row">
             <label for="settings-browser-profile-default" class="settings-search-row-label">
               <span>In-app browser profile</span>
@@ -4099,7 +4108,10 @@
           </div>
           <div class="settings-search-row settings-chrome-signin-sync-row">
             <label for="settings-chrome-signin-sync-toggle" class="settings-search-row-label">
-              <span>Always use my Chrome sign-ins</span>
+              <span class="settings-row-label-stack">
+                <span>Always use my Chrome sign-ins</span>
+                <span id="settings-chrome-signin-sync-status" class="settings-row-hint" aria-live="polite"></span>
+              </span>
               <span class="settings-help" tabindex="0" aria-label="Always use my Chrome sign-ins details" data-settings-help="When on, opening a site copies that site's sign-in from your paired Personal Chrome, plus its sibling sites and login providers. Cookie values stay on this computer and are never written to logs. Agents can list which Google accounts and sites have Chrome sign-ins, but cannot change this setting.">?</span>
             </label>
             <label class="settings-profile-toggle" title="Copy Chrome sign-ins when opening sites">
@@ -4107,7 +4119,6 @@
               <span class="settings-profile-toggle-track" aria-hidden="true"><span class="settings-profile-toggle-thumb"></span></span>
             </label>
           </div>
-          <div id="settings-chrome-signin-sync-status" class="settings-help-text muted" aria-live="polite"></div>
 
           <div id="settings-chrome-profile-import-panel" class="settings-chrome-profile-import-panel" hidden>
             <div class="settings-chrome-profile-import-controls">
