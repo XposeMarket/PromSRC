@@ -2239,6 +2239,9 @@ function renderSessionsList() {
       return title.includes(_sessionSearchQuery) || msgs.includes(_sessionSearchQuery) || indexedMatchIds.has(String(s.id));
     });
   }
+  // Agents filter (bottom of the list): Prometheus and/or connected harnesses.
+  const harnessSidebar = window.__promHarnessSidebar;
+  if (harnessSidebar) sorted = sorted.filter((s) => harnessSidebar.visible(s));
 
   const pinned = sorted.filter(s => _pinnedChats.includes(s.id));
   const unpinned = sorted.filter(s => !_pinnedChats.includes(s.id));
@@ -2260,9 +2263,14 @@ function renderSessionsList() {
     }
   }
 
-  const projectRows = typeof window.renderProjectChatRows === 'function'
+  const promProjectRows = (!harnessSidebar || harnessSidebar.isVisible('prometheus')) && typeof window.renderProjectChatRows === 'function'
     ? window.renderProjectChatRows({ query: _sessionSearchQuery })
     : '';
+  // After the last Prometheus project: one collapsible section per connected harness.
+  const harnessRows = harnessSidebar && !_sessionSearchQuery
+    ? harnessSidebar.projectsHtml({ chatRow: (c) => renderChatSessionCard({ id: c.id, title: c.title, lastMessageAt: c.lastMessageAt, channel: 'web', history: [], ...((window.chatSessions || []).find((s) => String(s?.id) === c.id) || {}) }, { projectNested: true }) })
+    : '';
+  const projectRows = promProjectRows + harnessRows;
   const projectsSection = document.getElementById('sidebar-projects-section');
   const projectsListEl = document.getElementById('sidebar-projects-list');
   if (projectsSection && projectsListEl) {
@@ -2294,6 +2302,7 @@ function renderSessionsList() {
     </button>`;
   }
 
+  content += harnessSidebar?.filterButtonHtml?.() || '';
   content += `<button class="sessions-show-more-btn settled-entry-btn" onclick="toggleSettledSessionsView()" style="width:100%;margin-top:8px;padding:8px 12px;background:transparent;border:1px solid var(--line);color:var(--sidebar-muted, var(--muted));border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;font-family:'Manrope',sans-serif;transition:all 0.15s ease" onmouseover="this.style.background='color-mix(in srgb, var(--pm-gold, var(--brand)) 10%, transparent)'" onmouseout="this.style.background='transparent'">
     Settled
   </button>`;
@@ -2395,6 +2404,7 @@ function _documentedReasoningCapability(provider, model) {
 }
 
 function _supportsFastSpeed(provider, model) {
+  if (window.__promAgentModelSwitcher?.active()) return false; // harnesses own their speed
   const name = String(model || '').trim().toLowerCase().split('/').filter(Boolean).pop() || '';
   // Fast mode is Claude Opus 5 / Opus 4.8 only (removed on Opus 4.7).
   if (provider === 'anthropic') return /^claude-opus-(?:5|4-8)(?:-|$)/.test(name);
@@ -2445,6 +2455,8 @@ function _supportsAnthropicXHigh(model) {
 }
 
 function _effortLevelsForProvider(provider, model) {
+  // A connected agent (Codex, Claude Code...) owns this chat: its own levels only.
+  if (window.__promAgentModelSwitcher?.active()) return window.__promAgentModelSwitcher.levels(model);
   if (provider === 'openai' || provider === 'openai_codex') {
     const cap = _documentedReasoningCapability(provider, model);
     return [{ v: '', label: 'Provider Default', desc: cap.defaultEffort ? `Model default: ${cap.defaultEffort}` : 'Use provider default' }]
@@ -2757,6 +2769,7 @@ async function _refreshActiveChatModelRouteNow(sessionId) {
 }
 
 async function setActiveChatModelRoute(route, sessionIdOverride = '') {
+  if (window.__promAgentModelSwitcher?.active()) return window.__promAgentModelSwitcher.setRoute(route);
   const sessionId = getActiveChatModelRouteSessionId(sessionIdOverride);
   if (!sessionId) throw new Error('No active chat');
   const data = await api(`/api/sessions/${encodeURIComponent(sessionId)}/model-route`, {
@@ -2830,6 +2843,7 @@ function _desktopSwitcherProviderLabel(id, catalog = []) {
 }
 
 async function _desktopSwitcherModelsFor(provider, state) {
+  if (Array.isArray(state.agentModels)) return state.agentModels.map((item) => item.id);
   const models = [];
   const add = (value) => {
     const name = String(value?.name || value || '').trim();
@@ -2880,6 +2894,7 @@ function _desktopSwitcherBuildState(route, llm, catalog = [], credentialed = [])
 }
 
 function _desktopSwitcherStateFromCache(sessionId = '') {
+  if (window.__promAgentModelSwitcher?.active()) return window.__promAgentModelSwitcher.cached();
   return _desktopSwitcherBuildState(
     _desktopSwitcherCachedRouteForSession(sessionId),
     window._llmSettingsCache || _desktopSwitcherSettingsCache,
@@ -2933,6 +2948,7 @@ function _desktopSwitcherLoadCredentialedProviders() {
 }
 
 async function _loadDesktopSwitcherState(sessionId = '') {
+  if (window.__promAgentModelSwitcher?.active()) return window.__promAgentModelSwitcher.load();
   const [route, settings, catalogData, credentialData] = await Promise.all([
     refreshActiveChatModelRoute(sessionId),
     _desktopSwitcherLoadSettings(),
@@ -3001,7 +3017,7 @@ function _renderDesktopSwitcherMain(state, controller = _desktopSwitcherControll
   const effort = levels.find((item) => item.v === state.reasoningEffort) || levels[0];
   const speedCapable = _supportsFastSpeed(state.provider, state.model);
   const speed = state.speed === 'fast' ? 'fast' : 'standard';
-  const source = state.route?.mode === 'explicit' ? 'This chat' : 'Main Chat default';
+  const source = state.agentName ? `${state.agentName} runs this chat` : state.route?.mode === 'explicit' ? 'This chat' : 'Main Chat default';
   main.innerHTML = `
     <div class="model-switcher-heading">Chat settings</div>
     <button type="button" class="model-switcher-row" data-switcher-view="providers"><span>Providers</span><strong>${escHtml(_desktopSwitcherProviderLabel(state.provider, state.catalog))}</strong><i>›</i></button>
@@ -3144,7 +3160,7 @@ async function _renderDesktopSwitcherModels(state, provider, controller = _deskt
   _desktopSwitcherShowDetail('Model', '<div class="model-switcher-empty">Loading models…</div>', controller);
   const allModels = await _desktopSwitcherModelsFor(provider, state);
   const groups = groupModelsByFamily(provider, allModels, provider === state.provider ? state.model : '');
-  const grouped = ['openai', 'openai_codex', 'anthropic'].includes(provider);
+  const grouped = !state.agentModels && ['openai', 'openai_codex', 'anthropic'].includes(provider);
   const family = grouped ? groups.find((group) => group.key === familyKey) : { label: 'Model', models: allModels };
   if (!family) {
     _desktopSwitcherShowDetail('Model families', groups.length ? groups.map((group) => _desktopSwitcherOption(

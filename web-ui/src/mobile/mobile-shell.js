@@ -14,6 +14,7 @@ const loadDrawerMorph = () => drawerMorphModule ||= import('./mobile-drawer-sear
 import { resolveDrawerActiveRun } from './mobile-turn-lifecycle.js';
 import { initMobileModelBadge, mobileModelBadgeSeedLabel, attachMobileButtonHaptic, attachMobileHapticGestureSurface, disposeMobileHapticGestureSurfaces, pmHaptic } from './mobile-model-badge.js';
 import { mobileGatewayFetch, buildWorkspaceCanvasUrl, attachMobileSessionToProject, detachMobileSessionFromProject } from './mobile-api.js';
+import { initHarnessSidebar, harnessProjectsHtml, harnessFilterButtonHtml, isSessionVisibleForHarnessFilter, isHarnessVisible } from '../chat/external-agent-sidebar.js';
 import {
   getGateway,
   getGatewayFilter,
@@ -1790,6 +1791,12 @@ function _mountDrawerGatewayFilterPanel() {
 export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSession, loadSessions, searchSessions }) {
   const root = document.getElementById('mobile-root');
   _shellOnNavigate = onNavigate;
+  initHarnessSidebar({
+    surface: 'mobile',
+    request: mobileGatewayFetch,
+    rerender: () => { if (_drawerEl?.isConnected && _drawerCallbacks) _renderDrawerSessions({ ..._drawerCallbacks, preserveScroll: true }).catch(() => {}); },
+    newChat: async () => { closeDrawer(); await _drawerCallbacks?.onNewChat?.(); },
+  });
   const existingApp = root?.querySelector(':scope > #pm-app');
   const existingPage = existingApp?.querySelector(':scope > #pm-page');
   const existingTabbar = existingApp?.querySelector(':scope > .pm-tabbar');
@@ -2199,7 +2206,7 @@ function _sessionPageHtml(pageState, emptyText) {
   if (!sessions.length && pageState?.error) return '<div class="pm-session-empty">Could not load sessions.</div>';
   // Filter out pinned sessions — they appear in the dedicated pinned section above
   const projectSessionIds = new Set(_drawerProjects.flatMap((project) => (project.sessions || []).map((session) => String(session?.id || ''))));
-  const visibleSessions = sessions.filter((session) => !_isDrawerHiddenRuntimeSession(session));
+  const visibleSessions = sessions.filter((session) => !_isDrawerHiddenRuntimeSession(session) && isSessionVisibleForHarnessFilter(session));
   const unpinned = _drawerSessionView === 'settled'
     ? visibleSessions.filter((session) => !projectSessionIds.has(String(session?.id || '')) && !session?.projectId && session?.source !== 'project')
     : visibleSessions.filter((session) => !_isPinned(session?.id) && !projectSessionIds.has(String(session?.id || '')) && !session?.projectId && session?.source !== 'project');
@@ -2208,7 +2215,7 @@ function _sessionPageHtml(pageState, emptyText) {
   // final click simply confirms there is no additional page.
   const showLoadMore = pageState?.hasMore === true || Number(pageState?.lastPageSize || 0) >= PM_DRAWER_SESSION_PAGE_SIZE;
   if (!unpinned.length && !showLoadMore && !pageState?.loading) {
-    return `<div class="pm-session-empty">${emptyText}</div>` + (_drawerSessionView === 'settled'
+    return `<div class="pm-session-empty">${emptyText}</div>` + harnessFilterButtonHtml() + (_drawerSessionView === 'settled'
       ? '<button class="pm-session-load-more pm-settled-back" type="button" data-active-session-view>Back to chats</button>'
       : '<button class="pm-session-load-more pm-settled-entry" type="button" data-settled-session-view>Settled</button>');
   }
@@ -2217,6 +2224,7 @@ function _sessionPageHtml(pageState, emptyText) {
     pageState?.error ? '<div class="pm-session-empty">Could not load more chats.</div>' : '',
     showLoadMore ? `<button class="pm-session-load-more" type="button" data-session-load-more>${_drawerSessionView === 'settled' ? 'Load more settled chats' : 'Load more chats'}</button>` : '',
     pageState?.loading ? '<div class="pm-session-empty pm-session-loading">Loading more...</div>' : '',
+    harnessFilterButtonHtml(),
     _drawerSessionView === 'settled'
       ? '<button class="pm-session-load-more pm-settled-back" type="button" data-active-session-view>Back to chats</button>'
       : '<button class="pm-session-load-more pm-settled-entry" type="button" data-settled-session-view>Settled</button>',
@@ -2365,7 +2373,7 @@ function _renderDrawerPinnedSessions(pageState, pinnedOverride = null) {
   var sessions = _hydrateDrawerSessionStates(sourceSessions);
   var localOrder = _getPinnedSessionIds();
   var pinnedSessions = sessions.filter(function(session) {
-    return !_isDrawerHiddenRuntimeSession(session) && _isPinned(session && session.id);
+    return !_isDrawerHiddenRuntimeSession(session) && _isPinned(session && session.id) && isSessionVisibleForHarnessFilter(session);
   });
   pinnedSessions.sort(function(a, b) {
     // Server sidebarOrder (shared with desktop drag) beats pin time.
@@ -2624,11 +2632,17 @@ function _renderDrawerProjects() {
   const projectsEl = _drawerEl?.querySelector('#pm-drawer-project-list');
   if (!projectsEl) return;
   if (_drawerSessionView === 'settled') { projectsEl.innerHTML = ''; return; }
-  const projects = _drawerProjects;
-  projectsEl.innerHTML = projects.length
+  const projects = isHarnessVisible('prometheus') ? _drawerProjects : [];
+  // After the last Prometheus project: one collapsible section per connected harness.
+  const pageSessions = _drawerPageStateFor().sessions || [];
+  const harness = harnessProjectsHtml({
+    surface: 'mobile',
+    chatRow: (c) => _sessionButtonHtml({ id: c.id, title: c.title, lastMessageAt: c.lastMessageAt, ...(pageSessions.find((s) => String(s?.id || '') === c.id) || {}) }, { projectChild: true }),
+  });
+  projectsEl.innerHTML = (projects.length || harness)
     ? '<div class="pm-drawer-project-section">' +
       '<button class="pm-drawer-section-title pm-drawer-project-toggle" type="button" data-drawer-project-toggle aria-expanded="' + String(!_drawerProjectsCollapsed) + '" aria-controls="pm-drawer-project-content"><span>Projects</span><span class="pm-drawer-pinned-chevron" aria-hidden="true">' + ICONS.chev + '</span></button>' +
-      '<div class="pm-drawer-project-content" id="pm-drawer-project-content"' + (_drawerProjectsCollapsed ? ' hidden' : '') + '>' + projects.map(_projectButtonHtml).join('') + '</div>' +
+      '<div class="pm-drawer-project-content" id="pm-drawer-project-content"' + (_drawerProjectsCollapsed ? ' hidden' : '') + '>' + projects.map(_projectButtonHtml).join('') + harness + '</div>' +
       '</div>'
     : '';
   _wireDrawerLongPress(_sessLongCallbacks || {});

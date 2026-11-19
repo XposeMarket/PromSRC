@@ -15,6 +15,8 @@ import { createMobileChatCamera } from './mobile-chat-camera.js';
 import { finalizeMobileMainPlan } from './mobile-plan-finalize.js';
 import { createMobileSilenceBackstop, claimMobileFinalize, selectMobileTurnRowsToFinalize } from './mobile-turn-lifecycle.js';
 import { rememberMobileStreamOwner } from './mobile-stream-owner.js';
+import { mountMobileAgentRow, mobileAgentFieldForSend, mobileAgentStreamEvent, syncMobileAgentRequests } from '../chat/external-agent-mobile.js';
+import { harnessFolderPickerOptions, pickHarnessFolderOption, onHarnessSidebarChange } from '../chat/external-agent-sidebar.js';
 import { attachNativePicker } from './mobile-native-picker.js';
 import { mountSecureAccessDock, createSecureAccessContinuation } from '../features/secure-access/secure-access-core.js';
 import { installComposerSecretGuard } from '../features/secure-access/protected-plugin-entry.js';
@@ -1004,6 +1006,9 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
   const targetChip = page.querySelector('#pm-chat-target-chip');
   const projectChip = page.querySelector('#pm-new-chat-project');
   const contextDock = page.querySelector('#pm-new-chat-context-dock');
+  // Live connected agent row (first row of the dock; hidden unless an agent is on).
+  if (contextDock) mountMobileAgentRow(contextDock, { request: mobileGatewayFetch });
+  else if (requestedSession) syncMobileAgentRequests(requestedSession, mobileGatewayFetch).catch(() => {});
   const micBtn = page.querySelector('#pm-chat-mic-btn');
   const modeLauncher = page.querySelector('#pm-chat-mode-launcher');
   const modeVoiceButton = page.querySelector('#pm-chat-mode-voice');
@@ -1107,7 +1112,10 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
     const value = targetChip.querySelector('.pm-new-chat-context-value');
     if (value) value.querySelector('strong').textContent = target?.name || 'Gateway unavailable';
     else targetChip.innerHTML = `<strong>${escapeHtml(target?.name || 'Gateway unavailable')}</strong>`;
-    targetChip.disabled = false;
+    // Only offer a computer choice when there is another computer to choose.
+    const onlyOne = loadGatewayCatalog().length <= 1;
+    targetChip.hidden = onlyOne;
+    targetChip.disabled = onlyOne;
     targetChip.setAttribute('aria-expanded', String(!!targetPopover && targetPopover.dataset?.popoverType === 'target'));
     targetChip.setAttribute('aria-label', target ? `Current gateway: ${target.name}` : 'Gateway target unavailable');
     return target;
@@ -1351,7 +1359,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
   }
 
   function openChatTargetPopover() {
-    if (requestedSession !== MOBILE_CHAT_SESSION_ID || !targetChip) return;
+    if (requestedSession !== MOBILE_CHAT_SESSION_ID || !targetChip || targetChip.hidden) return;
     if (targetPopover?.dataset?.popoverType === 'target') {
       closeTargetPopover();
       return;
@@ -1480,12 +1488,21 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
   });
   nativeProjectPicker = attachNativePicker(projectChip, {
     label: 'Directed chat',
-    options: () => nativeProjectPickerOptions.map((option) => ({
+    // A connected agent (Codex, Claude Code, ...) lists its own projects here.
+    options: () => harnessFolderPickerOptions() || nativeProjectPickerOptions.map((option) => ({
       ...option,
       selected: option.value === targetProjectId,
     })),
     onChange: (value) => {
       const selected = String(value || '');
+      if (pickHarnessFolderOption(selected)) {
+        targetProjectId = '';
+        targetProjectLabel = '';
+        rememberChatContext();
+        renderChatProjectChip();
+        nativeProjectPicker?.refresh();
+        return;
+      }
       if (selected === '__pm_new_project__') {
         nativeProjectPicker?.refresh();
         openNewProjectPopover();
@@ -1528,6 +1545,10 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
     nativeProjectPicker?.refresh();
   };
   void loadNativeProjectPickerOptions();
+  const stopHarnessFolderUpdates = onHarnessSidebarChange(() => {
+    if (!projectChip?.isConnected) { stopHarnessFolderUpdates(); return; }
+    nativeProjectPicker?.refresh();
+  });
   const stopGatewayTargetUpdates = onGatewayCatalogChanged(() => {
     renderChatTargetChip();
     nativeTargetPicker?.refresh();
@@ -7820,12 +7841,14 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       clientRequestId,
       excludedSkillIds: excludedSkillIds.length ? excludedSkillIds : undefined,
       selectedSkillIds: selectedSkillIds.length ? selectedSkillIds : undefined,
+      agent: mobileAgentFieldForSend(actualSessionId),
     }, {
       onAccepted: () => { requestAccepted = true; },
       onEvent: (evt) => {
         hideReconnectingStatus();
         noteMobileLiveStreamActivity(actualSessionId);
         window.__pmMobileContextStreamEvent?.(evt, { sessionId: actualSessionId });
+        if (mobileAgentStreamEvent(evt, actualSessionId, mobileGatewayFetch)) return;
         const applied = applyMobileChatStreamEvent(aiTurn, evt);
         if (applied === 'final' || applied === 'done' || applied === 'error') finishAiTurn();
       },

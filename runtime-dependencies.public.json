@@ -14,6 +14,7 @@
     "@hyperframes/studio",
     "@iconify/iconify",
     "@lottiefiles/lottie-player",
+    "@prometheus/claude-driver",
     "@remotion/bundler",
     "@remotion/renderer",
     "archiver",
