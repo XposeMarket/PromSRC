@@ -21,57 +21,99 @@ function capPreview(text: string): string {
   if (text.length <= PREVIEW_LIMIT) return text;
   return `${text.slice(0, PREVIEW_LIMIT)}\n… (showing the first 2,000 of ${text.length.toLocaleString('en-US')} characters)`;
 }
+const REASON_LINE_LIMIT = 400;
 /** Builds the user-facing permission card for one Claude Code tool request. Never echoes raw JSON. */
 export function claudeRequestCard(name: string, args: Record<string, unknown>, cwd: string): ClaudeRequestCard {
   const detail: ClaudeRequestCard['detail'] = { cwd };
+  const reasons: string[] = [];
+  const shown = new Set<string>();
+  const show = (...keys: string[]) => { for (const key of keys) shown.add(key); };
+  const replaceAll = () => {
+    if (typeof args.replace_all !== 'boolean') return;
+    show('replace_all');
+    if (args.replace_all) reasons.push('Replaces all occurrences.');
+  };
   let kind: ClaudeRequestCard['kind'] = 'permissions';
   let title = `Claude Code wants to use ${name}`;
   const filePath = textOf(args.file_path);
   if (name === 'Bash' || name === 'PowerShell') {
     kind = 'command';
     title = 'Claude Code wants to run a command';
+    show('command', 'description');
     detail.command = String(args.command || '');
     const description = textOf(args.description);
-    if (description !== undefined) detail.reason = description;
+    if (description !== undefined) reasons.push(description);
   } else if (name === 'Write') {
     title = 'Claude Code wants to write a file';
+    show('file_path', 'content');
     if (filePath !== undefined) detail.files = [filePath];
     detail.preview = rawText(args.content);
   } else if (name === 'Edit') {
     title = 'Claude Code wants to edit a file';
+    show('file_path', 'old_string', 'new_string');
     if (filePath !== undefined) detail.files = [filePath];
     detail.preview = editBlock(rawText(args.old_string), rawText(args.new_string));
-    if (args.replace_all === true) detail.reason = 'Replaces every occurrence.';
+    replaceAll();
   } else if (name === 'MultiEdit') {
     title = 'Claude Code wants to edit a file';
+    show('file_path', 'edits');
     if (filePath !== undefined) detail.files = [filePath];
     const edits: unknown[] = Array.isArray(args.edits) ? args.edits : [];
     detail.preview = edits.map((item) => {
       const edit: Record<string, unknown> = typeof item === 'object' && item !== null ? (item as Record<string, unknown>) : {};
-      return editBlock(rawText(edit.old_string), rawText(edit.new_string));
+      const block = editBlock(rawText(edit.old_string), rawText(edit.new_string));
+      // replace_all belongs to each edit: say it next to the edit it widens, with any other per-edit option.
+      const notes = [
+        ...(edit.replace_all === true ? ['(replaces all occurrences)'] : []),
+        ...Object.keys(edit).filter((key) => !['old_string', 'new_string', 'replace_all'].includes(key)).map((key) => `(${key}: ${JSON.stringify(edit[key])})`),
+      ];
+      return notes.length ? `${notes.join('\n')}\n${block}` : block;
     }).join('\n\n');
+    replaceAll();
   } else if (name === 'NotebookEdit') {
-    title = 'Claude Code wants to edit a notebook';
+    const mode = textOf(args.edit_mode);
+    if (mode === 'replace' || mode === 'insert' || mode === 'delete') show('edit_mode');
+    const operation = mode ?? 'replace';
+    title = `Claude Code wants to ${operation === 'delete' ? 'delete a notebook cell' : operation === 'insert' ? 'insert a notebook cell' : 'edit a notebook cell'}`;
+    show('notebook_path');
     const notebookPath = textOf(args.notebook_path);
     if (notebookPath !== undefined) detail.files = [notebookPath];
-    detail.preview = rawText(args.new_source);
+    const cellId = textOf(args.cell_id);
+    if (cellId !== undefined) { show('cell_id'); reasons.push(`Cell id: ${cellId}`); }
+    const cellType = textOf(args.cell_type);
+    if (cellType !== undefined) { show('cell_type'); reasons.push(`Cell type: ${cellType}`); }
+    if (operation !== 'delete') {
+      show('new_source');
+      detail.preview = rawText(args.new_source);
+    }
   } else if (['Read', 'Glob', 'Grep', 'LS'].includes(name)) {
     title = 'Claude Code wants to read files';
+    show('file_path', 'path', 'pattern');
     const target = filePath ?? textOf(args.path);
     if (target !== undefined) detail.files = [target];
     const pattern = textOf(args.pattern);
-    if (pattern !== undefined) detail.reason = `Pattern: ${pattern}`;
+    if (pattern !== undefined) reasons.push(`Pattern: ${pattern}`);
   } else if (name === 'WebFetch') {
     title = 'Claude Code wants to open a web page';
+    show('url');
     const url = textOf(args.url);
-    if (url !== undefined) detail.reason = url;
+    if (url !== undefined) reasons.push(url);
   } else if (name === 'WebSearch') {
     title = 'Claude Code wants to search the web';
+    show('query');
     const query = textOf(args.query);
-    if (query !== undefined) detail.reason = query;
+    if (query !== undefined) reasons.push(query);
   } else {
+    for (const key of Object.keys(args)) show(key);
     detail.preview = Object.entries(args).map(([key, value]) => `${key}: ${rawText(value)}`).join('\n');
   }
+  // Any argument the card does not show is listed in plain text, never dropped silently.
+  const leftover = Object.keys(args).filter((key) => !shown.has(key));
+  if (leftover.length) {
+    const line = `Other arguments: ${leftover.map((key) => `${key}: ${JSON.stringify(args[key]) ?? 'undefined'}`).join('; ')}`;
+    reasons.push(line.length > REASON_LINE_LIMIT ? `${line.slice(0, REASON_LINE_LIMIT - 3)}...` : line);
+  }
+  if (reasons.length) detail.reason = reasons.join('\n');
   if (detail.preview !== undefined) detail.preview = capPreview(detail.preview);
   return { kind, title, detail };
 }

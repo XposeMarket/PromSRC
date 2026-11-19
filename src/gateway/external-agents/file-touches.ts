@@ -117,6 +117,50 @@ export function createAcpFileTracker(): (update: unknown) => ExternalFileTouch[]
   };
 }
 
+/** Secret files by base name (case-insensitive): env files, keys, certificates, credential stores. */
+const SENSITIVE_FILE_RE = /^(?:\.env(?:\..+)?|.+\.(?:pem|key|pfx|p12|kdbx)|id_rsa.*|id_ed25519.*|\.npmrc|\.netrc|credentials.*|secrets\..+)$/i;
+
+/** True for a secret file, judged on its name only. Its diff never goes into a chat card. */
+export function isSensitiveFile(filePath: string): boolean {
+  const name = String(filePath).split(/[\\/]/).pop() || '';
+  return SENSITIVE_FILE_RE.test(name);
+}
+
+function exists(filePath: string): boolean {
+  try { fs.lstatSync(filePath); return true; } catch { return false; }
+}
+
+/** Resolves symlinks and junctions. A missing tail is re-appended to its nearest existing parent. */
+function canonicalPath(absPath: string): string | null {
+  try {
+    let base = absPath;
+    const tail: string[] = [];
+    while (!exists(base)) {
+      const parent = path.dirname(base);
+      if (parent === base) return null;
+      tail.unshift(path.basename(base));
+      base = parent;
+    }
+    return path.join(fs.realpathSync.native(base), ...tail);
+  } catch {
+    return null;
+  }
+}
+
+/** True when the path, once links are resolved, is inside the chat folder. Any error counts as outside. */
+export function isInsideRoot(absPath: string, root: string): boolean {
+  try {
+    const realRoot = canonicalPath(root);
+    const real = canonicalPath(absPath);
+    if (!realRoot || !real) return false;
+    const fold = (value: string) => (process.platform === 'win32' ? value.toLowerCase() : value);
+    const rel = path.relative(fold(realRoot), fold(real));
+    return rel !== '' && rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel);
+  } catch {
+    return false;
+  }
+}
+
 function countDiff(diff: string): { insertions: number; deletions: number } {
   let insertions = 0;
   let deletions = 0;
@@ -164,16 +208,22 @@ export function buildHarnessFileChanges(touches: ExternalFileTouch[], cwd: strin
   const files: TurnFileChange[] = [];
   const undiffed: string[] = [];
   for (const entry of merged.values()) {
-    if (!entry.diffs.length) { if (undiffed.length < MAX_UNDIFFED_FILES) undiffed.push(entry.abs); continue; }
     const status = entry.status || 'modified';
     if (!fs.existsSync(entry.abs) && status !== 'deleted') continue;
+    // Outside the chat folder, or a secret file: listed with its status, never handed to the native collector.
+    const hidden = isSensitiveFile(entry.abs) || !isInsideRoot(entry.abs, root);
+    if (!entry.diffs.length) {
+      if (hidden) files.push({ path: entry.abs, displayPath: displayPath(entry.abs, root), status, insertions: 0, deletions: 0, baselineKind: 'none' });
+      else if (undiffed.length < MAX_UNDIFFED_FILES) undiffed.push(entry.abs);
+      continue;
+    }
     const diff = entry.diffs.join('\n');
     files.push({
       path: entry.abs,
       displayPath: displayPath(entry.abs, root),
       status,
       ...countDiff(diff),
-      diffPreview: diff.slice(0, MAX_DIFF_CHARS),
+      ...(isSensitiveFile(entry.abs) ? {} : { diffPreview: diff.slice(0, MAX_DIFF_CHARS) }),
       baselineKind: 'none',
     });
   }

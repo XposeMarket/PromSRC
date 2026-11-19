@@ -109,6 +109,15 @@ body.pm-mobile-active .ea-request-host.ea-request-fallback { left: 10px; right: 
   text-transform: none; letter-spacing: normal; font-weight: 400;
 }
 .ea-card-preview { max-height: 180px; overflow: auto; padding: 8px; border-radius: 8px; background: var(--pm-bg-soft, transparent); }
+/* Native rows uppercase their value span on desktop (.chat-approval-scope span) and the phone card
+   tracks text (.pm-chat-approval letter-spacing). The harness card wins by specificity, not !important:
+   paths, commands and previews are shown exactly as given, wrap, and a long preview scrolls. */
+.ea-harness-card .chat-approval-scope .ea-card-text,
+.ea-harness-card .ea-card-text,
+body.pm-mobile-active .ea-harness-card .ea-card-text { text-transform: none; letter-spacing: normal; font-weight: 400; }
+/* Phone: the native technical-details pre caps at 140px; the harness preview keeps its own 180px and scrolls. */
+body .ea-harness-card .ea-card-preview { max-height: 180px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; word-break: normal; }
+
 .ea-card-note { margin: 10px 0 0; font-size: 12px; color: var(--pm-muted, var(--muted, inherit)); }
 .ea-card-error { margin: 6px 0 0; font-size: 12px; color: var(--danger, var(--pm-red, #ef4444)); }
 .ea-card-q { margin: 8px 0; }
@@ -117,6 +126,14 @@ body.pm-mobile-active .ea-request-host.ea-request-fallback { left: 10px; right: 
 .ea-card-choice { display: flex; align-items: center; gap: 6px; font-size: 12px; }
 .ea-card-input { width: 100%; box-sizing: border-box; padding: 6px 8px; border: 1px solid var(--pm-border, var(--line, #888)); border-radius: 8px; background: transparent; color: inherit; font: inherit; }
 .ea-card-btn:disabled { opacity: .5; cursor: default; }
+/* A harness card whose markup failed to load: visible, never approvable. No Allow button. */
+.ea-card-fallback { display: grid; gap: 8px; margin: 2px 0 4px; padding: 12px 14px; box-sizing: border-box; border: 1px solid var(--ea-line); border-left: 3px solid var(--ea-warn); border-radius: 13px; background: var(--ea-surface); color: var(--ea-text); font-family: var(--pm-font, inherit); font-size: 13px; line-height: 1.4; overflow-wrap: anywhere; }
+.ea-card-fallback.ea-card-fallback-float { position: fixed; z-index: 10080; right: 20px; bottom: 120px; width: min(420px, calc(100vw - 40px)); }
+body.pm-mobile-active .ea-card-fallback.ea-card-fallback-float { left: 10px; right: 10px; width: auto; bottom: calc(var(--pm-tabbar-h, 0px) + env(safe-area-inset-bottom, 0px) + 140px); }
+.ea-card-fallback-title { font-weight: 650; }
+.ea-card-fallback-btn { justify-self: start; padding: 6px 12px; border: 1px solid var(--ea-line); border-radius: 8px; background: transparent; color: inherit; font: inherit; font-size: 12px; cursor: pointer; }
+.ea-card-fallback-btn:disabled { opacity: .5; cursor: default; }
+
 
 
 /* Desktop C: retain the real input/send handlers and all voice controls. */
