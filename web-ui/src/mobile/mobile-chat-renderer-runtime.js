@@ -9,6 +9,7 @@ import {
 import { createMobileStreamReceiptLedger } from '../features/chat/runtime/mobile-stream-receipts.js';
 import { waitCountdownHtml } from '../features/chat/tool-wait-countdown.js';
 import { createMobileChatMessageRenderer } from './mobile-chat-message-renderer.js';
+import { loadNewChatGlance, renderNewChatGlanceHtml } from '../chat/new-chat-glance.js';
 import { createVoiceWorkerRecovery } from './mobile-voice-worker-recovery.js';
 import { buildMobileDeliveryPaintPlan, isMobileDeliveryRow, mobileDeliverySplitMessage } from './mobile-thread-order.js';
 import { normalizeMobileImage } from './mobile-image-shrink.js';
@@ -1440,81 +1441,17 @@ export function createMobileChatRendererRuntime(context = {}) {
     return `\n\n[UPLOADED FILES]\n${lines.join('\n')}${hasImages ? '\nImages are attached directly for vision analysis.' : ''}\nUse the exact workspace paths above to read, edit, present, or process the attached files.`;
   }
   
-  const MOBILE_EMPTY_CHAT_STARTER_PROMPTS = [
-    {
-      title: 'Start a new build',
-      body: 'Shape a page, app mockup, workflow, or feature plan inside the current project.',
-      prompt: 'Help me start a new build in this project. Ask only for the key missing details, then turn it into a concrete implementation plan.',
-    },
-    {
-      title: 'Review recent momentum',
-      body: 'Look across recent Prometheus work and suggest the next highest-leverage move.',
-      prompt: 'Review the recent Prometheus project momentum and suggest the single highest-leverage next step, with a short plan for how to execute it.',
-    },
-    {
-      title: 'Turn an idea into a plan',
-      body: 'Take a rough thought and convert it into a scoped build, research, or agent task.',
-      prompt: 'Help me turn a rough idea into a clear plan. Start by making the idea concrete, then propose the smallest useful first version.',
-    },
-  ];
-  let mobileEmptyChatBrainCards = [];
-  let mobileEmptyChatBrainCardsLoaded = false;
-  let mobileEmptyChatBrainCardsLoading = false;
-  
-  function _normalizeMobileEmptyChatBrainCard(card) {
-    if (!card || typeof card !== 'object') return null;
-    const title = String(card.title || '').trim();
-    const body = String(card.body || '').trim();
-    const prompt = String(card.prompt || '').trim();
-    if (!title || !body || !prompt) return null;
-    return { title, body, prompt };
-  }
-  
-  function _getMobileEmptyChatStarterCards() {
-    return mobileEmptyChatBrainCards.length ? mobileEmptyChatBrainCards : MOBILE_EMPTY_CHAT_STARTER_PROMPTS;
-  }
-  
-  async function _loadMobileEmptyChatBrainCards(options = {}) {
-    const force = options?.force === true;
-    if (!force && (mobileEmptyChatBrainCardsLoaded || mobileEmptyChatBrainCardsLoading)) return;
-    if (mobileEmptyChatBrainCardsLoading) return;
-    mobileEmptyChatBrainCardsLoading = true;
-    try {
-      const data = await mobileGatewayFetch('/api/brain/pulse-cards');
-      mobileEmptyChatBrainCards = Array.isArray(data?.cards)
-        ? data.cards.map(_normalizeMobileEmptyChatBrainCard).filter(Boolean).slice(0, 3)
-        : [];
-      mobileEmptyChatBrainCardsLoaded = true;
-    } catch (err) {
-      console.warn('[mobile chat] failed to load Brain pulse cards:', err);
-      mobileEmptyChatBrainCards = [];
-      mobileEmptyChatBrainCardsLoaded = true;
-    } finally {
-      mobileEmptyChatBrainCardsLoading = false;
-    }
-    if (String(__pmChat.activeSessionId || '') === MOBILE_CHAT_SESSION_ID) {
+  // New-chat landing (F2), same as desktop #chat-welcome: P1 mark + greeting,
+  // one status card (running / needs you) and a usage line. Shared renderer.
+  async function _loadMobileNewChatGlance(options = {}) {
+    const changed = await loadNewChatGlance((url) => mobileGatewayFetch(url), { force: options?.force === true });
+    if (changed && String(__pmChat.activeSessionId || '') === MOBILE_CHAT_SESSION_ID) {
       _renderMobileChatSessionNow(MOBILE_CHAT_SESSION_ID);
     }
   }
-  
+
   function _renderMobileEmptyChatStarterCards() {
-    const cards = _getMobileEmptyChatStarterCards();
-    // Same landing as desktop (#chat-welcome): P1 mark, title, quote, then the starter cards.
-    return `<div class="pm-mobile-empty-chat" aria-label="Starter prompts">
-      <div class="pm-mobile-empty-hero">
-        <img class="pm-mobile-empty-hero-mark" src="/static/assets/prometheus-one/p1-mark-ring.png" alt="" aria-hidden="true" draggable="false">
-        <h2>Prometheus One</h2>
-        <p>"I whom you see am Prometheus, who gave fire to mankind."</p>
-      </div>
-      <div class="pm-mobile-empty-chat-cards">
-        ${cards.map((card, index) => `
-          <button class="pm-mobile-empty-chat-card" type="button" aria-label="${escapeHtml(`${card.title}: ${card.body}`)}" data-mobile-starter-prompt="${index}">
-            <span class="pm-mobile-empty-chat-card-title" aria-hidden="true">${escapeHtml(card.title)}</span>
-            <span class="pm-mobile-empty-chat-card-body">${escapeHtml(card.body)}</span>
-          </button>
-        `).join('')}
-      </div>
-    </div>`;
+    return `<div class="pm-mobile-empty-chat">${renderNewChatGlanceHtml()}</div>`;
   }
   
   function _threadForMobileSessionKey(key = '') {
@@ -5068,9 +5005,7 @@ function _mergeMobileLatestAssistantBackgroundFileChanges(sessionId = __pmChat.a
     _readMobileFileBase64,
     _uploadMobileChatAttachments,
     _buildMobileFileContextNote,
-    _normalizeMobileEmptyChatBrainCard,
-    _getMobileEmptyChatStarterCards,
-    _loadMobileEmptyChatBrainCards,
+    _loadMobileNewChatGlance,
     _renderMobileEmptyChatStarterCards,
     _threadForMobileSessionKey,
     _mobileSessionIdForRenderKey,

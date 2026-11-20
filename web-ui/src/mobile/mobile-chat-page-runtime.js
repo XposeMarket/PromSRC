@@ -149,7 +149,6 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
       _flushThreadRender,
       _formatBytes,
       _generateMobileSideChatId,
-      _getMobileEmptyChatStarterCards,
       _getMobilePromptVariantActiveIndex,
       _getMobileQueuedPrompts,
       _getMobileSideChatLinksForParent,
@@ -174,7 +173,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
       _isMobileUserVisibleReasoningTraceEntry,
       _isMobileVoiceAgentWorkerHandoff,
       _loadDurableMobileVoiceRoom,
-      _loadMobileEmptyChatBrainCards,
+      _loadMobileNewChatGlance,
       _loadMobileSideChatLinks,
       _loadMobileSources,
       _loadMobileThreadCache,
@@ -1810,29 +1809,11 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
   _pmRefreshSlashChrome(page, input);
   _installMobileTimestampReveal(threadEl, handleMobileMessageAction);
   threadEl?.addEventListener('click', (event) => {
-    const btn = event.target?.closest?.('[data-mobile-starter-prompt]');
-    if (!btn) return;
-    const index = Number(btn.getAttribute('data-mobile-starter-prompt'));
-    const card = _getMobileEmptyChatStarterCards()[index];
-    if (!card || !input) return;
-    if (modeLauncher && !composerModeOpen) {
-      setChatComposerMode(true, {
-        animate: true,
-        preserveScroll: true,
-        reason: 'starter',
-      });
-    }
-    input.value = card.prompt;
-    saveComposerDraft(draftKeyFor(), input.value);
-    resizeComposerInput();
-    _pmUpdateComposerRichPreview(page, input);
-    _pmClearActiveSlashCommand(page, input, { focus: false });
-    updateComposerSubmitState();
-    input.focus();
-    try { input.setSelectionRange(input.value.length, input.value.length); } catch {}
+    // New-chat glance rows (running / needs you) open the Tasks tab.
+    if (event.target?.closest?.('.pm-mobile-empty-chat [data-glance-open]')) window.location.hash = '#mobile/tasks';
   });
   if (requestedSession === MOBILE_CHAT_SESSION_ID) {
-    _loadMobileEmptyChatBrainCards().catch(() => {});
+    _loadMobileNewChatGlance().catch(() => {});
   }
   const previousBackgroundDockBridge = window.__pmMobileBackgroundSpawnDockChanged;
   const previousBackgroundAgentDetailBridge = window.__pmMobileBackgroundAgentDetail;

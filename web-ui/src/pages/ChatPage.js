@@ -80,6 +80,7 @@ import {
   writeBackgroundAgentWork,
 } from '../background-agent-work.js';
 import { createDesktopBackgroundAgentWork } from '../features/chat/core/desktop-background-agent-work.js';
+import { loadNewChatGlance, renderNewChatGlanceHtml, glanceTarget } from '../chat/new-chat-glance.js';
 installToolActivityExpansionPersistence();
 // Paints yield to typing: hold a stream paint until the composer has been idle 150ms,
 // never more than 400ms, so keystrokes are not queued behind a bubble patch (4x tail).
@@ -365,34 +366,7 @@ const {
   render: renderChatMessages,
   encode: encodeInlineJsString,
 });
-const EMPTY_CHAT_STARTER_PROMPTS = [
-  {
-    title: 'Start a new build',
-    body: 'Shape a page, app mockup, workflow, or feature plan inside the current project.',
-    prompt: 'Help me start a new build in this project. Ask only for the key missing details, then turn it into a concrete implementation plan.',
-  },
-  {
-    title: 'Review recent momentum',
-    body: 'Look across recent Prometheus work and suggest the next highest-leverage move.',
-    prompt: 'Review the recent Prometheus project momentum and suggest the single highest-leverage next step, with a short plan for how to execute it.',
-  },
-  {
-    title: 'Turn an idea into a plan',
-    body: 'Take a rough thought and convert it into a scoped build, research, or agent task.',
-    prompt: 'Help me turn a rough idea into a clear plan. Start by making the idea concrete, then propose the smallest useful first version.',
-  },
-];
-const EMPTY_CHAT_BRAIN_CARD_ICONS = [
-  'solar:stars-minimalistic-2-bold-duotone',
-  'solar:compass-bold-duotone',
-  'solar:lightbulb-bolt-bold-duotone',
-  'solar:magic-stick-3-bold-duotone',
-  'solar:rocket-2-bold-duotone',
-];
-let emptyChatBrainCardIconOrder = [];
-let emptyChatBrainCards = [];
-let emptyChatBrainCardsLoaded = false;
-let emptyChatBrainCardsLoading = false;
+
 
 const desktopNewChatContext = {
   projectId: '',
@@ -7245,7 +7219,6 @@ function setDraftChatSession(id = generateSessionId()) {
   window.activeChatSessionId = nextId;
   syncDesktopComposerDraft();
   setAgentSessionId(nextId, { remember: false });
-  emptyChatBrainCardIconOrder = [];
   // A draft is a new browser scope as well as a new message scope. Clear the
   // previous chat's registry before rendering the empty chat surface.
   restoreBrowserCanvasSessionState(null);
@@ -14153,79 +14126,6 @@ function renderDesktopSessionLoadNotice(session, loadState = getDesktopSessionLo
 }
 
 
-function normalizeEmptyChatBrainCard(card) {
-  if (!card || typeof card !== 'object') return null;
-  const title = String(card.title || '').trim();
-  const body = String(card.body || '').trim();
-  const prompt = String(card.prompt || '').trim();
-  if (!title || !body || !prompt) return null;
-  return {
-    title,
-    body,
-    prompt,
-    source: String(card.source || '').trim(),
-    kind: String(card.kind || '').trim(),
-  };
-}
-
-async function loadEmptyChatBrainCards(options = {}) {
-  const force = options?.force === true;
-  if (!force && (emptyChatBrainCardsLoaded || emptyChatBrainCardsLoading)) return;
-  if (emptyChatBrainCardsLoading) return;
-  emptyChatBrainCardsLoading = true;
-  try {
-    const data = await api('/api/brain/pulse-cards');
-    const cards = Array.isArray(data?.cards)
-      ? data.cards.map(normalizeEmptyChatBrainCard).filter(Boolean).slice(0, 3)
-      : [];
-    emptyChatBrainCards = cards;
-    emptyChatBrainCardsLoaded = true;
-  } catch (err) {
-    console.warn('[Chat] Failed to load Brain pulse cards:', err);
-    emptyChatBrainCards = [];
-    emptyChatBrainCardsLoaded = true;
-  } finally {
-    emptyChatBrainCardsLoading = false;
-  }
-
-  if (document.getElementById('chat-view')?.classList.contains('chat-empty')) {
-    renderChatMessages();
-  }
-}
-
-function refreshEmptyChatBrainCards() {
-  emptyChatBrainCardsLoaded = false;
-  loadEmptyChatBrainCards({ force: true });
-}
-
-function getEmptyChatStarterCards() {
-  return emptyChatBrainCards.length ? emptyChatBrainCards : EMPTY_CHAT_STARTER_PROMPTS;
-}
-
-function getEmptyChatBrainCardIcon(index) {
-  if (!emptyChatBrainCardIconOrder.length) {
-    emptyChatBrainCardIconOrder = EMPTY_CHAT_BRAIN_CARD_ICONS.slice();
-    for (let cursor = emptyChatBrainCardIconOrder.length - 1; cursor > 0; cursor -= 1) {
-      const swap = Math.floor(Math.random() * (cursor + 1));
-      [emptyChatBrainCardIconOrder[cursor], emptyChatBrainCardIconOrder[swap]] = [emptyChatBrainCardIconOrder[swap], emptyChatBrainCardIconOrder[cursor]];
-    }
-  }
-  return emptyChatBrainCardIconOrder[index % emptyChatBrainCardIconOrder.length];
-}
-
-function renderEmptyChatStarterCards() {
-  const cards = getEmptyChatStarterCards();
-  return `<div class="chat-pulse-cards" aria-label="Starter prompts">
-    ${cards.map((card, index) => `
-      <button class="chat-pulse-card" type="button" aria-label="${escHtml(`${card.title}: ${card.body}`)}" onclick="applyEmptyChatStarterPrompt(${index})">
-        <span class="chat-pulse-card-icon" aria-hidden="true"><iconify-icon icon="${getEmptyChatBrainCardIcon(index)}" width="18" height="18"></iconify-icon></span>
-        <span class="chat-pulse-card-title" aria-hidden="true">${escHtml(card.title)}</span>
-        <span class="chat-pulse-card-body">${escHtml(card.body)}</span>
-      </button>
-    `).join('')}
-  </div>`;
-}
-
 const PROJECT_EMPTY_CHAT_PROMPTS = [
   'What are we doing in {project} tonight?',
   'Where should we begin with {project}?',
@@ -14258,7 +14158,7 @@ function isDesktopNewChatDraft() {
   // that renders the Brain starter cards. Other empty drafts (including chats
   // created from a project/chat action) may briefly look like a generic empty
   // chat before their context attaches, but must never display this selector.
-  if (!document.querySelector('#chat-messages > #chat-welcome .chat-pulse-cards')) return false;
+  if (!document.querySelector('#chat-messages > #chat-welcome .pm-glance')) return false;
   if (getEmptyProjectChatWelcome()) return false;
   if (window.sideChatSplitOpen && getActiveSideChatLink()) return false;
   if (String(window.backgroundAgentDetailId || '').trim()) return false;
@@ -14540,17 +14440,6 @@ async function beginDesktopProjectChatSession() {
   return getChatSessionById(sessionId);
 }
 
-function applyEmptyChatStarterPrompt(index) {
-  const card = getEmptyChatStarterCards()[index];
-  const input = document.getElementById('chat-input');
-  if (!card || !input) return;
-  input.value = card.prompt;
-  resizeChatInput(input);
-  input.focus();
-  input.setSelectionRange(input.value.length, input.value.length);
-  handleSlashCommandInput(input);
-  handleSkillTriggerInput(input);
-}
 
 function extractGoalContinuationDirective(content) {
   const text = String(content || '').replace(/\r\n/g, '\n').trim();
@@ -14931,15 +14820,26 @@ function desktopSplitPaneKicker(session) {
 }
 
 function renderSplitPaneWelcomeHtml(projectWelcome = null) {
-  return `<div class="chat-welcome chat-welcome-pane${projectWelcome ? ' chat-welcome-project' : ''}" id="chat-welcome">
+  if (!projectWelcome) {
+    return `<div class="chat-welcome chat-welcome-pane chat-welcome-glance" id="chat-welcome" onclick="openNewChatGlanceTarget(event)">${renderNewChatGlanceHtml()}</div>`;
+  }
+  return `<div class="chat-welcome chat-welcome-pane chat-welcome-project" id="chat-welcome">
       <div class="chat-welcome-icon"><img src="/assets/Prometheus.png" alt="" style="width:64px;height:64px;object-fit:contain;opacity:0.90;"></div>
       <h2>Prometheus One</h2>
-      ${projectWelcome
-        ? `<p>${escHtml(projectWelcome.prompt)}</p>`
-        : `<p>"I whom you see am Prometheus, who gave fire to mankind."</p>
-          <div class="hint">c. 440–430 BCE, from Prometheus Bound.</div>
-          ${renderEmptyChatStarterCards()}`}
+      <p>${escHtml(projectWelcome.prompt)}</p>
     </div>`;
+}
+
+// New-chat landing (F2): rows open Tasks; data refreshes each time a new chat renders (30s cache).
+function openNewChatGlanceTarget(event) {
+  if (glanceTarget(event) && typeof window.setMode === 'function') window.setMode('bgtasks');
+}
+window.openNewChatGlanceTarget = openNewChatGlanceTarget;
+
+function refreshNewChatGlance() {
+  loadNewChatGlance((url) => api(url, { timeoutMs: 8000 })).then((changed) => {
+    if (changed && document.querySelector('#chat-welcome .pm-glance')) renderChatMessages();
+  }).catch(() => {});
 }
 
 function renderSideChatPaneHtml(timelineBudget = null) {
@@ -15387,19 +15287,13 @@ function renderChatMessages() {
     if (sessionLoadNotice) {
       setInnerHTMLPreservingVisuals(container, sessionLoadNotice);
     } else {
-      setInnerHTMLPreservingVisuals(container, `
-        <div class="chat-welcome${projectWelcome ? ' chat-welcome-project' : ''}" id="chat-welcome">
+      setInnerHTMLPreservingVisuals(container, projectWelcome ? `
+        <div class="chat-welcome chat-welcome-project" id="chat-welcome">
           <div class="chat-welcome-icon"><img src="/assets/Prometheus.png" style="width:90px;height:90px;object-fit:contain;opacity:0.90;"></div>
           <h2>Prometheus One</h2>
-          ${projectWelcome
-            ? `<p>${escHtml(projectWelcome.prompt)}</p>`
-            : `
-              <p>"I whom you see am Prometheus, who gave fire to mankind."</p>
-              <div class="hint">c. 440–430 BCE, from Prometheus Bound.</div>
-              ${renderEmptyChatStarterCards()}`
-          }
-        </div>`);
-      if (!projectWelcome) loadEmptyChatBrainCards();
+          <p>${escHtml(projectWelcome.prompt)}</p>
+        </div>` : `<div class="chat-welcome chat-welcome-glance" id="chat-welcome" onclick="openNewChatGlanceTarget(event)">${renderNewChatGlanceHtml()}</div>`);
+      if (!projectWelcome) refreshNewChatGlance();
     }
     syncDesktopQuestionComposerPopover(window.activeChatSessionId);
     renderDesktopNewChatContextDock();
@@ -45566,7 +45460,6 @@ window.emailComposerNotice = emailComposerNotice;
 window.openInFileLocation = openInFileLocation;
 window.renderChatMessages = renderChatMessages;
 window.toggleUnifiedDesktopComposerDictation = toggleUnifiedDesktopComposerDictation;
-window.applyEmptyChatStarterPrompt = applyEmptyChatStarterPrompt;
 window.toggleVoiceSettingsPopover = toggleVoiceSettingsPopover;
 window.closeVoiceSettingsPopover = closeVoiceSettingsPopover;
 window.renderMainGoalStrip = renderMainGoalStrip;
@@ -45876,9 +45769,6 @@ wsEventBus.on('boot_greeting', (msg) => {
   }
 });
 
-wsEventBus.on('brain_thought_done', () => {
-  refreshEmptyChatBrainCards();
-});
 
 // Manual and automatic settling both change visibility only. Keep the local
 // sidebar projection in sync without navigating away from an open chat.
