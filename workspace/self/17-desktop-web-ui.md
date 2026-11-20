@@ -49,10 +49,11 @@ The major page responsibilities are in the Map. In particular, chat includes cro
 
 Shared browser modules cover API calls, websocket subscription, state, formatting/markdown, keyboard shortcuts, command palette and performance. `web-ui/src/components/` holds reusable visual components, while `features/` holds feature-owned groups. Check for an existing owner before adding a module.
 
-Desktop Priority Mode is an inline alternative to Pinned, Projects and Sessions in `.sidebar-scroll`, not a popover. The bell in the collapsed rail expands the sidebar to show this list. Search and the other rail flyouts retain their own behavior.
-
 ### Chat and tool activity
 `ChatPage.js` receives gateway stream events, reconciles the active session, and renders messages plus process/tool activity. `tool-activity.js` converts activity records into a compact summary and expandable detail. It supports stateful disclosure, per-tool icons/status, readable tool details, and file-diff presentation. Do not collapse distinct running/completed/error/approval states into one generic spinner, or discard activity when switching between an active chat and persisted history. Recent desktop fixes make stream traces survive returning to a running chat and focus changes; consult the generated changelog before changing reconnect logic.
+
+### Desktop sidebar Priority Mode
+The bell switches the contents of `.sidebar-scroll` from the normal Pinned, Projects and Sessions sections to the inline Priority list. From the collapsed rail, the bell expands the sidebar to show this view instead of opening a flyout. Search and the other rail flyouts retain their own behavior.
 
 ### Visual language and themes
 `themes.css` defines the built-in skins, theme identity and CSS variables. P1 black + gold is the default brand; its legacy ID is `light`. Presets share the dark P1 shell and can adjust colors within that system. Brand surfaces that intentionally ignore theme selection must still follow current brand guidance; do not revive orange/ember by copying old screenshots or CSS. Prefer theme tokens over hardcoded surfaces/colors. Mobile adapts shared theme selections with mobile-specific tokens; see [18](18-mobile-app.md).
