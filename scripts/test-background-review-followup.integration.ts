@@ -50,6 +50,17 @@ for (const moduleName of ['node:http', 'node:https']) {
 require('node:net').Socket.prototype.connect = function () { return forbidNetwork('net.Socket.connect'); };
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+// Authority check for every provider request: tool outputs and the follow-up
+// assignment may only appear in user/tool-role messages, never system authority.
+function assertRoleAuthority(request: any, label: string, forbidden: string[]): void {
+  const messages: any[] = Array.isArray(request?.messages) ? request.messages : [];
+  for (const message of messages.filter((m) => m?.role === 'system')) {
+    const content = String(message.content ?? '');
+    for (const needle of forbidden) {
+      assert.ok(!content.includes(needle), `${label}: system-authority message must not contain ${needle}`);
+    }
+  }
+}
 async function until(predicate: () => boolean, label: string): Promise<void> {
   const deadline = Date.now() + 30_000;
   while (!predicate()) {
@@ -90,10 +101,12 @@ async function main(): Promise<void> {
       assert.ok(!text.includes(QUESTION), 'fresh assignment is not a follow-up');
       assert.ok(!text.includes(VERDICT), 'fresh assignment has no invented verdict');
       assert.ok(!text.includes(FACT), 'fact starts outside provider context');
+      assertRoleAuthority(request, 'fresh request', [FACT, QUESTION, VERDICT]);
       return { toolCalls: [{ name: 'skill_list', args: { query: 'synthetic specimen lookup' }, id: 'fixture_read_1' }] };
     },
     (request: any) => {
       assert.ok(request.messages.some((m: any) => m.role === 'tool' && String(m.content).includes(FACT)), 'first verdict model call sees actual tool output');
+      assertRoleAuthority(request, 'verdict request', [FACT]);
       return { text: VERDICT };
     },
     (request: any) => {
@@ -104,6 +117,15 @@ async function main(): Promise<void> {
       assert.ok(text.includes(VERDICT), 'follow-up provider request gets first verdict');
       assert.ok(text.includes(FACT), 'follow-up provider request retains tool-only fact omitted from verdict');
       assert.equal(reads, 1, 'fact reaches second invocation without reread');
+      // Authority: the question and the evidence are user/tool data; system carries only the round notice.
+      assertRoleAuthority(request, 'follow-up request', [FACT, QUESTION, VERDICT]);
+      const userOrTool = request.messages.filter((m: any) => m.role === 'user' || m.role === 'tool');
+      assert.ok(userOrTool.some((m: any) => String(m.content).includes(FACT)), 'tool-only fact is carried by user/tool-role messages');
+      const assignment = userOrTool.filter((m: any) => String(m.content).includes(QUESTION));
+      assert.equal(assignment.length, 1, `the new question appears in exactly one user-role message (no duplicate assignment): ${JSON.stringify(request.messages.map((m: any) => [m.role, String(m.content).slice(0, 70)]))}`);
+      assert.match(String(assignment[0].content), /\[NEW ASSIGNMENT:[^\]]*\][\s\S]*NEW_QUESTION_8cb41/, 'question is the labelled new assignment');
+      assert.ok(!request.messages.some((m: any) => m.role === 'system' && String(m.content).includes(QUESTION)), 'new assignment is never system authority');
+      assert.ok(!request.messages.some((m: any) => m.role === 'system' && String(m.content).includes('[NEW ASSIGNMENT')), 'assignment label never system authority');
       return { text: ANSWER };
     },
     (request: any) => {
@@ -112,6 +134,7 @@ async function main(): Promise<void> {
       assert.ok(!text.includes(QUESTION), 'unrelated fresh spawn does not receive prior question');
       assert.ok(!text.includes(VERDICT), 'unrelated fresh spawn does not inherit first verdict');
       assert.ok(!text.includes(FACT), 'unrelated fresh spawn does not inherit tool fact');
+      assertRoleAuthority(request, 'fresh control request', [FACT, QUESTION, VERDICT]);
       return { text: 'FRESH_CONTROL_VERDICT_9bd4: complete.' };
     },
   ], { onExhausted: 'throw' });

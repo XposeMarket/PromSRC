@@ -1,6 +1,6 @@
 /** Tool results may carry the wrapper name or its normalized internal name. Only
  * an admitted execution participates in the requesting turn's synthesis. */
-export function pendingReviewerRounds(rows: ReadonlyArray<{name: string; args?: any; result: string; error?: boolean}>, included: ReadonlySet<string>) {
+export function pendingReviewerRounds(rows: ReadonlyArray<{name: string; args?: {action?: unknown}; result: string; error?: boolean}>, included: ReadonlySet<string>) {
   const runs = new Map<string, {id: string; timeoutMs?: number}>();
   for (const row of rows) {
     if (row.error) continue;

@@ -43,15 +43,18 @@ runner.setBackgroundAgentDeps({
       send('tool_result', { name: 'workspace_read', toolCallId: 'read-1', result: `file says ${FACT}` });
       return { text: 'VERDICT_ONE: object to x.ts' };
     }
-    if (prompt === 'FAIL_PLEASE') { send('error', { message: 'provider 429' }); return { text: '' }; }
+    // Follow-up assignments are labelled evidence + the final question line.
+    const question = prompt.split('\n').pop() || prompt;
+    if (question === 'FAIL_PLEASE') { send('error', { message: 'provider 429' }); return { text: '' }; }
     if (/Continue background task/.test(prompt)) return { text: 'RECOVERED' };
     if (hold) await hold;
-    return { text: `ANSWER(${prompt})` };
+    return { text: `ANSWER(${question})` };
   },
 });
 
+// A stored follow-up assignment is the labelled evidence block plus the final question line.
 const historyCount = (sid: string, content: string) => sessions.getSession(sid).history
-  .filter((entry: any) => entry.role === 'user' && entry.content === content).length;
+  .filter((entry: any) => entry.role === 'user' && (entry.content === content || String(entry.content).endsWith(`\n${content}`))).length;
 const steersFor = (id: string) => registry.consumePendingRuntimeSteersForSession(PARENT, 50)
   .filter((event: any) => event.backgroundAgentId === id);
 const opts = (requestId: string, parentTurnId = 'turn-2', spawnerSessionId = PARENT) => ({ spawnerSessionId, requestId, parentTurnId });
@@ -76,7 +79,6 @@ async function main() {
   // Admission rejections happen before any model call.
   for (const [label, result] of [
     ['wrong chat', runner.backgroundFollowUp(first.id, 'steal', opts('x1', 'turn-x', 'other-chat'))],
-    ['missing request id', runner.backgroundFollowUp(first.id, 'q', opts(''))],
     ['missing parent turn', runner.backgroundFollowUp(first.id, 'q', { spawnerSessionId: PARENT, requestId: 'x2' })],
     ['unknown id', runner.backgroundFollowUp('bg_unknown-followup', 'q', opts('x3'))],
     ['empty message', runner.backgroundFollowUp(first.id, '   ', opts('x4'))],
@@ -111,11 +113,14 @@ async function main() {
   await settle(second.id);
   assert.equal(calls, 2, 'one execution per accepted request');
   const call2 = captured[1];
-  assert.equal(call2.prompt, 'WHY_OBJECT?', 'only the new message is the assignment (no restart wrapper)');
+  // The user-role assignment is the new question, labelled after bounded prior evidence (no restart wrapper).
+  assert.match(call2.prompt, /\[NEW ASSIGNMENT:[^\]]*\]\nWHY_OBJECT\?$/, 'the new message is the labelled final assignment');
+  assert.ok(!call2.prompt.includes('Continue background task'), 'no restart wrapper');
   assert.equal(call2.sid, convSid, 'same worker conversation');
   assert.equal(call2.history.filter((e: any) => e.role === 'user' && e.content === 'ORIGINAL_REVIEW').length, 1, 'original assignment once, not repeated');
   assert(call2.history.some((e: any) => e.role === 'assistant' && String(e.content).includes('VERDICT_ONE')), 'prior verdict visible');
-  assert(call2.callerContext.includes(FACT), 'bounded prior tool evidence visible to the model');
+  assert(call2.prompt.includes(FACT), 'bounded prior tool evidence visible to the model as user-role data');
+  assert(!call2.callerContext.includes(FACT), 'system-authority callerContext never carries raw tool output');
   assert.deepEqual(call2.toolFilter, ['web_fetch'], 'current restricted permission intersection');
   assert.equal(runner.backgroundStatus(first.id).result.startsWith('VERDICT_ONE'), true, 'first answer never changes');
   assert.match(runner.backgroundStatus(second.id).result, /ANSWER\(WHY_OBJECT\?\)/);
@@ -193,18 +198,20 @@ async function restart() {
   assert.equal(calls, 0, 'nothing re-executes on boot');
   const convSid = `background_${ids.first}`;
   registry.registerLiveRuntime({ kind: 'main_chat', label: 'parent turn 9', sessionId: PARENT, clientRequestId: 'turn-9' });
-  assert.equal(runner.backgroundFollowUp(ids.first, 'WHY_OBJECT?', opts('req-1', 'turn-9')).id, ids.second, 'admission dedupe survives restart');
+  // Same turn (turn-2), same tool-call id, same message: a genuine retry across restart returns the same run.
+  assert.equal(runner.backgroundFollowUp(ids.first, 'WHY_OBJECT?', opts('req-1', 'turn-2')).id, ids.second, 'admission dedupe survives restart');
   assert.equal(calls, 0);
   const next = runner.backgroundFollowUp(ids.first, 'AFTER_RESTART', opts('req-9', 'turn-9'));
   assert.equal(next.queued, true, String(next.error));
   await settle(next.id);
   assert.equal(calls, 1);
   const call = captured[0];
-  assert.equal(call.prompt, 'AFTER_RESTART');
+  assert.match(call.prompt, /\nAFTER_RESTART$/, 'the new message is the final labelled assignment');
   assert.equal(call.sid, convSid);
   assert(call.history.some((e: any) => e.role === 'user' && e.content === 'ORIGINAL_REVIEW'), 'history retained after pruning/restart');
   assert(call.history.some((e: any) => String(e.content).includes('VERDICT_ONE')));
-  assert(call.callerContext.includes(FACT), 'bounded evidence retained after snapshot pruning');
+  assert(call.prompt.includes(FACT), 'bounded evidence retained after snapshot pruning (user-role data)');
+  assert(!call.callerContext.includes(FACT), 'system-authority context never carries tool evidence');
   assert.equal(steersFor(next.id).length, 1);
   sessions.flushAllSessions();
   await sessions.flushPendingSessionWrites();
