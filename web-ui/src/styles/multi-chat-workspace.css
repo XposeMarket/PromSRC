@@ -17,6 +17,8 @@ body:not(.pm-mobile-active) .prom-multi-chat-tabs {
   overflow-x: auto;
   overflow-y: hidden;
   padding: 0 8px;
+  /* Keep the first tab's straight edge out of the shell's clipped corner. */
+  padding-left: max(8px, calc(var(--prom-desktop-shell-start-radius, 0px) + 2px));
   border-bottom: 1px solid var(--line);
   background: color-mix(in srgb, var(--panel) 96%, transparent);
   backdrop-filter: blur(16px) saturate(1.08);

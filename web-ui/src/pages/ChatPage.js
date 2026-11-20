@@ -12877,7 +12877,7 @@ function renderUserMessageContent(msg) {
   const imgHtml = imageAttachments.length
     ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:5px">${imageAttachments.map((p) => {
         const src = p.dataUrl || `/api/canvas/inline?path=${encodeURIComponent(String(p.workspacePath || ''))}`;
-        return `<img src="${escHtml(src)}" class="msg-img-thumb" title="${escHtml(p.name)}" onclick="openImgPreview(this.src,'${escHtml(p.name).replace(/'/g, '&#39;')}')">`;
+        return `<img src="${escHtml(src)}" class="msg-img-thumb" title="${escHtml(p.name)}" onclick="openImgPreview(this.src, this.title)">`;
       }).join('')}</div>`
     : '';
   const fileHtml = fileAttachments.length
@@ -42820,46 +42820,56 @@ function renderChatFilePills() {
   }
   staging.style.display = 'flex';
   staging.innerHTML = pendingChatFiles.map((f, idx) => {
-    const isImg = IMAGE_EXTENSIONS.has(f.ext);
-    const preview = isImg && f.dataUrl
-      ? `<img class="pill-thumb" src="${f.dataUrl}" alt="">`
+    const canPreview = IMAGE_EXTENSIONS.has(f.ext) && !!f.dataUrl;
+    const name = escHtml(f.name);
+    const icon = canPreview
+      ? `<img class="pill-thumb" src="${escHtml(f.dataUrl)}" alt="">`
       : `<span class="pill-icon" aria-hidden="true">${getCanvasFileIcon(f.ext)}</span>`;
     const kind = f.ext ? f.ext.toUpperCase() : 'FILE';
-    return `<div class="chat-file-pill" title="${escHtml(f.name)}">
-      ${preview}
-      <span class="pill-copy">
-        <strong class="pill-name">${escHtml(f.name)}</strong>
-        <em class="pill-ext">${escHtml(kind)}</em>
-      </span>
-      <button class="pill-remove" onclick="removeChatFile(${idx})" title="Remove attachment" aria-label="Remove ${escHtml(f.name)}">&times;</button>
+    const body = `${icon}<span class="pill-copy">
+      <strong class="pill-name">${name}</strong>
+      <em class="pill-ext">${escHtml(kind)}</em>
+    </span>`;
+    return `<div class="chat-file-pill${canPreview ? ' is-previewable' : ''}" title="${name}">
+      ${canPreview ? `<button type="button" class="pill-preview" data-preview-index="${idx}" aria-label="Preview ${name}" aria-haspopup="dialog">${body}</button>` : body}
+      <button type="button" class="pill-remove" onclick="removeChatFile(${idx})" title="Remove attachment" aria-label="Remove ${name}">&times;</button>
     </div>`;
   }).join('');
+  staging.querySelectorAll('.pill-preview').forEach((button) => {
+    const entry = pendingChatFiles[Number(button.dataset.previewIndex)];
+    button.addEventListener('click', () => openImgPreview(entry.dataUrl, entry.name));
+  });
   syncChatAttachmentStackVisibility();
   updateDesktopComposerSendButton();
 }
 
 function openImgPreview(src, name) {
-  if (document.getElementById('img-preview-overlay')) return;
-  const overlay = document.createElement('div');
+  if (!src || document.getElementById('img-preview-overlay')) return;
+  const overlay = document.createElement('dialog');
   overlay.id = 'img-preview-overlay';
   overlay.className = 'img-preview-overlay';
-  overlay.innerHTML = `
-    <div class="img-preview-box" onclick="event.stopPropagation()">
-      <button class="img-preview-close" onclick="closeImgPreview()" title="Close">&times;</button>
-      <img src="${src}" alt="${name || ''}">
-      ${name ? `<div class="img-preview-name">${name}</div>` : ''}
-    </div>`;
-  overlay.addEventListener('click', closeImgPreview);
+  overlay.setAttribute('aria-label', 'Image preview');
+  overlay.innerHTML = `<div class="img-preview-box">
+    <button type="button" class="img-preview-close" title="Close" aria-label="Close" autofocus>&times;</button>
+    <img alt="">
+    <div class="img-preview-name"></div>
+  </div>`;
+  const image = overlay.querySelector('img');
+  image.src = src;
+  image.alt = name || 'Image preview';
+  const caption = overlay.querySelector('.img-preview-name');
+  caption.textContent = name || '';
+  caption.hidden = !name;
+  overlay.querySelector('.img-preview-close').addEventListener('click', closeImgPreview);
+  overlay.addEventListener('click', (event) => {
+    if (event.target === overlay) closeImgPreview();
+  });
+  overlay.addEventListener('close', () => overlay.remove(), { once: true });
   document.body.appendChild(overlay);
-  document.addEventListener('keydown', _imgPreviewKeyHandler);
+  overlay.showModal();
 }
 function closeImgPreview() {
-  const el = document.getElementById('img-preview-overlay');
-  if (el) el.remove();
-  document.removeEventListener('keydown', _imgPreviewKeyHandler);
-}
-function _imgPreviewKeyHandler(e) {
-  if (e.key === 'Escape') closeImgPreview();
+  document.getElementById('img-preview-overlay')?.close();
 }
 window.openImgPreview = openImgPreview;
 window.closeImgPreview = closeImgPreview;
