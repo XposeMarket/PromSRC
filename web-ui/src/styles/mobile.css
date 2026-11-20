@@ -2750,7 +2750,14 @@ html.pm-session-context-open * {
   justify-content: center;
   box-sizing: border-box;
   padding: 10px 0 20px;
+  flex-direction: column;
+  gap: 18px;
 }
+/* New-chat landing, same as desktop #chat-welcome: P1 ring mark, title, quote. */
+.pm-mobile-empty-hero { width: min(100%, 360px); text-align: center; }
+.pm-mobile-empty-hero-mark { display: block; width: 56px; height: 56px; margin: 0 auto 12px; object-fit: contain; filter: drop-shadow(0 0 14px rgba(214, 183, 94, .18)); }
+.pm-mobile-empty-hero h2 { margin: 0 0 6px; font-size: 21px; font-weight: 650; letter-spacing: -0.2px; color: var(--pm-text); }
+.pm-mobile-empty-hero p { margin: 0 auto; max-width: 320px; color: var(--pm-muted); font-size: 12.5px; line-height: 1.45; font-style: italic; }
 /* Keyboard open on an unsaved chat: the composer and the fixed context dock
    (gateway + directed-chat rows) take most of the remaining height and were
    drawn over the starter cards. Hide the starters while typing; they return

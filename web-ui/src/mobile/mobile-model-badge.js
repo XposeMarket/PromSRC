@@ -17,7 +17,7 @@
 // threshold as best-effort. All paths degrade silently.
 
 import { mobileGatewayFetch } from './mobile-api.js';
-import { hasAgentModelContext, agentModelBadge, agentModelState, saveAgentModel, saveAgentEffort } from '../chat/external-agent-models.js';
+import { hasAgentModelContext, agentModelBadge, agentModelState, saveAgentModel, saveAgentEffort, agentModelGroups } from '../chat/external-agent-models.js';
 window.addEventListener('external-agent-model-context', () => { _closeSheet(); refreshMobileModelBadge(true).catch(() => {}); });
 import { groupModelsByFamily } from '../model-family-grouping.js';
 import {
@@ -1384,15 +1384,30 @@ function _renderAgentAdvanced(state) {
   body?.querySelector('[data-action="model"]')?.addEventListener('click', () => _renderAgentList(state, 'model'));
   body?.querySelector('[data-action="intelligence"]')?.addEventListener('click', () => _renderAgentList(state, 'effort'));
 }
-function _renderAgentList(state, kind) {
+function _renderAgentList(state, kind, familyKey = '') {
   const isModel = kind === 'model';
-  _setSheetTitle(`<button type="button" class="pm-msheet-back" id="pm-msheet-back">&lsaquo;</button> ${isModel ? 'Model' : 'Intelligence'}`);
-  const items = isModel ? state.models.map((m) => [m.id, m.label]) : state.efforts.map((v) => [v, _effortLabel(v, state.provider, state.model)]);
-  const active = isModel ? state.model : state.effort;
-  const rows = items.map(([value, label]) => `<button type="button" class="pm-msheet-row" data-agent-pick="${_esc(value)}"><span class="pm-msheet-row-label">${_esc(label)}</span>${value === active ? '<span class="pm-msheet-check">&#10003;</span>' : ''}</button>`).join('')
+  // Same two-level picker as Prometheus models: families first (Astra, GPT 6.1, Opus...), then models.
+  const { top, groups } = isModel ? agentModelGroups(state) : { top: [], groups: [] };
+  const family = groups.length ? groups.find((group) => group.key === familyKey) : null;
+  const pickRow = ([value, label]) => `<button type="button" class="pm-msheet-row" data-agent-pick="${_esc(value)}"><span class="pm-msheet-row-label">${_esc(label)}</span>${value === (isModel ? state.model : state.effort) ? '<span class="pm-msheet-check">&#10003;</span>' : ''}</button>`;
+  if (isModel && groups.length && !family) {
+    _setSheetTitle(`<button type="button" class="pm-msheet-back" id="pm-msheet-back">&lsaquo;</button> Model families`);
+    const familyRows = groups.map((group) => `<button type="button" class="pm-msheet-row" data-agent-family="${_esc(group.key)}"><span class="pm-msheet-row-label">${_esc(group.label)}</span>${group.models.some((m) => m.id === state.model) ? '<span class="pm-msheet-check">&#10003;</span>' : ''}<span class="pm-msheet-chev">&rsaquo;</span></button>`).join('');
+    const familyBody = _setSheetBody(`<div class="pm-msheet-rows" data-pm-view="families">${top.map((m) => pickRow([m.id, m.label])).join('')}${familyRows}</div>`);
+    document.getElementById('pm-msheet-back')?.addEventListener('click', () => _renderAgentAdvanced(state));
+    familyBody?.querySelectorAll('[data-agent-family]').forEach((button) => button.addEventListener('click', () => _renderAgentList(state, 'model', button.getAttribute('data-agent-family'))));
+    _wireAgentPicks(familyBody, state, true);
+    return;
+  }
+  _setSheetTitle(`<button type="button" class="pm-msheet-back" id="pm-msheet-back">&lsaquo;</button> ${isModel ? _esc(family?.label || 'Model') : 'Intelligence'}`);
+  const items = isModel ? (family ? family.models : state.models).map((m) => [m.id, m.label]) : state.efforts.map((v) => [v, _effortLabel(v, state.provider, state.model)]);
+  const rows = items.map(pickRow).join('')
     || `<div class="pm-msheet-empty">${_esc(state.unavailableReason || 'Nothing to choose.')}</div>`;
   const body = _setSheetBody(`<div class="pm-msheet-rows${isModel ? ' pm-msheet-model-rows' : ''}">${rows}</div>`);
-  document.getElementById('pm-msheet-back')?.addEventListener('click', () => _renderAgentAdvanced(state));
+  document.getElementById('pm-msheet-back')?.addEventListener('click', () => (family ? _renderAgentList(state, 'model') : _renderAgentAdvanced(state)));
+  _wireAgentPicks(body, state, isModel);
+}
+function _wireAgentPicks(body, state, isModel) {
   body?.querySelectorAll('[data-agent-pick]').forEach((btn) => btn.addEventListener('click', async () => {
     btn.disabled = true;
     try {

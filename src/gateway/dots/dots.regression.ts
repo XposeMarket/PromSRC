@@ -300,10 +300,18 @@ room.push(msg('user-raul', 'thanks'));
   flags.getStatus = 0;
 
   // Off: sync stops; the chat stays.
+  session.flushSession(sid);
+  const listed = () => session.listSessionSummaries({ scope: 'all', limit: 500 }).sessions.some((row: any) => row.id === sid);
+  store.updateExternalAgentEntry('openai-dots', { enabled: true });
+  assert.equal(listed(), true, 'a dot chat is listed while OpenAI Dots is on');
   await registry.disableExternalAgent('openai-dots');
   assert.deepEqual(await sync.syncAllDots(true), { dots: 0, added: 0, sessions: [] });
   assert.ok(session.getSession(sid).history.length >= 7);
-  void store;
+  // ...but not listed in the sidebar/drawer while it is off, and listed again once it is back on.
+  assert.equal(listed(), false, 'a dot chat is hidden from chat lists while OpenAI Dots is off');
+  store.updateExternalAgentEntry('openai-dots', { enabled: true });
+  assert.equal(listed(), true, 'turning OpenAI Dots back on lists the same chat again');
+  store.updateExternalAgentEntry('openai-dots', { enabled: false });
 
   console.log('dots regression: ok (fake chatgpt.com backend, fixture sign-in)');
   process.exit(0);

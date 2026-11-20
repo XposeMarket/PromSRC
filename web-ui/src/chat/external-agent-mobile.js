@@ -10,7 +10,6 @@ import {
   setAgentChoice, setExternalAgentRequest, syncExternalAgentRequests,
 } from './external-agent-ui.js';
 
-import { syncAgentEmptyState, watchAgentEmptyState } from './external-agent-empty-state.js';
 import { setAgentModelContext, agentModelForSend, agentEffortForSend } from './external-agent-models.js';
 import { agentLogoHtml } from './external-agent-logos.js';
 
@@ -38,7 +37,7 @@ function renderRow() {
   if (show && computerValue && !computerValue.querySelector('small')) {
     const label = document.createElement('small'); label.className = 'ea-computer-label'; label.textContent = 'Computer'; computerValue.appendChild(label);
   } else if (!show) computerValue?.querySelector('.ea-computer-label')?.remove();
-  watchAgentEmptyState(); syncAgentEmptyState();
+  if (!show && ui.sheet) closeSheet();
 }
 
 function closeSheet() {
@@ -94,7 +93,12 @@ export function mountMobileAgentRow(dock, { request } = {}) {
     row.setAttribute('aria-label', 'Who runs this chat');
     row.setAttribute('aria-expanded', 'false');
     row.hidden = true;
-    row.addEventListener('click', (event) => { event.preventDefault(); event.stopPropagation(); openSheet(); });
+    row.addEventListener('click', (event) => {
+      event.preventDefault(); event.stopPropagation();
+      // Prometheus is the only choice: the row is hidden and must not open anything.
+      if (row.hidden || !selectableAgents().length) return;
+      openSheet();
+    });
     dock.insertBefore(row, dock.firstChild);
   }
   ui.row = row;

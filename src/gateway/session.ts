@@ -22,6 +22,7 @@ import { repairReappendedAssistantRows } from './history-reconciliation';
 import { appendContinuityEvent, appendContinuityMessage } from './audit/continuity';
 import { listLiveRuntimes } from './live-runtime-registry';
 import { normalizeManifestToolCategory } from '../runtime/tool-category-manifest';
+import { getExternalAgentEntry } from './external-agents/store';
 import {
   formatTurnContextPacketsForPrompt,
   mergeTurnContextPackets,
@@ -1813,6 +1814,8 @@ export function waitForSessionIndexRepair(): Promise<void> {
   return sessionIndexRepairPromise || Promise.resolve();
 }
 
+const DOT_SESSION_ID_RE = /^dot_[A-Za-z0-9]+$/;
+
 function getSortedSessionSummaries(
   channel?: Session['channel'],
   includeAutomated?: boolean,
@@ -1845,8 +1848,17 @@ function getSortedSessionSummaries(
   // their durable channel or affecting connector/CLI channel lists.
   const unifiedScope = scope === 'all';
   const admitAutomated = includeAutomated === true && (unifiedScope || channel === 'web' || channel === 'mobile');
+  // A dot's chat (dot_<room>) is listed only while OpenAI Dots is on. Turning it off keeps
+  // the chat on disk; turning it back on lists it again. Read lazily: most lists have none.
+  let dotsListed: boolean | undefined;
+  const listDot = (id: string) => {
+    if (!DOT_SESSION_ID_RE.test(id)) return true;
+    if (dotsListed === undefined) dotsListed = getExternalAgentEntry('openai-dots').enabled === true;
+    return dotsListed;
+  };
   return Object.values(index.summaries)
     .filter((summary) => !INTERNAL_SESSION_ID_RE.test(summary.id))
+    .filter((summary) => listDot(summary.id))
     .filter((summary) => {
       if (unifiedScope) {
         return summary.channel !== 'system' || (admitAutomated && /^auto_/i.test(summary.id));

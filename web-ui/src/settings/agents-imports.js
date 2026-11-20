@@ -11,6 +11,8 @@
 // module's in-memory view state for the open row only and are never written to
 // storage, memory, or sent to a model.
 
+import { agentLogoSrc } from '../chat/external-agent-logos.js';
+
 const PAGE_SIZE = 50;
 const POLL_MS = 900;
 
@@ -265,16 +267,20 @@ export function mountAgentsImports(container, options = {}) {
 
   // ---- rendering ------------------------------------------------------------
   function tile(agent) {
-    // Neutral letter tile + plain-text name. No vendor logos by design.
+    // Brand logo (same assets as the chat agent picker); letters only for an agent without one.
+    const src = agentLogoSrc(agent.id);
+    if (src) return `<span class="aip-tile aip-tile-logo aip-tile-${esc(agent.id)}" aria-hidden="true"><img src="${esc(src)}" alt="" draggable="false"></span>`;
     return `<span class="aip-tile" aria-hidden="true">${esc(agent.letter || (agent.name || '?')[0])}</span>`;
   }
 
+  /** What the import scan found, e.g. "131 chats · 2.1 MB". Empty for an agent with nothing to import. */
   function agentStatus(agent) {
-    const parts = ['Found'];
+    const parts = [];
     if (agent.chatCount) parts.push(`${plural(agent.chatCount, 'chat')}`);
     else if (agent.setupSources?.length) parts.push('MCP config only');
     const size = formatBytes(agent.bytes);
-    if (size) parts.push(size);
+    if (size && parts.length) parts.push(size);
+    if (parts.length && agent.capped) parts.push('counted up to the scan limit');
     return parts.join(' · ');
   }
 
@@ -282,7 +288,7 @@ export function mountAgentsImports(container, options = {}) {
     return `<div class="aip-head">
       <div class="aip-head-copy">
         <h2>Agents &amp; imports</h2>
-        <p>Coding agents found on this computer. Open one to choose which chats and projects to copy into Prometheus. Nothing is imported until you confirm.</p>
+        <p>Turn an agent on to run new chats with it. Open one to import its chats. Nothing is imported until you confirm.</p>
       </div>
       <div class="aip-head-actions">
         <button class="aip-btn aip-btn-ghost" type="button" data-act="scan" ${st.loading ? 'disabled' : ''}>${st.loading ? 'Scanning…' : 'Scan again'}</button>
@@ -304,19 +310,22 @@ export function mountAgentsImports(container, options = {}) {
 
   function renderRow(agent) {
     const open = st.openId === agent.id;
-    // Stage 3: live-connection toggle + one status line, only for agents that
-    // have a live adapter (Codex). Other rows get no toggle (no fake toggles).
-    const connectSlot = renderLiveConnect(agent);
+    // Live toggle only for agents with a live adapter (no fake toggles). Name, then one short live line (On / Off / Not installed), then what can be imported.
+    // Everything stacks under the name so nothing overlaps on a phone.
+    const live = renderLiveConnect(agent);
+    const found = agentStatus(agent);
     return `<div class="aip-row-wrap${open ? ' is-open' : ''}">
       <button class="aip-row" type="button" data-act="open" data-agent="${esc(agent.id)}" aria-expanded="${open}">
         ${tile(agent)}
         <span class="aip-row-copy">
           <span class="aip-row-name">${esc(agent.name)}${agent.importOnly ? ' <span class="aip-tag">Import only</span>' : ''}</span>
-          <span class="aip-row-status">${esc(agentStatus(agent))}${agent.capped ? ' · large folder, counted up to the scan limit' : ''}</span>
+          ${live.line}
+          ${found ? `<span class="aip-row-status">${esc(found)}</span>` : ''}
         </span>
-        ${connectSlot}
+        ${live.controls}
         <span class="aip-chev" aria-hidden="true">${open ? '⌄' : '›'}</span>
       </button>
+      ${live.confirm}
       ${open ? renderOpened(agent) : ''}
     </div>`;
   }
@@ -325,7 +334,7 @@ export function mountAgentsImports(container, options = {}) {
   // Own state and listener so the shared [data-act] click switch is untouched.
   // The switch sits inside the row button, so a capture listener handles it
   // first and stops the click from also opening the row.
-  const live = { loaded: false, loading: false, agents: new Map(), busy: new Set(), wired: false };
+  const live = { loaded: false, loading: false, agents: new Map(), busy: new Set(), wired: false, confirming: '' };
 
   function mergeRuntimeRows() {
     st.agents = st.agents.filter((agent) => !agent.runtimeOnly);
@@ -384,44 +393,61 @@ export function mountAgentsImports(container, options = {}) {
       if (act === 'toggle') {
         const turningOn = !live.agents.get(agentId)?.enabled;
         // OpenAI Dots is not a normal harness: say what turning it on does before it does it.
+        // The notice opens inside the row, not as a page modal: on mobile a modal opened
+        // under the Settings sheet, so the switch looked dead.
         if (turningOn && agentId === 'openai-dots') {
-          const go = () => liveAction(agentId, 'enable');
-          if (typeof window.showConfirm === 'function') window.showConfirm(DOTS_ENABLE_NOTICE, go);
-          else if (window.confirm(DOTS_ENABLE_NOTICE)) go();
+          live.confirming = live.confirming === agentId ? '' : agentId;
+          render();
           return;
         }
         liveAction(agentId, turningOn ? 'enable' : 'disable');
       }
+      else if (act === 'confirm-on') { live.confirming = ''; liveAction(agentId, 'enable'); }
+      else if (act === 'confirm-cancel') { live.confirming = ''; render(); }
       else if (act === 'verify') liveAction(agentId, 'verify');
     };
     container.addEventListener('click', handle, true);
     container.addEventListener('keydown', handle, true);
   }
 
-  const DOTS_ENABLE_NOTICE = 'Turn on OpenAI Dots? This uses an unofficial ChatGPT connection with your OpenAI sign-in. OpenAI does not support it and can change or block it at any time. Your dots\' recent conversations are copied into Prometheus chats on this computer and kept up to date in the background, and messages you send in those chats are posted to the dot as you.';
+  const DOTS_ENABLE_NOTICE = 'OpenAI Dots uses an unofficial ChatGPT connection with your OpenAI sign-in, so OpenAI can break or block it at any time. Your dots\' chats are copied here and kept in sync, and what you send in them is posted to the dot as you.';
 
+  /** One short line: On · v0.170.0 · ChatGPT Plus / Off / Not installed / the error to fix. */
   function liveStatusLine(snap) {
-    if (!snap.detected) return snap.statusText || `${snap.name} isn't installed on this computer.`;
-    if (!snap.enabled && snap.id === 'openai-dots') return 'Off. Experimental: mirrors your dots\' ChatGPT conversations here through an unofficial connection.';
-    if (!snap.enabled) return 'Off. Turn on to run new chats with your own ' + snap.name + '.';
-    return snap.statusText || (snap.status === 'ready' ? 'Connected' : `Checking ${snap.name}…`);
+    if (!snap.detected) return snap.kind === 'contact' ? 'Sign in to OpenAI in Settings > Models first' : 'Not installed';
+    if (!snap.enabled) return snap.id === 'openai-dots' ? 'Off · Experimental' : 'Off';
+    if (snap.status === 'checking') return 'Checking…';
+    if (snap.status === 'ready') return ['On', snap.version ? `v${snap.version}` : '', snap.account?.label || ''].filter(Boolean).join(' · ');
+    return snap.statusText || 'Needs attention';
   }
 
   function renderLiveConnect(agent) {
     wireLiveConnect();
-    if (!live.loaded) { loadLiveAgents(); return ''; }
+    const none = { line: '', controls: '', confirm: '' };
+    if (!live.loaded) { loadLiveAgents(); return none; }
     const runtimeId = agent.id === 'claude' ? 'claude-code' : agent.id;
     const snap = live.agents.get(runtimeId);
-    if (!snap) return '';
+    if (!snap) return none;
     const busy = live.busy.has(runtimeId);
     const tone = !snap.enabled ? 'off' : snap.status === 'ready' ? 'ok' : (snap.status === 'checking' ? 'busy' : 'warn');
     const canToggle = snap.detected || snap.enabled;
     const retry = snap.enabled && !busy && !['ready', 'checking'].includes(snap.status)
       ? `<span class="aip-link ea-connect-retry" role="button" tabindex="0" data-ea-act="verify" data-ea-agent="${esc(runtimeId)}">Check again</span>` : '';
-    return `<span class="ea-connect ea-connect-${tone}">
-        <span class="ea-connect-status" title="${esc(liveStatusLine(snap))}">${esc(liveStatusLine(snap))}</span>${retry}
+    const text = liveStatusLine(snap);
+    const confirming = live.confirming === runtimeId && !snap.enabled;
+    return {
+      line: `<span class="ea-connect-status ea-connect-${tone}" title="${esc(text)}">${esc(text)}</span>`,
+      controls: (retry || canToggle) ? `<span class="ea-connect">${retry}
         ${canToggle ? `<span class="ea-switch${snap.enabled ? ' is-on' : ''}${busy ? ' is-busy' : ''}" role="switch" tabindex="0" aria-checked="${snap.enabled ? 'true' : 'false'}" aria-label="Run new chats with ${esc(snap.name)}" data-ea-act="toggle" data-ea-agent="${esc(runtimeId)}"></span>` : ''}
-      </span>`;
+      </span>` : '',
+      confirm: confirming ? `<div class="ea-confirm" role="group" aria-label="Turn on ${esc(snap.name)}">
+        <p>${esc(DOTS_ENABLE_NOTICE)}</p>
+        <div class="ea-confirm-actions">
+          <button type="button" class="aip-btn aip-btn-ghost" data-ea-act="confirm-cancel" data-ea-agent="${esc(runtimeId)}">Cancel</button>
+          <button type="button" class="aip-btn" data-ea-act="confirm-on" data-ea-agent="${esc(runtimeId)}">Turn on</button>
+        </div>
+      </div>` : '',
+    };
   }
 
   function checkbox(state, attrs, label) {
@@ -909,7 +935,7 @@ export function mountAgentsImports(container, options = {}) {
     else body = `<div class="aip-card aip-rows">${st.agents.map(renderRow).join('')}</div>`;
     const focusField = container.contains(document.activeElement) ? document.activeElement?.getAttribute?.('data-field') : '';
     container.innerHTML = `${renderHeader()}${renderRun()}${renderFileForm()}${body}
-      <p class="aip-foot aip-muted">Finding an agent only lists its folders and file sizes. Chat titles and the last-message line are read when you open a row, shown here, and not saved. Login and credential files are never opened.</p>
+      <p class="aip-foot aip-muted">Scanning only reads folder names and sizes. Chat titles load when you open a row and aren't saved. Login files are never opened.</p>
       ${renderHistory()}${st.historyOpen ? renderSearchTools() : ''}`;
     container.querySelectorAll('input[data-indeterminate]').forEach((el) => { el.indeterminate = true; });
     if (focusField) {
