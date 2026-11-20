@@ -123,7 +123,7 @@ export function renderNewChatGlanceHtml(glance = cache, { now = new Date() } = {
     // The opener waits for the first glance fetch so it doesn't swap once the project name arrives.
     const opener = glance ? glanceOpener(g.recentProject?.name || '') : '';
     quiet = `<blockquote class="pm-glance-quote"><span>“${esc(quote)}”</span><cite>${esc(by)}</cite></blockquote>
-    ${opener ? `<p class="pm-glance-opener">${esc(opener)}</p>` : ''}`;
+    ${opener ? `<div class="pm-glance-opener">${esc(opener)}</div>` : ''}`;
   }
   const usageLine = usage.length
     ? `<div class="pm-glance-usage">${usage.map((u) => `<span${Number(u.leftPercent) <= 10 ? ' class="pm-glance-low"' : ''}>${esc(u.label)} ${Number(u.leftPercent)}% left</span>`).join('')}</div>`
