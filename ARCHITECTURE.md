@@ -113,6 +113,14 @@ holds the enforced numbers (`npm run check:file-budgets`).
 - The budget checker ratchets: a recorded size more than the slack above a
   file's real size, or an exemption for a file that is no longer oversized,
   fails CI, so shrinking a file always tightens its allowance.
+- The web UI holds the largest files in the repo and is covered by the same
+  size rules since 2026-11-20 (`webUi` block in `scripts/file-budgets.json`;
+  vendored and minified files excluded). `web-ui/src/pages/ChatPage.js` is
+  ~48.7k lines, `styles/mobile.css` ~19k, `mobile/mobile-pages.js` ~12.6k and
+  `mobile/mobile-chat-page-runtime.js` ~9.3k; 18 web UI files are over 3,000
+  lines. They are recorded at their current size, so they may not grow past
+  the slack and a new oversized UI file fails CI. Splitting `ChatPage.js` by
+  feature is the next target.
 
 These are tracked work, not hidden assumptions.
 
