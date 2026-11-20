@@ -565,6 +565,7 @@ const SCHEMA_HIDDEN_COMPAT_TOOL_NAMES = new Set([
   'prom_repo_pull',
   'prom_repo_sync',
   'background_spawn',
+  'background_follow_up',
   'background_steer',
   'background_status',
   'background_progress',

@@ -280,6 +280,7 @@ export interface ExecuteToolDeps {
   isAllowedShellCommand: (command: string) => boolean;
   runCommandCaptured: (command: string, cwd: string, timeoutMs?: number, options?: { shell?: string; pty?: boolean; approvalId?: string; sessionId?: string; toolCallId?: string; workspacePath?: string; trackWorkspaceChanges?: boolean; yieldTimeMs?: number; onOutput?: (event: { runId: string; stream: 'stdout' | 'stderr' | 'combined'; chunk: string; sequence: number }) => void }) => Promise<{ stdout: string; stderr: string; code: number | null; timedOut: boolean; reason?: string; signal?: NodeJS.Signals | number | null; noOutputTimedOut?: boolean; runId?: string; yielded?: boolean; workspacePath?: string; workspaceChanges?: Array<Record<string, unknown>>; workspaceSnapshots?: Array<Record<string, unknown>>; workspaceChangeSource?: 'terminal'; workspaceChangesTruncated?: boolean }>;
   toolCallId?: string;
+  backgroundParentTurnId?: string;
   skillsManager: any;
   getSessionSkillWindows: (sessionId: string) => Map<string, SkillWindow>;
   sessionCurrentTurn: Map<string, number>;
@@ -3549,6 +3550,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
 
       case 'background_status':
       case 'background_progress':
+        case 'background_follow_up':
         case 'background_steer':
         case 'background_wait':
         case 'background_join':

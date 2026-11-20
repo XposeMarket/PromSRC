@@ -86,7 +86,7 @@ const LOCAL_WRITE_TOOLS = new Set([
   // with an honest "changes something on this computer" label instead of the
   // unknown-tool fallback.
   'append_file', 'git_commit', 'timer', 'business_context_mode', 'update_heartbeat',
-  'set_current_model', 'background_spawn', 'background_steer', 'spawn_subagent',
+  'set_current_model', 'background_spawn', 'background_follow_up', 'background_steer', 'spawn_subagent',
   'save_site_shortcut', 'browser_close', 'browser_close_tab',
 ]);
 

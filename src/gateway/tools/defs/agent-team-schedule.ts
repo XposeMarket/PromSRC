@@ -1494,14 +1494,14 @@ export function getAgentTeamScheduleTools(): any[] {
       function: {
         name: 'background_ops',
         description:
-          'Background agents. spawn starts a parallel agent (this turn cannot finalize until same-turn workers finish and their results are injected); steer sends live guidance to an active worker; wait pauses this turn until the waited agents finish or wait_ms elapses (returns early on completion); status/progress check state; join is system-only.',
+          'Background agents. spawn starts a parallel agent (this turn cannot finalize until same-turn workers finish and their results are injected); steer guides a running worker; follow_up asks a completed worker another question in its existing conversation (same parent chat; use the returned new execution ID for wait/status); wait pauses this turn until the waited agents finish or wait_ms elapses (returns early on completion); status/progress check state; join is system-only.',
         parameters: {
           type: 'object',
           required: ['action'],
           properties: {
             action: {
               type: 'string',
-              enum: ['spawn', 'steer', 'status', 'progress', 'wait', 'join'],
+              enum: ['spawn', 'follow_up', 'steer', 'status', 'progress', 'wait', 'join'],
               description: 'Background operation to run.',
             },
             prompt: {
@@ -1514,11 +1514,11 @@ export function getAgentTeamScheduleTools(): any[] {
             },
             background_id: {
               type: 'string',
-              description: 'Background agent ID for steer/status/progress/wait/join.',
+              description: 'Background agent ID for follow_up/steer/status/progress/wait/join.',
             },
             message: {
               type: 'string',
-              description: 'For steer: the live correction, constraint, or follow-up to deliver to the active background agent.',
+              description: 'For follow_up: the new question or assignment. For steer: guidance for the active worker.',
             },
             background_ids: {
               type: 'array',

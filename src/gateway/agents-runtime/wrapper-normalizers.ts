@@ -1390,11 +1390,12 @@ export function normalizeBackgroundOpsWrapperTool(name: string, rawArgs: any): {
   if (name !== 'background_ops') return null;
   const args = rawArgs && typeof rawArgs === 'object' ? { ...rawArgs } : {};
   const action = String(args.action || args.operation || args.mode || '').trim().toLowerCase();
-  if (!action) return { name, args, error: 'background_ops requires action "spawn", "steer", "status", "progress", "wait", or "join".' };
+  if (!action) return { name, args, error: 'background_ops requires action "spawn", "follow_up", "steer", "status", "progress", "wait", or "join".' };
   delete args.action;
   delete args.operation;
   delete args.mode;
   if (action === 'spawn' || action === 'start') return { name: 'background_spawn', args };
+  if (action === 'follow_up') return { name: 'background_follow_up', args };
   if (action === 'steer' || action === 'message') return { name: 'background_steer', args };
   if (action === 'status') return { name: 'background_status', args };
   if (action === 'progress') return { name: 'background_progress', args };

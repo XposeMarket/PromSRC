@@ -1,5 +1,5 @@
 import path from 'path';
-import { backgroundJoin, backgroundProgress, backgroundSpawn, backgroundSteer, backgroundWait, compactBackgroundToolPayload, listBackgroundStatuses } from '../../tasks/task-runner';
+import { backgroundJoin, backgroundFollowUp, backgroundProgress, backgroundSpawn, backgroundSteer, backgroundWait, compactBackgroundToolPayload, listBackgroundStatuses } from '../../tasks/task-runner';
 import { normalizeSpawnToolCategoriesArg } from '../../tasks/spawn-tool-categories-arg';
 import { resolveBackgroundWorkDirArg } from '../background-work-dir';
 import {
@@ -48,6 +48,7 @@ import { executeTriggerOps } from '../../triggers/trigger-rule-input';
 
 const AUTOMATION_TOOL_NAMES = new Set([
   'background_spawn',
+  'background_follow_up',
   'background_steer',
   'background_status',
   'background_progress',
@@ -139,6 +140,13 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
         const status = backgroundProgress(bgId);
         if (!status) return { name, args, result: `No background agent found with id: ${bgId}`, error: true };
         return { name, args, result: JSON.stringify(compactBackgroundToolPayload(status)), error: false };
+      }
+
+      case 'background_follow_up': {
+        const result = backgroundFollowUp(String(args.background_id || '').trim(), String(args.message || '').trim(), {
+          spawnerSessionId: sessionId, requestId: deps.toolCallId || '', parentTurnId: deps.backgroundParentTurnId || '',
+        });
+        return { name, args, result: JSON.stringify(result), error: !result.queued };
       }
 
       case 'background_steer': {

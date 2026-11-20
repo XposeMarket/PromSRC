@@ -11,7 +11,7 @@ import { routeTeamEvent } from './../../teams/team-event-router';
 import { claimAgentForTeamWorkspace } from './../../teams/team-workspace';
 import { recordAgentRun } from './../../../scheduler';
 import { getSessionChannelHint } from './../../comms/broadcaster';
-import { backgroundSpawn, backgroundJoin, backgroundProgress, backgroundSteer, backgroundWait, compactBackgroundToolPayload, listBackgroundStatuses } from './../../tasks/task-runner';
+import { backgroundSpawn, backgroundJoin, backgroundFollowUp, backgroundProgress, backgroundSteer, backgroundWait, compactBackgroundToolPayload, listBackgroundStatuses } from './../../tasks/task-runner';
 import { normalizeSpawnToolCategoriesArg } from './../../tasks/spawn-tool-categories-arg';
 import { resolveBackgroundWorkDirArg } from './../background-work-dir';
 import { listTaskSummaries, loadTask, type TaskRecord } from './../../tasks/task-store';
@@ -1161,6 +1161,13 @@ export async function handleAgentsTool(ctx: handleAgentsToolContext): Promise<Aw
         const status = backgroundProgress(bgId);
         if (!status) return { name, args, result: `No background agent found with id: ${bgId}`, error: true };
         return { name, args, result: JSON.stringify(compactBackgroundToolPayload(status)), error: false };
+      }
+
+      case 'background_follow_up': {
+        const result = backgroundFollowUp(String(args.background_id || '').trim(), String(args.message || '').trim(), {
+          spawnerSessionId: sessionId, requestId: deps.toolCallId || '', parentTurnId: deps.backgroundParentTurnId || '',
+        });
+        return { name, args, result: JSON.stringify(result), error: !result.queued };
       }
 
       case 'background_steer': {
