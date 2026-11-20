@@ -51,7 +51,7 @@ Shared browser modules cover API calls, websocket subscription, state, formattin
 
 ### Desktop chat tabs and staged images
 
-- `themes.css` exposes the expanded-sidebar shell's top-left radius to `multi-chat-workspace.css`, so the first tab starts past the curve. A collapsed sidebar keeps the standard tab inset.
+- `themes.css` lets the rounded desktop shell clip the first tab itself. `multi-chat-workspace.css` extends that tab's background, click target and active underline to the rounded shell's left edge without a left divider. The label keeps its existing inner padding, and the square shell keeps the standard tab inset.
 - `ChatPage.js` → `renderChatFilePills()` keeps long image names compact in the main desktop composer; hover for the full filename. Click the image chip or activate it from the keyboard to open `openImgPreview()` without sending or uploading the draft. Escape, the close button, or a click outside the image dismisses it; the separate remove button still removes just that file. Mobile has its own composer and tab layout.
 
 ### Chat and tool activity

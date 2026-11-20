@@ -16,9 +16,8 @@ body:not(.pm-mobile-active) .prom-multi-chat-tabs {
   gap: 0;
   overflow-x: auto;
   overflow-y: hidden;
-  padding: 0 8px;
-  /* Keep the first tab's straight edge out of the shell's clipped corner. */
-  padding-left: max(8px, calc(var(--prom-desktop-shell-start-radius, 0px) + 2px));
+  /* The rounded shell clips the first tab; keep its gutter inside the button. */
+  padding: 0 8px 0 var(--prom-multi-chat-flush-start, 8px);
   border-bottom: 1px solid var(--line);
   background: color-mix(in srgb, var(--panel) 96%, transparent);
   backdrop-filter: blur(16px) saturate(1.08);
@@ -45,7 +44,7 @@ body:not(.pm-mobile-active) .prom-multi-chat-tab {
 }
 
 body:not(.pm-mobile-active) .prom-multi-chat-tab:first-child {
-  border-left: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+  border-left: var(--prom-multi-chat-flush-start, 1px) solid color-mix(in srgb, var(--line) 70%, transparent);
 }
 
 body:not(.pm-mobile-active) .prom-multi-chat-tab:hover {
@@ -78,6 +77,12 @@ body:not(.pm-mobile-active) .prom-multi-chat-tab.is-side::after {
   height: 2px;
   border-radius: 999px;
   background: var(--brand);
+}
+
+body:not(.pm-mobile-active) .prom-multi-chat-tab:first-child::after {
+  left: var(--prom-multi-chat-flush-start, 10px);
+  border-top-left-radius: var(--prom-multi-chat-flush-start, 999px);
+  border-bottom-left-radius: var(--prom-multi-chat-flush-start, 999px);
 }
 
 body:not(.pm-mobile-active) .prom-multi-chat-tab.is-side::after {

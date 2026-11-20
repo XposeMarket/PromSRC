@@ -6,7 +6,7 @@ import { chromium } from 'playwright';
 const origin = 'http://desktop-chat.test';
 const styles = ['theme-tokens', 'base', 'components', 'pages', 'themes', 'multi-chat-workspace'];
 const browser = await chromium.launch({ headless: true }).catch(() => chromium.launch({ channel: 'chrome', headless: true }));
-const page = await browser.newPage({ viewport: { width: 1280, height: 780 } });
+const page = await browser.newPage({ viewport: { width: 1280, height: 780 }, deviceScaleFactor: 2 });
 page.setDefaultTimeout(4000);
 const errors = [];
 page.on('pageerror', error => errors.push(error.message));
@@ -17,10 +17,13 @@ try {
     const url = new URL(route.request().url());
     if (url.origin !== origin) return route.abort();
     if (url.pathname === '/') return route.fulfill({ contentType: 'text/html', body: `<!doctype html>
-      <html data-theme="dark" data-skin="p1"><head>${styles.map(name => `<link rel="stylesheet" href="/src/styles/${name}.css">`).join('')}</head>
+      <html data-theme="dark" data-skin="p1"><head><meta charset="utf-8">${styles.map(name => `<link rel="stylesheet" href="/src/styles/${name}.css">`).join('')}</head>
       <body class="electron-shell"><div class="app"><aside class="sidebar"></aside><div class="workspace">
       <div class="main-shell-wrap"><header class="topbar"></header><main class="main-shell">
-      <div class="prom-multi-chat-tabs"><div class="prom-multi-chat-tab is-main"><button class="prom-multi-chat-tab-open">New chat</button></div></div>
+      <div class="prom-multi-chat-tabs"><div class="prom-multi-chat-tab is-main">
+       <button class="prom-multi-chat-tab-open"><span class="prom-multi-chat-tab-title">New chat</span></button>
+       <button class="prom-multi-chat-tab-close" aria-label="Close tab">×</button></div>
+       <button class="prom-multi-chat-new" aria-label="New tab">+</button></div>
       <div id="chat-view"><div id="chat-messages"></div><div class="chat-input-area">
       <div id="chat-composer-attachment-stack" class="chat-composer-attachment-stack"><div id="chat-file-staging" class="chat-file-staging"></div></div>
       <div class="chat-input-row"><div class="chat-composer-input-wrap" id="chat-composer-input-wrap">
@@ -64,21 +67,41 @@ try {
   const corner = () => page.evaluate(() => {
     const shell = document.querySelector('.main-shell-wrap');
     const strip = document.querySelector('.prom-multi-chat-tabs');
+    const tab = strip.firstElementChild;
+    const button = tab.querySelector('.prom-multi-chat-tab-open');
+    const shellBox = shell.getBoundingClientRect();
+    const tabBox = tab.getBoundingClientRect();
     return {
       radius: parseFloat(getComputedStyle(shell).borderTopLeftRadius),
-      inset: strip.firstElementChild.getBoundingClientRect().left - strip.getBoundingClientRect().left,
+      inset: tabBox.left - shellBox.left,
+      border: getComputedStyle(tab).borderLeftWidth,
+      underline: getComputedStyle(tab, '::after').left,
+      labelInset: getComputedStyle(button).paddingLeft,
+      edgeClickable: document.elementFromPoint(shellBox.left + 2, tabBox.top + tabBox.height / 2) === button,
     };
   });
   const expanded = await corner();
-  assert.ok(expanded.radius > 0 && expanded.inset > expanded.radius, `tab must start clear of the rounded corner: ${JSON.stringify(expanded)}`);
+  assert.ok(expanded.radius > 0, 'expanded sidebar should retain the rounded shell');
+  assert.equal(expanded.inset, 0, 'first tab background must start at the shell edge');
+  assert.equal(expanded.border, '0px', 'no divider should interrupt the corner');
+  assert.equal(expanded.underline, '0px', 'active underline must reach the shell edge');
+  assert.ok(parseFloat(expanded.labelInset) >= 12, 'keep the label comfortably inside the tab');
+  assert.equal(expanded.edgeClickable, true, 'the newly filled area should be part of the tab hit target');
   await page.locator('.sidebar').evaluate(el => el.classList.add('collapsed'));
-  assert.deepEqual(await corner(), { radius: 0, inset: 8 });
+  assert.deepEqual(await corner(), {
+    radius: 0, inset: 8, border: '1px', underline: '10px', labelInset: '12px', edgeClickable: false,
+  });
   await page.locator('.sidebar').evaluate(el => el.classList.remove('collapsed'));
 
   const screenshots = process.env.PROM_DESKTOP_CHAT_SCREENSHOTS;
   if (screenshots) {
     await mkdir(screenshots, { recursive: true });
     await page.screenshot({ path: path.join(screenshots, 'desktop-chat.png') });
+    const tab = await page.locator('.prom-multi-chat-tab').first().boundingBox();
+    await page.screenshot({ path: path.join(screenshots, 'tab-corner.png'), clip: {
+      x: Math.max(0, Math.floor(tab.x) - 24), y: Math.max(0, Math.floor(tab.y) - 14),
+      width: Math.ceil(tab.width) + 86, height: 80,
+    } });
   }
   await imageButton.click();
   const dialog = page.getByRole('dialog', { name: 'Image preview' });
@@ -105,6 +128,13 @@ try {
   // The existing message/lightbox path still works, including literal filename text.
   await page.evaluate(src => window.openImgPreview(src, `Raul's <screenshot>.png`), await chips.first().locator('img').getAttribute('src'));
   assert.equal(await dialog.locator('.img-preview-name').textContent(), `Raul's <screenshot>.png`);
+  // A closed dialog's cleanup event can arrive after the next preview request.
+  await preview.evaluate(img => {
+    img.closest('dialog').close();
+    window.openImgPreview(img.src, 'Next image.png');
+  });
+  assert.equal(await dialog.locator('.img-preview-name').textContent(), 'Next image.png');
+  assert.equal(await page.locator('#img-preview-overlay').count(), 1);
   await dialog.getByRole('button', { name: 'Close' }).click();
   await dialog.waitFor({ state: 'hidden' });
   assert.deepEqual(errors, []);

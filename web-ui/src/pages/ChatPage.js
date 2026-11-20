@@ -42844,7 +42844,11 @@ function renderChatFilePills() {
 }
 
 function openImgPreview(src, name) {
-  if (!src || document.getElementById('img-preview-overlay')) return;
+  if (!src) return;
+  const previous = document.getElementById('img-preview-overlay');
+  if (previous?.open) return;
+  // A native dialog closes before its queued close event removes it.
+  previous?.remove();
   const overlay = document.createElement('dialog');
   overlay.id = 'img-preview-overlay';
   overlay.className = 'img-preview-overlay';

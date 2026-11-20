@@ -4710,8 +4710,8 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area {
 }
 
 :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar:not(.collapsed) ~ .workspace .main-shell-wrap {
-  --prom-desktop-shell-start-radius: 14px;
-  border-top-left-radius: var(--prom-desktop-shell-start-radius);
+  --prom-multi-chat-flush-start: 0px;
+  border-top-left-radius: 14px;
   overflow: hidden;
 }
 
