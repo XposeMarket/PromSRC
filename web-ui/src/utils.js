@@ -241,13 +241,53 @@ function cleanVisualCssValue(value, fallback) {
   return cleaned || fallback;
 }
 
+// Chart.js and Mermaid parse colors themselves and only understand plain
+// hex/rgb(a). Palette themes derive most tokens with color-mix(...), which
+// both libraries reject, so axis labels, grid lines and Mermaid diagrams fell
+// back to unreadable defaults (or failed) on light palettes. Resolve each
+// token through the browser once and hand the iframe a plain rgb()/rgba().
+let visualColorProbe = null;
+function srgbChannel(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.round(Math.min(1, Math.max(0, n)) * 255) : null;
+}
+export function plainVisualColor(computed) {
+  const value = String(computed || '').trim();
+  if (/^(#[0-9a-f]{3,8}|rgba?\([^()]*\))$/i.test(value)) return value;
+  const srgb = value.match(/^color\(\s*srgb\s+([^\s/]+)\s+([^\s/]+)\s+([^\s/]+)\s*(?:\/\s*([^\s)]+))?\s*\)$/i);
+  if (!srgb) return '';
+  const [r, g, b] = [srgb[1], srgb[2], srgb[3]].map(srgbChannel);
+  if ([r, g, b].some((c) => c === null)) return '';
+  const alphaRaw = srgb[4] == null ? 1 : String(srgb[4]).endsWith('%') ? Number.parseFloat(srgb[4]) / 100 : Number(srgb[4]);
+  const alpha = Number.isFinite(alphaRaw) ? Math.min(1, Math.max(0, alphaRaw)) : 1;
+  return alpha >= 1 ? `rgb(${r}, ${g}, ${b})` : `rgba(${r}, ${g}, ${b}, ${Math.round(alpha * 1000) / 1000})`;
+}
+function resolveVisualColor(value) {
+  const raw = String(value || '').trim();
+  if (!raw || /^(#[0-9a-f]{3,8}|rgba?\([^()]*\))$/i.test(raw)) return raw;
+  try {
+    if (!visualColorProbe || !visualColorProbe.isConnected) {
+      visualColorProbe = document.createElement('span');
+      visualColorProbe.setAttribute('aria-hidden', 'true');
+      visualColorProbe.style.cssText = 'position:absolute;width:0;height:0;overflow:hidden;visibility:hidden;pointer-events:none';
+      (document.body || document.documentElement).appendChild(visualColorProbe);
+    }
+    visualColorProbe.style.color = '';
+    visualColorProbe.style.color = raw;
+    if (!visualColorProbe.style.color) return raw;
+    return plainVisualColor(getComputedStyle(visualColorProbe).color) || raw;
+  } catch {
+    return raw;
+  }
+}
+
 function readVisualTheme() {
   const root = document.documentElement;
   const styles = typeof getComputedStyle === 'function' ? getComputedStyle(root) : null;
   const read = (names, fallback) => {
     for (const name of names) {
       const value = styles?.getPropertyValue(name)?.trim();
-      if (value) return cleanVisualCssValue(value, fallback);
+      if (value) return cleanVisualCssValue(resolveVisualColor(value), fallback);
     }
     return fallback;
   };
@@ -259,7 +299,9 @@ function readVisualTheme() {
     || !!document.querySelector?.('.pm-app');
   const m = (mobileNames, desktopNames) => (mobile ? [...mobileNames, ...desktopNames] : desktopNames);
   const theme = {
-    isDark: root.getAttribute('data-theme') === 'dark',
+    // data-tone is the real brightness of the active theme (light palettes keep
+    // data-theme for legacy CSS paths); fall back to data-theme when absent.
+    isDark: (root.getAttribute('data-tone') || root.getAttribute('data-theme')) === 'dark',
     bg: read(m(['--pm-bg'], ['--bg', '--pm-chat-page-bg']), VISUAL_THEME_FALLBACKS.bg),
     bgSoft: read(m(['--pm-bg-soft'], ['--bg-soft']), VISUAL_THEME_FALLBACKS.bgSoft),
     surface: read(m(['--pm-surface'], ['--panel', '--composer-panel']), VISUAL_THEME_FALLBACKS.surface),

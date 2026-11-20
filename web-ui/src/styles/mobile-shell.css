@@ -566,13 +566,18 @@ body.pm-mobile-drawer-open .pm-app {
 /* Flat app backdrop: no theme glow/texture behind mobile UI. */
 .pm-app::before,
 .pm-app::after,
-:root[data-theme="dark"] .pm-app::before,
-:root[data-theme="dark"] .pm-app::after {
+:root[data-theme] .pm-app::before,
+:root[data-theme] .pm-app::after {
   content: '';
   position: absolute;
   inset: calc(-1 * env(safe-area-inset-top, 0px)) 0 0;
   z-index: 0;
   pointer-events: none;
+}
+.pm-app::before,
+.pm-app::after,
+:root[data-theme="dark"] .pm-app::before,
+:root[data-theme="dark"] .pm-app::after {
   background: none;
   background-image: none;
   mix-blend-mode: normal;

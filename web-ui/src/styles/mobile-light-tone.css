@@ -1,12 +1,27 @@
 /* Light palette themes on mobile (Olympus Day, Parchment, Daylight, and any
  * custom palette with a light background, i.e. :root[data-tone="light"]).
  *
- * Mobile chrome hard-codes white ink for the dark glass look. On bone/white
- * backgrounds that ink disappears (titles, drawer rows, the selected tab).
- * These rules only apply to the light tone; dark themes are untouched.
- * Specificity is higher than the unlayered `#fff !important` rules in
- * mobile.css, so import order does not matter. */
+ * Layout, type and spacing are shared with every other theme: the mobile
+ * stylesheets keep structure under the tone-neutral :root[data-theme] gate and
+ * only color/material under :root[data-theme="dark"]. This file is the light
+ * counterpart of that color layer. Mobile chrome hard-codes white ink and
+ * white glass for the dark look; on bone/white backgrounds that ink vanishes.
+ *
+ * Every rule is scoped to the light tone, so dark themes are untouched.
+ * Specificity (:root + [data-tone] + body class) beats the unlayered
+ * `body.pm-mobile-active ...` and `:root[data-theme] ...` rules in mobile.css,
+ * so import order does not matter. `!important` is used only where the rule
+ * being corrected is itself `!important`. */
 
+:root[data-tone="light"] body.pm-mobile-active {
+  --pm-light-ink: var(--pm-text);
+  --pm-light-glass: color-mix(in srgb, var(--pm-surface) 78%, transparent);
+  --pm-light-glass-strong: color-mix(in srgb, var(--pm-surface) 92%, transparent);
+  --pm-light-rim: color-mix(in srgb, var(--pm-text) 10%, transparent);
+  --pm-light-shadow: 0 8px 18px rgba(40, 32, 16, .10), 0 1px 4px rgba(40, 32, 16, .08);
+}
+
+/* Titles and drawer text that were pinned to #fff / bone ink. */
 :root[data-tone="light"] body.pm-mobile-active :is(
   .pm-page .pm-title,
   .pm-page .pm-detail-head h1,
@@ -17,6 +32,23 @@
 ) {
   color: var(--pm-text) !important;
   -webkit-text-fill-color: var(--pm-text) !important;
+}
+:root[data-tone="light"] body.pm-mobile-active :is(
+  .pm-drawer-item,
+  .pm-drawer-item strong,
+  .pm-drawer-new-chat,
+  .pm-session-row,
+  .pm-attach-chip
+) {
+  color: var(--pm-text);
+}
+
+/* Drawer navigation: same flat rail as the dark themes (accent icon, thin
+   divider), instead of the old filled icon tiles. */
+:root[data-tone="light"] body.pm-mobile-active .pm-drawer-item .pm-icon:not([style*="background"]) {
+  background: transparent;
+  color: var(--pm-accent);
+  border-right-color: color-mix(in srgb, var(--pm-accent) 32%, transparent);
 }
 
 :root[data-tone="light"] body.pm-mobile-active .pm-drawer-search {
@@ -42,4 +74,43 @@
 :root[data-tone="light"] body.pm-mobile-active .pm-msg.from-ai :is(.markdown-body, .pm-live-md) strong,
 :root[data-tone="light"] body.pm-mobile-active .pm-bubble .markdown-body th {
   color: var(--pm-text);
+}
+
+/* Voice / keyboard launcher on the new-chat screen: white icons on white
+   glass. Give them theme ink and a readable light glass body. */
+:root[data-tone="light"] body.pm-mobile-active .pm-chat-mode-button {
+  color: var(--pm-light-ink);
+  background: var(--pm-light-glass) !important;
+  border-color: var(--pm-light-rim) !important;
+  box-shadow:
+    inset 0 1px 1px rgba(255, 255, 255, .55),
+    var(--pm-light-shadow) !important;
+}
+:root[data-tone="light"] body.pm-mobile-active .pm-chat-mode-button svg {
+  color: currentColor;
+  stroke: currentColor;
+}
+
+/* Visual "Save HTML / Save image" pills under generated visuals. */
+:root[data-tone="light"] body.pm-mobile-active .pm-visual-save-btn {
+  color: var(--pm-text);
+  background: var(--pm-light-glass);
+  border-color: var(--pm-light-rim);
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, .5), 0 6px 14px rgba(40, 32, 16, .08);
+}
+
+/* Voice tab controls (Repeat last response, settings, Quiet/Milestone). */
+:root[data-tone="light"] body.pm-mobile-active .pm-voice-control-btn {
+  color: var(--pm-text) !important;
+  background: var(--pm-light-glass) !important;
+  border-color: var(--pm-light-rim) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .5), 0 4px 12px rgba(40, 32, 16, .06) !important;
+}
+:root[data-tone="light"] body.pm-mobile-active .pm-voice-mode-toggle {
+  background: color-mix(in srgb, var(--pm-text) 7%, var(--pm-surface)) !important;
+  border-color: var(--pm-light-rim) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .45) !important;
+}
+:root[data-tone="light"] body.pm-mobile-active .pm-voice-mode-toggle button:not(.active):not([aria-pressed="true"]):not(.is-active) {
+  color: color-mix(in srgb, var(--pm-text) 72%, transparent) !important;
 }
