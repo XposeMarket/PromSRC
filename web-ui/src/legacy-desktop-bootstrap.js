@@ -329,8 +329,11 @@ function toggleSidebarSearch(event) {
 function togglePriorityPanel(event) {
   event?.preventDefault?.();
   event?.stopPropagation?.();
-  _priorityPanelOpen = !_priorityPanelOpen;
   const sidebar = document.getElementById('sidebar');
+  const isRail = sidebar?.matches('.collapsed, .pm-panel-motion--closing');
+  // The bell on the rail reveals the sidebar instead of opening a flyout.
+  if (isRail) window.setSidebarCollapsed?.(false);
+  _priorityPanelOpen = isRail || !_priorityPanelOpen;
   const button = document.getElementById('sidebarPriorityToggle');
   sidebar?.classList.toggle('priority-panel-open', _priorityPanelOpen);
   button?.setAttribute('aria-expanded', String(_priorityPanelOpen));

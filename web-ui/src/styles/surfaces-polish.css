@@ -267,9 +267,9 @@ body:not(.pm-mobile-active) .sidebar.collapsed .more-popover { left: calc(100% +
 body:not(.pm-mobile-active) .sidebar.collapsed ~ .workspace .page-view { left: 64px !important; }
 
 /* One menu surface contract. Keep positioning and visibility owned by each
-   menu; search/priority and Prom Bot use the same surface without pretending
-   their richer content is a list of actions. */
-body:not(.pm-mobile-active) :is(.model-switcher-panel, .chat-attach-menu, .chat-header-menu, .chat-session-context-menu, .session-context-menu, #sidebar-priority-panel, .sidebar-search, .sidebar.collapsed #prom-bot-sidebar-section, .more-popover, #chat-text-selection-popover, #chat-new-context-popover, #voice-settings-popover) {
+   menu; search and the Prom Bot flyout use the same surface without pretending
+   their richer content is a list of actions. Priority is an inline sidebar view. */
+body:not(.pm-mobile-active) :is(.model-switcher-panel, .chat-attach-menu, .chat-header-menu, .chat-session-context-menu, .session-context-menu, .sidebar-search, .sidebar.collapsed #prom-bot-sidebar-section, .more-popover, #chat-text-selection-popover, #chat-new-context-popover, #voice-settings-popover) {
   box-sizing: border-box; padding: 6px; border-radius: 13px;
   border: 1px solid color-mix(in srgb, var(--text) 8%, transparent) !important;
   background: var(--panel) !important; color: var(--text);
@@ -277,11 +277,11 @@ body:not(.pm-mobile-active) :is(.model-switcher-panel, .chat-attach-menu, .chat-
   font-family: inherit; font-size: 13px; font-weight: 500;
   max-width: min(420px, calc(100vw - 24px));
 }
-body:not(.pm-mobile-active) :is(.model-switcher-popover, .chat-attach-menu, .chat-header-menu, .chat-session-context-menu, .session-context-menu, #sidebar-priority-panel, #prom-bot-sidebar-section, .more-popover, #chat-text-selection-popover, #chat-new-context-popover) :is([role="menuitem"], .more-popover-item, .model-switcher-row, .model-switcher-option, .sidebar-priority-row, .prom-bot-agent-row) {
+body:not(.pm-mobile-active) :is(.model-switcher-popover, .chat-attach-menu, .chat-header-menu, .chat-session-context-menu, .session-context-menu, #prom-bot-sidebar-section, .more-popover, #chat-text-selection-popover, #chat-new-context-popover) :is([role="menuitem"], .more-popover-item, .model-switcher-row, .model-switcher-option, .prom-bot-agent-row) {
   box-sizing: border-box; min-height: 34px; padding: 7px 10px; border-radius: 8px;
   border: 0; font-family: inherit; font-size: 13px; font-weight: 500; line-height: 20px; color: var(--text);
 }
-body:not(.pm-mobile-active) :is(.model-switcher-popover, .chat-attach-menu, .chat-header-menu, .chat-session-context-menu, .session-context-menu, #sidebar-priority-panel, #prom-bot-sidebar-section, .more-popover, #chat-text-selection-popover, #chat-new-context-popover) :is([role="menuitem"], .more-popover-item, .model-switcher-row, .model-switcher-option, .sidebar-priority-row, .prom-bot-agent-row):is(:hover, :focus-visible) { background: color-mix(in srgb, var(--text) 6%, transparent); }
+body:not(.pm-mobile-active) :is(.model-switcher-popover, .chat-attach-menu, .chat-header-menu, .chat-session-context-menu, .session-context-menu, #prom-bot-sidebar-section, .more-popover, #chat-text-selection-popover, #chat-new-context-popover) :is([role="menuitem"], .more-popover-item, .model-switcher-row, .model-switcher-option, .prom-bot-agent-row):is(:hover, :focus-visible) { background: color-mix(in srgb, var(--text) 6%, transparent); }
 
 /* Desktop page chrome: quiet boundaries, wrapping toolbars, readable forms. */
 body:not(.pm-mobile-active) .page-view { background: var(--panel); }
@@ -299,7 +299,7 @@ body:not(.pm-mobile-active) .model-switcher-popover :is(.model-switcher-row stro
 body:not(.pm-mobile-active) .model-switcher-popover .model-switcher-row strong { font-size: 13px; font-weight: 500; }
 /* Rail controls open usable flyouts rather than clipping into the 64px lane. */
 body:not(.pm-mobile-active) .sidebar.collapsed.sidebar-search-open .sidebar-search:not([hidden]) { display: flex !important; position: fixed; left: 74px; top: 56px; width: 280px; z-index: 1100; }
-body:not(.pm-mobile-active) .sidebar.collapsed #sidebar-priority-panel:not([hidden]) { position: fixed; left: 74px; top: 100px; width: 320px; max-height: calc(100vh - 120px); overflow: auto; z-index: 1100; }
+body:not(.pm-mobile-active) .sidebar.collapsed #sidebar-priority-panel { display: none; }
 body:not(.pm-mobile-active) .sidebar.collapsed #prom-bot-sidebar-section:not([hidden]) { display: block !important; position: fixed; left: 74px; top: 144px; width: 280px; max-height: calc(100vh - 164px); overflow: auto; z-index: 1100; }
 /* Explicit geometry wins over the legacy themed header's fixed-height row. */
 body:not(.pm-mobile-active) #sidebar.collapsed .sidebar-top { height: auto !important; min-height: 0 !important; flex: 0 0 auto; padding: 0 !important; align-items: center; }

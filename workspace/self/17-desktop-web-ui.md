@@ -49,6 +49,8 @@ The major page responsibilities are in the Map. In particular, chat includes cro
 
 Shared browser modules cover API calls, websocket subscription, state, formatting/markdown, keyboard shortcuts, command palette and performance. `web-ui/src/components/` holds reusable visual components, while `features/` holds feature-owned groups. Check for an existing owner before adding a module.
 
+Desktop Priority Mode is an inline alternative to Pinned, Projects and Sessions in `.sidebar-scroll`, not a popover. The bell in the collapsed rail expands the sidebar to show this list. Search and the other rail flyouts retain their own behavior.
+
 ### Chat and tool activity
 `ChatPage.js` receives gateway stream events, reconciles the active session, and renders messages plus process/tool activity. `tool-activity.js` converts activity records into a compact summary and expandable detail. It supports stateful disclosure, per-tool icons/status, readable tool details, and file-diff presentation. Do not collapse distinct running/completed/error/approval states into one generic spinner, or discard activity when switching between an active chat and persisted history. Recent desktop fixes make stream traces survive returning to a running chat and focus changes; consult the generated changelog before changing reconnect logic.
 
