@@ -17,6 +17,8 @@ export interface NewChatGlance {
   runningCount: number;
   needsYou: { count: number; oldestAt: number; firstLabel: string };
   usage: GlanceUsage[];
+  /** Most recently active project, for the quiet-day "Working on X?" prompt. */
+  recentProject: { id: string; name: string } | null;
 }
 
 const USAGE_LABELS: Record<string, string> = { anthropic: 'Claude', openai_codex: 'ChatGPT', openai: 'OpenAI', xai: 'Grok' };
@@ -94,7 +96,21 @@ export function readGlanceName(workspacePath: string): string {
   return '';
 }
 
-export function buildNewChatGlance(input: { name?: string; tasks: any[]; needsYou: any[]; usage: any[]; now?: number }): NewChatGlance {
+/** The project with the latest activity (its own update or its newest chat), or null. */
+export function buildGlanceRecentProject(projects: any[]): NewChatGlance['recentProject'] {
+  let best: { id: string; name: string; at: number } | null = null;
+  for (const project of Array.isArray(projects) ? projects : []) {
+    const id = String(project?.id || '');
+    const name = String(project?.name || '').replace(/\s+/g, ' ').trim();
+    if (!id || !name) continue;
+    const sessions = Array.isArray(project.sessions) ? project.sessions : [];
+    const at = Math.max(timeOf(project.updatedAt), ...sessions.map((s: any) => timeOf(s?.updatedAt)));
+    if (!best || at > best.at) best = { id, name: name.length > 40 ? `${name.slice(0, 39).trimEnd()}…` : name, at };
+  }
+  return best ? { id: best.id, name: best.name } : null;
+}
+
+export function buildNewChatGlance(input: { name?: string; tasks: any[]; needsYou: any[]; usage: any[]; projects?: any[]; now?: number }): NewChatGlance {
   const running = buildGlanceRunning(input.tasks, input.now);
   return {
     name: String(input.name || ''),
@@ -102,5 +118,6 @@ export function buildNewChatGlance(input: { name?: string; tasks: any[]; needsYo
     runningCount: running.count,
     needsYou: buildGlanceNeedsYou(input.needsYou),
     usage: buildGlanceUsage(input.usage),
+    recentProject: buildGlanceRecentProject(input.projects || []),
   };
 }
