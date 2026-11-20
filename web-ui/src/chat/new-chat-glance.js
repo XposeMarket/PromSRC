@@ -1,7 +1,9 @@
 // New-chat landing (F2): small P1 mark + greeting, one status card (what is
 // running, what needs you), one quiet usage line. Shared by desktop and mobile;
-// data comes from GET /api/new-chat/glance. On a quiet day the card and usage
-// line drop out and only the mark + greeting remain.
+// data comes from GET /api/new-chat/glance. On a quiet day (nothing running,
+// nothing waiting) the card is replaced by a rotating myth quote and ONE plain
+// opener line under it ("What are we working on today?", "Working on <project>?").
+// The line is text, not a button.
 import { agentLogoSrc } from './external-agent-logos.js';
 
 const TTL_MS = 30_000;
@@ -14,6 +16,34 @@ const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 const ICON_HAND = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v10M8 6v8M16 6v8M4 11v3a8 8 0 0 0 16 0V9"/></svg>';
 const ICON_CHEV = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>';
 const PROVIDER_LOGO = { anthropic: 'claude-code', openai_codex: 'codex', openai: 'codex' };
+
+// Picked once per page load so re-renders don't reshuffle; a fresh app open gets a new one.
+const QUOTES = [
+  ['From fire they shall learn many arts.', 'Aeschylus, Prometheus Bound'],
+  ['Every art that mortals have comes from Prometheus.', 'Aeschylus, Prometheus Bound'],
+  ['Fortune favors the bold.', 'Virgil, Aeneid'],
+  ['Relentless work conquers all.', 'Virgil, Georgics'],
+  ['What stands in the way becomes the way.', 'Marcus Aurelius'],
+  ['We suffer more often in imagination than in reality.', 'Seneca'],
+  ['While we wait for life, life passes.', 'Seneca'],
+  ['The beginning is the most important part of the work.', 'Plato, Republic'],
+  ['Philosophy begins in wonder.', 'Plato, Theaetetus'],
+  ['Give me a place to stand and I will move the earth.', 'Archimedes'],
+  ['Nothing is so hard that it can’t be found out by seeking.', 'Terence'],
+  ['No one steps in the same river twice.', 'Heraclitus'],
+];
+// Fixed slots so the pick is stable once data loads; project slots fall back to a generic line.
+const OPENERS = [
+  () => 'What are we working on today?',
+  () => 'What are we building?',
+  (p) => (p ? `Working on ${p}?` : 'What’s on your mind?'),
+  () => 'Where should we start?',
+  (p) => (p ? `Back to ${p}?` : 'What are we figuring out today?'),
+  (p) => (p ? `Picking ${p} back up?` : 'What’s the plan today?'),
+];
+const SEED = Math.floor(Math.random() * 1_000_000);
+const pick = (list, offset = 0) => list[(SEED + offset) % list.length];
+export function glanceOpener(projectName = '', seed = SEED) { return OPENERS[seed % OPENERS.length](String(projectName || '').trim()); }
 
 export function getNewChatGlance() { return cache; }
 
@@ -87,6 +117,14 @@ export function renderNewChatGlanceHtml(glance = cache, { now = new Date() } = {
       <span class="pm-glance-copy"><b>${needsCount} ${needsCount === 1 ? 'thing needs' : 'things need'} you</b><small>${oldest ? `Oldest waiting ${waitedFor(oldest, now.getTime())}` : esc(needs.firstLabel || '')}</small></span>
       <span class="pm-glance-chev">${ICON_CHEV}</span></button>`);
   }
+  let quiet = '';
+  if (!rows.length) {
+    const [quote, by] = pick(QUOTES);
+    // The opener waits for the first glance fetch so it doesn't swap once the project name arrives.
+    const opener = glance ? glanceOpener(g.recentProject?.name || '') : '';
+    quiet = `<blockquote class="pm-glance-quote"><span>“${esc(quote)}”</span><cite>${esc(by)}</cite></blockquote>
+    ${opener ? `<p class="pm-glance-opener">${esc(opener)}</p>` : ''}`;
+  }
   const usageLine = usage.length
     ? `<div class="pm-glance-usage">${usage.map((u) => `<span${Number(u.leftPercent) <= 10 ? ' class="pm-glance-low"' : ''}>${esc(u.label)} ${Number(u.leftPercent)}% left</span>`).join('')}</div>`
     : '';
@@ -95,7 +133,7 @@ export function renderNewChatGlanceHtml(glance = cache, { now = new Date() } = {
       <img class="pm-glance-mark" src="/static/assets/prometheus-one/p1-mark-ring.png" alt="" aria-hidden="true" draggable="false">
       <div><div class="pm-glance-greet">${esc(glanceGreeting(g.name || '', now))}</div><div class="pm-glance-date">${esc(dateLabel)}</div></div>
     </div>
-    ${rows.length ? `<div class="pm-glance-card">${rows.join('')}</div>` : ''}
+    ${rows.length ? `<div class="pm-glance-card">${rows.join('')}</div>` : quiet}
     ${usageLine}
   </div>`;
 }
@@ -105,3 +143,4 @@ export function glanceTarget(event) {
   const row = event?.target?.closest?.('[data-glance-open]');
   return row ? String(row.getAttribute('data-glance-open') || '') : '';
 }
+

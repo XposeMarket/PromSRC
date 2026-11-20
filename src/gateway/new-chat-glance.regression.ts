@@ -50,6 +50,15 @@ assert.equal(quiet.needsYou.count, 0);
 assert.equal(quiet.needsYou.oldestAt, 0);
 assert.equal(quiet.needsYou.firstLabel, '');
 assert.deepEqual(quiet.usage, []);
+assert.equal(quiet.recentProject, null);
+
+// Recent project: newest activity wins (project update or its newest chat); unnamed projects are skipped.
+const withProjects = buildNewChatGlance({ tasks: [], needsYou: [], usage: [], now, projects: [
+  { id: 'p1', name: 'Roblox Studio', updatedAt: now - 86_400_000, sessions: [{ updatedAt: now - 60_000 }] },
+  { id: 'p2', name: '  Prometheus\n', updatedAt: now - 3_600_000, sessions: [] },
+  { id: 'p3', name: '', updatedAt: now },
+] });
+assert.deepEqual(withProjects.recentProject, { id: 'p1', name: 'Roblox Studio' });
 
 // Name: onboarding "Preferred name" wins; memory-tagged "Name" bullet works; missing file is ''.
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'glance-'));

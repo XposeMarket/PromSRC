@@ -458,7 +458,9 @@ router.get('/api/new-chat/glance', async (_req, res) => {
       ]);
       usage = Array.isArray(data?.providers) ? data.providers : [];
     } catch { /* usage is optional on the landing */ }
-    const glance = buildNewChatGlance({ name: readGlanceName(getConfig().getWorkspacePath()), tasks, needsYou, usage });
+    let projects: any[] = [];
+    try { projects = require('../projects/project-store').listProjects(); } catch { /* projects are optional on the landing */ }
+    const glance = buildNewChatGlance({ name: readGlanceName(getConfig().getWorkspacePath()), tasks, needsYou, usage, projects });
     res.json({ success: true, ...glance });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err?.message || 'Failed to build the new-chat glance' });
