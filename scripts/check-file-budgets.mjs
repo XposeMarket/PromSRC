@@ -15,7 +15,10 @@
 //   4. webUi: rules 2 and 2b also apply to hand-written web UI source
 //      (web-ui/**/*.{js,mjs,cjs,jsx,ts,css,html}, minus vendored and minified
 //      files), with its own largeFiles list under the `webUi` key. Hard caps and
-//      `any` groups stay src-only.
+//      `any` groups stay src-only. This sits alongside the LF-byte ceilings in
+//      scripts/test-web-ui-architecture-guardrails.mjs (six legacy surfaces plus
+//      a 472,009-byte cap for other modules): the line rules add a 3,000-line
+//      limit for new files and the shrink ratchet.
 //
 // Usage:
 //   node scripts/check-file-budgets.mjs                 check (CI)
