@@ -1278,7 +1278,7 @@ export interface BackgroundFollowUpOptions {
 export type BackgroundFollowUpErrorCode =
   | 'invalid_request' | 'executor_unavailable' | 'not_found' | 'not_owner' | 'busy'
   | 'head_not_completed' | 'cancelled' | 'unresolved_actions' | 'custom_tools'
-  | 'workspace_unavailable' | 'context_unavailable' | 'round_limit' | 'admission_unavailable';
+  | 'scope_revoked' | 'workspace_unavailable' | 'context_unavailable' | 'round_limit' | 'admission_unavailable';
 
 export interface BackgroundFollowUpResult {
   ok: boolean;
