@@ -414,7 +414,7 @@ assert.ok(
     < pages.indexOf('selectedGateway = await probeGateway(selectedGateway, { retryTransient: true });'),
   'mobile send admission must be claimed before the awaited gateway probe',
 );
-assert.match(pages, /const sendAttemptKey = `\$\{msg\}\|\$\{files\.map/, 'duplicate-send admission must remain stable while a draft session is promoted');
+assert.match(pages, /const sendAttemptKey = `\$\{sendGatewayId\}\|\$\{msg\}\|\$\{files\.map/, 'duplicate-send admission must stay stable while a draft session is promoted on its gateway');
 assert.match(pages, /previousSendAttempt\?\.key === sendAttemptKey[\s\S]{0,100}< 8000/, 'one physical iOS send must remain suppressed through session promotion');
 assert.match(
   pages,
@@ -586,8 +586,8 @@ assert.match(pages, /function scheduleMobileRunRecovery\([\s\S]{0,260}if \(!isMo
 assert.match(pages, /const startingWasBusy = startingRun\.busy === true \|\| !!remembered/, 'recovery must detect a new run that started while an older recovery request was awaiting');
 assert.match(pages, /function _adoptMobileActiveRunState/, 'a tab observing another tab must adopt the server run identity before replay');
 assert.match(pages, /const rememberedBusyRun = _readMobileActiveRun\(busySessionId\)/, 'composer admission must honor an active run remembered by another tab');
-assert.match(pages, /const requeueRejectedAdmission = \(\) =>/, 'a duplicate-tab admission race must return the speculative prompt to the queue');
-assert.match(pages, /const queueKey = String\(clientRequestId \|\| ''\)\.trim\(\)/, 'duplicate-tab queue dedupe must use request identity rather than prompt text');
+assert.match(pages, /clearRejectedAdmission\(recoveringExistingServerTurn\)[\s\S]{0,420}await enqueueDurably\(actualSessionId\)/, 'a duplicate-tab admission race must only queue after durable acknowledgement');
+assert.match(pages, /if \(!queued\) restoreRejectedMessage\(\)/, 'an unsuccessful admission-race queue attempt must keep the draft');
 assert.match(pages, /const canonicalStreamAdopted = aiTurn && aiTurn\._pmAdmissionPending !== true/, 'a late canonical stream must protect its adopted assistant trace from 409 cleanup');
 assert.doesNotMatch(pages, /title: 'Restoring active request'/, 'duplicate-tab admission must not render a second restoring assistant bubble');
 assert.match(

@@ -1383,7 +1383,9 @@ export function createMobileChatRendererRuntime(context = {}) {
           throw abortError;
         }
         if (f.kind === 'text' && f.text != null) {
-          const r = await uploadMobileTextFile({ filename, content: String(f.text || ''), signal: options.signal });
+          const content = String(f.text || '');
+          const r = options.fetch ? await options.fetch('/api/canvas/upload', { method: 'POST', body: JSON.stringify({ filename, content }), timeoutMs: 60000, signal: options.signal })
+            : await uploadMobileTextFile({ filename, content, signal: options.signal });
           const workspacePath = r?.absPath || r?.path || '';
           f.workspacePath = workspacePath;
           f.uploadState = 'uploaded';
@@ -1392,7 +1394,8 @@ export function createMobileChatRendererRuntime(context = {}) {
         } else {
           const base64 = f.base64 || await _readMobileFileBase64(f.file);
           const mimeType = f.mimeType || 'application/octet-stream';
-          const r = await uploadMobileBinaryFile({ filename, base64, mimeType, signal: options.signal });
+          const r = options.fetch ? await options.fetch('/api/canvas/upload-binary', { method: 'POST', body: JSON.stringify({ filename, base64, mimeType }), timeoutMs: 60000, signal: options.signal })
+            : await uploadMobileBinaryFile({ filename, base64, mimeType, signal: options.signal });
           const workspacePath = r?.absPath || r?.path || '';
           f.workspacePath = workspacePath;
           f.uploadState = 'uploaded';

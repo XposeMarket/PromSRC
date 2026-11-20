@@ -1536,6 +1536,10 @@ async function startGatewayListeners(): Promise<void> {
       startupMark(`foreground recovery deferred ${firstDelayMs}ms (${recoveryQueue.length} turn(s))`);
 
     }
+    if (!shuttingDown && !draining && !skipInPreview('mobile-main-chat-queue')) {
+      try { getChatRouterModule().startMobileMainChatQueue(() => !shuttingDown && !draining); }
+      catch (error) { console.warn('[mobile-chat-queue] Startup failed:', error); }
+    }
     // Internal watches are durable, but their first scan can inspect task and
     // session state synchronously. Bind the listener first and give health and
     // restart clients a short scheduling window before starting that watcher.

@@ -117,6 +117,8 @@ import type { MainChatTurnReconciliation } from './shared';
 
 
 
+import { pauseMobileMainChatQueue } from './mobile-queue';
+
 export function registerMobileRoutes(router: Router, deps: {
   requireSafeSessionParam: RequestHandler;
   pruneMainChatStreams: () => void;
@@ -303,7 +305,10 @@ router.post('/api/mobile/commands/stop-now', (req, res) => {
       ? listActiveBackgroundIdsForSession(sessionId).filter((id) => backgroundAbort(id).ok)
       : [];
 
-    if (sessionId) stopMainChatGoalByUser(sessionId);
+    if (sessionId) {
+      pauseMobileMainChatQueue(sessionId, 'stopped');
+      stopMainChatGoalByUser(sessionId);
+    }
     if (!target) {
       if (abortedBackgroundIds.length > 0) {
         res.json({

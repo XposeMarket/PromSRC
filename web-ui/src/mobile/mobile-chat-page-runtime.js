@@ -1,3 +1,4 @@
+import { createMobileDurableQueue } from './mobile-durable-queue.js';
 import { noteMobilePendingEvent } from './mobile-ttft-state.js';
 
 import { createAdaptiveStreamScheduler } from '../features/chat/timeline/adaptive-stream-scheduler.js';
@@ -94,7 +95,6 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
       PM_CHAT_VOICE_ICON_SRC,
       PM_MOBILE_BROWSE_CACHE_TTL_MS,
       PM_MOBILE_CHAT_MESSAGE_PAGE_SIZE,
-      PM_MOBILE_MAX_QUEUED_PROMPTS,
       __pmChat,
       __pmRealtimeAgent,
       __pmVoice,
@@ -360,6 +360,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
       mobileChatRendererRuntime,
       mobileChatRuntimeAdapter,
       mobileGatewayFetch,
+      pinMobileGatewayFetch,
       mobileSourceState,
       mobileStreamRenderScheduler,
       mobileTimelineController,
@@ -721,7 +722,10 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
     <button type="button" class="pm-scroll-latest" id="pm-scroll-latest" hidden aria-label="Jump to latest message">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 9.5 12 15l5.5-5.5" /></svg>
     </button>
-    <div class="pm-mobile-queued-prompts" id="pm-mobile-queued-prompts" hidden></div>
+    <div class="pm-mobile-queued-prompts" id="pm-mobile-queue-stack" hidden>
+      <div id="pm-mobile-durable-queue" hidden></div>
+      <div id="pm-mobile-queued-prompts" hidden></div>
+    </div>
     <div class="pm-tool-progress-dock" id="pm-tool-progress-dock" hidden aria-live="polite"></div>
     <div class="pm-mobile-runtime-pills" id="pm-mobile-runtime-pills">
       <div class="pm-main-plan-dock" id="pm-main-plan-dock" hidden></div>
@@ -3352,18 +3356,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
           if (!isCurrentRecoveryTarget()) return;
           finalizeMobileLiveAiTurn(localAiTurn);
           delete __pmChat.mobileRecoveryUncertainSince[requestedSession];
-          const queue = _getMobileQueuedPrompts(requestedSession);
-          if (queue.length) {
-            const next = queue.shift();
-            _renderMobileQueuedPromptsPanel(requestedSession);
-            setTimeout(() => window.__pmMobileSendMessage?.(next.message, {
-              fromQueue: true,
-              attachments: Array.isArray(next.files) ? next.files : [],
-              excludedSkillIds: Array.isArray(next.excludedSkillIds) ? next.excludedSkillIds : [],
-              selectedSkillIds: Array.isArray(next.selectedSkillIds) ? next.selectedSkillIds : [],
-              selectedSkillRefs: Array.isArray(next.selectedSkillRefs) ? next.selectedSkillRefs : [],
-            }), 0);
-          }
+          void drainLocalMobileQueue(requestedSession);
           return;
         }
       }
@@ -3428,18 +3421,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
       }
       delete __pmChat.mobileRecoveryUncertainSince[requestedSession];
       setBusy(false);
-      const queue = _getMobileQueuedPrompts(requestedSession);
-      if (queue.length) {
-        const next = queue.shift();
-        _renderMobileQueuedPromptsPanel(requestedSession);
-        setTimeout(() => window.__pmMobileSendMessage?.(next.message, {
-          fromQueue: true,
-          attachments: Array.isArray(next.files) ? next.files : [],
-          excludedSkillIds: Array.isArray(next.excludedSkillIds) ? next.excludedSkillIds : [],
-          selectedSkillIds: Array.isArray(next.selectedSkillIds) ? next.selectedSkillIds : [],
-          selectedSkillRefs: Array.isArray(next.selectedSkillRefs) ? next.selectedSkillRefs : [],
-        }), 0);
-      }
+      void drainLocalMobileQueue(requestedSession);
     } catch (err) {
       const rememberedRun = _readMobileActiveRun(requestedSession);
       // A planned restart marks the run restart-suspended, not disconnected, so
@@ -3561,6 +3543,17 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
     if (!blocks.length) return `${msg}${uploadNote}`;
     return `${msg || 'Please review the attached file(s).'}\n\n[Attached files]\n${blocks.join('\n\n')}${uploadNote}`;
   }
+
+  const localQueueDrains = new Set();
+  const durableQueue = createMobileDurableQueue({
+    panel: page.querySelector('#pm-mobile-durable-queue'),
+    target: () => requestedSession === MOBILE_CHAT_SESSION_ID || voiceRoomTranscript ? null : {
+      sessionId: requestedSession, gatewayId: currentChatGateway()?.gatewayId,
+    },
+    pinFetch: pinMobileGatewayFetch, report: pmToast, escape: escapeHtml,
+    runtimeId: () => _readMobileActiveRun(requestedSession)?.runtimeId,
+    upload: (files, fetch) => _uploadMobileChatAttachments(files, { fetch }),
+  });
 
   function renderThreadNow() {
     _flushThreadRender(threadEl, body, requestedSession);
@@ -3747,7 +3740,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
       const previousSpace = Math.max(0, Number.parseFloat(body.style.getPropertyValue('--pm-chat-composer-space')) || 170);
       const composerRect = form.getBoundingClientRect?.();
       const height = Math.ceil(composerRect?.height || 0);
-      const queuedPanel = page?.querySelector?.('#pm-mobile-queued-prompts');
+      const queuedPanel = page?.querySelector?.('#pm-mobile-queue-stack');
       const queuedHeight = queuedPanel && !queuedPanel.hidden
         ? Math.ceil(queuedPanel.getBoundingClientRect?.().height || 0)
         : 0;
@@ -3854,7 +3847,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
       updateChatComposerSpace();
     })
     : null;
-  [form, connectionStatus, toolProgressDock, mainPlanDock, backgroundSpawnDock, goalStrip, page?.querySelector?.('#pm-mobile-queued-prompts')]
+  [form, connectionStatus, toolProgressDock, mainPlanDock, backgroundSpawnDock, goalStrip, page?.querySelector?.('#pm-mobile-queue-stack')]
     .filter(Boolean)
     .forEach((surface) => chatSurfaceResizeObserver?.observe(surface));
 
@@ -7362,8 +7355,33 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     }
   }
 
+  async function drainLocalMobileQueue(sid) {
+    const gatewayId = currentChatGateway()?.gatewayId;
+    if (!page.isConnected || requestedSession !== sid || !gatewayId || localQueueDrains.has(sid)) return;
+    const queue = _getMobileQueuedPrompts(sid);
+    const row = queue[0];
+    if (!row || row._localAttemptUncertain) return;
+    localQueueDrains.add(sid);
+    try {
+      await sendMessage(row.message, { fromQueue: true, queueSessionId: sid, queueGatewayId: gatewayId,
+        attachments: row.files || [], excludedSkillIds: row.excludedSkillIds || [],
+        selectedSkillIds: row.selectedSkillIds || [], selectedSkillRefs: row.selectedSkillRefs || [],
+        onQueueAccepted: () => {
+          const index = queue.indexOf(row);
+          if (index >= 0) queue.splice(index, 1);
+          if (requestedSession === sid && page.isConnected) _renderMobileQueuedPromptsPanel(sid);
+        },
+        onQueueUncertain: () => { row._localAttemptUncertain = true; },
+      });
+    } finally { localQueueDrains.delete(sid); }
+  }
+
   async function sendMessage(text, options = {}) {
-    const busySessionId = String(__pmChat.activeSessionId || requestedSession || MOBILE_CHAT_SESSION_ID);
+    const busySessionId = String(requestedSession || MOBILE_CHAT_SESSION_ID);
+    const sendGatewayId = currentChatGateway()?.gatewayId;
+    const stillInChat = () => page.isConnected && busySessionId === requestedSession
+      && currentChatGateway()?.gatewayId === sendGatewayId && window.__pmMobileActiveGatewayId === sendGatewayId;
+    if (options.queueSessionId && (options.queueSessionId !== busySessionId || options.queueGatewayId !== sendGatewayId || !stillInChat())) return;
     const msg = String(text || '').trim();
     const stagedVoiceImages = (
       !Array.isArray(options.attachments)
@@ -7379,6 +7397,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
           sizeLabel: '',
         })).filter((img) => img.dataUrl && img.base64)
       : [];
+    const composerAttachments = getPendingAttachments().slice();
     const files = Array.isArray(options.attachments)
       ? options.attachments.slice()
       : getPendingAttachments().slice().concat(stagedVoiceImages);
@@ -7389,9 +7408,9 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     // Exclude the session id: the first send promotes `mobile_default` to a
     // durable id while a delayed iOS click from the same physical tap can
     // still be pending. A session-qualified key lets that duplicate through.
-    const sendAttemptKey = `${msg}|${files.map((file) => `${String(file?.name || '').trim().toLowerCase()}:${String(file?.size || file?.bytes || '').trim()}`).join(',')}`;
+    const sendAttemptKey = `${sendGatewayId}|${msg}|${files.map((file) => `${String(file?.name || '').trim().toLowerCase()}:${String(file?.size || file?.bytes || '').trim()}`).join(',')}`;
     const previousSendAttempt = __pmChat.lastMobileSendAttempt;
-    if (previousSendAttempt?.key === sendAttemptKey && Date.now() - Number(previousSendAttempt.at || 0) < 8000) return;
+    if (!options.fromQueue && previousSendAttempt?.key === sendAttemptKey && Date.now() - Number(previousSendAttempt.at || 0) < 8000) return;
     __pmChat.lastMobileSendAttempt = { key: sendAttemptKey, at: Date.now() };
     let selectedGateway = currentChatGateway();
     if (!selectedGateway) {
@@ -7412,7 +7431,9 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     } catch {
       selectedGateway = getGateway(selectedGateway.gatewayId) || selectedGateway;
     }
+    if (!stillInChat()) return;
     if (selectedGateway.status !== MOBILE_GATEWAY_STATUS.ONLINE) {
+      __pmChat.lastMobileSendAttempt = null;
       pmToast(`${selectedGateway.name} is ${selectedGateway.status}. Sending is blocked until it reconnects or is repaired.`, 'error');
       return;
     }
@@ -7453,30 +7474,40 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
         scheduleMobileRunRecovery(0, { force: true, fullRefresh: false });
       }
     }
-    if (locallyBusy) {
-      const queue = _getMobileQueuedPrompts(busySessionId);
-      if (queue.length >= PM_MOBILE_MAX_QUEUED_PROMPTS) {
-        pmToast(`Queue full (${PM_MOBILE_MAX_QUEUED_PROMPTS}). Wait for Prometheus to finish.`, 'warn');
-        return;
+    if (!stillInChat()) return;
+    const enqueueDurably = async (sid) => {
+      const draftUnchanged = () => stillInChat() && (options.skipUserBubble || options.fromQueue
+        || (_pmGetComposerValue(input).trim() === msg && (Array.isArray(options.attachments)
+          || (getPendingAttachments().length === composerAttachments.length
+            && getPendingAttachments().every((file, index) => file === composerAttachments[index])))));
+      try {
+        const receipt = await durableQueue.enqueue({ sessionId: sid, gatewayId: sendGatewayId }, msg, files,
+          { excludedSkillIds, selectedSkillIds }, draftUnchanged);
+        if (draftUnchanged()) {
+          if (!Array.isArray(options.attachments)) { __pmChat.attachments[sid] = []; renderPendingAttachments(); }
+          if (!options.skipUserBubble && !options.fromQueue) resetComposerInput();
+          _pmClearActiveSlashCommand(page, input, { focus: false });
+        }
+        __pmChat.lastMobileSendAttempt = null;
+        pmToast('Queued on the gateway. You can close the app.', 'success');
+        if (!mobileBusyComposerModeLoaded) {
+          mobileBusyComposerModeLoaded = true;
+          await Promise.resolve().then(() => loadBusyComposerModeFromServer(pinMobileGatewayFetch(sendGatewayId))).catch(() => {});
+        }
+        if (stillInChat() && shouldAutoSteerBusyTurn({ mode: getCachedBusyComposerMode(), isQueuedReplay: false, sessionBusy: locallyBusy })) {
+          await durableQueue.act('steer', receipt.id);
+        }
+        return true;
+      } catch (error) {
+        __pmChat.lastMobileSendAttempt = null;
+        pmToast(error?.message || 'Could not confirm the queue. Keep your draft and retry.', 'warn');
+        return false;
       }
-      queue.push(_makeMobileQueuedPrompt(msg || 'Attached file(s)', files, { excludedSkillIds, selectedSkillIds, selectedSkillRefs }));
-      if (!Array.isArray(options.attachments)) {
-        __pmChat.attachments[busySessionId] = [];
-        renderPendingAttachments();
-      }
-      if (!options.skipUserBubble) resetComposerInput();
-      _pmClearActiveSlashCommand(page, input, { focus: false });
-      _renderMobileQueuedPromptsPanel(busySessionId);
-      pmToast(`Queued prompt #${queue.length}. It will run automatically next.`, 'success');
-      // Busy composer mode 'steer': steer the item just queued. On failure it stays queued.
-      if (!mobileBusyComposerModeLoaded) {
-        mobileBusyComposerModeLoaded = true;
-        await loadBusyComposerModeFromServer((url) => mobileGatewayFetch(url)).catch(() => {});
-      }
-      if (shouldAutoSteerBusyTurn({ mode: getCachedBusyComposerMode(), isQueuedReplay: false, sessionBusy: true })
-        && typeof window.__pmSteerMobileQueuedPrompt === 'function') {
-        await window.__pmSteerMobileQueuedPrompt(busySessionId, queue.length - 1);
-      }
+    };
+    const retryingQueueReceipt = !fromQueue && await durableQueue.matchesRetry({ gatewayId: sendGatewayId, sessionId: busySessionId }, msg, files, { excludedSkillIds, selectedSkillIds }).catch(() => false);
+    if (!stillInChat()) return;
+    if (locallyBusy || retryingQueueReceipt) {
+      await enqueueDurably(busySessionId);
       return;
     }
 
@@ -7678,6 +7709,8 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     let stoppedByUser = false;
     let turnFinished = false;
     let recoveringExistingServerTurn = false;
+    let sendFailed = false;
+    let backlogRejected = false;
 
     const finishAiTurn = () => {
       if (turnFinished) return;
@@ -7760,25 +7793,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       setBusy(false, actualSessionId);
     };
 
-    const runNextQueuedMobilePrompt = () => {
-      const queue = _getMobileQueuedPrompts(actualSessionId);
-      if (!queue.length) return;
-      const next = queue.shift();
-      _renderMobileQueuedPromptsPanel(actualSessionId);
-      pmToast(queue.length ? `Running queued prompt (${queue.length} remaining).` : 'Running queued prompt.', 'info');
-      setTimeout(() => {
-        sendMessage(next.message, { fromQueue: true, attachments: Array.isArray(next.files) ? next.files : [], excludedSkillIds: Array.isArray(next.excludedSkillIds) ? next.excludedSkillIds : [], selectedSkillIds: Array.isArray(next.selectedSkillIds) ? next.selectedSkillIds : [], selectedSkillRefs: Array.isArray(next.selectedSkillRefs) ? next.selectedSkillRefs : [] });
-      }, 0);
-    };
-
-    const requeueRejectedAdmission = () => {
-      const queue = _getMobileQueuedPrompts(actualSessionId);
-      const queueKey = String(clientRequestId || '').trim();
-      if (!queue.some((item) => String(item?._pmRecoveryQueueKey || '') === queueKey)) {
-        const queued = _makeMobileQueuedPrompt(msg || 'Attached file(s)', files, { excludedSkillIds, selectedSkillIds, selectedSkillRefs });
-        queued._pmRecoveryQueueKey = queueKey;
-        queue.unshift(queued);
-      }
+    const clearRejectedAdmission = (reconnecting) => {
       const removeTurn = (turn) => {
         const index = activeThread.indexOf(turn);
         if (index >= 0) activeThread.splice(index, 1);
@@ -7800,7 +7815,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       }
       const run = __pmChat.activeRuns?.[actualSessionId];
       if (run && String(run.clientRequestId || '').trim() === clientRequestId) {
-        __pmChat.activeRuns[actualSessionId] = { ...run, busy: true, abort: null, clientRequestId: '' };
+        __pmChat.activeRuns[actualSessionId] = { ...run, busy: reconnecting, abort: null, clientRequestId: '' };
       }
       _renderMobileQueuedPromptsPanel(actualSessionId);
       renderThreadNow();
@@ -7808,7 +7823,12 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
 
     let requestAccepted = false;
     const restoreRejectedMessage = () => {
-      if (requestAccepted || fromQueue || !msg) return;
+      if (requestAccepted || fromQueue) return;
+      if (!options.attachments && !__pmChat.attachments[actualSessionId]?.length && files.length) {
+        __pmChat.attachments[actualSessionId] = files;
+        if (page.isConnected && requestedSession === actualSessionId) renderPendingAttachments();
+      }
+      if (!msg) return;
       const key = draftKeyFor(actualSessionId);
       if (readComposerDraft(key)) return;
       saveComposerDraft(key, msg);
@@ -7818,6 +7838,12 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       _pmUpdateComposerRichPreview(page, input);
       updateComposerSubmitState();
     };
+    if (!page.isConnected || requestedSession !== actualSessionId || currentChatGateway()?.gatewayId !== sendGatewayId || window.__pmMobileActiveGatewayId !== sendGatewayId) {
+      clearRejectedAdmission(false);
+      restoreRejectedMessage();
+      setBusy(false, actualSessionId);
+      return;
+    }
     const stream = streamChat({
       message: messageForApi,
       sessionId: actualSessionId,
@@ -7828,7 +7854,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       selectedSkillIds: selectedSkillIds.length ? selectedSkillIds : undefined,
       agent: mobileAgentFieldForSend(actualSessionId),
     }, {
-      onAccepted: () => { requestAccepted = true; },
+      onAccepted: () => { requestAccepted = true; options.onQueueAccepted?.(); },
       onEvent: (evt) => {
         hideReconnectingStatus();
         noteMobileLiveStreamActivity(actualSessionId);
@@ -7839,6 +7865,8 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       },
       onError: (err) => {
         if (stoppedByUser || err?.name === 'AbortError') return;
+        sendFailed = true;
+        if (err?.mobileStreamDisconnected && !requestAccepted) options.onQueueUncertain?.();
         // A 409 is queued behind the server's already-active turn below, so
         // restoring it as a draft would offer the same message twice.
         if (err?.chatPresentation?.key !== 'session-turn-active') restoreRejectedMessage();
@@ -7870,17 +7898,20 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
           scheduleMobileRunRecovery(plannedRestart ? 250 : (err?.mobileStreamStalled ? 0 : 2500), { force: true });
         } else {
           const sourcePresentation = err?.chatPresentation || presentChatError(err);
-          if (sourcePresentation?.key === 'session-turn-active') {
-            recoveringExistingServerTurn = true;
-            const presentation = {
-              ...sourcePresentation,
-              severity: 'info',
-              title: 'Active request found',
-              summary: 'Prometheus is already working in this chat. Your message was queued behind it while its live tool stream reconnects.',
-            };
-            requeueRejectedAdmission();
-            setChatConnectionStatus(true, 'Reconnecting to active request');
-            pmToast(presentation);
+          if (sourcePresentation?.key === 'session-turn-active' || err?.code === 'MOBILE_CHAT_QUEUE_PENDING') {
+            backlogRejected = true;
+            recoveringExistingServerTurn = sourcePresentation?.key === 'session-turn-active';
+            clearRejectedAdmission(recoveringExistingServerTurn);
+            if (!fromQueue) {
+              restoreRejectedMessage();
+              void (async () => {
+                if (!stillInChat()) return;
+                const queued = await enqueueDurably(actualSessionId);
+                if (!queued) restoreRejectedMessage();
+              })();
+            }
+            if (recoveringExistingServerTurn) setChatConnectionStatus(true, 'Reconnecting to active request');
+            else setBusy(false, actualSessionId);
           } else {
             const presentation = _recordMobileChatError(targetAiTurn, err);
             _coalesceMobileChatError(activeThread, targetAiTurn, presentation);
@@ -7905,8 +7936,9 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
           scheduleMobileRunRecovery(2500, { force: true });
           return;
         }
+        if (backlogRejected) return;
         finishAiTurn();
-        if (!stoppedByUser) runNextQueuedMobilePrompt();
+        if (requestAccepted && !stoppedByUser && !sendFailed) void drainLocalMobileQueue(actualSessionId);
       },
     });
     let stopSent = false;
@@ -8399,6 +8431,12 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
   window.addEventListener('pagehide', onAppHide, { capture: true });
   document.addEventListener('visibilitychange', onAppHideVisibility, { capture: true });
 
+  const refreshDurableQueue = () => { if (!document.hidden && page.isConnected) void durableQueue.refresh(); };
+  const durableQueuePoll = setInterval(refreshDurableQueue, 3000);
+  refreshDurableQueue();
+  document.addEventListener('visibilitychange', refreshDurableQueue);
+  window.addEventListener('pageshow', refreshDurableQueue);
+  wsEventBus?.on?.('ws:open', refreshDurableQueue);
   window.addEventListener('focus', runRecoveryOnReturn);
   window.addEventListener('pageshow', runRecoveryOnReturn);
   document.addEventListener('visibilitychange', runRecoveryOnVisibility);
@@ -8511,6 +8549,11 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       connectionStatusSuccessTimer = null;
     }
 
+    clearInterval(durableQueuePoll);
+    durableQueue.dispose();
+    document.removeEventListener('visibilitychange', refreshDurableQueue);
+    window.removeEventListener('pageshow', refreshDurableQueue);
+    wsEventBus?.off?.('ws:open', refreshDurableQueue);
     document.removeEventListener('visibilitychange', runRecoveryOnVisibility);
     wsEventBus?.off?.('session_stream_snapshot', onSessionStreamSnapshot);
     wsEventBus?.off?.('session_activity', onSessionActivity);

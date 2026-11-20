@@ -54,7 +54,7 @@ import {
   loadTeamRuns, loadTeamChat, postTeamChat, loadTeamRoomState, streamTeamChat, loadTeamChatStreamReplay,
   createVoiceInterruptionEvent, streamVoiceAgentInputMobile,
   getDeviceToken, setDeviceToken, clearDeviceToken,
-  mobileGatewayFetch, mobileGatewayTextFetch, buildMobileGatewayWsUrl,
+  mobileGatewayFetch, pinMobileGatewayFetch, mobileGatewayTextFetch, buildMobileGatewayWsUrl,
   loadMobileChatResources, loadMobileBrowserHistory, saveMobileCurrentBrowserPage, attachMobileResource, detachMobileResource,
   loadTeamWorkspace, loadTeamWorkspaceFile, loadMemoryGraph,
   loadBgTasks, loadBgTaskDetail, loadBgTaskEvidence, sendBgTaskMessage, runBgTaskAction, loadVoiceStatus,
@@ -3055,11 +3055,13 @@ function _renderMobileQueuedPromptsPanel(sessionId = '') {
   const queue = _getMobileQueuedPrompts(sid);
   if (!queue.length) {
     panel.hidden = true;
+    if (panel.parentElement?.id === 'pm-mobile-queue-stack') panel.parentElement.hidden = panel.parentElement.querySelector('#pm-mobile-durable-queue')?.hidden !== false;
     panel.innerHTML = '';
     try { window.__pmMobileQueuedPromptsChanged?.(); } catch {}
     return;
   }
   panel.hidden = false;
+  if (panel.parentElement?.id === 'pm-mobile-queue-stack') panel.parentElement.hidden = false;
   // Stream events re-render this panel constantly. Rebuilding identical markup wiped the
   // open Steer/Delete popover under the user's thumb, so skip no-op rebuilds and keep the
   // open menu across real ones.
@@ -11127,6 +11129,7 @@ function loadMobileChatPageRenderer() {
   mobileChatRendererRuntime,
   mobileChatRuntimeAdapter,
   mobileGatewayFetch,
+  pinMobileGatewayFetch,
   mobileSourceState,
   mobileStreamRenderScheduler,
   mobileTimelineController,

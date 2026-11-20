@@ -8,6 +8,7 @@ import { mergeTurnFileTouches, type TurnFileTouch } from '../../../file-change-s
 import { listActiveBackgroundIdsForSession } from '../../../tasks/task-runner';
 import { formatBackgroundSpawnContinuity } from '../../../tasks/background-spawn-continuity';
 import { mainChatTurnCoordinator } from '../../../chat/turn-coordinator';
+import { isMobileQueueRequestId } from '../../../chat/mobile-main-chat-queue';
 import { broadcastWS, setModelBusy } from '../../../comms/broadcaster';
 import { registerLiveRuntime, finishLiveRuntime, updateLiveRuntimeCheckpoint, listLiveRuntimes, listInterruptedRuntimes, stripInheritedRecoveryMarks, markDurableRuntimeRecovered } from '../../../live-runtime-registry';
 import { retriggerDeferredMainChatRuntime } from '../../../runtime-recovery';
@@ -160,6 +161,12 @@ export function retriggerInterruptedMainChat(runtime: InterruptedMainChatRuntime
   // request after the user has moved on. Retire the ledger entry so the
   // background-completion wake stops retrying it.
   const plannedRestart = /^(gateway_restart|prom_apply_dev_changes)$/.test(String(runtime?.checkpoint?.toolName || '').trim());
+  // Delivery receipts prove admission, not that a crashed turn's side effects
+  // are replay-safe. Only an explicit restart continuation may resume it.
+  if (!plannedRestart && isMobileQueueRequestId(runtime.clientRequestId)) {
+    markDurableRuntimeRecovered(String(runtime.id), 'completed', { recovery: 'mobile_queue_replay_held' });
+    return false;
+  }
   const replayVerdict = evaluateRestartReplay(runtime, getHistory(sessionId, 80), { plannedRestart });
   if (!replayVerdict.replay) {
     console.warn(`[RuntimeRecovery] Skipped replay of ${sessionId} (old=${runtime?.id}): ${replayVerdict.reason} at ${new Date(replayVerdict.at).toISOString()}.`);
