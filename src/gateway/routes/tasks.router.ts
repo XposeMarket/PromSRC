@@ -440,6 +440,31 @@ router.get('/api/bg-tasks', (req, res) => {
   res.json({ success: true, tasks: limit ? combined.slice(0, limit) : combined });
 });
 
+// New-chat landing (F2): running work, needs-you count and plan usage in one small payload.
+router.get('/api/new-chat/glance', async (_req, res) => {
+  try {
+    const { buildNewChatGlance, readGlanceName } = require('../new-chat-glance');
+    const needsYou = collectNeedsYouItems();
+    const modelDeps = taskModelRefDeps();
+    const tasks = [...listTaskSummaries({ status: ['running'] }), ...listPlannedChatRuns(needsYou)]
+      .map((task: any) => withModelRef(task, modelDeps));
+    let usage: any[] = [];
+    try {
+      const { listCredentialedModelProviderIds } = require('../../providers/usage-awareness');
+      const { getProviderUsageLimits } = require('../../providers/provider-usage-limits');
+      const data: any = await Promise.race([
+        getProviderUsageLimits(listCredentialedModelProviderIds()),
+        new Promise((resolve) => setTimeout(() => resolve(null), 3_000)),
+      ]);
+      usage = Array.isArray(data?.providers) ? data.providers : [];
+    } catch { /* usage is optional on the landing */ }
+    const glance = buildNewChatGlance({ name: readGlanceName(getConfig().getWorkspacePath()), tasks, needsYou, usage });
+    res.json({ success: true, ...glance });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || 'Failed to build the new-chat glance' });
+  }
+});
+
 router.get('/api/bg-tasks/:id', async (req, res) => {
   if (String(req.params.id || '').startsWith('chat-plan:')) {
     const planned = getPlannedChatRunDetail(req.params.id, collectNeedsYouItems());

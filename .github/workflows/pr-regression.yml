@@ -144,6 +144,8 @@ jobs:
           npx tsx src/gateway/external-agents/scratch-folders.regression.ts
           npx tsx src/gateway/external-agents/native-tool-map.regression.ts
           npx tsx src/gateway/dots/dots.regression.ts
+      - name: Verify new-chat glance (running, needs you, usage, greeting name)
+        run: npx tsx src/gateway/new-chat-glance.regression.ts
       - name: Verify projects (instructions, notes, linked folders)
         run: |
           npx tsx src/gateway/projects/project-notes.regression.ts

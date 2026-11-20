@@ -43,6 +43,13 @@ const STYLE_DEFINITIONS = Object.freeze({
       version: 'pm-v1-2026-11-17-live-agents',
       attribute: 'data-prom-mobile-external-agents-style',
     }),
+    Object.freeze({
+      id: 'pm-mobile-new-chat-glance-style',
+      file: 'new-chat-glance.css',
+      layer: 'components',
+      version: 'pm-v1-2026-11-19-new-chat-glance',
+      attribute: 'data-prom-mobile-new-chat-glance-style',
+    }),
   ]),
   voice: Object.freeze([
     Object.freeze({

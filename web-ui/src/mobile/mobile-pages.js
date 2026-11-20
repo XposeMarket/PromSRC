@@ -9433,8 +9433,7 @@ function _formatBytes(...args) { return _mobileChatRendererInvoke('_formatBytes'
 function _normalizeMobileFile(...args) { return _mobileChatRendererInvoke('_normalizeMobileFile', args); }
 function _uploadMobileChatAttachments(...args) { return _mobileChatRendererInvoke('_uploadMobileChatAttachments', args); }
 function _buildMobileFileContextNote(...args) { return _mobileChatRendererInvoke('_buildMobileFileContextNote', args); }
-function _getMobileEmptyChatStarterCards(...args) { return _mobileChatRendererInvoke('_getMobileEmptyChatStarterCards', args); }
-function _loadMobileEmptyChatBrainCards(...args) { return _mobileChatRendererInvoke('_loadMobileEmptyChatBrainCards', args); }
+function _loadMobileNewChatGlance(...args) { return _mobileChatRendererInvoke('_loadMobileNewChatGlance', args); }
 function _commitMobileTranscriptCache(...args) { return _mobileChatRendererInvoke('_commitMobileTranscriptCache', args); }
 function _findMobileVoiceWorkgroupMessage(...args) { return _mobileChatRendererInvoke('_findMobileVoiceWorkgroupMessage', args); }
 function _appendMobilePrimaryWorkerProcess(...args) { return _mobileChatRendererInvoke('_appendMobilePrimaryWorkerProcess', args); }
@@ -10917,7 +10916,6 @@ function loadMobileChatPageRenderer() {
   _flushThreadRender,
   _formatBytes,
   _generateMobileSideChatId,
-  _getMobileEmptyChatStarterCards,
   _getMobilePromptVariantActiveIndex,
   _getMobileQueuedPrompts,
   _getMobileSideChatLinksForParent,
@@ -10942,7 +10940,7 @@ function loadMobileChatPageRenderer() {
   _isMobileUserVisibleReasoningTraceEntry,
   _isMobileVoiceAgentWorkerHandoff,
   _loadDurableMobileVoiceRoom,
-  _loadMobileEmptyChatBrainCards,
+  _loadMobileNewChatGlance,
   _loadMobileSideChatLinks,
   _loadMobileSources,
   _loadMobileThreadCache,

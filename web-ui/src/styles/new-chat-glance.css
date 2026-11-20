@@ -1,0 +1,79 @@
+/* New-chat landing (F2), shared by desktop #chat-welcome and the mobile empty
+   chat. Theme tokens only: mobile --pm-*, desktop --line/--muted/--text/--brand;
+   each falls back to the other so every theme applies. */
+.pm-glance {
+  --gl-line: var(--pm-border, var(--line, rgba(255, 255, 255, .12)));
+  --gl-text: var(--pm-text, var(--text, #f2f2f4));
+  --gl-muted: var(--pm-muted, var(--muted, #8e8e96));
+  --gl-accent: var(--pm-orange, var(--brand, #d8ab5a));
+  width: min(100%, 520px);
+  margin: 0 auto;
+  text-align: left;
+  font-family: inherit;
+  color: var(--gl-text);
+}
+.pm-glance-head { display: flex; align-items: center; gap: 12px; padding: 0 4px; }
+.pm-glance-mark { flex: none; width: 36px; height: 36px; object-fit: contain; filter: drop-shadow(0 0 12px rgba(214, 183, 94, .16)); }
+.pm-glance-greet { font-size: 24px; font-weight: 650; letter-spacing: -.015em; line-height: 1.2; color: var(--gl-text); }
+.pm-glance-date { margin-top: 2px; font-size: 13px; color: var(--gl-muted); }
+.pm-glance-card {
+  margin-top: 20px;
+  border: 1px solid var(--gl-line);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--gl-text) 3%, transparent);
+  overflow: hidden;
+}
+.pm-glance-row {
+  all: unset;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 14px;
+  cursor: pointer;
+  color: var(--gl-text);
+  -webkit-tap-highlight-color: transparent;
+}
+.pm-glance-row + .pm-glance-row { border-top: 1px solid var(--gl-line); }
+.pm-glance-row:hover, .pm-glance-row:focus-visible { background: color-mix(in srgb, var(--gl-text) 5%, transparent); }
+.pm-glance-row:focus-visible { outline: 2px solid var(--gl-accent); outline-offset: -2px; }
+.pm-glance-lead { flex: none; width: 52px; display: flex; align-items: center; justify-content: center; }
+.pm-glance-pile { justify-content: flex-start; padding-left: 2px; }
+.pm-glance-av {
+  width: 24px; height: 24px; border-radius: 50%;
+  display: grid; place-items: center;
+  margin-left: -8px;
+  background: #f4f1ea;
+  border: 2px solid var(--pm-bg, var(--panel, #111));
+  font: 700 10px/1 system-ui, sans-serif;
+  color: #1b1b1f;
+  overflow: hidden;
+}
+.pm-glance-av:first-child { margin-left: 0; }
+.pm-glance-av img { width: 14px; height: 14px; object-fit: contain; }
+.pm-glance-av-letter { background: color-mix(in srgb, var(--gl-accent) 70%, #000); color: #fff; }
+.pm-glance-hand { color: var(--gl-accent); }
+.pm-glance-hand svg, .pm-glance-chev svg {
+  width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;
+}
+.pm-glance-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.pm-glance-copy b { font-size: 14.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pm-glance-copy small { font-size: 12.5px; color: var(--gl-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pm-glance-chev { flex: none; color: var(--gl-muted); opacity: .7; display: flex; }
+.pm-glance-chev svg { width: 16px; height: 16px; }
+.pm-glance-usage { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 12px 6px 0; font-size: 12.5px; color: var(--gl-muted); }
+.pm-glance-usage .pm-glance-low { color: var(--gl-accent); }
+
+/* Desktop: sits above the centered composer inside #chat-welcome. */
+#chat-welcome.chat-welcome-glance { display: flex; flex-direction: column; align-items: center; padding-bottom: 22px; }
+#chat-welcome.chat-welcome-glance .pm-glance { width: min(100%, 700px); }
+#chat-welcome.chat-welcome-glance .pm-glance-greet { font-size: 28px; }
+#chat-welcome.chat-welcome-glance .pm-glance-mark { width: 40px; height: 40px; }
+.chat-welcome-pane.chat-welcome-glance .pm-glance-greet { font-size: 22px; }
+
+/* Mobile: the empty-chat container already centers its content vertically. */
+.pm-mobile-empty-chat .pm-glance { width: 100%; max-width: 400px; box-sizing: border-box; padding: 0 2px; }
+.pm-glance-card { box-sizing: border-box; width: 100%; }
+.pm-app.pm-keyboard-open .pm-mobile-empty-chat .pm-glance-card,
+.pm-app.pm-keyboard-open .pm-mobile-empty-chat .pm-glance-usage { display: none; }
