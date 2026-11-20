@@ -128,8 +128,10 @@ export function createMobileMainChatQueue(file: string) {
       if (find(data, sessionId, id)?.state !== 'claimed') return;
       update((next) => {
         const item = find(next, sessionId, id)!;
-        if (outcome === 'accepted') terminal(item, 'accepted');
-        else {
+        if (outcome === 'accepted') {
+          terminal(item, 'accepted');
+          if (!forSession(next, sessionId).some(active)) delete next.pauses[receiptKey(sessionId)];
+        } else {
           item.state = outcome === 'uncertain' ? 'uncertain' : 'pending';
           if (outcome !== 'return_to_queue') next.pauses[receiptKey(sessionId)] = outcome === 'uncertain' ? 'delivery_uncertain' : (reason || 'not_started');
         }
@@ -140,8 +142,10 @@ export function createMobileMainChatQueue(file: string) {
       update((next) => {
         for (const item of next.receipts) {
           if (item.state !== 'claimed') continue;
-          if (hasDurableUserMessage(item.sessionId, item.id)) terminal(item, 'accepted');
-          else {
+          if (hasDurableUserMessage(item.sessionId, item.id)) {
+            terminal(item, 'accepted');
+            if (!forSession(next, item.sessionId).some(active)) delete next.pauses[receiptKey(item.sessionId)];
+          } else {
             item.state = 'uncertain';
             next.pauses[receiptKey(item.sessionId)] = 'delivery_uncertain';
           }

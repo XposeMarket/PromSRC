@@ -163,6 +163,19 @@ test('external pause blocks claim until resume and survives reopen', () => {
   assert.equal(q2.claim('chat_a')?.id, 'mq_x1');
 });
 
+test('accepting the final active item does not carry its Stop pause into a later queue', () => {
+  const file = fileFor('last-item-stop');
+  const q = createMobileMainChatQueue(file);
+  q.enqueue(req('mq_stop_1'));
+  q.claim('chat_a');
+  q.pause('chat_a', 'stopped');
+  q.finish('chat_a', 'mq_stop_1', 'accepted');
+  const reloaded = createMobileMainChatQueue(file);
+  assert.equal(reloaded.list('chat_a').paused, null);
+  assert.equal(reloaded.enqueue(req('mq_stop_2')), 'queued');
+  assert.equal(reloaded.claim('chat_a')?.id, 'mq_stop_2');
+});
+
 test('pause on a chat with nothing active is a no-op and writes nothing', () => {
   const file = fileFor('pause-empty');
   const q = createMobileMainChatQueue(file);

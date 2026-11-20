@@ -10066,6 +10066,7 @@ function _pmRemoveComposerSkillMatch(page, input, id) {
   pmSkillTriggerExcludedIds.add(key);
   if (_pmSkillTriggerExclusionKey(pmSkillTriggerSelectedId) === key) pmSkillTriggerSelectedId = '';
   _pmRenderSkillTriggerPill(page, input);
+  input?.dispatchEvent(new Event('pm-mobile-draft-skills-changed'));
   pmToast('Skill removed from this message', 'info');
 }
 
@@ -10248,6 +10249,7 @@ function _pmReplaceSkillComposerWithSelection(page, input, skill) {
   const nextCursor = state.start + replacement.length;
   input.setSelectionRange?.(nextCursor, nextCursor);
   _pmRememberSelectedComposerSkill(skill.id || skill.name || safeName, safeName);
+  input.dispatchEvent(new Event('pm-mobile-draft-skills-changed'));
   _pmHideSlashPopover(page);
   _pmRenderSkillTriggerPill(page, input);
   _pmUpdateComposerRichPreview(page, input);

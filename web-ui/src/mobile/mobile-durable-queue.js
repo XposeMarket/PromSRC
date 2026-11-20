@@ -18,12 +18,21 @@ function readRetries() {
     return Array.isArray(entries) ? entries : [];
   } catch { return []; }
 }
+function writeRetries(entries) {
+  try { localStorage.setItem(RECEIPT_KEY, JSON.stringify(entries.slice(-16))); } catch { /* storage may be disabled */ }
+}
 function saveRetry(value, id) {
-  try {
-    const entries = readRetries().filter(entry => entry?.id !== id);
-    if (value) entries.push(value);
-    localStorage.setItem(RECEIPT_KEY, JSON.stringify(entries.slice(-16)));
-  } catch { /* storage may be disabled */ }
+  const entries = readRetries().filter(entry => entry?.id !== id);
+  if (value) entries.push(value);
+  writeRetries(entries);
+}
+
+export function clearMobileQueueDraftReceipt(value) {
+  if (!value?.gatewayId || !value.sessionId) return;
+  const draftKey = JSON.stringify([value.gatewayId, value.sessionId]);
+  const entries = readRetries();
+  const retained = entries.filter(entry => entry?.key !== draftKey);
+  if (retained.length !== entries.length) writeRetries(retained);
 }
 
 const pauseText = {
@@ -93,6 +102,12 @@ export function createMobileDurableQueue({ panel, target, pinFetch, report, esca
       }
     }
   }
+  function invalidateDraft(value = current()) {
+    if (!value?.gatewayId || !value.sessionId) return;
+    const draftKey = JSON.stringify([value.gatewayId, value.sessionId]);
+    if (pending?.key === draftKey) pending.invalidated = true;
+    clearMobileQueueDraftReceipt(value);
+  }
   const matchesRetry = async (value, message, files, skills) => {
     const targetKey = JSON.stringify([value.gatewayId, value.sessionId]);
     const candidates = readRetries().filter(entry => entry?.key === targetKey);
@@ -107,7 +122,7 @@ export function createMobileDurableQueue({ panel, target, pinFetch, report, esca
     // response went missing. This is a receipt retry, not a client outbox.
     const previous = pending;
     const skillKey = JSON.stringify(skills);
-    const same = previous?.key === queueKey && previous.message === message && previous.skillKey === skillKey
+    const same = !previous?.invalidated && previous?.key === queueKey && previous.message === message && previous.skillKey === skillKey
       && previous.files.length === files.length && previous.files.every((file, i) => file === files[i]);
     if (previous?.inFlight) throw new Error('Waiting for the gateway to confirm the last queued message.');
     const attempt = same ? previous : { key: queueKey, message, files: [...files], skillKey, id: '', payload: null };
@@ -121,7 +136,7 @@ export function createMobileDurableQueue({ panel, target, pinFetch, report, esca
       if (retry?.id === attempt.id) {
         const saved = await fetch(`${queuePath}&receiptId=${encodeURIComponent(attempt.id)}`);
         if (saved?.id === attempt.id && Array.isArray(saved.items)) {
-          if (guard && !guard()) throw new Error('This message was queued in the original chat. Your new draft was not changed.');
+          if (attempt.invalidated || (guard && !guard())) throw new Error('This message was queued in the original chat. Your new draft was not changed.');
           pending = null;
           saveRetry(null, attempt.id);
           ++generation;
@@ -141,15 +156,16 @@ export function createMobileDurableQueue({ panel, target, pinFetch, report, esca
           attachments: results.map((item, i) => ({ name: item.name, path: item.relPath, mimeType: item.mimeType || files[i]?.mimeType || '', kind: files[i]?.kind || '' })),
         };
       }
-      if (guard && !guard()) throw new Error('The draft changed or you left this chat. Nothing new was queued.');
+      if (attempt.invalidated || (guard && !guard())) throw new Error('The draft changed or you left this chat. Nothing new was queued.');
       // Keep only an opaque lookup ID and draft fingerprint across reloads, never payload or media.
       saveRetry({ key: queueKey, id: attempt.id, fingerprint }, attempt.id);
       const receipt = await fetch(ROUTE, { method: 'POST', body: JSON.stringify(attempt.payload) });
       if (receipt?.id !== attempt.id || !Array.isArray(receipt.items)) throw new Error('The gateway did not confirm this message. Retry the same draft.');
       pending = null;
-      saveRetry(null, attempt.id);
       ++generation;
       adopt({ ...value, key: queueKey }, receipt);
+      if (attempt.invalidated || (guard && !guard())) throw new Error('This message was queued in the original chat. Your new draft was not changed.');
+      saveRetry(null, attempt.id);
       return receipt;
     } catch (error) {
       if (error?.status === 404 || error?.status === 405) throw new Error('This chat or gateway does not support durable queues. Your draft was not queued.');
@@ -183,5 +199,5 @@ export function createMobileDurableQueue({ panel, target, pinFetch, report, esca
     if (message === null) return;
     void act(action, row.id, message);
   });
-  return { enqueue, refresh, act, matchesRetry, dispose() { disposed = true; ++generation; } };
+  return { enqueue, refresh, act, matchesRetry, invalidateDraft, dispose() { disposed = true; ++generation; } };
 }

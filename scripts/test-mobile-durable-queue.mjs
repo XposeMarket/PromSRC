@@ -44,7 +44,7 @@ const app = express();
 app.use(express.json());
 registerMobileRoutes(app, { requireSafeSessionParam: (_req, _res, next) => next(),
   pruneMainChatStreams: () => {}, reconcileMainChatTurn: () => ({ active: false }), storageAwareStatus: () => 500 });
-app.get('/fixture', (_req, res) => res.type('html').send(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/fixture.css"></head><body class="pm-mobile-active"><p>Mobile chat queue fixture</p><div id="queue" class="pm-mobile-queued-prompts" hidden></div><script type="module">
+app.get('/fixture', (_req, res) => res.type('html').send(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/fixture.css"></head><body class="pm-mobile-active"><p>Mobile chat queue fixture</p><textarea id="draft" aria-label="Draft"></textarea><div id="queue" class="pm-mobile-queued-prompts" hidden></div><script type="module">
 import { createMobileDurableQueue } from '/client.js';
 window.sessionId = '${sid}';
 const pinFetch = () => async (path, init) => {
@@ -59,6 +59,12 @@ const pinFetch = () => async (path, init) => {
 };
 window.queue = createMobileDurableQueue({ panel: document.querySelector('#queue'), target: () => ({gatewayId:'local-test',sessionId:window.sessionId}), pinFetch,
   report: console.warn, escape:(text)=>{const s=document.createElement('span');s.textContent=text;return s.innerHTML;}, runtimeId: () => '', upload: async () => [] });
+const draft = document.querySelector('#draft');
+draft.value = localStorage.getItem('fixture-draft') || '';
+draft.addEventListener('input', () => {
+  window.queue.invalidateDraft({ gatewayId: 'local-test', sessionId: window.sessionId });
+  localStorage.setItem('fixture-draft', draft.value);
+});
 await window.queue.refresh();
 window.fixtureReady=true;
 </script></body></html>`));
@@ -187,9 +193,22 @@ try {
   assert.equal(changed.items[0].message, 'Detect changed file');
   assert.equal((await action('cancel', { id: changed.items[0].id })).status, 200);
   assert.deepEqual(await otherState(), { paused: null, items: [] });
+  await page.evaluate(id => { window.sessionId = id; }, other);
+  await page.getByRole('textbox', { name: 'Draft' }).fill('Same text, separate sends');
+  const sendDraft = () => page.evaluate(() => window.queue.enqueue({ gatewayId: 'local-test', sessionId: window.sessionId }, document.querySelector('#draft').value, [], {}));
+  await page.evaluate(() => { window.dropNextReceipt = true; });
+  await assert.rejects(sendDraft, /lost the acknowledged response/);
+  await awaitState(state => state.items.length === 0);
+  const earlierId = messages.at(-1).id;
+  await page.getByRole('textbox', { name: 'Draft' }).fill('');
+  await page.getByRole('textbox', { name: 'Draft' }).fill('Same text, separate sends');
+  const laterId = (await sendDraft()).id;
+  assert.notEqual(laterId, earlierId, 'a discarded draft must not reuse an old receipt');
+  await awaitState(state => state.items.length === 0);
+  assert.deepEqual(messages.filter(row => row.text === 'Same text, separate sends').map(row => row.id), [earlierId, laterId]);
   setDeviceEnabled(device.id, false);
   assert.equal((await requestQueue(`?sessionId=${sid}`)).status, 401);
-  console.log('Mobile Chromium fixture passed: leave/return, close all client state, FIFO while closed, fresh reopen, lost response/reload, desktop Stop route, held-queue FIFO, unavailable model/edit/resume, immutable image and text refs, and revoked device.');
+  console.log('Mobile Chromium fixture passed: leave/return, close all client state, FIFO while closed, fresh reopen, lost response/reload, identical new draft, desktop Stop route, held-queue FIFO, unavailable model/edit/resume, immutable image and text refs, and revoked device.');
 } finally {
   stopMobileMainChatQueue();
   await browser?.close();

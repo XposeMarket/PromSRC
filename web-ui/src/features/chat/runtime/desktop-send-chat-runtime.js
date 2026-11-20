@@ -896,6 +896,7 @@ export function createDesktopSendChatRuntime(resolveContext = () => ({})) {
 	  let finalFrameShouldStopReader = false;
 	  let desktopStreamRecoveryPending = false;
 	  let chatRequestAccepted = false;
+	  let heldByMobileBacklog = false;
 	  let interruptedTurnSaved = false;
 	  const commitFinalAssistantTurn = async () => {
 	    if (finalAssistantTurnCommitted || !finalReply) return false;
@@ -998,9 +999,15 @@ export function createDesktopSendChatRuntime(resolveContext = () => ({})) {
       });
 
       if (!res.ok) {
-        // Live-agent refusals (409 agent_locked / agent_unavailable, 400 bad_cwd) carry a plain line.
+        // Show the gateway's specific refusal instead of a generic HTTP 409/400.
         let refusal = '';
-        if (res.status === 409 || res.status === 400) { try { const body = await res.clone().json(); if (/^(agent_|bad_cwd|imported_chat|unknown_agent)/.test(String(body?.code || ''))) refusal = String(body.error || ''); } catch {} }
+        if (res.status === 409 || res.status === 400) {
+          try {
+            const body = await res.clone().json();
+            heldByMobileBacklog = body?.code === 'MOBILE_CHAT_QUEUE_PENDING';
+            if (heldByMobileBacklog || /^(agent_|bad_cwd|imported_chat|unknown_agent)/.test(String(body?.code || ''))) refusal = String(body.error || '');
+          } catch {}
+        }
         throw new Error(refusal || `HTTP ${res.status}`);
       }
       chatRequestAccepted = true;
@@ -1850,6 +1857,7 @@ export function createDesktopSendChatRuntime(resolveContext = () => ({})) {
 
     } catch (err) {
       if (!chatRequestAccepted && !queuedTurn) restoreDesktopComposerAfterFailedSend(thisSessionId, message);
+      if (heldByMobileBacklog && queuedTurn) getSessionQueuedPrompts(thisSessionId).unshift(queuedTurn);
       try { window.pmClearTurnModelOverride?.(thisSessionId); } catch {}
       persistTurnThinkingToProcess();
       const pageLifecycleDisconnected = window._desktopPageLifecycleDisconnectedSessions?.[thisSessionId] === true;
@@ -1857,7 +1865,14 @@ export function createDesktopSendChatRuntime(resolveContext = () => ({})) {
         || turnAbortController?.signal?.aborted
         || streamState.abortRequested === true
         || /abort/i.test(String(err?.message || err || '')));
-      if (finalAssistantTurnCommitted && finalReply) {
+      if (heldByMobileBacklog) {
+        if (reuseExistingUserIndex < 0) {
+          const optimisticIndex = sessionHistoryRef.indexOf(userTurnMessage);
+          if (optimisticIndex >= 0) sessionHistoryRef.splice(optimisticIndex, 1);
+        }
+        addProcessEntry('warn', err.message);
+        if (window.activeChatSessionId === thisSessionId) showToast('Mobile queue is holding this chat', err.message, 'info', 5500);
+      } else if (finalAssistantTurnCommitted && finalReply) {
         // The answer was committed from the terminal `final` frame. A late
         // reader-close/abort error is transport noise and must not downgrade
         // the completed turn into an interruption or recovery placeholder.
@@ -1989,10 +2004,11 @@ export function createDesktopSendChatRuntime(resolveContext = () => ({})) {
     {
       const shouldPauseQueue = isFailedTurnReply(finalReply || (sessionHistoryRef[sessionHistoryRef.length - 1]?.content || ''));
       const queue = getSessionQueuedPrompts(thisSessionId);
-      let queuedPromptStarted = false;
-      if (queue.length > 0 && shouldPauseQueue) {
+      // Keep the local item for the user; do not retry against the same hold.
+      let queuedPromptStarted = heldByMobileBacklog;
+      if (!heldByMobileBacklog && queue.length > 0 && shouldPauseQueue) {
         if (isViewingThisSession) addProcessEntry('warn', 'Queue paused because the previous turn failed/blocked. Press Send to resume queued prompts.');
-      } else if (queue.length > 0) {
+      } else if (!heldByMobileBacklog && queue.length > 0) {
         const next = queue.shift();
         if (window.activeChatSessionId === thisSessionId) {
           window.queuedPrompts = queue;

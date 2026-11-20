@@ -1,4 +1,4 @@
-import { createMobileDurableQueue } from './mobile-durable-queue.js';
+import { clearMobileQueueDraftReceipt, createMobileDurableQueue } from './mobile-durable-queue.js';
 import { noteMobilePendingEvent } from './mobile-ttft-state.js';
 
 import { createAdaptiveStreamScheduler } from '../features/chat/timeline/adaptive-stream-scheduler.js';
@@ -953,6 +953,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
   let messageComposerEdit = null;
   const input    = page.querySelector('#pm-composer-input');
   const draftKeyFor = (session = requestedSession) => composerDraftKey('mobile', session, gatewayTarget?.gatewayId || '');
+  let durableQueue = null;
   if (input) input.value = readComposerDraft(draftKeyFor());
   // Protected access cards: same shared renderer as desktop. The dock stops
   // polling and wipes card inputs when this chat page leaves the DOM.
@@ -1002,6 +1003,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
     const handoff = sessionStorage.getItem('pm_mobile_prefill_chat');
     if (handoff && input) {
       sessionStorage.removeItem('pm_mobile_prefill_chat');
+      clearMobileQueueDraftReceipt({ sessionId: requestedSession, gatewayId: gatewayTarget?.gatewayId });
       input.value = handoff;
       saveComposerDraft(draftKeyFor(), handoff);
     }
@@ -1922,6 +1924,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
   let resetChatDictationComposerState = () => {};
   const resetComposerInput = () => {
     if (!input) return;
+    durableQueue?.invalidateDraft();
     input.value = '';
     input.dataset.pmLastLen = '0';
     saveComposerDraft(draftKeyFor(), '');
@@ -2110,7 +2113,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
     attachTray.querySelectorAll('[data-remove-attachment]').forEach((btn) => {
       btn.addEventListener('click', () => {
         const idx = Number(btn.getAttribute('data-remove-attachment'));
-        if (Number.isFinite(idx)) getPendingAttachments().splice(idx, 1);
+        if (Number.isFinite(idx)) { durableQueue?.invalidateDraft(); getPendingAttachments().splice(idx, 1); }
         renderPendingAttachments();
         updateComposerSubmitState();
       });
@@ -3545,7 +3548,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
   }
 
   const localQueueDrains = new Set();
-  const durableQueue = createMobileDurableQueue({
+  durableQueue = createMobileDurableQueue({
     panel: page.querySelector('#pm-mobile-durable-queue'),
     target: () => requestedSession === MOBILE_CHAT_SESSION_ID || voiceRoomTranscript ? null : {
       sessionId: requestedSession, gatewayId: currentChatGateway()?.gatewayId,
@@ -8841,8 +8844,15 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     });
   });
 
+  const onComposerDraftMutation = () => {
+    if (!messageComposerEdit) {
+      durableQueue.invalidateDraft();
+      saveComposerDraft(draftKeyFor(), input.value);
+    }
+  };
+  input?.addEventListener('pm-mobile-draft-skills-changed', onComposerDraftMutation);
   input?.addEventListener('input', () => {
-    if (!messageComposerEdit) saveComposerDraft(draftKeyFor(), input.value);
+    onComposerDraftMutation();
     resizeComposerInput();
     _pmHandleSlashInput(page, input);
     _pmRenderSkillTriggerPill(page, input);
@@ -9190,6 +9200,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     }
     try {
       const normalized = await Promise.all(files.map(_normalizeMobileFile));
+      durableQueue.invalidateDraft();
       getPendingAttachments().push(...normalized);
       renderPendingAttachments();
     } catch (err) {
@@ -9265,7 +9276,12 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
           else interim += transcript;
         }
         const spoken = `${finalTranscript}${interim}`.trim();
-        input.value = `${cycleStartValue}${cycleStartValue && spoken ? ' ' : ''}${spoken}`;
+        const nextValue = `${cycleStartValue}${cycleStartValue && spoken ? ' ' : ''}${spoken}`;
+        if (!messageComposerEdit && input.value !== nextValue) {
+          durableQueue.invalidateDraft();
+          saveComposerDraft(draftKeyFor(), nextValue);
+        }
+        input.value = nextValue;
         syncComposerAfterProgrammaticTextChange();
       };
       recognition.onerror = (event) => {
