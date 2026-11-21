@@ -46864,9 +46864,9 @@ if (typeof window !== 'undefined') {
 // ─── Cross-channel live update helpers ────────────────────────────────────────
 
 async function _wsReconnectCatchUp() {
-  // Refresh session list from server to pick up sessions from other channels
+  // Same bounded page as the periodic refresh; bare /api/sessions is every chat (~1 MB).
   try {
-    const data = await fetchJsonWithTimeout('/api/sessions', 2500);
+    const data = await fetchJsonWithTimeout('/api/sessions?scope=all&includeAutomated=1&limit=160&offset=0', 2500);
     if (data) {
       const svr = Array.isArray(data.sessions) ? data.sessions : [];
       if (svr.length > 0) {

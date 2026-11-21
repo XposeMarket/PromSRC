@@ -477,6 +477,62 @@ function saveProject(project: Project): void {
   // Written to a temp file and renamed, so a crash mid-write never leaves a half-written project file.
   writeTextAtomic(getProjectFile(project.id), JSON.stringify(project, null, 2));
   indexProjectSessions(project.id, project.sessions.map((sess) => sess.id));
+  projectMembershipFiles?.files.delete(project.id);
+}
+
+// Chat -> project membership for list views. The session list attaches it on every sidebar,
+// drawer and reconnect refresh; reading and path-confining each project file per request
+// cost ~40 ms with a dozen projects (most of a 20-chat page). Each project file is re-read
+// only when its size, mtime or file id changes, so writes from this store, another process
+// or a hand edit are all picked up on the next call. Read-only: no migration side effects.
+type ProjectMembershipFile = { stamp: string; id: string; name: string; updatedAt: number; sessionIds: string[] };
+let projectMembershipFiles: { dir: string; files: Map<string, ProjectMembershipFile> } | null = null;
+
+export function listSessionProjectMembership(): Map<string, { id: string; name: string }> {
+  const dir = getProjectsDir();
+  if (!projectMembershipFiles || projectMembershipFiles.dir !== dir) projectMembershipFiles = { dir, files: new Map() };
+  const cache = projectMembershipFiles.files;
+  let entries: fs.Dirent[] = [];
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { cache.clear(); return new Map(); }
+  const present = new Set<string>();
+  const projects: ProjectMembershipFile[] = [];
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+    const id = entry.name.slice(0, -5);
+    if (!isSafeStorageId(id)) continue;
+    let stamp: string;
+    try {
+      const st = fs.statSync(path.join(dir, entry.name), { bigint: true });
+      stamp = `${st.size}:${st.mtimeNs}:${st.ino}`;
+    } catch { continue; }
+    present.add(id);
+    let cached = cache.get(id);
+    if (!cached || cached.stamp !== stamp) {
+      // Stat before read: a write racing this read leaves a newer stamp on disk, so the
+      // next call re-reads. The read itself stays on the confined loader.
+      const project = loadProjectFromDisk(id);
+      if (!project) { cache.delete(id); continue; }
+      cached = {
+        stamp,
+        id: project.id,
+        name: String(project.name || ''),
+        updatedAt: Number(project.updatedAt) || 0,
+        sessionIds: project.sessions.map((session) => String(session?.id || '').trim()).filter(Boolean),
+      };
+      cache.set(id, cached);
+    }
+    projects.push(cached);
+  }
+  for (const id of [...cache.keys()]) if (!present.has(id)) cache.delete(id);
+  // Same precedence as listProjects(): most recently updated project wins a shared chat.
+  projects.sort((a, b) => b.updatedAt - a.updatedAt);
+  const membership = new Map<string, { id: string; name: string }>();
+  for (const project of projects) {
+    for (const sessionId of project.sessionIds) {
+      if (!membership.has(sessionId)) membership.set(sessionId, { id: project.id, name: project.name });
+    }
+  }
+  return membership;
 }
 
 function loadProjectFromDisk(id: string): Project | null {
@@ -673,6 +729,7 @@ export function deleteProject(id: string, options: DeleteProjectOptions = {}): b
   const projectFile = getProjectFile(id);
   if (fs.existsSync(projectFile)) { try { fs.unlinkSync(projectFile); } catch {} }
   indexProjectSessions(id, []);
+  projectMembershipFiles?.files.delete(id);
 
   console.log(`[ProjectStore] Deleted project ${id}`);
   return true;

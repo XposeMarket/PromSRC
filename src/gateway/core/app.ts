@@ -12,7 +12,6 @@ import { payloadContainsRecognizableSecret } from '../../security/secret-format-
 import express from 'express';
 import cors from 'cors';
 import path from 'path';
-import zlib from 'zlib';
 import fs from 'fs';
 import crypto from 'crypto';
 import { getPublicWebUiRoot, hasPublicWebUiBuild, isPublicDistributionBuild, resolvePrometheusRoot } from '../../runtime/distribution.js';
@@ -29,6 +28,10 @@ import { initVideoProjectWake } from '../video-project-wake';
 import { getConfig } from '../../config/config';
 import { triggerHookRawBodyMiddleware } from '../routes/triggers.router';
 import { staticCacheControl } from './static-cache';
+import { compressLargeJsonResponses, pickJsonResponseEncoding } from './json-response';
+
+// Kept importable from core/app for existing callers and tests.
+export { compressLargeJsonResponses, pickJsonResponseEncoding };
 
 const startedAt = Date.now();
 // Request timing is intentionally separate from the normal startup profile:
@@ -90,75 +93,6 @@ export function stampServiceWorkerSource(source: string, digest: string): string
   return source.replace(SW_BUILD_SENTINEL, `const ASSET_BUILD_ID = '${digest}';`);
 }
 
-const JSON_COMPRESSION_MIN_BYTES = 16 * 1024;
-
-export function pickJsonResponseEncoding(acceptEncoding: unknown): 'br' | 'gzip' | null {
-  const header = String(acceptEncoding || '').trim().toLowerCase();
-  if (!header) return null;
-  const q = new Map<string, number>();
-  let wildcard: number | undefined;
-  for (const part of header.split(',')) {
-    const [rawToken, ...params] = part.trim().split(';');
-    const token = rawToken.trim();
-    if (!token) continue;
-    let value = 1;
-    for (const param of params) {
-      const [key, raw] = param.split('=');
-      if (String(key || '').trim() !== 'q') continue;
-      const parsed = Number(String(raw || '').trim());
-      value = Number.isFinite(parsed) ? parsed : 1;
-    }
-    if (token === '*') wildcard = value;
-    else q.set(token, value);
-  }
-  const ok = (token: string) => {
-    const value = q.has(token) ? q.get(token)! : wildcard;
-    return value !== undefined && value > 0;
-  };
-  if (ok('br')) return 'br';
-  if (ok('gzip')) return 'gzip';
-  return null;
-}
-
-export function compressLargeJsonResponses(req: express.Request, res: express.Response, next: express.NextFunction): void {
-  const encoding = pickJsonResponseEncoding(req.headers['accept-encoding']);
-  if (!encoding || req.method === 'HEAD') { next(); return; }
-  const originalJson = res.json.bind(res);
-  res.json = ((body: any) => {
-    let text: string;
-    try { text = JSON.stringify(body); } catch { return originalJson(body); }
-    if (text === undefined || Buffer.byteLength(text) < JSON_COMPRESSION_MIN_BYTES || res.headersSent || res.getHeader('Content-Encoding')) {
-      return originalJson(body);
-    }
-    const raw = Buffer.from(text, 'utf8');
-    const done = (err: Error | null, compressed?: Buffer) => {
-      if (res.headersSent || res.writableEnded) return;
-      if (err || !compressed || compressed.length >= raw.length) {
-        if (!res.getHeader('Content-Type')) res.setHeader('Content-Type', 'application/json; charset=utf-8');
-        res.end(raw);
-        return;
-      }
-      if (!res.getHeader('Content-Type')) res.setHeader('Content-Type', 'application/json; charset=utf-8');
-      res.setHeader('Content-Encoding', encoding);
-      res.setHeader('Vary', 'Accept-Encoding');
-      res.setHeader('Content-Length', String(compressed.length));
-      res.end(compressed);
-    };
-    if (encoding === 'br') {
-      zlib.brotliCompress(raw, {
-        params: {
-          [zlib.constants.BROTLI_PARAM_QUALITY]: 4,
-          [zlib.constants.BROTLI_PARAM_SIZE_HINT]: raw.length,
-        },
-      }, done);
-    } else {
-      zlib.gzip(raw, { level: 5 }, done);
-    }
-    return res;
-  }) as any;
-  next();
-}
-
 export function createApp(): express.Application {
   const app = express();
 
@@ -201,12 +135,8 @@ export function createApp(): express.Application {
     }
     next();
   });
-  // Large JSON API responses (chat history pages reach several MB, mostly
-  // repetitive trace JSON) were sent uncompressed. Over LAN/Tailscale that is
-  // the dominant cost of opening a thread on mobile: 3.5 MB -> ~340 KB with
-  // brotli q4 in ~20 ms. Only res.json() bodies are touched, so SSE streams,
-  // static files (compressed separately in core/server.ts) and small replies
-  // keep their existing behavior. Compression runs async off the event loop.
+  // Large res.json() bodies are brotli/gzip-compressed with ETag/304 intact;
+  // SSE, static files and small replies are untouched (see core/json-response.ts).
   app.use(compressLargeJsonResponses);
 
   // Creative video compositions are a gateway-owned workspace resource. Mount
