@@ -48,8 +48,13 @@ jobs:
         id: modules
         uses: actions/cache/restore@v4
         with:
-          path: node_modules
-          key: node-modules-v1-${{ runner.os }}-${{ runner.arch }}-node22-${{ hashFiles('package-lock.json') }}
+          # Every directory npm ci writes: local file: packages (packages/claude-driver)
+          # keep their own dependencies next to them. test:ci-runner checks this list
+          # against package-lock.json.
+          path: |
+            node_modules
+            packages/*/node_modules
+          key: node-modules-v2-${{ runner.os }}-${{ runner.arch }}-node22-${{ hashFiles('package-lock.json') }}
       - name: Install dependencies without package lifecycle scripts and build node-pty
         if: steps.modules.outputs.cache-hit != 'true'
         run: |
@@ -60,7 +65,9 @@ jobs:
         # Saved before any regression runs, so test side effects never enter the cache.
         uses: actions/cache/save@v4
         with:
-          path: node_modules
+          path: |
+            node_modules
+            packages/*/node_modules
           key: ${{ steps.modules.outputs.cache-primary-key }}
       - name: Resolve Playwright version
         id: playwright

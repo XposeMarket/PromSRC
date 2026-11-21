@@ -50,6 +50,22 @@ for (const step of shardJob.steps) {
   if (!step.run || step === runnerStep) continue;
   assert.doesNotMatch(step.run, /npm run (-s )?test:|\.regression\.ts|scripts\/test-/, `regressions belong in scripts/ci/regressions.json, not workflow step "${step.name}"`);
 }
+// The dependency cache must hold every directory npm ci writes. Local file: packages keep their
+// own node_modules (packages/claude-driver/node_modules); missing one broke a cache-hit run.
+const restore = shardJob.steps.find((s) => s.id === 'modules');
+const save = shardJob.steps.find((s) => s.uses?.startsWith('actions/cache/save'));
+const cachePaths = String(restore.with.path).split('\n').map((p) => p.trim()).filter(Boolean);
+assert.deepEqual(String(save.with.path).split('\n').map((p) => p.trim()).filter(Boolean), cachePaths, 'save and restore must cover the same paths');
+const lock = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package-lock.json'), 'utf8'));
+const installDirs = new Set(['node_modules']);
+for (const key of Object.keys(lock.packages || {})) {
+  const at = key.indexOf('/node_modules/');
+  if (key && !key.startsWith('node_modules/') && at > 0) installDirs.add(key.slice(0, at + '/node_modules'.length));
+}
+const globToRegExp = (glob) => new RegExp(`^${glob.split('*').map((part) => part.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('[^/]+')}$`);
+for (const dir of installDirs) assert.ok(cachePaths.some((glob) => globToRegExp(glob).test(dir)), `dependency cache misses ${dir} (add it to the cache path list)`);
+assert.match(restore.with.key, /hashFiles\('package-lock\.json'\)/);
+
 const verify = workflow.jobs.verify;
 assert.ok(verify && !verify.name, 'job id `verify` must keep its default check name (branch protection requires "verify")');
 assert.match(String(verify.if), /always\(\)/, 'verify must run even when a shard fails (a skipped required check counts as passing)');
