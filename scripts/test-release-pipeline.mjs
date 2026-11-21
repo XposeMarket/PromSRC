@@ -22,8 +22,11 @@ for (const [job, file] of [['regression','pr-regression'],['privacy','privacy-se
   assert.equal(release.jobs[job].uses, `./.github/workflows/${file}.yml`);
   const workflow = yaml.load(fs.readFileSync(`${workflows}/${file}.yml`, 'utf8'));
   assert(workflow.on.workflow_call.inputs.ref.required);
-  const checkout = Object.values(workflow.jobs)[0].steps.find(s => s.uses?.startsWith('actions/checkout'));
-  assert(checkout.with.ref.includes('inputs.ref'));
+  // Reusable gates may have several jobs (pr-regression runs shards plus a verify gate):
+  // every job that checks out code must test the requested release ref, not the default branch.
+  const checkouts = Object.values(workflow.jobs).flatMap(j => (j.steps || []).filter(s => s.uses?.startsWith('actions/checkout')));
+  assert(checkouts.length > 0, `${file}: no checkout step`);
+  for (const checkout of checkouts) assert(checkout.with?.ref?.includes('inputs.ref'), `${file}: a checkout ignores inputs.ref`);
 }
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'prom-release-manifest-'));
 try {
