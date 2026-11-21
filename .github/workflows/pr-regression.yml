@@ -165,6 +165,7 @@ jobs:
       - name: Verify desktop multi-chat and composer contracts
         run: |
           node scripts/test-desktop-chat-layout-contract.mjs
+          node scripts/test-desktop-priority-sidebar.mjs
           node scripts/test-desktop-subagent-chat-ui.mjs
           npm run test:multi-chat-main-tab-cap
       - name: Enforce generated UI and gateway performance budgets
