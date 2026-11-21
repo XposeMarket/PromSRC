@@ -75,6 +75,10 @@ function processAlive(pid: number) {
 
 /** Passive read model. Each runtime's original process owns exactly one atomic file.
  * A draining gateway cannot overwrite another process's records or cached outcomes. */
+/** Terminal planned runs kept on disk; older ones are pruned on write. */
+const PLANNED_RUN_HISTORY_LIMIT = 500;
+const ROWS_CACHE_MAX_AGE_MS = 10_000;
+
 export class PlannedChatRunStore {
   constructor(private directory: string, private ownerPid = process.pid, private alive = processAlive) {}
   private filename(id: string) { return path.join(this.directory, `${createHash('sha256').update(id).digest('hex')}.json`); }
@@ -85,15 +89,33 @@ export class PlannedChatRunStore {
       if (row?.runtimeId === id && row.sourceKind === 'planned_chat' && row.sessionId && Array.isArray(row.runtimeProgress?.items)) return row;
     } catch { /* Missing/torn records cannot affect original chat execution. */ }
   }
+  // Parsed rows are reused while nothing changed. Every write is tmp+rename and every prune an
+  // unlink, so any change by any process moves the directory mtime; this process's own writes
+  // also bump `generation`. ROWS_CACHE_MAX_AGE_MS bounds staleness on filesystems with coarse
+  // directory timestamps. Reading all ~240 files cost ~140 ms per Tasks poll before this.
+  private rowsCache: { generation: number; dirMtimeMs: number; at: number; rows: PlannedChatRun[] } | undefined;
+  private generation = 0;
+  private invalidateRows() { this.generation += 1; }
   private rows(): PlannedChatRun[] {
+    let dirMtimeMs: number;
+    try { dirMtimeMs = fs.statSync(this.directory).mtimeMs; }
+    catch (error: any) { if (error?.code === 'ENOENT') return []; throw error; }
+    const cached = this.rowsCache;
+    if (cached && cached.generation === this.generation && cached.dirMtimeMs === dirMtimeMs && Date.now() - cached.at < ROWS_CACHE_MAX_AGE_MS) {
+      return cached.rows.slice();
+    }
+    const generation = this.generation;
+    let rows: PlannedChatRun[];
     try {
-      return fs.readdirSync(this.directory).filter(name => /^[a-f0-9]{64}\.json$/.test(name)).flatMap(name => {
+      rows = fs.readdirSync(this.directory).filter(name => /^[a-f0-9]{64}\.json$/.test(name)).flatMap(name => {
         try {
           const row = JSON.parse(fs.readFileSync(path.join(this.directory, name), 'utf8'));
           return row?.sourceKind === 'planned_chat' && row.runtimeId && row.sessionId && Array.isArray(row.runtimeProgress?.items) ? [row] : [];
         } catch { return []; }
       });
     } catch (error: any) { if (error?.code === 'ENOENT') return []; throw error; }
+    this.rowsCache = { generation, dirMtimeMs, at: Date.now(), rows };
+    return rows.slice();
   }
   // ── Async persistence. One promise chain per runtimeId serializes every read-merge-write for that run,
   // so queued activity can never overwrite newer progress/finish state.
@@ -125,13 +147,15 @@ export class PlannedChatRunStore {
     const target = this.filename(row.runtimeId);
     const tmp = `${target}.${this.ownerPid}.${randomUUID()}.tmp`;
     try { await fsp.writeFile(tmp, JSON.stringify(row)); await fsp.rename(tmp, target); }
-    finally { try { await fsp.unlink(tmp); } catch {} }
+    finally { try { await fsp.unlink(tmp); } catch {} this.invalidateRows(); }
     // Only mutations prune history; polling is read-only. Never prune a live owner.
     await this.pruneAsync();
   }
   private async pruneAsync() {
     let names: string[];
     try { names = (await fsp.readdir(this.directory)).filter(name => /^[a-f0-9]{64}\.json$/.test(name)); } catch { return; }
+    // Nothing can exceed the retained history yet; skip re-reading every record on every write.
+    if (names.length <= PLANNED_RUN_HISTORY_LIMIT) return;
     const rows: PlannedChatRun[] = [];
     for (const name of names) {
       try {
@@ -140,10 +164,11 @@ export class PlannedChatRunStore {
       } catch { /* skip torn */ }
     }
     const terminal = rows.filter(r => r.status !== 'running' || !this.alive(r.ownerPid)).sort((a, b) => b.updatedAt - a.updatedAt);
-    for (const old of terminal.slice(500)) {
+    for (const old of terminal.slice(PLANNED_RUN_HISTORY_LIMIT)) {
       const latest = await this.readAsync(old.runtimeId);
       if (latest && (latest.status !== 'running' || !this.alive(latest.ownerPid))) {
         try { await fsp.unlink(this.filename(old.runtimeId)); } catch {}
+        this.invalidateRows();
       }
     }
   }

@@ -1,5 +1,6 @@
 import { readTaskNoteEvidence, taskJournalNoteEvidence } from '../tasks/task-note-evidence';
 import { listPlannedChatRuns, getPlannedChatRunDetail } from '../tasks/planned-chat-runs';
+import { parseBgTaskListWindow, windowBgTaskList } from '../tasks/bg-task-list-window';
 import { continuePlannedChat } from '../tasks/planned-chat-resume';
 
 // src/gateway/routes/tasks.router.ts
@@ -433,11 +434,19 @@ router.get('/api/bg-tasks', (req, res) => {
   const requestedLimit = Number(req.query.limit || 0);
   const limit = Number.isFinite(requestedLimit) && requestedLimit > 0 ? Math.max(1, Math.min(500, Math.floor(requestedLimit))) : undefined;
   const compact = String(req.query.mobile || '') === '1' || String(req.query.compact || '') === '1';
-  const tasks = listTaskSummaries({ limit }).map((task: any) => projectBgTaskRow(task, compact));
-  const plannedRuns = listPlannedChatRuns(collectNeedsYouItems());
+  // ?finished=N (+ optional q) opts into the windowed list: all unfinished work plus the newest N finished
+  // rows and exact finished totals. Sort and window the raw summaries first so only shipped rows pay for
+  // projection and model-ref lookups. Stable sort over the same input order keeps the legacy row order.
+  const listWindow = parseBgTaskListWindow(req.query as Record<string, unknown>);
+  const entries = [
+    ...listTaskSummaries({ limit }).map((task: any) => ({ task, planned: false })),
+    ...listPlannedChatRuns(collectNeedsYouItems()).map((task: any) => ({ task, planned: true })),
+  ].sort((a, b) => Number(b.task.startedAt || 0) - Number(a.task.startedAt || 0));
+  const windowed = listWindow ? windowBgTaskList(entries, listWindow, (entry) => entry.task) : null;
   const modelDeps = taskModelRefDeps();
-  const combined = [...tasks, ...plannedRuns].map((task: any) => withModelRef(task, modelDeps)).sort((a: any, b: any) => Number(b.startedAt || 0) - Number(a.startedAt || 0));
-  res.json({ success: true, tasks: limit ? combined.slice(0, limit) : combined });
+  const tasks = (windowed ? windowed.items : entries)
+    .map(({ task, planned }) => withModelRef(planned ? task : projectBgTaskRow(task, compact), modelDeps));
+  res.json({ success: true, tasks: limit ? tasks.slice(0, limit) : tasks, ...(windowed ? windowed.meta : {}) });
 });
 
 // New-chat landing (F2): running work, needs-you count and plan usage in one small payload.

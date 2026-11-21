@@ -98,6 +98,17 @@ let bgtDragClickSuppressUntil = 0;
 let bgtRecentProcessRuns = [];
 let bgtCodingWorkspace = null;
 let bgtSearchQuery = '';
+// Finished history is windowed by the gateway (src/gateway/tasks/bg-task-list-window.ts):
+// every unfinished task comes back, plus the newest bgtFinishedWindow finished ones and
+// exact finished totals. Search text is sent along so it still covers all history.
+const BGT_FINISHED_PAGE = 200;
+const BGT_FINISHED_SEARCH_WINDOW = 500;
+const BGT_FINISHED_STATUSES = new Set(['complete', 'completed', 'done', 'succeeded', 'failed', 'cancelled']);
+let bgtFinishedWindow = BGT_FINISHED_PAGE;
+let bgtListMeta = null;            // finished totals from the gateway; null = older gateway (full list)
+let bgtServerQuery = '';           // search text the current list was fetched with
+let bgtSearchRefreshTimer = null;
+const bgtExpandedColumns = new Set();
 
 const BGT_HIDDEN_KEY = 'prom_hidden_tasks';
 
@@ -158,12 +169,58 @@ function updateBgtSearchUI(matchCount = null) {
 function bgtHandleSearchInput(value) {
   bgtSearchQuery = String(value || '');
   renderBgTasks();
+  bgtScheduleServerSearch();
 }
 
 function bgtClearSearch() {
   bgtSearchQuery = '';
   updateBgtSearchUI();
   renderBgTasks();
+  bgtScheduleServerSearch();
+}
+
+// Re-fetch with the search text when the gateway holds finished history that is not loaded,
+// or when the loaded list was itself a search result. Debounced so typing stays local.
+function bgtScheduleServerSearch() {
+  if (bgtSearchRefreshTimer) clearTimeout(bgtSearchRefreshTimer);
+  bgtSearchRefreshTimer = null;
+  const next = bgtSearchQuery.trim().toLowerCase();
+  if (next === bgtServerQuery) return;
+  if (!bgtServerQuery && !bgtListMeta?.hasMoreFinished) return;
+  bgtSearchRefreshTimer = setTimeout(() => {
+    bgtSearchRefreshTimer = null;
+    refreshBgTasks();
+  }, 300);
+}
+
+function bgtLoadOlderTasks(columnKey) {
+  bgtFinishedWindow = Math.min(2000, bgtFinishedWindow + BGT_FINISHED_PAGE);
+  if (columnKey) bgtExpandedColumns.add(columnKey);
+  refreshBgTasks();
+}
+
+function bgtToggleColumnMore(columnKey) {
+  if (bgtExpandedColumns.has(columnKey)) bgtExpandedColumns.delete(columnKey);
+  else bgtExpandedColumns.add(columnKey);
+  renderBgTasks();
+}
+
+// Finished rows per board column that exist on the gateway but are not loaded yet.
+function bgtUnloadedFinishedByColumn() {
+  if (!bgtListMeta?.finishedCounts || bgtServerQuery) return null;
+  const remaining = {};
+  for (const [status, count] of Object.entries(bgtListMeta.finishedCounts)) {
+    const key = bgtNormalizeStatus(status);
+    remaining[key] = (remaining[key] || 0) + (Number(count) || 0);
+  }
+  for (const task of bgtTasks) {
+    const status = String(task?.status || '').trim().toLowerCase();
+    if (!BGT_FINISHED_STATUSES.has(status)) continue;
+    const key = bgtNormalizeStatus(status);
+    remaining[key] = (remaining[key] || 0) - 1;
+  }
+  for (const key of Object.keys(remaining)) remaining[key] = Math.max(0, remaining[key]);
+  return remaining;
 }
 
 function installBgtSearch() {
@@ -488,13 +545,20 @@ function startNeedsYouLive() {
 // --- Fetch & Render ----------------------------------------------------------
 async function refreshBgTasks() {
   startNeedsYouLive();
+  const serverQuery = bgtSearchQuery.trim().toLowerCase();
+  const finishedWindow = serverQuery ? Math.max(bgtFinishedWindow, BGT_FINISHED_SEARCH_WINDOW) : bgtFinishedWindow;
+  const listUrl = `/api/bg-tasks?finished=${finishedWindow}${serverQuery ? `&q=${encodeURIComponent(serverQuery)}` : ''}`;
   const [tasksResult, threadsResult, needsYouResult] = await Promise.allSettled([
-    api('/api/bg-tasks', { timeoutMs: 8000 }),
+    api(listUrl, { timeoutMs: 8000 }),
     api('/api/thread-supervisions?includeTerminal=true&limit=100', { timeoutMs: 8000 }),
     api('/api/needs-you', { timeoutMs: 8000 }),
   ]);
   if (tasksResult.status === 'fulfilled' && tasksResult.value?.success) {
-    bgtTasks = tasksResult.value.tasks || [];
+    const value = tasksResult.value;
+    bgtTasks = value.tasks || [];
+    // Older gateways ignore ?finished and send everything without totals.
+    bgtListMeta = typeof value.finishedTotal === 'number' && value.finishedCounts ? value : null;
+    bgtServerQuery = bgtListMeta ? serverQuery : '';
   } else if (tasksResult.status === 'rejected') {
     console.error('[BGT] refreshBgTasks error:', tasksResult.reason);
   }
@@ -676,6 +740,7 @@ function renderBgTasks() {
     else if (byStatus['stalled']) byStatus['stalled'].push({ type: 'managed_thread', record });
   }
 
+  const unloadedFinished = bgtUnloadedFinishedByColumn();
   const restoreRequestCards = preserveRequestCards(board, needsYouEntries(bgtNeedsYouItems));
   board.innerHTML = '';
   // Needs You is the leftmost column whenever something is waiting on the user.
@@ -685,19 +750,24 @@ function renderBgTasks() {
     : BGT_COLUMNS;
   for (const col of orderedCols) {
     const items = byStatus[col.key];
+    const olderCount = unloadedFinished?.[col.key] || 0;
+    const columnTotal = items.length + olderCount;
+    const expanded = bgtExpandedColumns.has(col.key);
     if (items.length === 0 && (col.key === 'complete' || col.key === 'failed' || col.key === 'stalled' || col.key === 'needs_assistance' || col.key === 'cancelled')) continue;
     const colEl = document.createElement('div');
     colEl.className = 'bgt-col';
     colEl.innerHTML = `
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
         <span style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.06em;color:${col.color}">${col.label}</span>
-        <span style="font-size:10px;background:${col.bg};color:${col.color};border-radius:999px;padding:1px 8px;font-weight:700">${items.length}</span>
+        <span style="font-size:10px;background:${col.bg};color:${col.color};border-radius:999px;padding:1px 8px;font-weight:700">${columnTotal}</span>
       </div>
       <div class="bgt-col-cards" data-bgt-drop-status="${col.key}" ondragover="bgtHandleColumnDragOver(event,'${col.key}')" ondragenter="bgtHandleColumnDragEnter(event,'${col.key}')" ondragleave="bgtHandleColumnDragLeave(event,'${col.key}')" ondrop="bgtHandleColumnDrop(event,'${col.key}')" style="display:flex;flex-direction:column;gap:8px;min-height:60px;border-radius:12px;transition:outline 0.15s,background 0.15s">
         ${items.slice(0,5).map(item => bgtColumnItemHTML(item, col)).join('')}
         ${items.length > 5 ? `
-        <div id="bgt-more-${col.key}" style="display:none;">${items.slice(5).map(item => bgtColumnItemHTML(item, col)).join('')}</div>
-        <button onclick="event.stopPropagation();const m=document.getElementById('bgt-more-${col.key}');const show=m.style.display==='none';m.style.display=show?'flex':'none';m.style.flexDirection='column';m.style.gap='8px';this.textContent=show?'▲ show less':'▼ +${items.length - 5} more'" style="border:1px solid color-mix(in srgb, var(--text) 12%, transparent);background:var(--panel-2);color:var(--muted);border-radius:8px;padding:5px;font-size:11px;font-weight:600;cursor:pointer;text-align:center">▼ +${items.length - 5} more</button>` : ''}
+        <div id="bgt-more-${col.key}" style="display:${expanded ? 'flex' : 'none'};flex-direction:column;gap:8px;">${expanded ? items.slice(5).map(item => bgtColumnItemHTML(item, col)).join('') : ''}</div>
+        <button onclick="event.stopPropagation();bgtToggleColumnMore('${col.key}')" style="border:1px solid color-mix(in srgb, var(--text) 12%, transparent);background:var(--panel-2);color:var(--muted);border-radius:8px;padding:5px;font-size:11px;font-weight:600;cursor:pointer;text-align:center">${expanded ? '▲ show less' : `▼ +${items.length - 5} more`}</button>` : ''}
+        ${olderCount > 0 && (expanded || items.length <= 5) ? `
+        <button onclick="event.stopPropagation();bgtLoadOlderTasks('${col.key}')" style="border:1px dashed color-mix(in srgb, var(--text) 18%, transparent);background:transparent;color:var(--muted);border-radius:8px;padding:5px;font-size:11px;font-weight:600;cursor:pointer;text-align:center">↓ Load older (${olderCount} more on the gateway)</button>` : ''}
       </div>
     `;
     board.appendChild(colEl);
@@ -1768,6 +1838,8 @@ window.bgtHandleColumnDragOver = bgtHandleColumnDragOver;
 window.bgtHandleColumnDragEnter = bgtHandleColumnDragEnter;
 window.bgtHandleColumnDragLeave = bgtHandleColumnDragLeave;
 window.bgtHandleColumnDrop = bgtHandleColumnDrop;
+window.bgtLoadOlderTasks = bgtLoadOlderTasks;
+window.bgtToggleColumnMore = bgtToggleColumnMore;
 window.openBgtPanel = openBgtPanel;
 window.bgtSetPanelTab = bgtSetPanelTab;
 window.closeBgtPanel = closeBgtPanel;

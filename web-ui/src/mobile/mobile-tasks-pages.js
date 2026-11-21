@@ -36,6 +36,8 @@ import {
   denyMobileApproval,
   loadMobileNeedsYou,
   cancelMobileQuestion,
+  getCachedBgTasksMeta,
+  MOBILE_FINISHED_TASK_PAGE,
 } from './mobile-api.js';
 
 /* ---------------- TASKS PAGE ---------------- */
@@ -164,6 +166,12 @@ function _pmTaskStatus(status) {
   if (s === 'cancelled') return 'failed';
   if (s === 'interrupted') return 'stalled';
   return s || 'queued';
+}
+
+// Matches FINISHED_BG_TASK_STATUSES on the gateway (src/gateway/tasks/bg-task-list-window.ts).
+const PM_FINISHED_TASK_STATUSES = new Set(['complete', 'completed', 'done', 'succeeded', 'failed', 'cancelled']);
+function _pmIsFinishedStatus(status) {
+  return PM_FINISHED_TASK_STATUSES.has(String(status || '').trim().toLowerCase());
 }
 
 function _pmTaskFilter(status) {
@@ -421,6 +429,10 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
   let nyAutoOpened = false;
   const filterOf = (t) => (isNeedsYouTask(t, needsYouTaskIds(needsYouItems)) ? 'needs_you' : _pmTaskFilter(t.status));
   let visibleLimit = taskPageSize;
+  // The gateway sends every unfinished task but only the newest `finishedWindow`
+  // finished ones; listMeta carries the exact finished totals for the tab counts.
+  let finishedWindow = MOBILE_FINISHED_TASK_PAGE;
+  let listMeta = getCachedBgTasksMeta();
   let lastPaintSignature = '';
   let details = {};
   let evidence = {};
@@ -430,7 +442,18 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
 
   function paint() {
     const counts = PM_TASK_FILTERS.reduce((acc, f) => { acc[f.key] = 0; return acc; }, {});
-    for (const t of allTasks) counts[filterOf(t)] = (counts[filterOf(t)] || 0) + 1;
+    const serverFinishedCounts = listMeta?.windowed && listMeta.finishedCounts ? listMeta.finishedCounts : null;
+    for (const t of allTasks) {
+      // Finished buckets come from the gateway's totals; only a window of those rows is loaded.
+      if (serverFinishedCounts && _pmIsFinishedStatus(t.status)) continue;
+      counts[filterOf(t)] = (counts[filterOf(t)] || 0) + 1;
+    }
+    if (serverFinishedCounts) {
+      for (const [status, count] of Object.entries(serverFinishedCounts)) {
+        const key = _pmTaskFilter(status);
+        counts[key] = (counts[key] || 0) + (Number(count) || 0);
+      }
+    }
     counts.needs_you = needsYouCount(allTasks, needsYouItems);
     for (const f of PM_TASK_FILTERS) {
       const el = filterEl.querySelector(`[data-count="${f.key}"]`);
@@ -446,6 +469,11 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
     }
 
     const visibleTasks = tasks.slice(0, visibleLimit);
+    // Rows in this tab that exist on the gateway but are not loaded yet (older finished history).
+    const unloadedInTab = serverFinishedCounts && listMeta.hasMoreFinished && ['complete', 'failed'].includes(currentFilter)
+      ? Math.max(0, (counts[currentFilter] || 0) - tasks.length)
+      : 0;
+    const remainingInTab = Math.max(0, tasks.length - visibleLimit) + unloadedInTab;
     const linkedTask = expandedId && tasks.find(t => String(t.id || '') === expandedId);
     if (linkedTask && !visibleTasks.includes(linkedTask)) visibleTasks.unshift(linkedTask);
     const paintSignature = JSON.stringify({
@@ -453,6 +481,7 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
       nyExpandedId,
       filter: currentFilter,
       visibleLimit,
+      remainingInTab,
       expandedId,
       tasks: visibleTasks,
       detail: expandedId ? details[expandedId] : null,
@@ -486,8 +515,8 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
             ${!detail ? `<div class="pm-card-body">${details[id]?.error ? escapeHtml(details[id].error) : 'Loading task details...'}</div>` : _pmRenderTaskDetail(t, detail, detailEvidence, detailTab[id] || 'overview')}
           </div>` : '';
       return _pmRenderLiveCard(t, { isOpen, body });
-    }).join('') + (tasks.length > visibleLimit
-      ? `<button type="button" class="pm-btn ghost" data-pm-task-load-more style="display:block;margin:16px auto 24px;">Show more tasks (${Math.min(taskPageSize, tasks.length - visibleLimit)} of ${tasks.length - visibleLimit} remaining)</button>`
+    }).join('') + (remainingInTab > 0
+      ? `<button type="button" class="pm-btn ghost" data-pm-task-load-more style="display:block;margin:16px auto 24px;">Show more tasks (${Math.min(taskPageSize, remainingInTab)} of ${remainingInTab} remaining)</button>`
       : '');
     if (nyEntries.length) {
       listEl.insertAdjacentHTML('afterbegin', nyEntries.map(nyEntryHtml).join(''));
@@ -513,8 +542,17 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
   }
 
   function wireTaskCards() {
-    listEl.querySelector('[data-pm-task-load-more]')?.addEventListener('click', () => {
+    listEl.querySelector('[data-pm-task-load-more]')?.addEventListener('click', (event) => {
       visibleLimit += taskPageSize;
+      const loadedInTab = allTasks.filter(t => filterOf(t) === currentFilter).length;
+      if (visibleLimit > loadedInTab && listMeta?.windowed && listMeta.hasMoreFinished) {
+        // Fetch older finished history from the gateway, then paint.
+        finishedWindow = Math.min(2000, finishedWindow + Math.max(taskPageSize, MOBILE_FINISHED_TASK_PAGE));
+        const button = event.currentTarget;
+        if (button) { button.disabled = true; button.textContent = 'Loading older tasks...'; }
+        load({ force: true }).catch(() => {});
+        return;
+      }
       paint();
     });
     listEl.querySelectorAll('.pm-task-card').forEach(card => {
@@ -583,6 +621,10 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
       evidence[id] = ev || [];
     } catch (err) {
       details[id] = { task: null, error: err?.message || 'Failed to load task detail' };
+    }
+    if (id === expandedId && details[id]?.task && !allTasks.some(t => String(t.id || '') === id)) {
+      applyTaskList(allTasks);
+      return;
     }
     paint();
   }
@@ -669,6 +711,10 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
 
   function applyTaskList(nextTasks) {
     allTasks = Array.isArray(nextTasks) ? nextTasks : [];
+    // A deep-linked task can be older than the finished window the gateway sent;
+    // keep its card by pinning the row from its detail fetch.
+    const pinned = expandedId ? details[expandedId]?.task : null;
+    if (pinned && !allTasks.some(t => String(t.id || '') === expandedId)) allTasks = [...allTasks, pinned];
     if (expandedId) {
       const linkedTask = allTasks.find(t => String(t.id || '') === expandedId);
       if (linkedTask) {
@@ -693,7 +739,8 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
 
   async function load({ resetExpandedDetail = false, force = false } = {}) {
     try {
-      const [tasksRes, nyRes] = await Promise.allSettled([loadBgTasks({ force }), loadMobileNeedsYou()]);
+      const [tasksRes, nyRes] = await Promise.allSettled([loadBgTasks({ force, finished: finishedWindow }), loadMobileNeedsYou()]);
+      if (tasksRes.status === 'fulfilled') listMeta = getCachedBgTasksMeta() || listMeta;
       if (nyRes.status === 'fulfilled' && Array.isArray(nyRes.value)) needsYouItems = nyRes.value;
       if (!taskInteractions && needsYouItems.some(item => ['question', 'browser_login', 'tool_approval', 'final_action_approval'].includes(item.kind))) {
         try {
