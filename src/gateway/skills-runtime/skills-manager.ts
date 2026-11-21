@@ -775,7 +775,8 @@ export class SkillsManager {
       const step = () => {
         if (this.scannedOnce) return; // a synchronous scan already loaded the catalog
         const sliceEnd = Date.now() + sliceMs;
-        while (index < entries.length && Date.now() < sliceEnd) {
+        let processed = 0; // always make progress, even when a slice is already over budget
+        while (index < entries.length && (processed++ === 0 || Date.now() < sliceEnd)) {
           const entry = entries[index++];
           if (!entry.isDirectory() || entry.name.startsWith('_') || entry.name.startsWith('.')) continue;
           this.loadSkillInto(staged, path.join(this.skillsDir, entry.name), entry.name);

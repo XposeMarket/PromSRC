@@ -568,8 +568,8 @@
     },
     {
       "name": "Verify gateway boot speed (build freshness stamps, planned-restart fast path, dist prune ownership)",
-      "run": "node scripts/test-gateway-boot-speed.mjs && node scripts/test-prune-dist.mjs",
-      "seconds": 1
+      "run": "node scripts/test-gateway-boot-speed.mjs && node scripts/test-prune-dist.mjs && npx tsx src/gateway/skills-runtime/skills-manager-lazy-scan.regression.ts",
+      "seconds": 3
     }
   ]
 }
