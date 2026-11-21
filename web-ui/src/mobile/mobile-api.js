@@ -1659,13 +1659,42 @@ export async function denyMobileProposal(id) {
   });
 }
 
-export async function loadBgTasks({ force = false } = {}) {
+// Finished history is windowed by the gateway (?finished=N): unfinished work always
+// arrives in full, finished rows newest-first, with exact finished totals saved
+// under 'tasks-meta' for the tab counts. The Tasks page grows N on "Show more".
+export const MOBILE_FINISHED_TASK_PAGE = 60;
+const MOBILE_FINISHED_TASK_MAX = 2000;
+
+function _bgTaskListMeta(response, requested) {
+  // Older gateways ignore ?finished and return every task without totals.
+  if (typeof response?.finishedTotal !== 'number' || !response?.finishedCounts || typeof response.finishedCounts !== 'object') {
+    return { windowed: false, finishedWindow: requested };
+  }
+  return {
+    windowed: true,
+    finishedWindow: Number(response.finishedWindow) || requested,
+    finishedTotal: response.finishedTotal,
+    finishedCounts: response.finishedCounts,
+    hasMoreFinished: response.hasMoreFinished === true,
+  };
+}
+
+export function getCachedBgTasksMeta(maxAgeMs = 21_600_000) {
+  return getCachedMobilePageData('tasks-meta', maxAgeMs);
+}
+
+export async function loadBgTasks({ force = false, finished = MOBILE_FINISHED_TASK_PAGE } = {}) {
+  const requested = Math.max(1, Math.min(MOBILE_FINISHED_TASK_MAX, Math.floor(Number(finished) || MOBILE_FINISHED_TASK_PAGE)));
   const cacheScope = _mobileGatewayCacheScope();
-  const cached = !force ? getCachedMobilePageData('tasks', 8_000, cacheScope) : null;
-  if (cached) return cached;
-  return _coalesceMobilePageRequest('tasks', async () => {
-    const r = await api('/api/bg-tasks?mobile=1', { timeoutMs: 9000 });
+  if (!force) {
+    const cached = getCachedMobilePageData('tasks', 8_000, cacheScope);
+    const meta = getCachedMobilePageData('tasks-meta', 8_000, cacheScope);
+    if (cached && (!meta?.windowed || Number(meta.finishedWindow || 0) >= requested)) return cached;
+  }
+  return _coalesceMobilePageRequest(`tasks:${requested}`, async () => {
+    const r = await api(`/api/bg-tasks?mobile=1&finished=${requested}`, { timeoutMs: 9000 });
     if (!r?.success || !Array.isArray(r.tasks)) throw new Error(r?.error || 'Invalid tasks response');
+    _saveMobilePageData('tasks-meta', _bgTaskListMeta(r, requested), cacheScope);
     return _saveMobilePageData('tasks', r.tasks, cacheScope);
   }, cacheScope);
 }

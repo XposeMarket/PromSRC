@@ -14,6 +14,15 @@
       "seconds": 2
     },
     {
+      "name": "Verify bg-tasks finished window and planned-run list cache",
+      "run": [
+        "npx tsx src/gateway/tasks/bg-task-list-window.regression.ts",
+        "npx tsx src/gateway/tasks/planned-chat-runs.regression.ts",
+        "npx tsx src/gateway/tasks/planned-chat-live-cards.regression.ts"
+      ],
+      "seconds": 6
+    },
+    {
       "name": "Verify desktop stable/beta update channel",
       "run": "node --test electron/update-channel.test.js",
       "seconds": 1
