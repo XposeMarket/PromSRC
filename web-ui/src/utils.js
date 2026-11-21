@@ -241,44 +241,31 @@ function cleanVisualCssValue(value, fallback) {
   return cleaned || fallback;
 }
 
-// Chart.js and Mermaid parse colors themselves and only understand plain
-// hex/rgb(a). Palette themes derive most tokens with color-mix(...), which
-// both libraries reject, so axis labels, grid lines and Mermaid diagrams fell
-// back to unreadable defaults (or failed) on light palettes. Resolve each
-// token through the browser once and hand the iframe a plain rgb()/rgba().
-let visualColorProbe = null;
+// Chart.js and Mermaid need legacy RGB values for computed palette colors.
+const legacyVisualColor = /^(#[\da-f]{3,8}|rgba?\([^()]*\))$/i;
+let visualColorProbe;
 function srgbChannel(value) {
-  const n = Number(value);
-  return Number.isFinite(n) ? Math.round(Math.min(1, Math.max(0, n)) * 255) : null;
+  return Math.round(255 * Math.max(0, Math.min(1, Number(value))));
 }
-export function plainVisualColor(computed) {
-  const value = String(computed || '').trim();
-  if (/^(#[0-9a-f]{3,8}|rgba?\([^()]*\))$/i.test(value)) return value;
-  const srgb = value.match(/^color\(\s*srgb\s+([^\s/]+)\s+([^\s/]+)\s+([^\s/]+)\s*(?:\/\s*([^\s)]+))?\s*\)$/i);
-  if (!srgb) return '';
-  const [r, g, b] = [srgb[1], srgb[2], srgb[3]].map(srgbChannel);
-  if ([r, g, b].some((c) => c === null)) return '';
-  const alphaRaw = srgb[4] == null ? 1 : String(srgb[4]).endsWith('%') ? Number.parseFloat(srgb[4]) / 100 : Number(srgb[4]);
-  const alpha = Number.isFinite(alphaRaw) ? Math.min(1, Math.max(0, alphaRaw)) : 1;
-  return alpha >= 1 ? `rgb(${r}, ${g}, ${b})` : `rgba(${r}, ${g}, ${b}, ${Math.round(alpha * 1000) / 1000})`;
+export function plainVisualColor(value) {
+  if (legacyVisualColor.test(value)) return value;
+  const match = /^color\(srgb\s+([\d.e+-]+)\s+([\d.e+-]+)\s+([\d.e+-]+)(?:\s*\/\s*([\d.e+-]+)(%)?)?\)$/i.exec(value);
+  if (!match) return '';
+  const rgb = match.slice(1, 4).map(srgbChannel);
+  const alpha = Math.max(0, Math.min(1, Number(match[4] ?? 1) / (match[5] ? 100 : 1)));
+  if (!rgb.every(Number.isFinite) || !Number.isFinite(alpha)) return '';
+  return alpha === 1 ? `rgb(${rgb.join(', ')})` : `rgba(${rgb.join(', ')}, ${alpha})`;
 }
-function resolveVisualColor(value) {
-  const raw = String(value || '').trim();
-  if (!raw || /^(#[0-9a-f]{3,8}|rgba?\([^()]*\))$/i.test(raw)) return raw;
-  try {
-    if (!visualColorProbe || !visualColorProbe.isConnected) {
-      visualColorProbe = document.createElement('span');
-      visualColorProbe.setAttribute('aria-hidden', 'true');
-      visualColorProbe.style.cssText = 'position:absolute;width:0;height:0;overflow:hidden;visibility:hidden;pointer-events:none';
-      (document.body || document.documentElement).appendChild(visualColorProbe);
-    }
-    visualColorProbe.style.color = '';
-    visualColorProbe.style.color = raw;
-    if (!visualColorProbe.style.color) return raw;
-    return plainVisualColor(getComputedStyle(visualColorProbe).color) || raw;
-  } catch {
-    return raw;
+function resolveVisualColor(raw) {
+  if (legacyVisualColor.test(raw)) return raw;
+  if (!visualColorProbe?.isConnected) {
+    visualColorProbe = document.createElement('span');
+    visualColorProbe.hidden = true;
+    document.documentElement.appendChild(visualColorProbe);
   }
+  visualColorProbe.style.color = '';
+  visualColorProbe.style.color = raw;
+  return (visualColorProbe.style.color && plainVisualColor(getComputedStyle(visualColorProbe).color)) || raw;
 }
 
 function readVisualTheme() {

@@ -98,7 +98,7 @@ for (const sel of ['.pm-chat-mode-button svg', '.pm-voice-control-btn', '.pm-voi
 
 // Visual iframes: theme colors must reach Chart.js/Mermaid as plain rgb()/hex.
 const utils = read('web-ui/src/utils.js');
-const fnSrc = utils.replace(/\r\n/g, '\n').match(/function srgbChannel[\s\S]*?\n}\nexport function plainVisualColor[\s\S]*?\n}\n/);
+const fnSrc = utils.replace(/\r\n/g, '\n').match(/const legacyVisualColor[\s\S]*?\n}\nexport function plainVisualColor[\s\S]*?\n}\n/);
 assert.ok(fnSrc, 'plainVisualColor helper missing from utils.js');
 // eslint-disable-next-line no-new-func
 const plainVisualColor = new Function(`${fnSrc[0].replace('export function', 'function')}; return plainVisualColor;`)();
