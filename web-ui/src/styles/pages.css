@@ -3495,6 +3495,31 @@
   cursor: default;
   position: relative;
 }
+#chat-file-staging .chat-file-pill.is-previewable {
+  max-width: min(172px, 100%);
+}
+.chat-file-pill .pill-preview {
+  display: flex;
+  align-items: center;
+  gap: inherit;
+  min-width: 0;
+  flex: 1;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: zoom-in;
+}
+.chat-file-pill .pill-preview:hover .pill-name {
+  text-decoration: underline;
+}
+.chat-file-pill .pill-preview:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
 .chat-file-pill .pill-icon {
   font-size: 16px;
   flex-shrink: 0;
@@ -3607,14 +3632,23 @@
 .img-preview-overlay {
   position: fixed;
   inset: 0;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
   background: rgba(0,0,0,0.72);
-  z-index: 9000;
+}
+.img-preview-overlay[open] {
   display: flex;
   align-items: center;
   justify-content: center;
   animation: imgOverlayIn 0.15s ease;
   cursor: zoom-out;
 }
+.img-preview-overlay::backdrop { background: transparent; }
 @keyframes imgOverlayIn {
   from { opacity: 0; }
   to   { opacity: 1; }

@@ -49,6 +49,11 @@ The major page responsibilities are in the Map. In particular, chat includes cro
 
 Shared browser modules cover API calls, websocket subscription, state, formatting/markdown, keyboard shortcuts, command palette and performance. `web-ui/src/components/` holds reusable visual components, while `features/` holds feature-owned groups. Check for an existing owner before adding a module.
 
+### Desktop chat tabs and staged images
+
+- `themes.css` lets the rounded desktop shell clip the first tab itself. `multi-chat-workspace.css` extends that tab's background, click target and active underline to the rounded shell's left edge without a left divider. The label keeps its existing inner padding, and the square shell keeps the standard tab inset.
+- `ChatPage.js` → `renderChatFilePills()` keeps long image names compact in the main desktop composer; hover for the full filename. Click the image chip or activate it from the keyboard to open `openImgPreview()` without sending or uploading the draft. Escape, the close button, or a click outside the image dismisses it; the separate remove button still removes just that file. Mobile has its own composer and tab layout.
+
 ### Chat and tool activity
 `ChatPage.js` receives gateway stream events, reconciles the active session, and renders messages plus process/tool activity. `tool-activity.js` converts activity records into a compact summary and expandable detail. It supports stateful disclosure, per-tool icons/status, readable tool details, and file-diff presentation. Do not collapse distinct running/completed/error/approval states into one generic spinner, or discard activity when switching between an active chat and persisted history. Recent desktop fixes make stream traces survive returning to a running chat and focus changes; consult the generated changelog before changing reconnect logic.
 
