@@ -24,6 +24,34 @@
     "src/gateway/teams/managed-teams.ts": 3316,
     "src/gateway/agents-runtime/handlers/creative.ts": 3300
   },
+  "webUi": {
+    "roots": [
+      "web-ui"
+    ],
+    "exclude": [
+      "web-ui/vendor/"
+    ],
+    "largeFiles": {
+      "web-ui/src/pages/ChatPage.js": 48763,
+      "web-ui/src/styles/mobile.css": 19080,
+      "web-ui/src/mobile/mobile-pages.js": 12644,
+      "web-ui/src/styles/components.css": 9877,
+      "web-ui/src/mobile/mobile-chat-page-runtime.js": 9314,
+      "web-ui/src/pages/SettingsPage.js": 7381,
+      "web-ui/src/mobile/mobile-voice-realtime-runtime.js": 7024,
+      "web-ui/src/pages/TeamsPage.js": 6635,
+      "web-ui/index.html": 6014,
+      "web-ui/src/mobile/mobile-voice-page.js": 5693,
+      "web-ui/src/mobile/mobile-voice-runtime.js": 5546,
+      "web-ui/src/styles/themes.css": 5485,
+      "web-ui/src/mobile/mobile-chat-renderer-runtime.js": 5111,
+      "web-ui/src/mobile/mobile-shell.js": 4964,
+      "web-ui/src/legacy-desktop-bootstrap.js": 4771,
+      "web-ui/src/styles/pages.css": 4460,
+      "web-ui/src/pages/SubagentsPage.js": 4097,
+      "web-ui/src/styles/settings.css": 3383
+    }
+  },
   "anyGroups": {
     "chat-router": {
       "paths": [
