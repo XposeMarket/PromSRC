@@ -109,49 +109,92 @@ function checkCompiledBuildFreshness(rootDir) {
   return result(true, 'dist/ matches the source tree');
 }
 
+function readText(file) {
+  try { return fs.readFileSync(file, 'utf8'); } catch { return null; }
+}
+
+function parseLock(raw) {
+  try {
+    const lock = JSON.parse(raw);
+    return lock && Number.isInteger(Number(lock.ownerPid)) && Number(lock.ownerPid) > 0 && lock.token ? lock : null;
+  } catch { return null; }
+}
+
 /**
  * Take the dist/ build lock (dist/.build-in-progress.json, created with O_EXCL so
  * two builds can never both acquire it). A lock whose owner process is alive is
- * never taken over; one whose owner is gone (hard-killed build) is replaced.
+ * never taken over; an empty or unreadable lock fails closed; one whose owner is gone
+ * (hard-killed build) is reclaimed under a second exclusive lock (`<lock>.reclaim`).
  * Acquiring drops any previous completion stamp. scripts/build-backend.mjs holds
  * the lock for the whole pipeline and releases it in a finally block.
  * @returns {{ startedAtMs: number, ownerPid: number, token: string, sourceRoots: string[] }}
+ *
+ * `hooks` exist only so tests can pause at the two race windows deterministically.
  */
-function acquireBuildLock(rootDir, { now = Date.now(), pid = process.pid } = {}) {
+function acquireBuildLock(rootDir, { now = Date.now(), pid = process.pid, hooks = {} } = {}) {
   const lockPath = path.join(rootDir, BUILD_IN_PROGRESS_STAMP);
+  const reclaimPath = `${lockPath}.reclaim`;
+  const lockRel = toPosix(BUILD_IN_PROGRESS_STAMP);
   fs.mkdirSync(path.join(rootDir, 'dist'), { recursive: true });
   for (let attempt = 0; attempt < 2; attempt++) {
-    let fd;
+    let fd = null;
     try {
       fd = fs.openSync(lockPath, 'wx');
     } catch (error) {
       if (!error || error.code !== 'EEXIST') throw error;
-      const raw = (() => { try { return fs.readFileSync(lockPath, 'utf8'); } catch { return null; } })();
-      if (raw === null) continue; // released between our open and read: retry
-      let active = null;
-      try { active = JSON.parse(raw); } catch {}
-      const owner = Number(active && active.ownerPid);
-      if (isProcessAlive(owner)) {
-        throw new Error(
-          `another backend build (pid ${owner}) is writing dist/ in this checkout; wait for it to finish, `
-          + `or delete ${toPosix(BUILD_IN_PROGRESS_STAMP)} if pid ${owner} is not a build`,
-        );
-      }
-      // Abandoned lock: remove it only if it is still the one we inspected, then retry the exclusive create.
-      try { if (fs.readFileSync(lockPath, 'utf8') === raw) fs.rmSync(lockPath, { force: true }); } catch {}
-      continue;
     }
-    const lock = {
-      startedAtMs: now,
-      ownerPid: pid,
-      token: `${pid}-${now}-${Math.random().toString(36).slice(2)}`,
-      sourceRoots: SOURCE_TREES.filter((tree) => fs.existsSync(path.join(rootDir, tree))).map(toPosix),
-    };
-    try { fs.writeSync(fd, `${JSON.stringify(lock, null, 2)}\n`); } finally { fs.closeSync(fd); }
-    fs.rmSync(path.join(rootDir, BUILD_COMPLETE_STAMP), { force: true });
-    return lock;
+    if (fd !== null) {
+      const lock = {
+        startedAtMs: now,
+        ownerPid: pid,
+        token: `${pid}-${now}-${Math.random().toString(36).slice(2)}`,
+        sourceRoots: SOURCE_TREES.filter((tree) => fs.existsSync(path.join(rootDir, tree))).map(toPosix),
+      };
+      try {
+        if (hooks.afterCreate) hooks.afterCreate(lockPath);
+        fs.writeSync(fd, `${JSON.stringify(lock, null, 2)}\n`);
+      } finally {
+        fs.closeSync(fd);
+      }
+      fs.rmSync(path.join(rootDir, BUILD_COMPLETE_STAMP), { force: true });
+      return lock;
+    }
+    const raw = readText(lockPath);
+    if (raw === null) continue; // released between our create attempt and read: retry
+    const active = parseLock(raw);
+    if (!active) {
+      // Empty or unreadable: possibly a build that has created the lock but not written it yet.
+      // Fail closed; never delete a lock we cannot attribute to a dead owner.
+      throw new Error(`${lockRel} is empty or unreadable (another build may be starting); retry, or delete it if no build is running`);
+    }
+    const owner = Number(active.ownerPid);
+    if (isProcessAlive(owner)) {
+      throw new Error(
+        `another backend build (pid ${owner}) is writing dist/ in this checkout; wait for it to finish, `
+        + `or delete ${lockRel} if pid ${owner} is not a build`,
+      );
+    }
+    // The owner process is gone (hard-killed build). Reclaim under a second exclusive lock so two
+    // reclaimers can never interleave: only the reclaim holder deletes the lock, and only if it still
+    // holds the exact abandoned content we inspected.
+    if (hooks.beforeReclaim) hooks.beforeReclaim(lockPath);
+    let reclaimFd;
+    try {
+      reclaimFd = fs.openSync(reclaimPath, 'wx');
+    } catch (error) {
+      if (error && error.code === 'EEXIST') {
+        throw new Error(`another build is reclaiming the abandoned ${lockRel}; retry, or delete ${lockRel}.reclaim if no build is running`);
+      }
+      throw error;
+    }
+    try {
+      fs.closeSync(reclaimFd);
+      if (readText(lockPath) === raw) fs.rmSync(lockPath, { force: true });
+    } finally {
+      fs.rmSync(reclaimPath, { force: true });
+    }
   }
-  throw new Error('could not acquire the dist/ build lock: another build took it at the same moment');
+  throw new Error(`could not acquire ${lockRel}: another build took it at the same moment`);
 }
 
 function holdsBuildLock(rootDir, lock) {

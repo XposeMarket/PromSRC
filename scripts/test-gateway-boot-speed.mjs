@@ -136,6 +136,43 @@ try {
   freshness.releaseBuildLock(root, takeover);
   assert.equal(freshness.checkCompiledBuildFreshness(root).fresh, true);
 
+  // Race window 1: a lock created but not yet written is never treated as abandoned.
+  let contenderError = null;
+  const paused = freshness.acquireBuildLock(root, {
+    pid: process.pid,
+    hooks: { afterCreate: () => {
+      assert.equal(fs.readFileSync(lockFile, 'utf8'), '', 'the lock is still empty at this point');
+      try { freshness.acquireBuildLock(root, { pid: deadPid() }); } catch (e) { contenderError = e; }
+    } },
+  });
+  assert.match(String(contenderError && contenderError.message), /is empty or unreadable/, 'an empty lock fails closed');
+  assert.ok(freshness.completeBuild(root, paused), 'the paused winner still owns its lock');
+  freshness.releaseBuildLock(root, paused);
+  fs.writeFileSync(lockFile, '{ not json');
+  assert.throws(() => freshness.acquireBuildLock(root), /is empty or unreadable/, 'a malformed lock fails closed');
+  assert.equal(fs.readFileSync(lockFile, 'utf8'), '{ not json', 'a malformed lock is never deleted');
+  fs.rmSync(lockFile);
+
+  // Race window 2: two reclaimers of the same abandoned lock. B reclaims and acquires while A is
+  // between inspecting the dead lock and reclaiming it; A must not delete B's fresh lock.
+  fs.writeFileSync(lockFile, JSON.stringify({ startedAtMs: 1, ownerPid: deadPid(), token: 'abandoned-2' }));
+  let lockB = null;
+  assert.throws(() => freshness.acquireBuildLock(root, {
+    pid: process.pid + 2_000_000,
+    hooks: { beforeReclaim: () => { if (!lockB) lockB = freshness.acquireBuildLock(root, { pid: process.pid }); } },
+  }), /another backend build \(pid \d+\)/, 'A sees B as the live owner after B reclaimed');
+  assert.equal(JSON.parse(fs.readFileSync(lockFile, 'utf8')).token, lockB.token, "B's lock survived A's reclaim attempt");
+  // A reclaim already in progress (its mutex exists) makes other reclaimers back off without deleting.
+  freshness.releaseBuildLock(root, lockB);
+  fs.writeFileSync(lockFile, JSON.stringify({ startedAtMs: 1, ownerPid: deadPid(), token: 'abandoned-3' }));
+  fs.writeFileSync(`${lockFile}.reclaim`, '');
+  assert.throws(() => freshness.acquireBuildLock(root), /another build is reclaiming/);
+  assert.equal(JSON.parse(fs.readFileSync(lockFile, 'utf8')).token, 'abandoned-3');
+  fs.rmSync(`${lockFile}.reclaim`);
+  const reclaimed = freshness.acquireBuildLock(root);
+  assert.ok(!fs.existsSync(`${lockFile}.reclaim`), 'the reclaim mutex is released');
+  freshness.releaseBuildLock(root, reclaimed);
+
   // Simultaneous builds: of four processes acquiring at the same instant, exactly one wins.
   const startAt = Date.now() + 1_500;
   const contender = `
@@ -145,7 +182,7 @@ try {
       while (Date.now() < spinUntil) {}
       let lock;
       try { lock = f.acquireBuildLock(${JSON.stringify(root)}); }
-      catch (e) { process.exit(/another backend build|could not acquire/.test(e.message) ? 3 : 1); }
+      catch (e) { process.exit(/another backend build|could not acquire|is empty or unreadable|another build is reclaiming/.test(e.message) ? 3 : 1); }
       setTimeout(() => { f.releaseBuildLock(${JSON.stringify(root)}, lock); process.exit(0); }, 800);
     }, Math.max(0, wait - 50));
   `;
