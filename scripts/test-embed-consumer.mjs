@@ -8,6 +8,9 @@ import { fileURLToPath } from 'node:url';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const project = fs.mkdtempSync(path.join(os.tmpdir(), 'prom-embed-packed-'));
+// Phase timings make the slowest CI regression's cost visible in the log.
+let lapStart = Date.now();
+const lap = (label) => { const now = Date.now(); console.log(`[embed-consumer] ${label}: ${((now - lapStart) / 1000).toFixed(1)}s`); lapStart = now; };
 function npm(args, cwd) {
   const result = spawnSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', args, {
     cwd, encoding: 'utf8', timeout: 300_000, shell: process.platform === 'win32',
@@ -27,6 +30,7 @@ try {
   const packed = JSON.parse(npm(['pack', '--json', '--ignore-scripts', '--pack-destination', project], repo));
   const tarball = path.join(project, packed[0].filename);
   if (!packed[0].files.some(file => file.path === 'dist/embed/index.js')) throw new Error('Packed public embedding export is missing');
+  lap('npm pack');
   if (process.argv.includes('--shared-dependencies')) {
     // Explicit cache-independent diagnostic: real packed bytes, host dependency tree.
     // This is not evidence of an independent npm dependency installation.
@@ -38,10 +42,11 @@ try {
     // --online-install: the registry serves anything the npm cache lacks, but cached package metadata is
     // used without revalidating each of the ~1,400 packages (--prefer-online did that and cost ~60 s in CI).
     npm(['install', ...(process.argv.includes('--online-install') ? ['--prefer-offline'] : ['--offline']), '--ignore-scripts', '--include=optional', '--no-audit', '--no-fund', tarball], project);
+    lap('npm install (independent consumer)');
     // node-pty ships a Windows binary, but Unix requires its native lifecycle
     // build. Keep general install scripts disabled and build this dependency
     // explicitly in the isolated consumer, as the CI checkout does.
-    if (process.platform !== 'win32') npm(['rebuild', 'node-pty'], project);
+    if (process.platform !== 'win32') { npm(['rebuild', 'node-pty'], project); lap('npm rebuild node-pty'); }
   }
   const installed = path.join(project, 'node_modules/prometheus');
   if (fs.lstatSync(installed).isSymbolicLink()) throw new Error('Expected installed package, not source link');
@@ -50,6 +55,7 @@ try {
     env: { ...process.env, NODE_ENV: 'production', ...(process.argv.includes('--shared-dependencies') ? { NODE_PATH: path.join(repo, 'node_modules') } : {}) },
   });
   process.stdout.write(run.stdout || '');
+  lap('consumer run');
   if (run.status !== 0 || !/embed-consumer: ok/.test(run.stdout || '')) {
     const detail = String(run.error || run.stderr || run.status);
     if (process.env.GITHUB_ACTIONS === 'true') console.error(`::error title=Packed consumer runtime::${detail.slice(0, 6000).replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A')}`);

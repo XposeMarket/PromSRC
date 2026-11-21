@@ -9,7 +9,7 @@ and how to reproduce it locally. Paths and scripts named here are checked by
 Every pull request and every push to `main` runs
 `.github/workflows/pr-regression.yml` on `ubuntu-24.04` with Node 22. The
 regression list lives in `scripts/ci/regressions.json`; the `regressions` job
-runs it as four parallel shards through `scripts/ci/run-regressions.mjs`
+runs it as five parallel shards through `scripts/ci/run-regressions.mjs`
 (about 2-3 minutes end to end), and each shard reports every failing
 regression in one run instead of stopping at the first. Installed
 dependencies and the Playwright browser are cached by lockfile and Playwright

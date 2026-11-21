@@ -4,14 +4,14 @@
     "backend": {
       "description": "compiled backend in dist/; also the full backend type-check",
       "run": "npm run build:backend",
-      "seconds": 35
+      "seconds": 26
     }
   },
   "regressions": [
     {
       "name": "Verify public eval graders and local tool-loop recovery",
       "run": "npm run -s test:eval-graders && npm run -s test:local-tool-loop",
-      "seconds": 1
+      "seconds": 2
     },
     {
       "name": "Verify desktop stable/beta update channel",
@@ -26,7 +26,7 @@
     {
       "name": "Verify Anthropic history image normalization",
       "run": "npm run test:anthropic-continuation",
-      "seconds": 16
+      "seconds": 17
     },
     {
       "name": "Verify memory contradiction, freshness, deletion and poisoned recall",
@@ -36,7 +36,7 @@
     {
       "name": "Verify replay-gated skill promotion",
       "run": "npm run test:skill-promotion",
-      "seconds": 1
+      "seconds": 2
     },
     {
       "name": "Verify skill routing stays fast on long pastes (event-loop stall guard)",
@@ -51,22 +51,22 @@
     {
       "name": "Verify no new stateful dynamic import() of module-level state (tsx duplicate-instance guard)",
       "run": "npm run -s check:stateful-imports",
-      "seconds": 2
+      "seconds": 3
     },
     {
       "name": "Verify gateway heap flags, heap-pressure sampler and the stateful-import guard",
       "run": "npm run -s test:gateway-guardrails",
-      "seconds": 6
+      "seconds": 9
     },
     {
       "name": "Verify public skill bundle (visibility tags, no owner-specific content)",
       "run": "npm run test:public-skills",
-      "seconds": 1
+      "seconds": 2
     },
     {
       "name": "Verify scheduler misfire, leases, dedupe, script execution and crash-window lock recovery",
       "run": "npm run test:scheduler-misfire",
-      "seconds": 4
+      "seconds": 6
     },
     {
       "name": "Verify proxied loopback requests (Tailscale Funnel) are not trusted",
@@ -111,12 +111,12 @@
     {
       "name": "Verify event-loop stall CPU attribution",
       "run": "npm run test:stall-profiler",
-      "seconds": 2
+      "seconds": 3
     },
     {
       "name": "Verify Brain provider diagnostics and bounded failures",
       "run": "npm run test:brain-provider-diagnostics",
-      "seconds": 1
+      "seconds": 2
     },
     {
       "name": "Verify provider evidence and system health classification",
@@ -125,12 +125,12 @@
         "npx tsx src/gateway/diagnostics/system-diagnostics.regression.ts",
         "npx tsx src/gateway/diagnostics/system-diagnostics-integration.regression.ts"
       ],
-      "seconds": 5
+      "seconds": 6
     },
     {
       "name": "Verify scheduled Brain chat runtime contract",
       "run": "npm run test:brain-scheduled-chat",
-      "seconds": 2
+      "seconds": 3
     },
     {
       "name": "Verify proposal approval durability",
@@ -138,7 +138,7 @@
         "npx tsx src/gateway/proposals/proposal-approval-flow.regression.ts",
         "node scripts/test-proposal-approval-flow-ui.mjs"
       ],
-      "seconds": 1
+      "seconds": 2
     },
     {
       "name": "Verify hybrid atomic durable-memory retrieval",
@@ -147,17 +147,17 @@
         "npx tsx src/gateway/memory-index/memory-atoms-real-corpus.stress.ts",
         "npx tsx src/gateway/agents-runtime/capabilities/memory-wrapper.regression.ts"
       ],
-      "seconds": 6
+      "seconds": 9
     },
     {
       "name": "Verify web_fetch batch (urls[]) routing in the capability executor",
       "run": "npx tsx src/gateway/agents-runtime/capabilities/web-fetch-batch.regression.ts",
-      "seconds": 1
+      "seconds": 3
     },
     {
       "name": "Verify agent/team wrapper parameter alignment",
       "run": "npm run test:agent-team-wrapper-params",
-      "seconds": 1
+      "seconds": 2
     },
     {
       "name": "Verify memory worker readiness and cold-elastic admission",
@@ -166,22 +166,22 @@
         "npm run test:automatic-memory-search",
         "npx tsx src/gateway/memory-index/automatic-memory-prewarm.regression.ts"
       ],
-      "seconds": 9
+      "seconds": 10
     },
     {
       "name": "Verify connector/plugin tool-surface parity",
       "run": "npx tsx scripts/verify-extensions.ts && npx tsx src/extensions/tool-contracts.regression.ts",
-      "seconds": 1
+      "seconds": 2
     },
     {
       "name": "Verify natural-language tool activation",
       "run": "npm run test:extension-activation && npm run test:tool-category-routing && npx tsx src/runtime/tool-category-prompt-signals.regression.ts",
-      "seconds": 3
+      "seconds": 4
     },
     {
       "name": "Verify provider-facing tool category provisioning",
       "run": "npm run test:tool-category-provisioning && npm run test:tool-category-activation && npm run test:tool-category-switch-model && npm run test:background-spawn-tool-surface",
-      "seconds": 3
+      "seconds": 5
     },
     {
       "name": "Verify operating instructions and runtime behavior",
@@ -190,7 +190,7 @@
         "npx tsx src/runtime/prompt-manifest.regression.ts",
         "npx tsx src/runtime/instruction-segment-registry.regression.ts"
       ],
-      "seconds": 4
+      "seconds": 6
     },
     {
       "name": "Verify deterministic composite workflows",
@@ -200,7 +200,7 @@
     {
       "name": "Verify provider-neutral connector policy",
       "run": "npx tsx src/gateway/connector-tool-capabilities.regression.ts && npx tsx src/extensions/runtime-registry.performance.regression.ts",
-      "seconds": 1
+      "seconds": 2
     },
     {
       "name": "Verify connected agent harnesses",
@@ -214,7 +214,7 @@
         "npx tsx src/gateway/external-agents/native-tool-map.regression.ts",
         "npx tsx src/gateway/dots/dots.regression.ts"
       ],
-      "seconds": 12
+      "seconds": 7
     },
     {
       "name": "Verify new-chat glance (running, needs you, usage, greeting name)",
@@ -228,7 +228,7 @@
         "npx tsx src/gateway/projects/project-folder-access.regression.ts",
         "npx tsx src/gateway/projects/project-membership.regression.ts"
       ],
-      "seconds": 2
+      "seconds": 3
     },
     {
       "name": "Verify tool activity edit line stats",
@@ -252,12 +252,12 @@
         "node scripts/test-desktop-subagent-chat-ui.mjs",
         "npm run test:multi-chat-main-tab-cap"
       ],
-      "seconds": 1
+      "seconds": 2
     },
     {
       "name": "Enforce generated UI and gateway performance budgets",
       "run": "npm run test:perf-budgets",
-      "seconds": 1
+      "seconds": 2
     },
     {
       "name": "Verify main chat live stream delivery",
@@ -270,12 +270,12 @@
         "npm run test:git-read-cache",
         "npm run test:process-store-order"
       ],
-      "seconds": 1
+      "seconds": 2
     },
     {
       "name": "Verify context window contract",
       "run": "npm run test:context-window",
-      "seconds": 3
+      "seconds": 6
     },
     {
       "name": "Verify token-window-native model context",
@@ -339,7 +339,7 @@
     {
       "name": "Verify mobile multi-gateway contract",
       "run": "node scripts/test-mobile-gateway-contract.mjs",
-      "seconds": 1
+      "seconds": 2
     },
     {
       "name": "Verify mobile pairing QR decoder",
@@ -367,7 +367,7 @@
         "npx tsx src/gateway/chat/mobile-main-chat-queue.regression.ts",
         "node --import tsx scripts/test-mobile-durable-queue.mjs"
       ],
-      "seconds": 5
+      "seconds": 7
     },
     {
       "name": "Verify mobile stream receipt idempotency",
@@ -382,12 +382,12 @@
     {
       "name": "Verify encoding negotiation and module cache policy",
       "run": "npx tsx src/gateway/static-encoding-negotiation.regression.ts",
-      "seconds": 1
+      "seconds": 2
     },
     {
       "name": "Verify foreground Chat owner restart reconciliation",
       "run": "npm run test:restart-retrigger:run",
-      "seconds": 12,
+      "seconds": 7,
       "needs": [
         "backend"
       ]
@@ -400,7 +400,7 @@
     {
       "name": "Verify mobile and desktop chat regression audit",
       "run": "npm run test:mobile-regression-audit",
-      "seconds": 14
+      "seconds": 12
     },
     {
       "name": "Verify mobile voice/media contract",
@@ -468,12 +468,12 @@
     {
       "name": "Verify turn-loop replay scenarios",
       "run": "npm run test:replay",
-      "seconds": 5
+      "seconds": 7
     },
     {
       "name": "Verify embedding API from a separate consumer project",
       "run": "npm run test:embed:run",
-      "seconds": 62,
+      "seconds": 64,
       "needs": [
         "backend"
       ]
@@ -486,7 +486,7 @@
     {
       "name": "Verify eval harness self-test (oracle must score 7/7)",
       "run": "npm run test:evals-selftest:run",
-      "seconds": 6,
+      "seconds": 7,
       "needs": [
         "backend"
       ]
@@ -499,22 +499,22 @@
     {
       "name": "Verify end-to-end turn tracing",
       "run": "npm run test:turn-trace",
-      "seconds": 2
+      "seconds": 4
     },
     {
       "name": "Verify crash recovery (hard-killed gateway, no blind replay of committed side effects)",
       "run": "npm run test:crash-recovery",
-      "seconds": 1
+      "seconds": 2
     },
     {
       "name": "Verify web-ui build id ignores npm script changes",
       "run": "npm run test:webui-build-id-stability",
-      "seconds": 2
+      "seconds": 4
     },
     {
       "name": "Verify complete mediation across execution paths",
       "run": "npm run test:mediation",
-      "seconds": 3
+      "seconds": 4
     },
     {
       "name": "Verify security controls (final-action grants, public build, secret scrubbing)",
@@ -544,7 +544,7 @@
     {
       "name": "Verify stale tool-result elision",
       "run": "npm run test:tool-result-elision",
-      "seconds": 2
+      "seconds": 3
     },
     {
       "name": "Verify plugin manifests and MCP environment isolation",
@@ -554,12 +554,12 @@
     {
       "name": "Verify build identity records the source commit",
       "run": "npx tsx src/gateway/diagnostics/build-identity.regression.ts",
-      "seconds": 4
+      "seconds": 2
     },
     {
       "name": "Verify CI regression runner, shard plan and required verify gate",
       "run": "npm run test:ci-runner",
-      "seconds": 3
+      "seconds": 2
     }
   ]
 }
