@@ -42,10 +42,19 @@ const shards = shardJob.strategy.matrix.shard;
 assert.equal(shardJob.strategy['fail-fast'], false, 'one failing shard must not cancel the others');
 assert.deepEqual(shards, shards.map((_, i) => i + 1), 'matrix.shard must be 1..N');
 assert.ok(shardJob.steps.find((s) => s.uses?.startsWith('actions/checkout')).with.ref.includes('inputs.ref'), 'shards check out the requested ref');
-const runnerStep = shardJob.steps.find((s) => /run-regressions\.mjs/.test(s.run || ''));
+const runnerStep = shardJob.steps.find((s) => /run-regressions\.mjs/.test(s.run || '') && !/--print-setups/.test(s.run));
+// Per-shard caches: the incremental backend build is restored only in shards whose plan needs it.
+const planStep = shardJob.steps.find((s) => s.id === 'plan');
+assert.match(planStep.run, /--shard \$\{\{ matrix\.shard \}\}\/\$\{\{ strategy\.job-total \}\} --print-setups/);
+const distRestore = shardJob.steps.find((s) => s.uses?.startsWith('actions/cache/restore') && s.with?.path === 'dist');
+const distSave = shardJob.steps.find((s) => s.uses?.startsWith('actions/cache/save') && s.with?.path === 'dist');
+assert.ok(distRestore && distSave, 'backend dist cache restore and save steps');
+for (const step of [distRestore, distSave]) assert.match(String(step.if), /contains\(steps\.plan\.outputs\.setups, ',backend,'\)/, 'dist cache only in shards that build the backend');
+assert.equal(distRestore.with.key, distSave.with.key);
+assert.ok(shardJob.steps.indexOf(distRestore) < shardJob.steps.indexOf(runnerStep) && shardJob.steps.indexOf(runnerStep) < shardJob.steps.indexOf(distSave));
 assert.match(runnerStep.run, /--shard \$\{\{ matrix\.shard \}\}\/\$\{\{ strategy\.job-total \}\}/);
 const stepIndex = (re) => shardJob.steps.findIndex((s) => re.test(s.run || ''));
-assert.ok(stepIndex(/npm ci/) < stepIndex(/sync:web-ui/) && stepIndex(/sync:web-ui/) < stepIndex(/run-regressions/), 'install, then web UI build, then regressions');
+assert.ok(stepIndex(/npm ci/) < stepIndex(/sync:web-ui/) && stepIndex(/sync:web-ui/) < shardJob.steps.indexOf(runnerStep), 'install, then web UI build, then regressions');
 for (const step of shardJob.steps) {
   if (!step.run || step === runnerStep) continue;
   assert.doesNotMatch(step.run, /npm run (-s )?test:|\.regression\.ts|scripts\/test-/, `regressions belong in scripts/ci/regressions.json, not workflow step "${step.name}"`);
@@ -53,7 +62,7 @@ for (const step of shardJob.steps) {
 // The dependency cache must hold every directory npm ci writes. Local file: packages keep their
 // own node_modules (packages/claude-driver/node_modules); missing one broke a cache-hit run.
 const restore = shardJob.steps.find((s) => s.id === 'modules');
-const save = shardJob.steps.find((s) => s.uses?.startsWith('actions/cache/save'));
+const save = shardJob.steps.find((s) => s.uses?.startsWith('actions/cache/save') && s.with?.path !== 'dist');
 const cachePaths = String(restore.with.path).split('\n').map((p) => p.trim()).filter(Boolean);
 assert.deepEqual(String(save.with.path).split('\n').map((p) => p.trim()).filter(Boolean), cachePaths, 'save and restore must cover the same paths');
 const lock = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package-lock.json'), 'utf8'));

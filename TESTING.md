@@ -13,7 +13,8 @@ runs it as five parallel shards through `scripts/ci/run-regressions.mjs`
 (about 2-3 minutes end to end), and each shard reports every failing
 regression in one run instead of stopping at the first. Installed
 dependencies and the Playwright browser are cached by lockfile and Playwright
-version. `main` is branch-protected: the **`verify`** job (it passes only when
+version, and shards that build the backend restore the previous incremental
+`dist/` so `tsc` only rebuilds what changed. `main` is branch-protected: the **`verify`** job (it passes only when
 every shard passed) and the **`audit`** job (privacy and secret scan,
 `.github/workflows/privacy-secret-scan.yml`) are *required status checks*, and
 admins are not exempt. Nothing merges red.
@@ -52,8 +53,10 @@ Between them the shards run:
 Append an entry to `scripts/ci/regressions.json`: `name`, `run` (one command,
 or a list run in order that stops at the first failure), optional `needs` (a
 setup such as `backend`, which runs once per shard before its first user) and
-`seconds` (typical CI duration; it only balances the shards). Do not add test
-steps to the workflow file: `npm run test:ci-runner` rejects that, and checks
+`seconds` (typical CI duration; it only balances the shards). A regression
+that imports compiled code from `dist/` must declare `"needs": ["backend"]`;
+shards only build the backend when one of their regressions needs it. Do not
+add test steps to the workflow file: `npm run test:ci-runner` rejects that, and checks
 that every entry's npm script or file exists. Shard count is the workflow's
 matrix; the split is deterministic, so every shard computes the same plan.
 

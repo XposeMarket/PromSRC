@@ -234,14 +234,14 @@ export function summarize(run) {
 }
 
 function usage() {
-  return 'usage: run-regressions.mjs --shard <i>/<n> | --plan <n> | --list | --only <regex> | --all';
+  return 'usage: run-regressions.mjs --shard <i>/<n> [--print-setups] | --plan <n> | --list | --only <regex> | --all';
 }
 
 export async function main(argv) {
   const args = { };
   for (let i = 0; i < argv.length; i++) {
     const flag = argv[i];
-    if (flag === '--list' || flag === '--all') args[flag.slice(2)] = true;
+    if (flag === '--list' || flag === '--all' || flag === '--print-setups') args[flag.slice(2)] = true;
     else if (flag === '--shard' || flag === '--plan' || flag === '--only') args[flag.slice(2)] = argv[++i];
     else throw new Error(`unknown argument "${flag}"\n${usage()}`);
   }
@@ -262,6 +262,12 @@ export async function main(argv) {
   if (args.shard) {
     const { index, count } = parseShard(args.shard);
     const shard = planShards(manifest, count)[index - 1];
+    // --print-setups lets the workflow prepare per-shard caches (e.g. the incremental backend build)
+    // only where a regression needs them, before any regression runs.
+    if (args['print-setups']) {
+      console.log(shard.setups.join(','));
+      return 0;
+    }
     entries = shard.entries;
     label = `shard ${index}/${count}`;
     console.log(`Regression ${label}: ${entries.length} regressions, estimated ~${shard.estimatedSeconds}s${shard.setups.length ? ` (setups: ${shard.setups.join(', ')})` : ''}`);

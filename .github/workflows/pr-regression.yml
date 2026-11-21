@@ -44,6 +44,10 @@ jobs:
           # npm's download cache: used by npm ci on a dependency change and by the
           # packed-consumer (embed) regression's independent npm install.
           cache: npm
+      - name: Plan this shard
+        id: plan
+        # Setups this shard's regressions need, as ",a,b," for exact contains() checks.
+        run: echo "setups=,$(node scripts/ci/run-regressions.mjs --shard ${{ matrix.shard }}/${{ strategy.job-total }} --print-setups)," >> "$GITHUB_OUTPUT"
       - name: Restore installed dependencies (keyed by package-lock.json)
         id: modules
         uses: actions/cache/restore@v4
@@ -87,8 +91,24 @@ jobs:
         run: |
           npm run sync:web-ui
           git diff --exit-code
+      - name: Restore incremental backend build (shards that build the backend only)
+        if: contains(steps.plan.outputs.setups, ',backend,')
+        uses: actions/cache/restore@v4
+        with:
+          # dist/ with dist/.tsbuildinfo from a recent run: tsc rebuilds only what changed and
+          # prune-dist drops output whose source is gone. Shards whose regressions do not need
+          # the backend never see a restored dist/.
+          path: dist
+          key: backend-dist-v1-${{ runner.os }}-${{ hashFiles('package-lock.json', 'tsconfig.json') }}-${{ github.sha }}
+          restore-keys: backend-dist-v1-${{ runner.os }}-${{ hashFiles('package-lock.json', 'tsconfig.json') }}-
       - name: Run regression shard ${{ matrix.shard }}/${{ strategy.job-total }}
         run: node scripts/ci/run-regressions.mjs --shard ${{ matrix.shard }}/${{ strategy.job-total }}
+      - name: Save incremental backend build
+        if: (success() || failure()) && contains(steps.plan.outputs.setups, ',backend,') && hashFiles('dist/.tsbuildinfo') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: dist
+          key: backend-dist-v1-${{ runner.os }}-${{ hashFiles('package-lock.json', 'tsconfig.json') }}-${{ github.sha }}
       - name: Verify regressions left tracked files unchanged
         run: git diff --exit-code --stat
 
