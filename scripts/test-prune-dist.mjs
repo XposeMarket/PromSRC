@@ -71,7 +71,9 @@ try {
   r = run();
   assert.equal(r.status, 0, r.stderr);
   for (const rel of orphans) assert.ok(!has(rel), `orphan survived: ${rel}`);
-  for (const rel of owned) assert.ok(has(rel), `owned file removed: ${rel}`);
+  // Pruning output means dist/ no longer equals a completed build: the completion stamp goes too.
+  for (const rel of owned.filter((f) => f !== 'dist/.build-complete.json')) assert.ok(has(rel), `owned file removed: ${rel}`);
+  assert.ok(!has('dist/.build-complete.json'), 'pruning orphans must drop the build completion stamp');
   assert.ok(!has('dist/agents'), 'empty directories are removed');
   assert.ok(!has('dist/gateway/turn-workers'), 'empty nested directories are removed');
   assert.ok(has('dist'), 'dist itself is kept');
@@ -79,6 +81,11 @@ try {
   // now clean
   r = run('--check');
   assert.equal(r.status, 0, r.stderr);
+  // a prune that removes nothing keeps the completion stamp (stamps are never orphans)
+  write('dist/.build-complete.json');
+  r = run();
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(has('dist/.build-complete.json'), 'a no-op prune must keep the completion stamp');
 
   // --all wipes dist
   r = run('--all');

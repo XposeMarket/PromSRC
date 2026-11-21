@@ -15,8 +15,11 @@ const { beginBuildStamp, completeBuildStamp } = require('../electron/compiled-bu
 const root = path.resolve(__dirname, '..');
 const action = process.argv[2];
 if (action === 'begin') beginBuildStamp(root);
-else if (action === 'complete') completeBuildStamp(root);
-else {
+else if (action === 'complete') {
+  if (!completeBuildStamp(root)) {
+    console.warn('[build] A newer backend build took over dist/; leaving the completion stamp to it.');
+  }
+} else {
   console.error('usage: node scripts/build-stamp.js begin|complete');
   process.exit(2);
 }

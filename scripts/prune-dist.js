@@ -155,6 +155,9 @@ function main() {
   for (const rel of orphans) fs.rmSync(path.join(dist, rel), { force: true });
   if (exists(dist)) removeEmptyDirs(dist);
   if (orphans.length > 0) {
+    // dist/ no longer equals a completed backend build, so source checkouts must not
+    // launch it until the next build (inside build:backend the stamp is already gone).
+    fs.rmSync(path.join(dist, '.build-complete.json'), { force: true });
     console.log(`[build] Pruned ${summarize(orphans)} from dist/ with no source`);
   } else if (!opts.quiet) {
     console.log('[build] dist/ has no orphaned files');
