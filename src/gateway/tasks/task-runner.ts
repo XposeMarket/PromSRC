@@ -1900,7 +1900,7 @@ function statusFromRecord(rec: EphemeralBackgroundRecord): EphemeralBackgroundSt
     tags: rec.tags,
     spawnerSessionId: rec.spawnerSessionId,
     backgroundSessionId: backgroundRuntimeSessionId(rec),
-    ...(rec.conversationId ? { conversationId: rec.conversationId, predecessorId: rec.predecessorId } : {}),
+    ...backgroundFollowUpMetadata(rec),
     promptPreview: rec.promptPreview,
     fileChanges: rec.fileChanges,
     providerId: rec.providerId,

@@ -65,7 +65,12 @@ export function createDesktopBackgroundAgentWork({
     if (!normalized) return null;
     const records = readBackgroundAgentWork();
     const index = records.findIndex((item) => item.id === normalized.id && item.sessionId === normalized.sessionId);
-    if (index >= 0) {
+    const roundOf = (item) => Math.max(0, Math.floor(Number(item?.followUpRound || 0)) || 0);
+    if (index >= 0 && roundOf(normalized) !== roundOf(records[index])) {
+      // A follow-up round replaces per-round buffers; an older round's late
+      // write never overwrites a newer one.
+      if (roundOf(normalized) > roundOf(records[index])) records[index] = { ...normalized, events: normalized.events.slice(-1200) };
+    } else if (index >= 0) {
       const previous = records[index];
       const previousLastSeq = Number(previous.lastSeq || 0);
       const normalizedLastSeq = Number(normalized.lastSeq || 0);

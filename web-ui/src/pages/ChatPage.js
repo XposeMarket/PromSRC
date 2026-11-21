@@ -66,11 +66,15 @@ import {
   sourcePanelResourceBelongsToContext,
 } from '../source-panel-context.js';
 import {
+  archiveBackgroundAgentRound,
   backgroundAgentAgeLabel,
-  backgroundAgentFollowUpFields,
-  backgroundAgentFollowUpLabel,
+  backgroundAgentFollowUpLink,
+  backgroundAgentFollowUpPromptMessage,
+  backgroundAgentLaneExecutionId,
+  backgroundAgentLaneKey,
   backgroundAgentPreview,
   backgroundAgentRecordToMessage,
+  backgroundAgentRoundTransition,
   backgroundAgentWorkForSession,
   findBackgroundAgentWork,
   mergeBackgroundAgentEvents,
@@ -79,7 +83,6 @@ import {
   normalizeBackgroundAgentWork,
   readBackgroundAgentWork,
   resolveBackgroundAgentIdentity,
-  resolveBackgroundLaneIdentity,
   writeBackgroundAgentWork,
 } from '../background-agent-work.js';
 import { createDesktopBackgroundAgentWork } from '../features/chat/core/desktop-background-agent-work.js';
@@ -931,8 +934,10 @@ function rememberBackgroundAgentSteer(backgroundId, text) {
 }
 
 async function sendBackgroundAgentSteerMessage(message = null) {
-  const backgroundId = String(window.backgroundAgentDetailId || '').trim();
-  if (!backgroundId) return;
+  const laneId = String(window.backgroundAgentDetailId || '').trim();
+  if (!laneId) return;
+  // The lane is keyed by its conversation root; steer the round it is showing.
+  const backgroundId = backgroundAgentLaneExecutionId(ensureBackgroundSpawnDockMap().get(laneId)) || laneId;
   const input = document.getElementById('background-agent-chat-input');
   const text = String(message == null ? input?.value || '' : message).trim();
   if (!text) return;
@@ -951,7 +956,7 @@ async function sendBackgroundAgentSteerMessage(message = null) {
       input.value = '';
       input.style.height = 'auto';
     }
-    rememberBackgroundAgentSteer(backgroundId, text);
+    rememberBackgroundAgentSteer(laneId, text);
     renderBackgroundAgentDetail();
   } catch (error) {
     showToast('Could not steer background agent', String(error?.message || error || 'The live agent is no longer available.'), 'error');
@@ -14891,6 +14896,33 @@ function renderSideChatPaneHtml(timelineBudget = null) {
     </section>`;
 }
 
+// Follow-ups continue the agent's own thread: each earlier round renders as its
+// follow-up prompt, steers and answer, then the current round's prompt.
+function backgroundAgentFollowUpThreadHistory(record, identity) {
+  const history = [];
+  (Array.isArray(record?.rounds) ? record.rounds : []).forEach((round) => {
+    const prompt = round.round
+      ? backgroundAgentFollowUpPromptMessage(round.prompt, { laneId: record.id, executionId: round.executionId, round: round.round, timestamp: round.startedAt })
+      : null;
+    if (prompt) history.push(prompt);
+    (Array.isArray(round.steerMessages) ? round.steerMessages : []).forEach((steer) => {
+      const content = String(steer?.content || '').trim();
+      if (content) history.push({ role: 'user', content, timestamp: Number(steer.timestamp || 0) || Date.now(), channelLabel: 'steer', workflowGroupId: String(steer.workflowGroupId || `chat_steer_background_${round.executionId}`), workflowPart: 'interruption' });
+    });
+    history.push({
+      ...backgroundAgentRecordToMessage({ ...round, id: record.id, agentName: identity.name, agentColor: identity.color, events: round.processEntries }),
+      workflowLabel: identity.name,
+      workflowAvatarHtml: renderBackgroundAgentWorkflowAvatar(identity),
+      streaming: false,
+    });
+  });
+  const current = Number(record?.followUpRound || 0)
+    ? backgroundAgentFollowUpPromptMessage(record.roundPrompt, { laneId: record.id, executionId: record.executionId, round: record.followUpRound, timestamp: record.startedAt })
+    : null;
+  if (current) history.push(current);
+  return history;
+}
+
 function renderBackgroundAgentSidePaneHtml(record, timelineBudget = null) {
   if (!record) return '';
   const identity = resolveBackgroundAgentIdentity(record.id, {
@@ -14927,6 +14959,7 @@ function renderBackgroundAgentSidePaneHtml(record, timelineBudget = null) {
     }))
     .filter((steer) => steer.content);
   const sideSessionId = `background:${record.id}`;
+  steerHistory.unshift(...backgroundAgentFollowUpThreadHistory(record, identity));
   const sideHistory = running ? steerHistory : [...steerHistory, message];
   const sideEntries = desktopTimelineEntries(sideHistory, sideSessionId);
   const sideTimeline = desktopTimelineController.select(`desktop:side:${sideSessionId}`, sideEntries, {
@@ -14949,7 +14982,7 @@ function renderBackgroundAgentSidePaneHtml(record, timelineBudget = null) {
     <section class="side-chat-pane background-agent-side-pane" data-background-agent-id="${escHtml(record.id)}" data-chat-pane-key="side:${escHtml(sideSessionId)}" aria-label="${escHtml(identity.name)} background work" style="--background-agent-color:${escHtml(identity.color)}">
       <div class="side-chat-header">
         <div class="side-chat-title-wrap">
-          <div class="side-chat-kicker">${escHtml([backgroundAgentFollowUpLabel(record), record.model ? formatModelWithReasoning(record.model, record.providerId, record.reasoningEffort) : statusLabel].filter(Boolean).join(' \u00b7 '))}</div>
+          <div class="side-chat-kicker">${escHtml(record.model ? formatModelWithReasoning(record.model, record.providerId, record.reasoningEffort) : statusLabel)}</div>
           <div class="side-chat-title" style="color:${escHtml(identity.color)}">${escHtml(identity.name)}</div>
         </div>
         <button class="side-chat-close" type="button" onclick="closeBackgroundAgentDetail()" title="Close background work" aria-label="Close background work">×</button>
@@ -18494,13 +18527,17 @@ function setBackgroundSpawnDockOpen(sessionId, open) {
 }
 
 function backgroundSpawnIdentityForLane(lane, allLanes = []) {
-  // Same-conversation lanes (a root and its follow-up rounds) share identity.
-  return resolveBackgroundLaneIdentity(lane?.id, {
+  const usedNames = allLanes
+    .filter((item) => item && item !== lane && String(item.sessionId || '') === String(lane?.sessionId || ''))
+    .map((item) => item.agentName || item.label);
+  const usedColors = allLanes
+    .filter((item) => item && item !== lane && String(item.sessionId || '') === String(lane?.sessionId || ''))
+    .map((item) => item.agentColor);
+  return resolveBackgroundAgentIdentity(lane?.id, {
     existingName: lane?.agentName,
     existingColor: lane?.agentColor,
-    sources: [lane],
-    lanes: allLanes.filter((item) => item && item !== lane && String(item.sessionId || '') === String(lane?.sessionId || '')),
-    sessionId: lane?.sessionId,
+    usedNames,
+    usedColors,
   });
 }
 
@@ -18509,7 +18546,10 @@ function backgroundSpawnWorkRecord(lane) {
   const identity = backgroundSpawnIdentityForLane(lane, Array.from(ensureBackgroundSpawnDockMap().values()));
   return {
     id: lane.id,
-    ...backgroundAgentFollowUpFields(lane),
+    executionId: lane.executionId,
+    followUpRound: lane.followUpRound,
+    roundPrompt: lane.roundPrompt,
+    rounds: lane.rounds,
     sessionId: lane.sessionId || window.activeChatSessionId,
     agentName: identity.name,
     agentColor: identity.color,
@@ -18555,37 +18595,87 @@ function backgroundSpawnIsVoiceWorker(msg = {}) {
 function backgroundSpawnEventSessionMatches(msg = {}) {
   if (backgroundSpawnIsVoiceWorker(msg)) return false;
   const id = backgroundSpawnLaneId(msg);
-  if (id && ensureBackgroundSpawnClearedIds().has(id)) return false;
+  // A follow-up reopens a dismissed agent: it is new activity in that thread.
+  if (id && ensureBackgroundSpawnClearedIds().has(id) && !backgroundSpawnFollowUpLink(msg)) return false;
   const sid = String(msg.sessionId || msg.spawnerSessionId || '').trim();
   if (!sid) return true;
   return sid === String(window.activeChatSessionId || '').trim()
     || sid === String(window.agentSessionId || '').trim();
 }
 
-function backgroundSpawnLaneId(msg = {}) {
+function backgroundSpawnExecutionId(msg = {}) {
   return String(msg.bgId || msg.backgroundId || msg.serverAgentId || msg.agentId || '').trim();
+}
+
+function backgroundSpawnFollowUpLink(msg = {}) {
+  return backgroundAgentFollowUpLink(backgroundSpawnExecutionId(msg), msg, msg.data);
+}
+
+// Lanes are keyed by conversation root: a follow-up round lands in its agent.
+function backgroundSpawnLaneId(msg = {}) {
+  return backgroundAgentLaneKey(backgroundSpawnExecutionId(msg), msg, msg.data);
+}
+
+// Archive the lane's current round and reset its live per-round state.
+function beginBackgroundSpawnFollowUpRound(lane, executionId, link, msg = {}) {
+  lane.rounds = archiveBackgroundAgentRound(lane, { liveTraceEntries: backgroundSpawnLaneLiveTrace(lane), processEntries: lane.events });
+  Object.assign(lane, {
+    executionId,
+    followUpRound: link.round || Number(lane.followUpRound || 0) + 1,
+    roundPrompt: '',
+    status: 'running',
+    events: [],
+    liveTraceEntries: [],
+    __liveTraceEventsRef: null,
+    result: '',
+    error: '',
+    fileChanges: null,
+    plan: null,
+    steerMessages: [],
+    streamId: '',
+    lastSeq: 0,
+    startedAt: Number(msg.startedAt || 0) || Date.now(),
+    completedAt: 0,
+  });
 }
 
 function upsertBackgroundSpawnLane(msg = {}) {
   const id = backgroundSpawnLaneId(msg);
   if (!id) return null;
+  const executionId = backgroundSpawnExecutionId(msg) || id;
+  const link = backgroundSpawnFollowUpLink(msg);
   const lanes = ensureBackgroundSpawnDockMap();
+  if (link && !lanes.has(id)) {
+    // The agent's lane was dismissed or cleared: continue its stored thread.
+    ensureBackgroundSpawnClearedIds().delete(id);
+    const stored = findBackgroundAgentWork(id, String(msg.sessionId || msg.spawnerSessionId || window.activeChatSessionId || '').trim()) || findBackgroundAgentWork(id);
+    if (stored) lanes.set(id, { ...stored, label: stored.agentName, events: Array.isArray(stored.events) ? stored.events : [] });
+  }
   const existing = lanes.get(id) || {};
-  const identity = resolveBackgroundLaneIdentity(id, {
+  const transition = backgroundAgentRoundTransition(existing, executionId, link);
+  if (transition === 'stale') return null;
+  if (transition === 'new') beginBackgroundSpawnFollowUpRound(existing, executionId, link, msg);
+  else if (link && !existing.executionId) Object.assign(existing, { executionId, followUpRound: link.round || 1 });
+  // A round's task text is its follow-up prompt; the lane's task stays the root assignment.
+  const incomingTask = String(msg.task || msg.prompt || '').trim();
+  if (link && incomingTask) existing.roundPrompt = incomingTask;
+  const identity = resolveBackgroundAgentIdentity(id, {
     existingName: existing.agentName,
     existingColor: existing.agentColor,
-    sources: [msg, existing],
-    lanes: Array.from(lanes.values()).filter((lane) => lane !== existing),
-    sessionId: String(msg.sessionId || existing.sessionId || window.activeChatSessionId || '').trim(),
+    usedNames: Array.from(lanes.values()).filter((lane) => lane !== existing).map((lane) => lane.agentName || lane.label),
+    usedColors: Array.from(lanes.values()).filter((lane) => lane !== existing).map((lane) => lane.agentColor),
   });
   const lane = {
     id,
-    ...backgroundAgentFollowUpFields(msg, existing),
+    executionId: existing.executionId || (executionId !== id ? executionId : undefined),
+    followUpRound: Number(existing.followUpRound || 0) || undefined,
+    roundPrompt: existing.roundPrompt || '',
+    rounds: Array.isArray(existing.rounds) ? existing.rounds : [],
     sessionId: String(msg.sessionId || existing.sessionId || window.activeChatSessionId || '').trim(),
     label: identity.name,
     agentName: identity.name,
     agentColor: identity.color,
-    task: String(msg.task || msg.prompt || existing.task || '').trim(),
+    task: String((link ? '' : incomingTask) || existing.task || incomingTask || '').trim(),
     model: msg.model || existing.model || '',
     providerId: msg.providerId || existing.providerId || '',
     reasoningEffort: msg.reasoningEffort || msg.executor_reasoning_effort || existing.reasoningEffort || '',
@@ -19016,7 +19106,7 @@ document.addEventListener('prom-mode-change', () => scheduleBackgroundAgentUiUpd
 function completeBackgroundSpawnLane(msg = {}) {
   const clearedId = backgroundSpawnLaneId(msg);
   const clearedSessionId = String(msg.sessionId || msg.spawnerSessionId || window.activeChatSessionId || '').trim();
-  if (clearedId && ensureBackgroundSpawnClearedIds().has(clearedId)) {
+  if (clearedId && ensureBackgroundSpawnClearedIds().has(clearedId) && !backgroundSpawnFollowUpLink(msg)) {
     const existing = findBackgroundAgentWork(clearedId, clearedSessionId) || {};
     const failed = msg.state === 'failed' || msg.state === 'timed_out' || !!msg.error;
     const completedAt = Number(msg.completedAt || Date.now()) || Date.now();
@@ -19101,7 +19191,7 @@ function renderBackgroundAgentDetail() {
     }
     const list = pane.querySelector('#background-agent-side-messages');
     if (!list) return;
-    const signature = `${record.status}:${record.updatedAt}:${record.lastSeq}:${record.events?.length}:${record.result}:${record.steerMessages?.length}`;
+    const signature = `${record.status}:${record.updatedAt}:${record.lastSeq}:${record.events?.length}:${record.result}:${record.steerMessages?.length}:${record.followUpRound || 0}:${record.rounds?.length || 0}`;
     if (list.dataset.streamVersion === signature) return;
     const template = document.createElement('div');
     template.innerHTML = renderBackgroundAgentSidePaneHtml(record);
@@ -19142,16 +19232,20 @@ async function refreshBackgroundAgentStream(backgroundId) {
   const id = String(backgroundId || '').trim();
   const lane = id ? ensureBackgroundSpawnDockMap().get(id) : null;
   if (!id || !lane) return;
+  // Replay the round this lane is showing; its frames keep their conversation link.
+  const executionId = backgroundAgentLaneExecutionId(lane) || id;
+  const roundLink = executionId !== id ? { conversationId: id, followUpRound: lane.followUpRound } : {};
   try {
-    const replay = await api(`/api/background/${encodeURIComponent(id)}/stream?after=${encodeURIComponent(String(lane.lastSeq || 0))}`);
+    const replay = await api(`/api/background/${encodeURIComponent(executionId)}/stream?after=${encodeURIComponent(String(lane.lastSeq || 0))}`);
     const stream = replay?.stream || null;
     if (stream?.streamId && lane.streamId && stream.streamId !== lane.streamId) lane.lastSeq = 0;
     if (stream?.streamId) lane.streamId = String(stream.streamId);
     (Array.isArray(replay?.events) ? replay.events : []).forEach((frame) => {
       pushBackgroundSpawnEvent({
         ...(frame.data || {}),
-        bgId: id,
-        backgroundId: id,
+        ...roundLink,
+        bgId: executionId,
+        backgroundId: executionId,
         sessionId: lane.sessionId,
         eventType: frame.type,
         streamId: frame.streamId || stream?.streamId,
@@ -19255,7 +19349,7 @@ function renderBackgroundSpawnDock() {
       toolSummary: liveTraceToolSummary,
     });
     const identity = resolveBackgroundAgentIdentity(lane.id, { existingName: lane.agentName, existingColor: lane.agentColor });
-    const modelLabel = [backgroundAgentFollowUpLabel(lane), agentModelLabel(lane)].filter(Boolean).join(' \u00b7 ');
+    const modelLabel = agentModelLabel(lane);
     return `
       <section class="background-spawn-lane ${escHtml(status)}" data-bg-id="${escHtml(lane.id)}" style="--background-agent-color:${escHtml(identity.color)}">
         <button type="button" class="background-spawn-summary" data-bg-open-detail="${escHtml(lane.id)}" aria-label="Open ${escHtml(identity.name)} background work">
@@ -48657,7 +48751,7 @@ wsEventBus.on('bg_agent_done', (msg) => {
       sessionId,
       'Background agent',
       msg?.result || msg?.error || msg?.taskPrompt || (failed ? 'The background task needs attention.' : 'The background task is ready.'),
-      { state: failed ? 'failed' : 'complete', title: `Background ${msg?.conversationId ? 'follow-up' : 'agent'} ${failed ? 'needs attention' : 'complete'}` },
+      { state: failed ? 'failed' : 'complete', title: failed ? 'Background agent needs attention' : 'Background agent complete' },
     );
   }
   // The server owns synthesis and durable internal evidence. A late completion

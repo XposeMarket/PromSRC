@@ -265,7 +265,7 @@ if (!window.__pmMobileCompletionToastBridgeInstalled) {
   wsEventBus.on('bg_agent_done', (msg = {}) => {
     _showMobileCompletionToast({
       key: `background:${msg.bgId || ''}:${msg.state || 'completed'}`,
-      title: `Background ${msg.conversationId ? 'follow-up' : 'agent'} ${String(msg.state || '').toLowerCase() === 'failed' ? 'failed' : 'finished'}`,
+      title: String(msg.state || '').toLowerCase() === 'failed' ? 'Background agent failed' : 'Background agent finished',
       summary: msg.result || msg.error || msg.taskPrompt || msg.task || 'A background agent completed its work.',
       route: _mobileCompletionRoute(msg),
     });

@@ -96,84 +96,126 @@ export function resolveBackgroundAgentIdentity(id, options = {}) {
   return { name, color };
 }
 
-// Follow-up rounds are fresh executions inside their root agent's conversation.
-// Lanes are keyed by execution id, so carry the conversation link and present
-// every round as the SAME agent (name + color), labelled with its round.
-function backgroundAgentRecordId(source) {
-  return String(source?.id || source?.bgId || source?.backgroundId || '').trim();
+// ─── Follow-up rounds ────────────────────────────────────────────────────────
+// A follow-up is a fresh execution (its own id and stream) inside the root
+// agent's conversation. Clients keep ONE lane per conversation, keyed by the
+// root id, so a follow-up continues the original agent's thread: the previous
+// answer is archived as a finished round and the follow-up prompt becomes the
+// next message, instead of a second agent appearing in the dock.
+const MAX_BACKGROUND_AGENT_ROUNDS = 8;
+const MAX_BACKGROUND_AGENT_ROUND_ENTRIES = 160;
+
+function backgroundAgentRoundNumber(value) {
+  return Math.max(0, Math.floor(Number(value || 0)) || 0);
 }
 
-export function backgroundAgentFollowUp(...sources) {
-  let conversationId = '';
-  let round = 0;
+/** The conversation link carried by a follow-up execution, or null for a root run. */
+export function backgroundAgentFollowUpLink(executionId, ...sources) {
+  const exec = String(executionId || '').trim();
   for (const source of sources) {
     if (!source || typeof source !== 'object') continue;
-    const linked = String(source.conversationId || '').trim();
-    if (!linked || linked === backgroundAgentRecordId(source)) continue;
-    conversationId ||= linked;
-    if (linked !== conversationId) continue;
-    round ||= Math.max(0, Math.floor(Number(source.followUpRound ?? source.round ?? 0)) || 0);
+    const conversationId = String(source.conversationId || '').trim();
+    if (conversationId && conversationId !== exec) {
+      return { conversationId, round: backgroundAgentRoundNumber(source.followUpRound) };
+    }
   }
-  return conversationId ? { conversationId, round } : null;
+  return null;
 }
 
-export function backgroundAgentFollowUpFields(...sources) {
-  const followUp = backgroundAgentFollowUp(...sources);
-  if (!followUp) return {};
-  return { conversationId: followUp.conversationId, ...(followUp.round ? { followUpRound: followUp.round } : {}) };
+/** Lane key for an execution: its conversation root, or itself for a root run. */
+export function backgroundAgentLaneKey(executionId, ...sources) {
+  return backgroundAgentFollowUpLink(executionId, ...sources)?.conversationId || String(executionId || '').trim();
 }
 
-export function backgroundAgentFollowUpLabel(...sources) {
-  const followUp = backgroundAgentFollowUp(...sources);
-  if (!followUp) return '';
-  return followUp.round ? `Follow-up \u00b7 round ${followUp.round}` : 'Follow-up';
-}
-
-function backgroundAgentConversationKey(source) {
-  return backgroundAgentFollowUp(source)?.conversationId || backgroundAgentRecordId(source);
+/** The execution a lane currently shows (steer, status and replay target it). */
+export function backgroundAgentLaneExecutionId(lane) {
+  return String(lane?.executionId || lane?.id || '').trim();
 }
 
 /**
- * Identity for a live lane. Rounds of one conversation share a name and color:
- * a follow-up inherits its root's identity (live lane, then durable work), and
- * lanes of the same conversation never count as "used" by each other, which
- * would otherwise rename or recolor either side.
+ * How a frame from `executionId` relates to the lane: 'same' execution, a
+ * 'new' follow-up round that should advance the lane, or 'stale' (an earlier
+ * round, or the root run, arriving after the lane already moved on).
  */
-export function resolveBackgroundLaneIdentity(id, options = {}) {
-  const selfId = String(id || '').trim();
-  const followUp = backgroundAgentFollowUp(...(Array.isArray(options.sources) ? options.sources : []));
-  const key = followUp?.conversationId || selfId;
-  const lanes = (Array.isArray(options.lanes) ? options.lanes : []).filter((lane) => lane && typeof lane === 'object');
-  // This execution's own (possibly still unlinked) lane is never a peer.
-  const peers = lanes.filter((lane) => backgroundAgentRecordId(lane) !== selfId && backgroundAgentConversationKey(lane) !== key);
-  let existingName = String(options.existingName || '').trim();
-  let existingColor = String(options.existingColor || '').trim();
-  if (followUp) {
-    // Authoritative once linked: a round wears its root's identity even if it
-    // was cached before the link existed or first seen from an unlinked frame.
-    const root = lanes.find((lane) => backgroundAgentRecordId(lane) === key)
-      || findBackgroundAgentWork(key, options.sessionId)
-      || findBackgroundAgentWork(key);
-    const rootName = String(root?.agentName || root?.label || '').trim();
-    const rootColor = String(root?.agentColor || root?.color || '').trim();
-    if (!isGenericBackgroundAgentName(rootName)) existingName = rootName;
-    if (rootColor) existingColor = rootColor;
-    if (!root && isGenericBackgroundAgentName(existingName)) {
-      // Root gone everywhere: borrow a sibling round's identity before reseeding.
-      const sibling = lanes.find((lane) => backgroundAgentRecordId(lane) !== selfId
-        && backgroundAgentConversationKey(lane) === key && !isGenericBackgroundAgentName(lane.agentName));
-      existingName = String(sibling?.agentName || '').trim();
-      existingColor ||= String(sibling?.agentColor || '').trim();
-    }
-  }
-  // Seed by the conversation, so a round whose root is gone still lands on
-  // the identity the root would have had.
-  return resolveBackgroundAgentIdentity(key, {
-    existingName,
-    existingColor,
-    usedNames: peers.map((lane) => lane.agentName || lane.label),
-    usedColors: peers.map((lane) => lane.agentColor),
+export function backgroundAgentRoundTransition(lane, executionId, link = null) {
+  const exec = String(executionId || '').trim();
+  const current = lane && typeof lane === 'object' ? backgroundAgentLaneExecutionId(lane) : '';
+  if (!current || !exec || exec === current) return 'same';
+  if ((Array.isArray(lane.rounds) ? lane.rounds : []).some((round) => round?.executionId === exec)) return 'stale';
+  if (!link) return 'stale';
+  const laneRound = backgroundAgentRoundNumber(lane.followUpRound);
+  if (link.round && link.round <= laneRound) return 'stale';
+  return 'new';
+}
+
+export function normalizeBackgroundAgentRound(round = {}) {
+  const executionId = String(round?.executionId || '').trim();
+  if (!executionId) return null;
+  const entries = (value) => (Array.isArray(value) ? value : [])
+    .filter((entry) => entry && typeof entry === 'object')
+    .slice(-MAX_BACKGROUND_AGENT_ROUND_ENTRIES);
+  return {
+    executionId,
+    round: backgroundAgentRoundNumber(round.round),
+    prompt: backgroundAgentText(round.prompt),
+    result: backgroundAgentText(round.result),
+    error: backgroundAgentText(round.error),
+    status: String(round.status || 'completed').trim().toLowerCase() || 'completed',
+    startedAt: Number(round.startedAt || 0) || 0,
+    completedAt: Number(round.completedAt || 0) || 0,
+    liveTraceEntries: entries(round.liveTraceEntries),
+    processEntries: entries(round.processEntries),
+    steerMessages: mergeBackgroundAgentSteerMessages([], Array.isArray(round.steerMessages) ? round.steerMessages : []),
+  };
+}
+
+export function normalizeBackgroundAgentRounds(rounds = []) {
+  const byExecution = new Map();
+  (Array.isArray(rounds) ? rounds : []).forEach((round) => {
+    const normalized = normalizeBackgroundAgentRound(round);
+    if (normalized) byExecution.set(normalized.executionId, normalized);
   });
+  return [...byExecution.values()]
+    .sort((a, b) => a.round - b.round || a.startedAt - b.startedAt)
+    .slice(-MAX_BACKGROUND_AGENT_ROUNDS);
+}
+
+/** Archive the lane's current round; returns the new rounds list. */
+export function archiveBackgroundAgentRound(lane, snapshot = {}) {
+  return normalizeBackgroundAgentRounds([
+    ...(Array.isArray(lane?.rounds) ? lane.rounds : []),
+    {
+      executionId: backgroundAgentLaneExecutionId(lane),
+      round: backgroundAgentRoundNumber(lane?.followUpRound),
+      prompt: backgroundAgentRoundNumber(lane?.followUpRound) ? lane?.roundPrompt : '',
+      status: lane?.status,
+      startedAt: lane?.startedAt,
+      completedAt: lane?.completedAt,
+      result: lane?.result,
+      error: lane?.error,
+      steerMessages: lane?.steerMessages,
+      ...snapshot,
+    },
+  ]);
+}
+
+/** The follow-up prompt rendered as the next user message in the agent thread. */
+export function backgroundAgentFollowUpPromptMessage(prompt, options = {}) {
+  const content = backgroundAgentText(prompt);
+  if (!content) return null;
+  const timestamp = Number(options.timestamp || 0) || Date.now();
+  return {
+    role: 'user',
+    content,
+    body: { text: content },
+    timestamp,
+    backgroundFollowUpRound: backgroundAgentRoundNumber(options.round),
+    _backgroundFollowUpRowKey: `background:${String(options.laneId || '')}:follow-up:${String(options.executionId || timestamp)}`,
+  };
+}
+
+function backgroundAgentRoundOf(record) {
+  return backgroundAgentRoundNumber(record?.followUpRound);
 }
 
 export function normalizeBackgroundAgentEvent(event = {}) {
@@ -283,10 +325,15 @@ export function normalizeBackgroundAgentWork(record = {}) {
     [],
     Array.isArray(record.liveTraceEntries) ? record.liveTraceEntries : [],
   );
+  const executionId = String(record.executionId || '').trim();
+  const followUpRound = backgroundAgentRoundOf(record);
+  const rounds = normalizeBackgroundAgentRounds(record.rounds);
   return {
     id,
     sessionId,
-    ...backgroundAgentFollowUpFields(record),
+    ...(executionId && executionId !== id ? { executionId } : {}),
+    ...(followUpRound ? { followUpRound, roundPrompt: backgroundAgentText(record.roundPrompt) } : {}),
+    ...(rounds.length ? { rounds } : {}),
     backgroundSessionId: String(record.backgroundSessionId || record.bgSessionId || '').trim(),
     agentName: identity.name,
     agentColor: identity.color,
@@ -457,7 +504,12 @@ export function persistBackgroundAgentWork(record = {}, options = {}) {
   if (!normalized) return null;
   const records = readBackgroundAgentWork();
   const index = records.findIndex((item) => item.id === normalized.id && item.sessionId === normalized.sessionId);
-  if (index >= 0) {
+  if (index >= 0 && backgroundAgentRoundOf(normalized) !== backgroundAgentRoundOf(records[index])) {
+    // A follow-up round replaces the per-round buffers wholesale; merging would
+    // pull the archived round's events back into the current one. A late write
+    // from an older round never overwrites a newer one.
+    if (backgroundAgentRoundOf(normalized) > backgroundAgentRoundOf(records[index])) records[index] = normalized;
+  } else if (index >= 0) {
     const previous = records[index];
     const previousLastSeq = Number(previous.lastSeq || 0);
     const normalizedLastSeq = Number(normalized.lastSeq || 0);

@@ -178,7 +178,7 @@
     "test:tool-category-routing": "tsx src/runtime/tool-category-routing.regression.ts",
     "test:tool-category-provisioning": "tsx src/gateway/tool-category-provisioning.regression.ts",
     "test:background-spawn-tool-surface": "tsx src/gateway/tasks/background-spawn-tool-surface.regression.ts",
-    "test:background-follow-up-label": "tsx src/gateway/tasks/background-follow-up-scope.regression.ts && tsx src/gateway/tasks/background-follow-up.regression.ts && node scripts/test-background-follow-up-label.mjs",
+    "test:background-follow-up-thread": "tsx src/gateway/tasks/background-follow-up-scope.regression.ts && tsx src/gateway/tasks/background-follow-up.regression.ts && node scripts/test-background-follow-up-thread.mjs && node scripts/test-mobile-background-agent-reducer.mjs",
     "test:background-wait-early-return": "tsx src/gateway/tasks/background-wait-early-return.regression.ts",
     "test:goal-final-reply-placement": "tsx src/gateway/goal-final-reply-placement.regression.ts",
     "test:goal-stop-recovery": "tsx src/gateway/goal-stop-recovery.regression.ts",
