@@ -39,9 +39,10 @@ assert.match(performanceRuntime, /processLogPersistTimers/);
 const desktopBackgroundEventListener = desktop.match(/wsEventBus\.on\('bg_agent_event'[\s\S]*?\n\}\);/)?.[0] || '';
 assert.ok(desktopBackgroundEventListener, 'desktop background-agent event listener must remain present');
 assert.doesNotMatch(desktopBackgroundEventListener, /_showChannelActivityToast\(/, 'background progress frames must not create desktop toasts');
-assert.match(mobileChatRuntime, /sendMobileBackgroundSteer\(backgroundId, msg\)/);
+// Lanes are keyed by conversation root; steer/replay target the round shown.
+assert.match(mobileChatRuntime, /const steerTarget = backgroundAgentLaneExecutionId\(_mobileBackgroundSpawnLanes\(\)\[backgroundId\]\) \|\| backgroundId;\s*const steerResult = await sendMobileBackgroundSteer\(steerTarget, msg\)/);
 assert.match(mobileChatRuntime, /catch \(persistError\)[\s\S]{0,500}local persistence failed after successful steer/, 'post-success local persistence must not be reported as a failed steer');
-assert.match(mobileChatRuntime, /loadMobileBackgroundStreamReplay\(cleanId, currentLane\?\.lastSeq \|\| 0\)/);
+assert.match(mobileChatRuntime, /loadMobileBackgroundStreamReplay\(executionId, currentLane\?\.lastSeq \|\| 0\)/);
 assert.match(mobileChatRuntime, /_reconcileMobileBackgroundAgentSideThread\(sideThreadEl/);
 assert.match(mobileChatRuntime, /_mobileChatRendererInvoke\('backgroundDetailRecord'/, 'cold background detail records must use the chat renderer runtime');
 assert.match(mobileChatRenderer, /function _mobileBackgroundAgentDetailRecord[\s\S]{0,1400}buildMessage\(storedRecord\)/, 'cold background detail records must become renderable agent messages');

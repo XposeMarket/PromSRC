@@ -267,4 +267,89 @@ runtime._completeMobileBackgroundSpawnLane({
 const promptOnlyRecord = runtime.backgroundDetailRecord(promptOnlyId, sessionId, (entry) => entry, (record) => record.message);
 assert.equal(promptOnlyRecord.result, '', 'the original task prompt must never become the terminal answer');
 
+// Follow-up rounds continue the ORIGINAL agent's lane: the earlier answer is
+// archived as a finished round, the follow-up prompt becomes the next message,
+// and no second agent lane appears.
+const ROOT = 'bg_followup_root';
+const ROUND = 'bg_followup_round1';
+const ROUND2 = 'bg_followup_round2';
+const ROOT_PROMPT = 'Review the scope helper and report one nit.';
+const FOLLOW_UP = 'Without re-reading: which file did you review?';
+const rootEvent = (eventType, seq, data = {}) => ({
+  type: 'bg_agent_event', bgId: ROOT, sessionId, spawnerSessionId: sessionId,
+  backgroundSessionId: `background_${ROOT}`, eventType, streamId: 'stream_root', seq, at: Date.now() + seq, data, prompt: ROOT_PROMPT,
+});
+const roundEvent = (bgId, round, eventType, seq, data = {}, extra = {}) => ({
+  type: 'bg_agent_event', bgId, conversationId: ROOT, predecessorId: ROOT, followUpRound: round,
+  sessionId, spawnerSessionId: sessionId, backgroundSessionId: `background_${ROOT}`,
+  eventType, streamId: `stream_${bgId}`, seq, at: Date.now() + 100 + seq, data, ...extra,
+});
+const roundDone = (bgId, round, result, prompt) => ({
+  type: 'bg_agent_done', bgId, conversationId: ROOT, predecessorId: ROOT, followUpRound: round,
+  sessionId, spawnerSessionId: sessionId, state: 'completed', result, task: prompt, prompt,
+});
+
+runtime._pushMobileBackgroundSpawnEvent(rootEvent('status', 1, { state: 'in_progress' }), sessionId);
+runtime._pushMobileBackgroundSpawnEvent(rootEvent('tool_call', 2, { name: 'Read', args: { path: 'scope.ts' } }), sessionId);
+runtime._completeMobileBackgroundSpawnLane({ type: 'bg_agent_done', bgId: ROOT, sessionId, spawnerSessionId: sessionId, state: 'completed', result: 'Root answer: line 32 nit.', prompt: ROOT_PROMPT }, sessionId);
+
+assert.equal(runtime._pushMobileBackgroundSpawnEvent(roundEvent(ROUND, 1, 'status', 1, { phase: 'queued' }, { task: FOLLOW_UP }), sessionId), true);
+runtime._pushMobileBackgroundSpawnEvent(roundEvent(ROUND, 1, 'agent_thought', 2, { text: 'Recalling the original assignment.' }), sessionId);
+let followLane = chat.backgroundSpawnLanes[ROOT];
+assert.ok(!chat.backgroundSpawnLanes[ROUND], 'a follow-up round never creates its own agent lane');
+assert.equal(followLane.executionId, ROUND, 'the lane now shows the follow-up execution');
+assert.equal(followLane.followUpRound, 1);
+assert.equal(followLane.status, 'running', 'a follow-up reopens the finished agent');
+assert.equal(followLane.task, ROOT_PROMPT, 'the agent keeps its original assignment');
+assert.equal(followLane.roundPrompt, FOLLOW_UP, 'the follow-up prompt is the next message');
+assert.equal(followLane.rounds.length, 1);
+assert.equal(followLane.rounds[0].executionId, ROOT);
+assert.match(followLane.rounds[0].result, /Root answer: line 32 nit/, 'the earlier answer stays in the thread');
+assert.ok(followLane.rounds[0].processEntries.length >= 1, 'the earlier round keeps its tool activity');
+assert.ok(!String(followLane.message.content || '').includes('Root answer'), 'the follow-up streams into a fresh bubble');
+
+// A late frame from the earlier round is stale and never rewinds the lane.
+assert.equal(runtime._pushMobileBackgroundSpawnEvent(rootEvent('tool_result', 9, { name: 'Read', result: 'late' }), sessionId), false);
+assert.equal(chat.backgroundSpawnLanes[ROOT].executionId, ROUND);
+
+runtime._completeMobileBackgroundSpawnLane(roundDone(ROUND, 1, 'Round answer: scope.ts.', FOLLOW_UP), sessionId);
+followLane = chat.backgroundSpawnLanes[ROOT];
+assert.equal(followLane.status, 'completed');
+assert.match(followLane.result, /Round answer: scope\.ts/);
+assert.equal(followLane.rounds.length, 1, 'completing the round does not duplicate the archive');
+const followDetail = runtime.backgroundDetailRecord(ROOT, sessionId, (entry) => entry, (record) => record.message);
+assert.equal(followDetail.roundPrompt, FOLLOW_UP);
+assert.equal(followDetail.rounds.length, 1);
+assert.match(followDetail.result, /Round answer/);
+
+// Durable work is one record per agent conversation, at its latest round.
+runtime._queueMobileBackgroundWorkPersistence?.(followLane, { immediate: true });
+persistBackgroundAgentWork(runtime._mobileBackgroundSpawnWorkRecord?.(followLane) || {
+  ...followDetail, sessionId,
+}, { immediate: true });
+const storedFollow = findBackgroundAgentWork(ROOT, sessionId);
+assert.equal(storedFollow.followUpRound, 1);
+assert.equal(storedFollow.executionId, ROUND);
+assert.match(storedFollow.rounds[0].result, /Root answer/);
+assert.equal(findBackgroundAgentWork(ROUND, sessionId), null, 'no separate durable record for the round');
+
+// Cold reopen: a root status arriving for a stored follow-up conversation is stale.
+delete chat.backgroundSpawnLanes[ROOT];
+assert.equal(runtime._applyMobileBackgroundSpawnStatus({ id: ROOT, state: 'completed', result: 'Root answer: line 32 nit.', spawnerSessionId: sessionId }, sessionId), false);
+const coldLane = chat.backgroundSpawnLanes[ROOT];
+assert.equal(coldLane?.executionId, ROUND, 'cold reopen restores the latest round, not the root again');
+assert.equal(coldLane?.rounds?.length, 1, 'cold reopen does not duplicate the archived root');
+
+// A dismissed agent reopens in place when Prometheus follows up again.
+delete chat.backgroundSpawnLanes[ROOT];
+chat.backgroundSpawnClearedIds[ROOT] = true;
+assert.equal(runtime._pushMobileBackgroundSpawnEvent(roundEvent(ROUND2, 2, 'status', 1, { phase: 'queued' }, { task: 'One more question.' }), sessionId), true);
+const reopened = chat.backgroundSpawnLanes[ROOT];
+assert.ok(reopened, 'the follow-up reopens the dismissed agent');
+assert.ok(!chat.backgroundSpawnClearedIds[ROOT], 'the agent is no longer dismissed');
+assert.equal(reopened.executionId, ROUND2);
+assert.deepEqual(reopened.rounds.map((round) => round.executionId), [ROOT, ROUND]);
+assert.match(reopened.rounds[1].result, /Round answer/);
+assert.equal(reopened.rounds[1].prompt, FOLLOW_UP);
+
 console.log('mobile background-agent reducer: ok');

@@ -1,4 +1,36 @@
+import { backgroundAgentFollowUpPromptMessage, backgroundAgentRecordToMessage, backgroundAgentRoundOf } from './background-agent-work.js';
+
 const BACKGROUND_AGENT_WORK_PERSIST_DEBOUNCE_MS = 750;
+
+/**
+ * Desktop detail pane: earlier follow-up rounds rendered as one continuous
+ * agent thread (each round's prompt, steers and answer), then the current
+ * round's prompt. Desktop-only so it stays out of the mobile chat slice.
+ */
+export function backgroundAgentFollowUpThreadHistory(record, identity = {}, avatarHtml = '') {
+  const history = [];
+  (Array.isArray(record?.rounds) ? record.rounds : []).forEach((round) => {
+    const prompt = round.round
+      ? backgroundAgentFollowUpPromptMessage(round.prompt, { laneId: record.id, executionId: round.executionId, round: round.round, timestamp: round.startedAt })
+      : null;
+    if (prompt) history.push(prompt);
+    (Array.isArray(round.steerMessages) ? round.steerMessages : []).forEach((steer) => {
+      const content = String(steer?.content || '').trim();
+      if (content) history.push({ role: 'user', content, timestamp: Number(steer.timestamp || 0) || Date.now(), channelLabel: 'steer', workflowGroupId: String(steer.workflowGroupId || `chat_steer_background_${round.executionId}`), workflowPart: 'interruption' });
+    });
+    history.push({
+      ...backgroundAgentRecordToMessage({ ...round, id: record.id, agentName: identity.name, agentColor: identity.color, events: round.processEntries }),
+      workflowLabel: identity.name,
+      workflowAvatarHtml: avatarHtml,
+      streaming: false,
+    });
+  });
+  const current = backgroundAgentRoundOf(record)
+    ? backgroundAgentFollowUpPromptMessage(record.roundPrompt, { laneId: record.id, executionId: record.executionId, round: record.followUpRound, timestamp: record.startedAt })
+    : null;
+  if (current) history.push(current);
+  return history;
+}
 
 export function createDesktopBackgroundAgentWork({
   mergeBackgroundAgentEvents,
@@ -65,7 +97,12 @@ export function createDesktopBackgroundAgentWork({
     if (!normalized) return null;
     const records = readBackgroundAgentWork();
     const index = records.findIndex((item) => item.id === normalized.id && item.sessionId === normalized.sessionId);
-    if (index >= 0) {
+    const roundOf = (item) => Math.max(0, Math.floor(Number(item?.followUpRound || 0)) || 0);
+    if (index >= 0 && roundOf(normalized) !== roundOf(records[index])) {
+      // A follow-up round replaces per-round buffers; an older round's late
+      // write never overwrites a newer one.
+      if (roundOf(normalized) > roundOf(records[index])) records[index] = { ...normalized, events: normalized.events.slice(-1200) };
+    } else if (index >= 0) {
       const previous = records[index];
       const previousLastSeq = Number(previous.lastSeq || 0);
       const normalizedLastSeq = Number(normalized.lastSeq || 0);

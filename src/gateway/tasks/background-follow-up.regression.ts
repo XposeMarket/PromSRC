@@ -34,10 +34,11 @@ const ceiling = require('../agents-runtime/tool-ceiling');
 
 type Captured = { prompt: string; sid: string; callerContext: string; toolFilter: any; history: any[] };
 const captured: Captured[] = [];
+const frames: any[] = [];
 let calls = 0;
 let hold: Promise<void> | null = null;
 runner.setBackgroundAgentDeps({
-  broadcastWS() {},
+  broadcastWS(frame: any) { frames.push(frame); },
   async handleChat(prompt: string, sid: string, send: any, ...args: any[]) {
     calls++;
     const history = sessions.getSession(sid).history.slice();
@@ -143,6 +144,21 @@ async function main() {
   assert.equal(runner.backgroundStatus(first.id).result.startsWith('VERDICT_ONE'), true, 'first answer never changes');
   assert.match(runner.backgroundStatus(second.id).result, /ANSWER\(WHY_OBJECT\?\)/);
   assert.equal(runner.backgroundStatus(second.id).backgroundSessionId, convSid);
+  // Clients render a round as the same agent, labelled with its round: live
+  // frames and status carry the conversation link; root frames never do.
+  assert.equal(second.round, 1, 'first follow-up is round 1');
+  assert.equal(runner.backgroundStatus(second.id).followUpRound, 1);
+  assert.equal(runner.backgroundStatus(second.id).conversationId, first.id);
+  assert.equal(runner.backgroundStatus(first.id).conversationId, undefined, 'root status has no conversation link');
+  const roundFrames = frames.filter((frame) => frame.bgId === second.id);
+  assert(roundFrames.some((frame) => frame.type === 'bg_agent_event'), 'follow-up streams live events');
+  for (const frame of roundFrames.filter((f) => f.type === 'bg_agent_event' || f.type === 'bg_agent_done')) {
+    assert.equal(frame.conversationId, first.id, `${frame.type} carries the conversation`);
+    assert.equal(frame.followUpRound, 1, `${frame.type} carries the round`);
+    assert.equal(frame.predecessorId, first.id);
+  }
+  assert(roundFrames.some((frame) => frame.type === 'bg_agent_done'), 'follow-up emits a done frame');
+  assert(frames.filter((frame) => frame.bgId === first.id).every((frame) => frame.conversationId === undefined), 'root frames carry no conversation link');
   assert.equal(steersFor(second.id).length, 1, 'result delivered to the requesting turn once');
   const rejoin = await runner.backgroundJoin({ backgroundId: first.id, joinPolicy: 'wait_all' });
   assert.match(rejoin.result, /^VERDICT_ONE/);

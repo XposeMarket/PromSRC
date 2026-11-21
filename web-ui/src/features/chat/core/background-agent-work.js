@@ -96,6 +96,208 @@ export function resolveBackgroundAgentIdentity(id, options = {}) {
   return { name, color };
 }
 
+// ─── Follow-up rounds ────────────────────────────────────────────────────────
+// A follow-up is a fresh execution (its own id and stream) inside the root
+// agent's conversation. Clients keep ONE lane per conversation, keyed by the
+// root id, so a follow-up continues the original agent's thread: the previous
+// answer is archived as a finished round and the follow-up prompt becomes the
+// next message, instead of a second agent appearing in the dock.
+const MAX_BACKGROUND_AGENT_ROUNDS = 8;
+const MAX_BACKGROUND_AGENT_ROUND_ENTRIES = 160;
+
+function backgroundAgentRoundNumber(value) {
+  return Math.max(0, Math.floor(Number(value || 0)) || 0);
+}
+
+/** The conversation link carried by a follow-up execution, or null for a root run. */
+export function backgroundAgentFollowUpLink(executionId, ...sources) {
+  const exec = String(executionId || '').trim();
+  for (const source of sources) {
+    if (!source || typeof source !== 'object') continue;
+    const conversationId = String(source.conversationId || '').trim();
+    if (conversationId && conversationId !== exec) {
+      return { conversationId, round: backgroundAgentRoundNumber(source.followUpRound) };
+    }
+  }
+  return null;
+}
+
+/** Lane key for an execution: its conversation root, or itself for a root run. */
+export function backgroundAgentLaneKey(executionId, ...sources) {
+  return backgroundAgentFollowUpLink(executionId, ...sources)?.conversationId || String(executionId || '').trim();
+}
+
+/** The execution a lane currently shows (steer, status and replay target it). */
+export function backgroundAgentLaneExecutionId(lane) {
+  return String(lane?.executionId || lane?.id || '').trim();
+}
+
+/**
+ * How a frame from `executionId` relates to the lane: 'same' execution, a
+ * 'new' follow-up round that should advance the lane, or 'stale' (an earlier
+ * round, or the root run, arriving after the lane already moved on).
+ */
+export function backgroundAgentRoundTransition(lane, executionId, link = null) {
+  const exec = String(executionId || '').trim();
+  const current = lane && typeof lane === 'object' ? backgroundAgentLaneExecutionId(lane) : '';
+  if (!current || !exec || exec === current) return 'same';
+  if ((Array.isArray(lane.rounds) ? lane.rounds : []).some((round) => round?.executionId === exec)) return 'stale';
+  if (!link) return 'stale';
+  const laneRound = backgroundAgentRoundNumber(lane.followUpRound);
+  if (link.round && link.round <= laneRound) return 'stale';
+  return 'new';
+}
+
+export function normalizeBackgroundAgentRound(round = {}) {
+  const executionId = String(round?.executionId || '').trim();
+  if (!executionId) return null;
+  const entries = (value) => (Array.isArray(value) ? value : [])
+    .filter((entry) => entry && typeof entry === 'object')
+    .slice(-MAX_BACKGROUND_AGENT_ROUND_ENTRIES);
+  return {
+    executionId,
+    round: backgroundAgentRoundNumber(round.round),
+    prompt: backgroundAgentText(round.prompt),
+    result: backgroundAgentText(round.result),
+    error: backgroundAgentText(round.error),
+    status: String(round.status || 'completed').trim().toLowerCase() || 'completed',
+    startedAt: Number(round.startedAt || 0) || 0,
+    completedAt: Number(round.completedAt || 0) || 0,
+    liveTraceEntries: entries(round.liveTraceEntries),
+    processEntries: entries(round.processEntries),
+    steerMessages: mergeBackgroundAgentSteerMessages([], Array.isArray(round.steerMessages) ? round.steerMessages : []),
+  };
+}
+
+export function normalizeBackgroundAgentRounds(rounds = []) {
+  const byExecution = new Map();
+  (Array.isArray(rounds) ? rounds : []).forEach((round) => {
+    const normalized = normalizeBackgroundAgentRound(round);
+    if (normalized) byExecution.set(normalized.executionId, normalized);
+  });
+  return [...byExecution.values()]
+    .sort((a, b) => a.round - b.round || a.startedAt - b.startedAt)
+    .slice(-MAX_BACKGROUND_AGENT_ROUNDS);
+}
+
+/** Archive the lane's current round; returns the new rounds list. */
+export function archiveBackgroundAgentRound(lane, snapshot = {}) {
+  return normalizeBackgroundAgentRounds([
+    ...(Array.isArray(lane?.rounds) ? lane.rounds : []),
+    {
+      executionId: backgroundAgentLaneExecutionId(lane),
+      round: backgroundAgentRoundNumber(lane?.followUpRound),
+      prompt: backgroundAgentRoundNumber(lane?.followUpRound) ? lane?.roundPrompt : '',
+      status: lane?.status,
+      startedAt: lane?.startedAt,
+      completedAt: lane?.completedAt,
+      result: lane?.result,
+      error: lane?.error,
+      steerMessages: lane?.steerMessages,
+      ...snapshot,
+    },
+  ]);
+}
+
+/** The follow-up prompt rendered as the next user message in the agent thread. */
+export function backgroundAgentFollowUpPromptMessage(prompt, options = {}) {
+  const content = backgroundAgentText(prompt);
+  if (!content) return null;
+  const timestamp = Number(options.timestamp || 0) || Date.now();
+  return {
+    role: 'user',
+    content,
+    body: { text: content },
+    timestamp,
+    backgroundFollowUpRound: backgroundAgentRoundNumber(options.round),
+    _backgroundFollowUpRowKey: `background:${String(options.laneId || '')}:follow-up:${String(options.executionId || timestamp)}`,
+  };
+}
+
+export function backgroundAgentRoundOf(record) {
+  return backgroundAgentRoundNumber(record?.followUpRound);
+}
+
+/** Follow-up fields every lane, durable work record and detail record carries. */
+export function backgroundAgentLaneRoundState(lane, laneId = lane?.id, executionId = '') {
+  const exec = String(lane?.executionId || '').trim() || (executionId && executionId !== laneId ? String(executionId) : '');
+  return {
+    executionId: exec || undefined,
+    followUpRound: backgroundAgentRoundOf(lane) || undefined,
+    roundPrompt: lane?.roundPrompt || '',
+    rounds: Array.isArray(lane?.rounds) ? lane.rounds : [],
+  };
+}
+
+/** Durable work only counts for per-round fields when it records the round the lane shows. */
+export function backgroundAgentWorkIsLaneRound(work, lane, laneId) {
+  return !!work && backgroundAgentRoundOf(work) === backgroundAgentRoundOf(lane)
+    && String(work.executionId || work.id) === String(lane?.executionId || laneId);
+}
+
+/** A lane that continues a dismissed or cold agent thread from its durable record. */
+export function backgroundAgentLaneSeed(id, work) {
+  return { id, sessionId: work.sessionId, task: work.task, prompt: work.task, ...backgroundAgentLaneRoundState(work, id), steerMessages: [] };
+}
+
+/** The finishing round, from the lane's live message, else its durable record of the same round. */
+export function backgroundAgentMessageRoundSnapshot(lane, stored, storedProcessEntries = () => []) {
+  const live = lane?.message && typeof lane.message === 'object' ? lane.message : null;
+  const durable = stored && backgroundAgentRoundOf(stored) === backgroundAgentRoundOf(lane) ? stored : null;
+  return {
+    status: lane.status || durable?.status,
+    startedAt: lane.startedAt || durable?.startedAt,
+    completedAt: lane.completedAt || durable?.completedAt,
+    result: backgroundAgentText(lane.result, live?.content, live?.body?.text, durable?.result),
+    error: backgroundAgentText(lane.error, durable?.error),
+    steerMessages: (lane.steerMessages?.length ? lane.steerMessages : durable?.steerMessages) || [],
+    liveTraceEntries: live?.liveTraceEntries?.length ? live.liveTraceEntries : (durable?.liveTraceEntries || []),
+    processEntries: live?.processEntries?.length ? live.processEntries : storedProcessEntries(durable),
+  };
+}
+
+/**
+ * Archive the lane's current round and reset its per-round state so the
+ * follow-up streams into a fresh answer. `reset` adds client-specific fields.
+ */
+export function beginBackgroundAgentFollowUpRound(lane, executionId, link, snapshot = {}, options = {}) {
+  lane.rounds = archiveBackgroundAgentRound(lane, snapshot);
+  Object.assign(lane, {
+    executionId,
+    followUpRound: link?.round || backgroundAgentRoundOf(lane) + 1,
+    roundPrompt: '',
+    status: 'running',
+    result: '',
+    error: '',
+    fileChanges: null,
+    plan: null,
+    approvalRequest: null,
+    steerMessages: [],
+    streamId: '',
+    lastSeq: 0,
+    startedAt: Number(options.startedAt || 0) || Date.now(),
+    completedAt: null,
+  }, options.reset || {});
+  return lane;
+}
+
+/**
+ * Apply a frame's round relationship to its lane. Returns false for a stale
+ * frame (drop it). A new follow-up round archives the current one first;
+ * `options.snapshot` (object or function) is read before the reset.
+ */
+export function advanceBackgroundAgentLane(lane, executionId, link, options = {}) {
+  const transition = backgroundAgentRoundTransition(lane, executionId, link);
+  if (transition === 'stale') return false;
+  if (transition === 'new') {
+    const snapshot = typeof options.snapshot === 'function' ? options.snapshot() : options.snapshot;
+    beginBackgroundAgentFollowUpRound(lane, executionId, link, snapshot || {}, options);
+  } else if (link && !lane.executionId) {
+    Object.assign(lane, { executionId, followUpRound: link.round || 1 });
+  }
+  return true;
+}
+
 export function normalizeBackgroundAgentEvent(event = {}) {
   const data = event.data && typeof event.data === 'object' ? event.data : {};
   const source = { ...data, ...event };
@@ -203,9 +405,15 @@ export function normalizeBackgroundAgentWork(record = {}) {
     [],
     Array.isArray(record.liveTraceEntries) ? record.liveTraceEntries : [],
   );
+  const executionId = String(record.executionId || '').trim();
+  const followUpRound = backgroundAgentRoundOf(record);
+  const rounds = normalizeBackgroundAgentRounds(record.rounds);
   return {
     id,
     sessionId,
+    ...(executionId && executionId !== id ? { executionId } : {}),
+    ...(followUpRound ? { followUpRound, roundPrompt: backgroundAgentText(record.roundPrompt) } : {}),
+    ...(rounds.length ? { rounds } : {}),
     backgroundSessionId: String(record.backgroundSessionId || record.bgSessionId || '').trim(),
     agentName: identity.name,
     agentColor: identity.color,
@@ -376,7 +584,12 @@ export function persistBackgroundAgentWork(record = {}, options = {}) {
   if (!normalized) return null;
   const records = readBackgroundAgentWork();
   const index = records.findIndex((item) => item.id === normalized.id && item.sessionId === normalized.sessionId);
-  if (index >= 0) {
+  if (index >= 0 && backgroundAgentRoundOf(normalized) !== backgroundAgentRoundOf(records[index])) {
+    // A follow-up round replaces the per-round buffers wholesale; merging would
+    // pull the archived round's events back into the current one. A late write
+    // from an older round never overwrites a newer one.
+    if (backgroundAgentRoundOf(normalized) > backgroundAgentRoundOf(records[index])) records[index] = normalized;
+  } else if (index >= 0) {
     const previous = records[index];
     const previousLastSeq = Number(previous.lastSeq || 0);
     const normalizedLastSeq = Number(normalized.lastSeq || 0);
