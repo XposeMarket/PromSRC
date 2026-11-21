@@ -48,25 +48,20 @@ import {
   type RuntimeSteerEvent,
 } from '../../live-runtime-registry';
 import { normalizeRuntimeVisionAttachmentsInput, normalizeRuntimeAttachmentPreviewsInput, summarizeMobileRuntime } from './shared';
+import { isMobileQueueRequestId } from '../../chat/mobile-main-chat-queue';
 import type { MainChatStreamState } from '../../chat/main-chat-stream-store';
 
 
 
-export function registerSteerRoutes(router: Router, deps: {
-  getMainChatStream: (sessionId: string) => MainChatStreamState | null;
-}): void {
-  const { getMainChatStream } = deps;
-router.post('/api/chat/steer', (req, res) => {
+export function applyChatSteer(body: Record<string, any>, getMainChatStream: (sessionId: string) => MainChatStreamState | null) {
   try {
-    const body = req.body || {};
     const sessionId = assertSafeStorageId(String(body.sessionId || 'default').trim() || 'default', 'session id');
     const steerAttachments = normalizeRuntimeVisionAttachmentsInput(body.attachments);
     const steerAttachmentPreviews = normalizeRuntimeAttachmentPreviewsInput(body.attachmentPreviews);
     const message = String(body.message || body.text || '').trim()
       || (steerAttachments.length || steerAttachmentPreviews.length ? `User sent ${steerAttachments.length + steerAttachmentPreviews.length} attachment(s) as a live steer.` : '');
     if (!message && steerAttachments.length === 0 && steerAttachmentPreviews.length === 0) {
-      res.status(400).json({ ok: false, success: false, error: 'Message or attachment required' });
-      return;
+      return { status: 400, body: { ok: false, success: false, error: 'Message or attachment required' } };
     }
     const mobileQueueSteer = String(body.source || '').trim() === 'mobile_queue_button';
     const clientSteerId = mobileQueueSteer ? String(body.clientSteerId || '').trim().slice(0, 160) : '';
@@ -76,10 +71,9 @@ router.post('/api/chat/steer', (req, res) => {
       ? getSession(sessionId).history.find((entry: any) => entry?.role === 'user' && entry?.clientSteerId === clientSteerId)
       : null;
     if (priorSteer) {
-      res.json({ ok: true, success: true, eventId: (priorSteer as any).steerEventId,
+      return { status: 200, body: { ok: true, success: true, eventId: (priorSteer as any).steerEventId,
         messageId: priorSteer.messageId, timestamp: priorSteer.timestamp,
-        workflowGroupId: (priorSteer as any).workflowGroupId, alreadyAccepted: true });
-      return;
+        workflowGroupId: (priorSteer as any).workflowGroupId, alreadyAccepted: true } };
     }
     const expectedRuntimeId = String(body.expectedRuntimeId || body.runtimeId || '').trim();
     const activeRuntime = listLiveRuntimes()
@@ -90,8 +84,7 @@ router.post('/api/chat/steer', (req, res) => {
       ))
       .sort((a, b) => Number(b.startedAt || 0) - Number(a.startedAt || 0))[0] || null;
     if (!activeRuntime?.id) {
-      res.status(409).json({ ok: false, success: false, error: 'No active steerable chat turn for this session.' });
-      return;
+      return { status: 409, body: { ok: false, success: false, error: 'No active steerable chat turn for this session.' } };
     }
     const steer = addPendingRuntimeSteer(activeRuntime.id, {
       sessionId,
@@ -102,8 +95,7 @@ router.post('/api/chat/steer', (req, res) => {
       attachmentPreviews: steerAttachmentPreviews,
     });
     if (!steer.ok || !steer.event) {
-      res.status(409).json({ ok: false, success: false, error: steer.error || 'Could not queue steer event.' });
-      return;
+      return { status: 409, body: { ok: false, success: false, error: steer.error || 'Could not queue steer event.' } };
     }
     // The server owns the steer split for every source (mobile, desktop, voice):
     // the boundary is the live stream position at acceptance, and the tool
@@ -210,7 +202,7 @@ router.post('/api/chat/steer', (req, res) => {
       attachments: steerAttachments,
       attachmentPreviews: steerAttachmentPreviews,
     });
-    res.json({
+    return { status: 200, body: {
       ok: true,
       success: true,
       eventId: steer.event.id,
@@ -225,10 +217,22 @@ router.post('/api/chat/steer', (req, res) => {
         workflowStreamId: durableSteer.workflowStreamId,
         ...(durableBefore ? { beforeMessageId: durableBefore.messageId } : {}),
       } : {}),
-    });
+    } };
   } catch (err: any) {
-    res.status(500).json({ ok: false, success: false, error: String(err?.message || err) });
+    return { status: 500, body: { ok: false, success: false, error: String(err?.message || err) } };
   }
+}
+
+export function registerSteerRoutes(router: Router, deps: {
+  getMainChatStream: (sessionId: string) => MainChatStreamState | null;
+}): void {
+router.post('/api/chat/steer', (req, res) => {
+  if (isMobileQueueRequestId(String(req.body?.clientSteerId || '').trim().slice(0, 160))) {
+    res.status(409).json({ success: false, error: 'Manage this item through its mobile queue.' });
+    return;
+  }
+  const result = applyChatSteer(req.body || {}, deps.getMainChatStream);
+  res.status(result.status).json(result.body);
 });
 
 router.post('/api/background-agents/steer', (req, res) => {

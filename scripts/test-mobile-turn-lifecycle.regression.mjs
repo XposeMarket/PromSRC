@@ -129,7 +129,9 @@ async function runLoop(reader, timers, { idleMs = MOBILE_STREAM_IDLE_TIMEOUT_MS,
 
 // --- streamChat wiring (source contract) ---
 {
-  const fn = api.slice(api.indexOf('export function streamChat('), api.indexOf('export function streamChat(') + 9000);
+  // streamChat is the final export in this module; a fixed byte window can
+  // cut off its return value after a harmless addition to the request path.
+  const fn = api.slice(api.indexOf('export function streamChat('));
   assert.match(fn, /idleTimeoutMs = MOBILE_STREAM_IDLE_TIMEOUT_MS/, 'idle limit overridable via option');
   assert.match(fn, /readChunkWithIdleTimeout\(reader, \{ idleMs: idleTimeoutMs \}\)/, 'every read is raced against the watchdog');
   assert.match(fn, /classifyMobileStreamFailure\(err, \{ userAborted \}\)/);
