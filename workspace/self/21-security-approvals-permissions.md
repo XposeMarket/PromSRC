@@ -158,7 +158,7 @@ Keep tests deterministic and avoid actual paid API calls, OS-admin operations, p
 4. For final-action flows, test exact next-tool binding, mismatch, expiry, rejection and returned UI evidence. For elevated commands, test missing broker, denial, fresh grant consumption, Lite and non-Windows behavior.
 5. For path/source rules, test traversal, case normalization on Windows, directory descendants, symlink/junction resolution, unapproved file and category-without-edit-approval.
 6. For secret handling, use synthetic credentials, verify vault lifecycle and ensure logs/errors/audit/results redact them; run privacy scanning.
-7. Run targeted regressions from [generated tests](generated/tests.md), `npx tsc --noEmit`, relevant package build/sync and `.github/workflows/pr-regression.yml` checks. Inspect logs for actual decision reasons.
+7. Run targeted regressions from [generated tests](generated/tests.md), `npx tsc --noEmit`, relevant package build/sync and the pull-request CI regressions (`scripts/ci/regressions.json`, run by `.github/workflows/pr-regression.yml`). Inspect logs for actual decision reasons.
 8. Update this doc when policy behavior changes; avoid documenting an unverified security guarantee as fact. For every ?always/never? claim, cite a direct guard/test.
 
 ## Related

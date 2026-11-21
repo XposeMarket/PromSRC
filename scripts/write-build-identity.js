@@ -19,7 +19,12 @@ function writeBuildIdentity(repoRoot, targetDir) {
       // Covers src, electron, web-ui, scripts, builder configs, tsconfig*, manifests. False "modified" is acceptable; false "exact" is not.
       const statusOut = git('status', '--porcelain', '--untracked-files=all', '--', '.', ':(exclude)dist', ':(exclude)generated', ':(exclude)release', ':(exclude)release-public');
       // Gitignored files under compiled/packaged inputs are invisible to status; check them explicitly (node_modules excluded).
-      const ignoredOut = git('ls-files', '--others', '--ignored', '--exclude-standard', '--', 'src', 'electron', 'web-ui', 'scripts', ':(exclude)**/node_modules/**');
+      // node_modules is filtered here, not with a ':(exclude)**/node_modules/**' pathspec: that pathspec makes git walk
+      // every ignored path and took minutes in a real checkout, so the 5 s timeout fired and identity fell back to unknown.
+      const ignoredOut = git('ls-files', '--others', '--ignored', '--exclude-standard', '--', 'src', 'electron', 'web-ui', 'scripts')
+        .split('\n')
+        .filter((line) => line && !/(^|\/)node_modules(\/|$)/.test(line))
+        .join('\n');
       dirty = Boolean(statusOut || ignoredOut);
     }
   } catch { commit = null; dirty = null; }

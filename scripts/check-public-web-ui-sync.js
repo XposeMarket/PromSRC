@@ -2,6 +2,7 @@
 
 const childProcess = require('child_process');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const esbuild = require('esbuild');
 
@@ -208,49 +209,98 @@ function verifyRelativeImports(filePath) {
   }
 }
 
+// `node --check` can accept a module graph that Chromium later rejects before
+// any mobile UI mounts. Parse source through esbuild as a browser ES module too,
+// so the static check uses a second, strict parser and reports an actionable
+// source location. The async API lets esbuild parse every file concurrently.
+async function runEsbuildChecks(files) {
+  const results = new Map();
+  await Promise.all(files.map(async (filePath) => {
+    const source = fs.readFileSync(filePath, 'utf8');
+    try {
+      await esbuild.transform(source, {
+        loader: 'js',
+        format: 'esm',
+        target: 'chrome100',
+        sourcefile: toPosix(path.relative(ROOT, filePath)),
+      });
+      results.set(filePath, null);
+    } catch (error) {
+      const details = Array.isArray(error?.errors) && error.errors.length
+        ? error.errors.map((entry) => {
+          const loc = entry.location ? `:${entry.location.line}:${entry.location.column}` : '';
+          return `${entry.text || String(entry)}${loc}`;
+        }).join('\n')
+        : String(error?.message || error);
+      results.set(filePath, details);
+    }
+  }));
+  return results;
+}
+
+let esbuildCheckResults = new Map();
 function verifyJavaScriptSyntax(filePath) {
-  const source = fs.readFileSync(filePath, 'utf8');
-  try {
-    // `node --check` can accept a module graph that Chromium later rejects
-    // before any mobile UI mounts. Parse source through esbuild as a browser
-    // ES module too, so the static check uses a second, strict parser and
-    // reports an actionable source location.
-    esbuild.transformSync(source, {
-      loader: 'js',
-      format: 'esm',
-      target: 'chrome100',
-      sourcefile: toPosix(path.relative(ROOT, filePath)),
-    });
-  } catch (error) {
-    const details = Array.isArray(error?.errors) && error.errors.length
-      ? error.errors.map((entry) => {
-        const loc = entry.location ? `:${entry.location.line}:${entry.location.column}` : '';
-        return `${entry.text || String(entry)}${loc}`;
-      }).join('\n')
-      : String(error?.message || error);
+  if (!esbuildCheckResults.has(filePath)) {
+    fail(`Browser module syntax check did not run for ${toPosix(path.relative(ROOT, filePath))}`);
+  } else if (esbuildCheckResults.get(filePath) !== null) {
     fail(
-      `Browser module syntax check failed for ${toPosix(path.relative(ROOT, filePath))}\n${details}`,
+      `Browser module syntax check failed for ${toPosix(path.relative(ROOT, filePath))}\n${esbuildCheckResults.get(filePath)}`,
     );
   }
 
-  const result = childProcess.spawnSync(process.execPath, ['--check', filePath], {
-    cwd: ROOT,
-    encoding: 'utf8',
-  });
-
-  if (result.status !== 0) {
+  const result = nodeCheckResults.get(filePath);
+  if (!result || result.status !== 0) {
     fail(
       `JavaScript syntax check failed for ${toPosix(path.relative(ROOT, filePath))}\n` +
-      `${(result.stderr || result.stdout || '').trim()}`
+      `${(result ? result.output : 'node --check did not run').trim()}`
     );
   }
 }
 
-function verifySourceWebUi() {
+// `node --check` needs one process per file (~60 ms each on Windows, ~270 files), which
+// made this check the slowest part of every build. Run the processes concurrently up
+// front; failures are still reported per file, in the same order as before.
+let nodeCheckResults = new Map();
+function runNodeChecks(files) {
+  const results = new Map();
+  const cpuCount = typeof os.availableParallelism === 'function' ? os.availableParallelism() : os.cpus().length;
+  const limit = Math.max(1, Math.min(16, cpuCount || 1, files.length));
+  let next = 0;
+  const worker = () => new Promise((resolve) => {
+    const launch = () => {
+      if (next >= files.length) {
+        resolve();
+        return;
+      }
+      const filePath = files[next++];
+      let output = '';
+      let settled = false;
+      const finish = (status, extra = '') => {
+        if (settled) return;
+        settled = true;
+        results.set(filePath, { status, output: `${output}${extra}` });
+        launch();
+      };
+      const child = childProcess.spawn(process.execPath, ['--check', filePath], {
+        cwd: ROOT,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: true,
+      });
+      child.stdout.on('data', (chunk) => { output += chunk; });
+      child.stderr.on('data', (chunk) => { output += chunk; });
+      child.on('error', (error) => finish(1, `\n${error && error.message ? error.message : error}`));
+      child.on('close', (code, signal) => finish(code === 0 && !signal ? 0 : (code || 1), signal ? `\nterminated by ${signal}` : ''));
+    };
+    launch();
+  });
+  return Promise.all(Array.from({ length: limit }, worker)).then(() => results);
+}
+
+function verifySourceWebUi(sourceFiles) {
   verifyIndexAssets(SRC_WEB_UI, path.join(SRC_WEB_UI, 'index.html'), 'src');
   verifyIndexAssets(SRC_WEB_UI, path.join(SRC_WEB_UI, 'mobile.html'), 'src');
 
-  for (const filePath of walkFiles(SRC_WEB_UI_SRC).filter((file) => file.endsWith('.js'))) {
+  for (const filePath of sourceFiles) {
     verifyJavaScriptSyntax(filePath);
     verifyRelativeImports(filePath);
   }
@@ -272,18 +322,27 @@ function verifyProductionManifest() {
   }
 }
 
-verifySourceWebUi();
-verifyGeneratedWebUiIsCurrent();
-verifyGeneratedWebUi();
-verifyProductionManifest();
+async function main() {
+  const sourceFiles = walkFiles(SRC_WEB_UI_SRC).filter((file) => file.endsWith('.js'));
+  [nodeCheckResults, esbuildCheckResults] = await Promise.all([runNodeChecks(sourceFiles), runEsbuildChecks(sourceFiles)]);
+  verifySourceWebUi(sourceFiles);
+  verifyGeneratedWebUiIsCurrent();
+  verifyGeneratedWebUi();
+  verifyProductionManifest();
 
-if (failures.length > 0) {
-  console.error('[check-public-web-ui-sync] Web UI check failed:');
-  for (const failure of failures) {
-    console.error(`- ${failure}`);
+  if (failures.length > 0) {
+    console.error('[check-public-web-ui-sync] Web UI check failed:');
+    for (const failure of failures) {
+      console.error(`- ${failure}`);
+    }
+    console.error('\nRun `npm run sync:web-ui` to regenerate generated/public-web-ui from web-ui.');
+    process.exit(1);
   }
-  console.error('\nRun `npm run sync:web-ui` to regenerate generated/public-web-ui from web-ui.');
-  process.exit(1);
+
+  console.log('[check-public-web-ui-sync] web-ui and generated/public-web-ui are in sync');
 }
 
-console.log('[check-public-web-ui-sync] web-ui and generated/public-web-ui are in sync');
+main().catch((error) => {
+  console.error('[check-public-web-ui-sync] check crashed:', error && error.stack ? error.stack : error);
+  process.exit(1);
+});

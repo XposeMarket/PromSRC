@@ -55,7 +55,7 @@ execution, subagents and teams, extensions/MCP, and stored credentials.
 
 ## Testing
 
-Each mitigation above has a regression wired into `.github/workflows/pr-regression.yml`:
+Each mitigation above has a regression wired into pull-request CI (`scripts/ci/regressions.json`, run by `.github/workflows/pr-regression.yml`):
 `test:gateway-auth-proxy` (A1/A2), `test:final-action-gate` (A3/A4/A5),
 `src/security/security-controls.regression.ts` (grant validation) and the
 adversarial replay scenarios in `src/testing/replay/scenarios.ts` (unknown or

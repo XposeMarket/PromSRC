@@ -23,11 +23,17 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  verify:
+  # The regression list lives in scripts/ci/regressions.json (add tests there, not here).
+  # scripts/ci/run-regressions.mjs splits it into balanced shards that run in parallel and
+  # reports every failure of a shard in one run. To change the shard count, edit the matrix.
+  regressions:
+    name: regressions (${{ matrix.shard }}/${{ strategy.job-total }})
     runs-on: ubuntu-24.04
-    # Browser OS-package mirrors can consume 10+ minutes before tests start.
-    # Keep every regression mandatory while allowing dependency installation.
-    timeout-minutes: 30
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -35,262 +41,64 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          # npm's download cache: used by npm ci on a dependency change and by the
+          # packed-consumer (embed) regression's independent npm install.
           cache: npm
-      - name: Install dependencies without package lifecycle scripts
-        run: npm ci --ignore-scripts
-      - name: Build public web UI bundle (generated/public-web-ui is not tracked)
-        run: npm run sync:web-ui
-      - name: Verify public eval graders and local tool-loop recovery
-        run: npm run -s test:eval-graders && npm run -s test:local-tool-loop
-      - name: Build native terminal runtime used by tool regressions
-        run: npm rebuild node-pty --ignore-scripts=false
-      - name: Install Playwright Chromium for browser regressions
-        # apt mirrors on hosted runners intermittently fail DNS; runner images already ship
-        # Chromium's system libs, so fall back to the browser-only download.
-        run: npx playwright install --with-deps chromium || npx playwright install chromium
-      - name: Verify desktop stable/beta update channel
-        run: node --test electron/update-channel.test.js
-      - name: Verify release workflow and updater manifests
-        run: node scripts/test-release-pipeline.mjs
-      - name: Verify public skills when available
-        run: npm run test:public-skills --if-present
-      - name: Type-check backend
-        run: npx tsc --noEmit
-      - name: Verify Anthropic history image normalization
-        run: npm run test:anthropic-continuation
-      - name: Verify memory contradiction, freshness, deletion and poisoned recall
-        run: npm run test:memory-recall
-      - name: Verify replay-gated skill promotion
-        run: npm run test:skill-promotion
-      - name: Verify skill routing stays fast on long pastes (event-loop stall guard)
-        run: npm run test:skill-matcher-perf
-      - name: Verify source file-size and any budgets
-        run: npm run check:file-budgets
-      - name: Verify no new stateful dynamic import() of module-level state (tsx duplicate-instance guard)
-        run: npm run -s check:stateful-imports
-      - name: Verify gateway heap flags, heap-pressure sampler and the stateful-import guard
-        run: npm run -s test:gateway-guardrails
-      - name: Verify public skill bundle (visibility tags, no owner-specific content)
-        run: npm run test:public-skills
-      - name: Verify scheduler misfire, leases, dedupe, script execution and crash-window lock recovery
-        run: npm run test:scheduler-misfire
-      - name: Verify proxied loopback requests (Tailscale Funnel) are not trusted
-        run: npm run test:gateway-auth-proxy
-      - name: Verify mandatory final-action gate and subagent tool ceiling
-        run: npm run test:final-action-gate
-      - name: Verify external operation ledger, crash deduplication and torn-write repair
-        run: npm run test:operation-ledger
-      - name: Verify Codex image carrier-model fallback chain
-        run: npm run test:codex-image-chat-model
-      - name: Verify stranded timer restart recovery
-        run: npm run test:timer-stranded
-      - name: Verify task acceptance verifier failure classification
-        run: npm run test:task-verifier
-      - name: Verify durable main-chat goal user stop
-        run: npm run test:goal-stop-recovery
-      - name: Verify thread handoff regression
-        run: npm run test:thread-handoff
-      - name: Verify event-loop stall CPU attribution
-        run: npm run test:stall-profiler
-      - name: Verify Brain provider diagnostics and bounded failures
-        run: npm run test:brain-provider-diagnostics
-      - name: Verify provider evidence and system health classification
+      - name: Restore installed dependencies (keyed by package-lock.json)
+        id: modules
+        uses: actions/cache/restore@v4
+        with:
+          path: node_modules
+          key: node-modules-v1-${{ runner.os }}-${{ runner.arch }}-node22-${{ hashFiles('package-lock.json') }}
+      - name: Install dependencies without package lifecycle scripts and build node-pty
+        if: steps.modules.outputs.cache-hit != 'true'
         run: |
-          npx tsx src/gateway/provider-status.regression.ts
-          npx tsx src/gateway/diagnostics/system-diagnostics.regression.ts
-          npx tsx src/gateway/diagnostics/system-diagnostics-integration.regression.ts
-      - name: Verify scheduled Brain chat runtime contract
-        run: npm run test:brain-scheduled-chat
-      - name: Verify proposal approval durability
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm rebuild node-pty --ignore-scripts=false
+      - name: Save installed dependencies
+        if: steps.modules.outputs.cache-hit != 'true'
+        # Saved before any regression runs, so test side effects never enter the cache.
+        uses: actions/cache/save@v4
+        with:
+          path: node_modules
+          key: ${{ steps.modules.outputs.cache-primary-key }}
+      - name: Resolve Playwright version
+        id: playwright
+        run: echo "version=$(node -p "require('playwright/package.json').version")" >> "$GITHUB_OUTPUT"
+      - name: Restore Playwright Chromium
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright.outputs.version }}
+      - name: Install Playwright Chromium (cache miss only)
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        # Runner images already ship Chromium's system libraries; only the browser is downloaded.
+        run: npx playwright install chromium
+      - name: Build public web UI bundle and verify committed outputs are current
+        # generated/public-web-ui is untracked build output; sync:web-ui ends with check:web-ui.
         run: |
-          npx tsx src/gateway/proposals/proposal-approval-flow.regression.ts
-          node scripts/test-proposal-approval-flow-ui.mjs
-      - name: Verify hybrid atomic durable-memory retrieval
-        run: |
-          npx tsx src/gateway/memory-index/memory-atoms-hybrid.regression.ts
-          npx tsx src/gateway/memory-index/memory-atoms-real-corpus.stress.ts
-          npx tsx src/gateway/agents-runtime/capabilities/memory-wrapper.regression.ts
-      - name: Verify web_fetch batch (urls[]) routing in the capability executor
-        run: npx tsx src/gateway/agents-runtime/capabilities/web-fetch-batch.regression.ts
-      - name: Verify agent/team wrapper parameter alignment
-        run: npm run test:agent-team-wrapper-params
-      - name: Verify memory worker readiness and cold-elastic admission
-        run: |
-          npm run test:memory-worker-readiness
-          npm run test:automatic-memory-search
-          npx tsx src/gateway/memory-index/automatic-memory-prewarm.regression.ts
-      - name: Verify connector/plugin tool-surface parity
-        run: npx tsx scripts/verify-extensions.ts && npx tsx src/extensions/tool-contracts.regression.ts
-      - name: Verify natural-language tool activation
-        run: npm run test:extension-activation && npm run test:tool-category-routing && npx tsx src/runtime/tool-category-prompt-signals.regression.ts
-      - name: Verify provider-facing tool category provisioning
-        run: npm run test:tool-category-provisioning && npm run test:tool-category-activation && npm run test:tool-category-switch-model && npm run test:background-spawn-tool-surface
-      - name: Verify operating instructions and runtime behavior
-        run: |
-          node scripts/test-model-acceptance.mjs
-          npx tsx src/runtime/prompt-manifest.regression.ts
-          npx tsx src/runtime/instruction-segment-registry.regression.ts
-      - name: Verify deterministic composite workflows
-        run: npx tsx src/gateway/tools/composite-tools.regression.ts
-      - name: Verify provider-neutral connector policy
-        run: npx tsx src/gateway/connector-tool-capabilities.regression.ts && npx tsx src/extensions/runtime-registry.performance.regression.ts
-      - name: Verify connected agent harnesses
-        run: |
-          npx tsx src/gateway/external-agents/external-agents.regression.ts
-          npx tsx src/gateway/external-agents/acp.regression.ts
-          npx tsx src/gateway/external-agents/claude-code.regression.ts
-          npx tsx src/gateway/external-agents/file-touches.regression.ts
-          npx tsx src/gateway/external-agents/models.regression.ts
-          npx tsx src/gateway/external-agents/scratch-folders.regression.ts
-          npx tsx src/gateway/external-agents/native-tool-map.regression.ts
-          npx tsx src/gateway/dots/dots.regression.ts
-      - name: Verify new-chat glance (running, needs you, usage, greeting name)
-        run: npx tsx src/gateway/new-chat-glance.regression.ts
-      - name: Verify projects (instructions, notes, linked folders)
-        run: |
-          npx tsx src/gateway/projects/project-notes.regression.ts
-          npx tsx src/gateway/projects/project-folder-access.regression.ts
-          npx tsx src/gateway/projects/project-membership.regression.ts
-      - name: Verify public web source sync
-        run: |
-          npm run check:web-ui
+          npm run sync:web-ui
           git diff --exit-code
-      - name: Verify tool activity edit line stats
-        run: |
-          node scripts/test-tool-activity-edit-stats.mjs
-          node scripts/test-prom-viz-version.mjs
-          npm run test:tool-activity-stream
-      - name: Verify Creative video timeline interactions
-        run: node scripts/test-creative-video-timeline-interactions.mjs
-      - name: Verify desktop multi-chat and composer contracts
-        run: |
-          node scripts/test-desktop-chat-layout-contract.mjs
-          node scripts/test-desktop-priority-sidebar.mjs
-          node scripts/test-desktop-subagent-chat-ui.mjs
-          npm run test:multi-chat-main-tab-cap
-      - name: Enforce generated UI and gateway performance budgets
-        run: npm run test:perf-budgets
-      - name: Verify main chat live stream delivery
-        run: npm run test:main-chat-stream
-      - name: Verify git read cache and process store ordering
-        run: |
-          npm run test:git-read-cache
-          npm run test:process-store-order
-      - name: Verify context window contract
-        run: npm run test:context-window
-      - name: Verify token-window-native model context
-        run: node scripts/test-token-window-native-context.mjs
-      - name: Verify Prom Bot persistent-agent stack
-        run: |
-          node scripts/test-desktop-prom-bot.mjs
-          node scripts/test-desktop-prom-bot-roster.mjs
-          node scripts/test-desktop-prom-bot-collab.mjs
-          node scripts/test-prom-bot-team-flow.mjs
-          node scripts/test-bot-creation-contract.mjs
-          node scripts/test-prom-bot-persistent-agent-hardening.mjs
-          node scripts/test-web-ui-performance-foundation.mjs
-          node scripts/test-web-ui-production-smoke.mjs
-      - name: Verify Prometheus chat link routing
-        run: npm run test:link-routing
-      - name: Verify web UI restart reload dedupe
-        run: npm run test:web-ui-refresh-loop
-      - name: Verify August 12 mobile Liquid Glass restore
-        run: node scripts/test-mobile-liquid-glass-live-demo-material.mjs
-      - name: Verify dynamic require paths resolve
-        run: node scripts/test-dynamic-require-paths.mjs
-      - name: Verify web UI architecture guardrails
-        run: node scripts/test-web-ui-architecture-guardrails.mjs
-      - name: Verify mobile tool-progress pill clears and retires
-        run: node scripts/test-mobile-tool-progress-state.mjs
-      - name: Verify mobile agent activity presentation
-        run: npm run test:mobile-agent-activity
-      - name: Verify shared chat core contract
-        run: node scripts/test-chat-core-contract.mjs
-      - name: Verify mobile multi-gateway contract
-        run: node scripts/test-mobile-gateway-contract.mjs
-      - name: Verify mobile pairing QR decoder
-        run: node scripts/test-mobile-pairing-qr-decoder.mjs
-      - name: Verify remote mobile gateway JSON mutations
-        run: node scripts/test-mobile-gateway-json-mutations.mjs
-      - name: Verify stale mobile chat gateway recovery
-        run: node scripts/test-mobile-stale-gateway-route-recovery.mjs
-      - name: Verify mobile chat recovery
-        run: node scripts/test-mobile-chat-recovery.mjs
-      - name: Verify durable mobile main-chat queue store and browser lifecycle
-        run: |
-          npx tsx src/gateway/chat/mobile-main-chat-queue.regression.ts
-          node --import tsx scripts/test-mobile-durable-queue.mjs
-      - name: Verify mobile stream receipt idempotency
-        run: node scripts/test-mobile-stream-receipts.mjs
-      - name: Verify static asset compression
-        run: npm run test:static-compression
-      - name: Verify encoding negotiation and module cache policy
-        run: npx tsx src/gateway/static-encoding-negotiation.regression.ts
+      - name: Run regression shard ${{ matrix.shard }}/${{ strategy.job-total }}
+        run: node scripts/ci/run-regressions.mjs --shard ${{ matrix.shard }}/${{ strategy.job-total }}
+      - name: Verify regressions left tracked files unchanged
+        run: git diff --exit-code --stat
 
-
-      - name: Verify foreground Chat owner restart reconciliation
-        run: npm run test:restart-retrigger
-      - name: Verify gateway supervisor identity and liveness recovery policy
-        run: npx tsx src/cli/gateway-supervisor-policy.regression.ts
-      - name: Verify gateway progress lease persistence
-        run: npm run test:gateway-progress-lease
-      - name: Verify mobile and desktop chat regression audit
-        run: npm run test:mobile-regression-audit
-      - name: Verify mobile voice/media contract
-        run: node scripts/test-mobile-voice-media-contract.mjs
-      - name: Verify mobile voice and image lifecycle
-        run: npm run test:mobile-voice-image-lifecycle
-      - name: Verify mobile voice motion and realtime resilience
+  # Required status check (branch protection requires "verify"). A skipped required job
+  # would count as passing, so this always runs and fails unless every shard succeeded.
+  verify:
+    if: ${{ always() }}
+    needs: regressions
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every regression shard to pass
+        env:
+          SHARDS_RESULT: ${{ needs.regressions.result }}
         run: |
-          node scripts/test-mobile-voice-motion-orb.mjs
-          node scripts/test-mobile-realtime-transient-disconnect.mjs
-      - name: Verify Electron security boundary
-        run: node scripts/test-electron-security-boundary.mjs
-      - name: Verify Electron main window recovery
-        run: npm run test:electron-window-lifecycle
-      - name: Verify Electron native browser resource policy
-        run: npm run test:electron-browser-resource-policy
-      - name: Verify browser dispatch continuity and failure evidence
-        run: npx tsx src/gateway/browser-continuity.regression.ts
-      - name: Verify plugins page contract
-        run: node scripts/test-plugins-page-contract.mjs
-      - name: Verify Hub goals contract
-        run: node scripts/test-hub-goals-contract.mjs
-      - name: Verify design preview contract
-        run: node scripts/test-design-preview-contract.mjs
-      - name: Verify tool dispatch policy
-        run: npm run test:tool-dispatch-policy
-      - name: Verify stale approvals expire
-        run: npm run test:approval-stale-expiry
-      - name: Verify turn-loop replay scenarios
-        run: npm run test:replay
-      - name: Verify embedding API from a separate consumer project
-        run: npm run test:embed
-      - name: Verify gateway eval runner safety and metrics
-        run: node evals/gateway-runner.regression.mjs
-      - name: Verify eval harness self-test (oracle must score 7/7)
-        run: npm run test:evals-selftest
-      - name: Verify small-context tool schema fitting
-        run: npm run test:small-context-fit
-      - name: Verify end-to-end turn tracing
-        run: npm run test:turn-trace
-      - name: Verify crash recovery (hard-killed gateway, no blind replay of committed side effects)
-        run: npm run test:crash-recovery
-      - name: Verify web-ui build id ignores npm script changes
-        run: npm run test:webui-build-id-stability
-      - name: Verify complete mediation across execution paths
-        run: npm run test:mediation
-      - name: Verify security controls (final-action grants, public build, secret scrubbing)
-        run: npm run test:security-controls
-      - name: Verify evidence docs cite real paths and scripts
-        run: npm run test:docs-evidence
-      - name: Verify chat error presentation
-        run: node scripts/test-chat-error-presentation.mjs
-      - name: Verify desktop reasoning summary streaming
-        run: node scripts/test-desktop-reasoning-summary-stream.mjs
-      - name: Verify chat artifact lifecycle
-        run: npm run test:chat-artifact-lifecycle
-      - name: Verify stale tool-result elision
-        run: npm run test:tool-result-elision
-      - name: Verify plugin manifests and MCP environment isolation
-        run: npm run test:platform-wave5a
+          echo "Regression shards finished: $SHARDS_RESULT"
+          if [ "$SHARDS_RESULT" != "success" ]; then
+            echo "::error title=Regression shards::One or more regression shards did not pass ($SHARDS_RESULT). Open the failing 'regressions (n/N)' job."
+            exit 1
+          fi
