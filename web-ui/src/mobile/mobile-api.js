@@ -1986,16 +1986,6 @@ export async function searchMobileChatSessions(query, { limit = 100, mode = 'con
   }) : [];
 }
 
-export async function loadLatestUsableSession() {
-  const r = await mfetch('/api/sessions').catch(() => ({ sessions: [] }));
-  const sessions = Array.isArray(r?.sessions) ? r.sessions.map(_normalizeSessionSummary).filter(s => s.id) : [];
-  return sessions
-    .filter(s => s.channel !== 'system')
-    .filter(s => !/^(brain_|subagent_chat_|cron_|task_|auto_)/i.test(s.id))
-    .filter(s => Number(s.messageCount || 0) > 0)
-    .sort((a, b) => Number(b.lastMessageAt || b.lastActiveAt || 0) - Number(a.lastMessageAt || a.lastActiveAt || 0))[0] || null;
-}
-
 // ── Session cache (30s TTL, invalidated on history writes) ────────────────────
 const _sessionCache = new Map(); // scoped session id → { session, expiresAt }
 const _sessionRequests = new Map(); // scoped session/detail → in-flight Promise

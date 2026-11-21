@@ -231,6 +231,11 @@
       "seconds": 3
     },
     {
+      "name": "Verify JSON response compression, ETag/304 and Vary",
+      "run": "npx tsx src/gateway/core/json-compression.regression.ts",
+      "seconds": 2
+    },
+    {
       "name": "Verify tool activity edit line stats",
       "run": [
         "node scripts/test-tool-activity-edit-stats.mjs",

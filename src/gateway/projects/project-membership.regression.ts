@@ -137,6 +137,53 @@ async function main(): Promise<void> {
     editOnDisk(cold.id, (sessions) => sessions.filter((s) => s.id !== 'chat_ext'));
     assert.equal(storeApi.findProjectBySessionId('chat_ext'), null, 'outside removal: never returns the stale owner');
 
+    // ── Session-list membership map: per-file cache, every write path visible ──
+    const membership = () => storeApi.listSessionProjectMembership();
+    const sameAsListProjectsScan = (label: string): void => {
+      const expected = new Map<string, { id: string; name: string }>();
+      for (const project of storeApi.listProjects()) {
+        for (const session of project.sessions) if (!expected.has(session.id)) expected.set(session.id, { id: project.id, name: project.name });
+      }
+      const byKey = (a: [string, unknown], b: [string, unknown]) => a[0].localeCompare(b[0]);
+      assert.deepEqual([...membership()].sort(byKey), [...expected].sort(byKey), `${label}: same answer as the listProjects() scan it replaces`);
+    };
+    seed('chat_map');
+    const mapA = storeApi.createProject('Map A');
+    const mapB = storeApi.createProject('Map B');
+    storeApi.attachSessionToProject(mapA.id, 'chat_map');
+    assert.deepEqual(membership().get('chat_map'), { id: mapA.id, name: 'Map A' }, 'map sees the owner');
+    sameAsListProjectsScan('after attach');
+
+    const realReadFileSync = fs.readFileSync;
+    let projectFileReads = 0;
+    (fs as any).readFileSync = function patchedReadFileSync(this: unknown, file: any, ...rest: any[]) {
+      if (/[\\/]projects[\\/][^\\/]+\.json$/.test(String(file))) projectFileReads += 1;
+      return (realReadFileSync as any).call(this, file, ...rest);
+    };
+    try {
+      projectFileReads = 0;
+      membership();
+      assert.equal(projectFileReads, 0, 'a warm call re-reads no project file');
+      storeApi.updateProject(mapA.id, { name: 'Map A renamed' });
+      projectFileReads = 0;
+      assert.equal(membership().get('chat_map')?.name, 'Map A renamed', 'rename through the store is visible');
+      assert.equal(projectFileReads, 1, 'only the changed project file is re-read');
+    } finally {
+      (fs as any).readFileSync = realReadFileSync;
+    }
+
+    editOnDisk(mapA.id, (sessions) => sessions.filter((s) => s.id !== 'chat_map'));
+    editOnDisk(mapB.id, (sessions) => [...sessions, { id: 'chat_map', title: 'moved by hand' }]);
+    assert.equal(membership().get('chat_map')?.id, mapB.id, 'a hand edit on disk is visible on the next call');
+    sameAsListProjectsScan('after hand edit');
+    editOnDisk(mapA.id, (sessions) => [...sessions, { id: 'chat_map', title: 'shared by hand' }]);
+    sameAsListProjectsScan('chat listed in two projects');
+    fs.unlinkSync(projectFile(mapA.id));
+    assert.equal(membership().get('chat_map')?.id, mapB.id, 'a project file removed outside the store drops out');
+    storeApi.deleteProject(mapB.id);
+    assert.equal(membership().has('chat_map'), false, 'a deleted project owns nothing');
+    sameAsListProjectsScan('after delete');
+
     // ── Router: strict booleans, 400/404 paths, delete counts (real express app) ──
     const express = (await import('express')).default;
     const { router: projectsRouter } = await import('../routes/projects.router');

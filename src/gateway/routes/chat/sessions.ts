@@ -1,6 +1,7 @@
 import type { Router, RequestHandler } from 'express';
 import express from 'express';
-import { slimSessionList, responseEtag } from '.././perf-projections';
+import { slimSessionList } from '.././perf-projections';
+import { sendJsonText } from '../../core/json-response';
 import crypto from 'crypto';
 import { getConfig } from '../../../config/config';
 import { getReferenceService } from '../../resources/reference-service';
@@ -24,7 +25,7 @@ import { isInternalBackgroundResult, mergeHistoryWithExistingMessageMetadata } f
 import { buildContextBudget, estimateMessageTokenBreakdownForModel, estimateMessagesTokensForModel, estimateTextTokensForModel, resolveActiveModelContextProfile } from '../../context/model-context';
 import { captureChatTurnRouteSnapshot, ChatModelRouteUnavailableError, resolveChatModelRouteSource, validateChatModelRoute } from '../../chat/chat-model-route';
 import { createToolObservationsFromResults, formatToolStateSummaryForContext, persistToolResultsAsObservations, readToolObservationSnapshot, readToolObservations, type ToolObservation, type ToolObservationSnapshot } from '../../tool-observations';
-import { buildProjectContextBlock, findProjectBySessionId, listProjects, deleteSessionFromProject } from '../../projects/project-store.js';
+import { buildProjectContextBlock, findProjectBySessionId, listSessionProjectMembership, deleteSessionFromProject } from '../../projects/project-store.js';
 import { cancelThreadSupervision, listThreadSupervisions } from '../../threads/thread-supervision';
 import {
   blockMainChatGoalFromOwner,
@@ -120,15 +121,11 @@ export function attachProjectMembershipToSessionList<T extends any>(input: T): T
   // monopolize the gateway event loop for tens of seconds. Build the reverse map
   // once per response instead; project writes remain durable and this only
   // changes the read-side work from O(sessions * projects) to O(sessions + projects).
-  const projectBySessionId = new Map<string, { id: string; name: string }>();
+  // Reading every project file on each refresh was still ~40 ms, so the map now
+  // comes from a per-file cache that re-reads only files whose stamp changed.
+  let projectBySessionId = new Map<string, { id: string; name: string }>();
   try {
-    for (const project of listProjects()) {
-      for (const session of Array.isArray(project.sessions) ? project.sessions : []) {
-        const sessionId = String(session?.id || '').trim();
-        if (!sessionId || projectBySessionId.has(sessionId)) continue;
-        projectBySessionId.set(sessionId, { id: project.id, name: project.name });
-      }
-    }
+    projectBySessionId = listSessionProjectMembership();
   } catch {
     // Project metadata is an optional presentation overlay; a broken project
     // record must never make the ordinary chat list unavailable.
@@ -251,10 +248,8 @@ router.get('/api/sessions', async (req, res) => {
       profileSessions('active-runs', activeStartedAt);
       const responseStartedAt = Date.now();
       const payload = req.query.full === '1' ? withActiveRuns : slimSessionList(withActiveRuns);
-      const etag = responseEtag(payload);
-      res.setHeader('ETag', etag);
-      if (req.headers['if-none-match'] === etag) res.status(304).end();
-      else res.json(payload);
+      // Serialized once: the ETag (and 304) and the possibly compressed body share it.
+      sendJsonText(req, res, JSON.stringify(payload));
       profileSessions('response', responseStartedAt, `routeMs=${Date.now() - routeStartedAt}`);
       return;
     }
@@ -270,10 +265,7 @@ router.get('/api/sessions', async (req, res) => {
     profileSessions('active-runs', activeStartedAt);
     const responseStartedAt = Date.now();
     const payload = req.query.full === '1' ? { sessions: withActiveRuns } : slimSessionList({ sessions: withActiveRuns });
-    const etag = responseEtag(payload);
-    res.setHeader('ETag', etag);
-    if (req.headers['if-none-match'] === etag) res.status(304).end();
-    else res.json(payload);
+    sendJsonText(req, res, JSON.stringify(payload));
     profileSessions('response', responseStartedAt, `routeMs=${Date.now() - routeStartedAt}`);
   } catch (err: any) {
     console.error('[/api/sessions] Error:', err);

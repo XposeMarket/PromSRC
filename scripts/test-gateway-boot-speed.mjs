@@ -4,7 +4,7 @@
 //  2. a planned restart exit (42) relaunches without crash backoff or the netstat port scan
 //  3. the desktop dev launcher uses dist/ when current instead of always forcing tsx
 //  4. boot-path costs stay off the critical path (vault decrypt for the banner, document
-//     parsers at import, double skill seeding)
+//     parsers at import, double skill seeding, skill recovery forcing a scan mid-warm)
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -256,5 +256,9 @@ assert.doesNotMatch(attachments, /^const \w+: any = require\('(?:xlsx|mammoth|pd
 const server = read('src/gateway/server-v2.ts');
 assert.match(server, /seenFolders\.has\(folderKey\(dir\)\)/, 'each real skills folder is seeded once');
 assert.match(server, /seedBundledSkillsIntoDir\(dir, bundledSkillsDir, triggerBaseline\)/);
+// The empty-catalog recovery reads the catalog, so a fixed timer that fired mid-warm forced the
+// whole skill scan synchronously (~1.3 s event-loop stall right after every restart).
+assert.doesNotMatch(server, /setTimeout\(\(\) => \{ try \{ recoverSkillsIfEmpty\(\); \} catch \{\} \}, \d/, 'no fixed-delay skill recovery that can fire mid-warm');
+assert.match(server, /warmInBackground\(\(count, ms\) => \{[\s\S]{0,200}recoverSkillsAfterWarm\(\)/, 'skill recovery runs when the sliced warm completes');
 
 console.log('gateway boot speed: all checks passed');

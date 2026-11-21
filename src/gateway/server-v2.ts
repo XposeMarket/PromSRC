@@ -697,9 +697,10 @@ setSkillRecoveryFn(() => {
     skillsManager.scanSkills();
   } catch (err: any) { console.warn(`[Skills] Recovery failed: ${err.message}`); }
 });
-// Deferred: forcing getAll() here would pull the full skill scan back before
-// listen. The empty-catalog recovery runs once the post-listen warm finishes.
-setTimeout(() => { try { recoverSkillsIfEmpty(); } catch {} }, 2_000).unref?.();
+// The empty-catalog recovery runs from the post-listen warm's completion (see
+// warmInBackground below). It used to be a fixed 2 s timer from import, which
+// fired mid-warm and forced the whole ~1.3 s skill scan synchronously, stalling
+// the first requests after every restart.
 
 const heartbeatConfigPath = path.join(CONFIG_DIR_PATH, 'heartbeat', 'config.json');
 const heartbeatRunner = new HeartbeatRunner({
@@ -1460,7 +1461,16 @@ async function startGatewayListeners(): Promise<void> {
     }
     // OOM evidence: samples heap pressure every 60s (PROMETHEUS_GATEWAY_HEAP_SAMPLER=0 disables).
     startHeapPressureSampler();
-    skillsManager.warmInBackground((count, ms) => startupMark(`skills warmed after listen (${count} in ${ms}ms)`));
+    // recoverSkillsIfEmpty() reads the catalog, so it must only run once the catalog
+    // is loaded: after the sliced warm, or right away if a request already scanned it.
+    // The late fallback covers a warm that was cut short; by then a scan is harmless.
+    const recoverSkillsAfterWarm = () => { try { recoverSkillsIfEmpty(); } catch {} };
+    skillsManager.warmInBackground((count, ms) => {
+      startupMark(`skills warmed after listen (${count} in ${ms}ms)`);
+      recoverSkillsAfterWarm();
+    });
+    if (skillsManager.hasScanned()) recoverSkillsAfterWarm();
+    setTimeout(recoverSkillsAfterWarm, 30_000).unref?.();
     // The mobile model picker's first open after a restart used to pay a
     // ~1.5s cold build of the provider catalog. Build it once off the
     // critical path so the first picker open is served warm. The build is
