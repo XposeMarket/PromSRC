@@ -9,6 +9,7 @@ import net from 'net';
 import { execSync, spawn, type ChildProcess } from 'child_process';
 import readline from 'readline/promises';
 import { stdin as input, stdout as output } from 'process';
+import { pathToFileURL } from 'url';
 import { getConfig } from '../config/config';
 import {
   buildGatewayUrl,
@@ -91,6 +92,14 @@ const GATEWAY_BUSY_RESTART_GRACE_MS = parsePositiveInt(process.env.PROMETHEUS_SU
 const GATEWAY_HEALTH_TIMEOUT_MS = parsePositiveInt(process.env.PROMETHEUS_SUPERVISOR_HEALTH_TIMEOUT_MS, 5_000);
 // Gateway exit code asking the desktop app to relaunch itself (see lifecycle.ts).
 const GATEWAY_APP_RELAUNCH_EXIT_CODE = 43;
+// Gateway exit code for its own planned restart under a supervisor (lifecycle.gracefulRestart:
+// gateway_restart, Settings restart, memory-pressure recycle, queued restarts). The gateway
+// closed its listeners and exited on purpose, so the port is free and no crash backoff applies.
+const GATEWAY_PLANNED_RESTART_EXIT_CODE = 42;
+// Shared with electron/main.js and lifecycle.ts: may this source checkout run dist/ instead of tsx?
+const { checkCompiledBuildFreshness } = require('../../electron/compiled-build-freshness.js') as {
+  checkCompiledBuildFreshness(rootDir: string): { fresh: boolean; reason: string; checkMs: number };
+};
 const GATEWAY_HEALTH_FAILURE_LIMIT = parsePositiveInt(process.env.PROMETHEUS_SUPERVISOR_HEALTH_FAILURE_LIMIT, 2);
 
 let gatewayPortOverride: number | undefined;
@@ -258,7 +267,24 @@ function gatewayChildArgs(): string[] {
   const entry = resolveGatewayEntryForTerminal();
   // Heap limit + optional near-limit snapshots for the gateway child (see gateway-node-flags.ts).
   const heapFlags = gatewayNodeFlagExtras({ configDir: getConfig().getConfigDir() });
-  return entry.endsWith('.ts') ? [...process.execArgv, ...heapFlags, entry] : [...heapFlags, entry];
+  return entry.endsWith('.ts') ? [...sourceLoaderExecArgv(), ...heapFlags, entry] : [...heapFlags, entry];
+}
+
+const TSX_LOADER_ARG_RE = /[\\/]tsx[\\/]dist[\\/](?:preflight\.cjs|loader\.mjs)$/;
+
+/**
+ * Node flags a child needs to run src/*.ts. A supervisor started from dist/ (the
+ * desktop app does that when dist/ is current) has no tsx loader of its own, so
+ * a relaunch that falls back to source adds this checkout's tsx loader.
+ */
+function sourceLoaderExecArgv(): string[] {
+  if (process.execArgv.some((arg) => TSX_LOADER_ARG_RE.test(arg))) return [...process.execArgv];
+  const tsxDist = path.join(resolveInstallRoot(), 'node_modules', 'tsx', 'dist');
+  return [
+    ...process.execArgv,
+    '--require', path.join(tsxDist, 'preflight.cjs'),
+    '--import', pathToFileURL(path.join(tsxDist, 'loader.mjs')).href,
+  ];
 }
 
 function killGatewayChild(child: ChildProcess): void {
@@ -444,42 +470,20 @@ async function ensureGatewayForCli(): Promise<boolean> {
   return false;
 }
 
-function sourceTreeNewerThanCompiled(rootDir: string, compiledMtimeMs: number): boolean {
-  const pending: string[] = [path.join(rootDir, 'src')];
-  while (pending.length) {
-    const current = pending.pop()!;
-    let entries: fs.Dirent[];
-    try { entries = fs.readdirSync(current, { withFileTypes: true }); } catch { continue; }
-    for (const entry of entries) {
-      if (entry.name === 'node_modules' || entry.name === '.git') continue;
-      const fullPath = path.join(current, entry.name);
-      if (entry.isDirectory()) {
-        pending.push(fullPath);
-        continue;
-      }
-      if (!/\.(?:ts|tsx|js|mjs|cjs)$/.test(entry.name)) continue;
-      try {
-        if (fs.statSync(fullPath).mtimeMs > compiledMtimeMs) return true;
-      } catch {}
-    }
-  }
-  return false;
-}
-
 function resolveGatewayEntryForTerminal(): string {
   const rootDir = resolveInstallRoot();
   const compiledEntry = path.join(rootDir, 'dist', 'gateway', 'server-v2.js');
   const sourceEntry = path.join(rootDir, 'src', 'gateway', 'server-v2.ts');
-  const preferSource = process.env.PROMETHEUS_GATEWAY_USE_SOURCE === '1';
-  const preferCompiled = process.env.PROMETHEUS_GATEWAY_USE_COMPILED === '1';
-  if (fs.existsSync(compiledEntry) && !preferSource) {
-    try {
-      const compiledMtimeMs = fs.statSync(compiledEntry).mtimeMs;
-      if (preferCompiled || !sourceTreeNewerThanCompiled(rootDir, compiledMtimeMs)) return compiledEntry;
-    } catch {}
-  }
-  if (fs.existsSync(sourceEntry)) return sourceEntry;
-  return compiledEntry;
+  // Installed/packaged layouts ship only dist/.
+  if (!fs.existsSync(sourceEntry)) return compiledEntry;
+  if (!fs.existsSync(compiledEntry) || process.env.PROMETHEUS_GATEWAY_USE_SOURCE === '1') return sourceEntry;
+  if (process.env.PROMETHEUS_GATEWAY_USE_COMPILED === '1') return compiledEntry;
+  // A source checkout runs dist/ only while the last completed backend build is
+  // newer than every source file; after an edit without a build it runs src/
+  // through tsx so the edit is live. Checked on every launch and relaunch.
+  const freshness = checkCompiledBuildFreshness(rootDir);
+  console.error(`[GatewaySupervisor] Gateway entry: ${freshness.fresh ? 'compiled dist/' : 'src/ via tsx'} (${freshness.reason}; checked in ${freshness.checkMs}ms).`);
+  return freshness.fresh ? compiledEntry : sourceEntry;
 }
 
 function hasExplicitQuickRestartContext(stateDir: string): boolean {
@@ -673,6 +677,7 @@ async function runSupervisedGateway(): Promise<void> {
   const pendingHandoffRestarts = new Map<string, { source: ChildProcess; target: ChildProcess }>();
   let restartTimer: NodeJS.Timeout | null = null;
   let fastLaunchPending = false;
+  let plannedLaunchPending = false;
   // The parent-provided value is only a seed for this supervisor. Each child
   // launch receives a fresh generation so a stale status file from an earlier
   // child cannot be mistaken for the currently supervised gateway. Heartbeat
@@ -737,7 +742,11 @@ async function runSupervisedGateway(): Promise<void> {
     }
   };
 
-  const scheduleLaunch = (explicitQuickRestart = false) => {
+  // plannedRestart: the child exited with GATEWAY_PLANNED_RESTART_EXIT_CODE. It
+  // relaunches after 100ms like an explicit quick restart and skips the port
+  // ownership scan, but the replacement boots as an ordinary (non-hot) start and
+  // still counts toward crash-loop protection.
+  const scheduleLaunch = (explicitQuickRestart = false, plannedRestart = false) => {
     if (stopping || restartTimer || launchInFlight) return;
     restartCount++;
     // restartCount only resets on a healthy probe, so a gateway that dies on
@@ -748,31 +757,37 @@ async function runSupervisedGateway(): Promise<void> {
       ? 100
       : crashLooping
         ? GATEWAY_CRASH_LOOP_BACKOFF_MS
-        : Math.min(10_000, 1000 + restartCount * 1000);
+        : plannedRestart
+          ? 100
+          : Math.min(10_000, 1000 + restartCount * 1000);
     if (crashLooping) {
       console.error(`[GatewaySupervisor] Gateway has failed ${restartCount} consecutive launches without a healthy probe (crash loop). Backing off to ${Math.round(delayMs / 1000)}s between attempts; see logs/gateway-exit-diagnostics.ndjson and *.corrupt-* state copies.`);
     }
-    console.error(`[GatewaySupervisor] Scheduling gateway restart in ${delayMs}ms${explicitQuickRestart ? ' (explicit quick restart)' : ''}...`);
+    console.error(`[GatewaySupervisor] Scheduling gateway restart in ${delayMs}ms${explicitQuickRestart ? ' (explicit quick restart)' : plannedRestart && !crashLooping ? ' (planned restart)' : ''}...`);
     fastLaunchPending = explicitQuickRestart;
+    plannedLaunchPending = plannedRestart && !crashLooping;
     restartTimer = setTimeout(() => {
       restartTimer = null;
       const launchFast = fastLaunchPending;
+      const launchPlanned = plannedLaunchPending;
       fastLaunchPending = false;
-      launch(launchFast).catch((err: any) => {
+      plannedLaunchPending = false;
+      launch(launchFast, launchPlanned).catch((err: any) => {
         console.error(`[GatewaySupervisor] Restart failed: ${err?.message || err}`);
         scheduleLaunch();
       });
     }, delayMs);
   };
 
-  const launch = async (explicitQuickRestart = false) => {
+  const launch = async (explicitQuickRestart = false, plannedRestart = false) => {
     if (stopping || launchInFlight || (child && child.exitCode === null && child.signalCode === null)) return;
     launchInFlight = true;
     try {
     // The gateway process has already emitted its exit event for an explicit
-    // quick restart, so the supervisor can spawn immediately. The health/port
-    // ownership probe remains on crash-recovery and manual relaunch paths.
-    if (!explicitQuickRestart) await clearUnhealthyGatewayPort(child?.pid ? [child.pid] : []);
+    // quick restart or a planned restart exit, so the supervisor can spawn
+    // immediately. The health/port ownership probe (netstat: ~1.5s right after
+    // a process exit on Windows) remains on crash-recovery and manual relaunch paths.
+    if (!explicitQuickRestart && !plannedRestart) await clearUnhealthyGatewayPort(child?.pid ? [child.pid] : []);
     if (stopping) return;
     const launchedGatewayProcessStartedAt = allocateGatewayProcessStartedAt();
     const launched = spawn(process.execPath, gatewayChildArgs(), {
@@ -867,9 +882,12 @@ async function runSupervisedGateway(): Promise<void> {
         setTimeout(() => process.exit(0), 50).unref?.();
         return;
       }
+      // A planned restart exit released its own listener; the netstat owner scan
+      // would only delay the relaunch (measured ~1.5s right after the exit).
+      const plannedRestart = code === GATEWAY_PLANNED_RESTART_EXIT_CODE;
       const now = Date.now();
       const probe = await probeGatewayHealth(1200);
-      const portOwnerPids = getGatewayPortOwnerPids();
+      const portOwnerPids = plannedRestart ? [] : getGatewayPortOwnerPids();
       const runtimeStatus = readGatewayRuntimeStatus();
       const progressLease = readGatewayProgressLease(getGatewayStateRoot());
       const decision = classifyGatewaySupervisorObservation({
@@ -935,7 +953,7 @@ async function runSupervisedGateway(): Promise<void> {
         }
         return;
       }
-      scheduleLaunch(hasExplicitQuickRestartContext(supervisorStateDir));
+      scheduleLaunch(hasExplicitQuickRestartContext(supervisorStateDir), plannedRestart);
       })().catch((error: any) => {
         console.error(`[GatewaySupervisor] Child-exit handling failed: ${error?.message || error}`);
         scheduleLaunch();

@@ -26,7 +26,8 @@ const {
   nativeImage,
   safeStorage,
 } = require('electron');
-const { spawn, execSync, execFileSync }  = require('child_process');
+const { spawn, execSync, execFile, execFileSync }  = require('child_process');
+const { checkCompiledBuildFreshness } = require('./compiled-build-freshness');
 const path       = require('path');
 const http       = require('http');
 const net        = require('net');
@@ -1189,10 +1190,11 @@ function getTailscaleCliPath() {
   return [configured, ...installedCandidates].find((candidate) => candidate && fs.existsSync(candidate)) || 'tailscale';
 }
 
-// Funnel's public URL is stable; only its local target must follow a relay
-// port selected for this Electron profile. Do this after the relay is bound so
-// there is no gap where Funnel forwards requests to a closed local listener.
+// Funnel's public URL is stable; only its local target must follow the gateway
+// port selected for this Electron profile. The retarget runs in the background
+// while the gateway boots (requests before it listens fail either way).
 let lastTailscaleFunnelTarget = '';
+let tailscaleFunnelTargetInFlight = '';
 function synchronizeTailscaleFunnelTarget() {
   const funnel = getConfiguredTailscaleFunnel();
   if (!funnel) return;
@@ -1200,20 +1202,25 @@ function synchronizeTailscaleFunnelTarget() {
   // a synchronous CLI call on the Electron main thread every restart only
   // delays the respawn.
   const target = `${funnel.httpsPort}->${gatewayPort}`;
-  if (target === lastTailscaleFunnelTarget) return;
+  if (target === lastTailscaleFunnelTarget || target === tailscaleFunnelTargetInFlight) return;
   const tailscaleBin = getTailscaleCliPath();
-  try {
-    execFileSync(tailscaleBin, ['funnel', '--bg', `--https=${funnel.httpsPort}`, String(gatewayPort)], {
-      encoding: 'utf8',
-      stdio: 'pipe',
-      windowsHide: true,
-      timeout: 12_000,
-    });
+  // Never block the gateway launch on the Tailscale CLI: right after a reboot
+  // tailscaled can take seconds to answer (12s timeout), and the retarget is
+  // idempotent. Funnel only needs the target once the gateway listens.
+  tailscaleFunnelTargetInFlight = target;
+  execFile(tailscaleBin, ['funnel', '--bg', `--https=${funnel.httpsPort}`, String(gatewayPort)], {
+    encoding: 'utf8',
+    windowsHide: true,
+    timeout: 12_000,
+  }, (error) => {
+    if (tailscaleFunnelTargetInFlight === target) tailscaleFunnelTargetInFlight = '';
+    if (error) {
+      writeGatewayLog(`[main] Could not retarget Tailscale Funnel to ${gatewayPort} via ${tailscaleBin}: ${error?.message || error}\n`);
+      return;
+    }
     lastTailscaleFunnelTarget = target;
     writeGatewayLog(`[main] Tailscale Funnel ${funnel.publicUrl} now targets local relay ${gatewayPort}\n`);
-  } catch (error) {
-    writeGatewayLog(`[main] Could not retarget Tailscale Funnel to ${gatewayPort} via ${tailscaleBin}: ${error?.message || error}\n`);
-  }
+  });
 }
 
 // Preserve the detailed Windows owner message for explicitly requested ports.
@@ -1758,6 +1765,21 @@ function resolveGatewayLauncherCommand() {
     const node = resolvePackagedGatewayNode();
     return { command: node.command, args: [cliEntry, ...cliArgs], electronRunAsNode: node.electronRunAsNode, cliEntry };
   }
+  // A source checkout starts the compiled launcher when dist/ holds a completed
+  // build of the current source tree: no tsx transpile-cache work for the CLI
+  // supervisor, the gateway or its workers (gateway spawn -> health measured
+  // 7.3-11.5s via tsx vs 4.0s from dist/). The CLI re-checks on every gateway
+  // relaunch, so editing src/ and restarting without a build runs the edit via
+  // tsx. PROMETHEUS_GATEWAY_USE_SOURCE=1 forces tsx.
+  const forcedSource = String(process.env.PROMETHEUS_GATEWAY_USE_SOURCE || '') === '1';
+  const freshness = forcedSource
+    ? { fresh: false, reason: 'PROMETHEUS_GATEWAY_USE_SOURCE=1', checkMs: 0 }
+    : checkCompiledBuildFreshness(APP_ROOT);
+  writeGatewayLog(`[main] Gateway launcher: ${freshness.fresh ? 'compiled dist/' : 'src/ via tsx'} (${freshness.reason}; checked in ${freshness.checkMs}ms)\n`);
+  if (freshness.fresh) {
+    const compiledCliEntry = path.join(APP_ROOT, 'dist', 'cli', 'index.js');
+    return { command: resolveSourceGatewayNode(), args: [compiledCliEntry, ...cliArgs], electronRunAsNode: false, cliEntry: compiledCliEntry };
+  }
   // Source runs load tsx as a loader in the CLI process. The CLI forwards its
   // execArgv to the gateway child, so the child gets the same loader.
   const tsxPreflight = path.join(APP_ROOT, 'node_modules', 'tsx', 'dist', 'preflight.cjs');
@@ -1808,10 +1830,10 @@ function buildGatewayEnvironment() {
     PROMETHEUS_ELECTRON_BROWSER_RPC_TOKEN: nativeBrowserRpcPort ? NATIVE_BROWSER_RPC_TOKEN : '',
     ...(IS_PACKAGED_RUNTIME ? {
       PLAYWRIGHT_BROWSERS_PATH: path.join(process.resourcesPath, 'playwright-browsers'),
-    } : {
-      // Electron dev runs always serve the live source tree.
-      PROMETHEUS_GATEWAY_USE_SOURCE: '1',
-    }),
+    } : {}),
+    // Source checkouts: the CLI supervisor picks dist/ or src/ per gateway launch
+    // (electron/compiled-build-freshness.js). A PROMETHEUS_GATEWAY_USE_SOURCE=1
+    // already in this environment still forces src/ and passes through above.
     ...(IS_PACKAGED_RUNTIME && process.platform === 'darwin' ? {
       PROMETHEUS_DESKTOP_HELPER_PATH: path.join(process.resourcesPath, 'prometheus-desktop-helper'),
     } : {}),
@@ -4659,8 +4681,10 @@ app.whenReady().then(async () => {
   }
   try {
     await startGateway();
+    // Reset the dev renderer cache while the gateway boots instead of after it is ready.
+    const rendererPrepared = prepareSourceElectronRenderer();
     await waitForGateway();
-    await prepareSourceElectronRenderer();
+    await rendererPrepared;
     createWindow();
     desktopStartupComplete = true;
     loader.close();

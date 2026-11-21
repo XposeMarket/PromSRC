@@ -16,6 +16,7 @@
  * A dist file is kept when one of these owns it:
  *   - dist/.tsbuildinfo (tsc incremental state)
  *   - dist/config/build-identity.json (written by the build, no source twin)
+ *   - dist/.build-complete.json, dist/.build-in-progress.json (scripts/build-stamp.js)
  *   - a compiled output (.js, .js.map, .d.ts, .d.ts.map) whose src/<path>.ts|.tsx|.mts|.cts exists
  *   - dist/extensions/prometheus-personal-chrome/<p> when extensions/prometheus-personal-chrome/<p> exists
  *   - any other dist/<p> when src/<p> exists (assets copied by the build: config prompts,
@@ -78,6 +79,8 @@ function isOwned(rel, root) {
   if (rel === '.tsbuildinfo') return true;
   // Written by scripts/write-build-identity.js on every build; it has no src/ twin.
   if (rel === 'config/build-identity.json') return true;
+  // Build completion stamps (scripts/build-stamp.js); launchers read them to decide dist/ vs tsx.
+  if (rel === '.build-complete.json' || rel === '.build-in-progress.json') return true;
   for (const [distDir, srcDir] of MIRRORS) {
     if (rel === distDir || rel.startsWith(distDir + '/')) {
       return exists(path.join(root, srcDir, rel.slice(distDir.length + 1)));

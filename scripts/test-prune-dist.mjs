@@ -38,6 +38,8 @@ try {
   const owned = [
     'dist/.tsbuildinfo',
     'dist/config/build-identity.json',
+    'dist/.build-complete.json',
+    'dist/.build-in-progress.json',
     'dist/cli/index.js', 'dist/cli/index.js.map', 'dist/cli/index.d.ts', 'dist/cli/index.d.ts.map',
     'dist/gateway/chat/view.js',
     'dist/config/soul.md',
@@ -92,7 +94,9 @@ try {
 
   // package.json wiring: every build path prunes, release paths wipe
   const pkg = JSON.parse(fs.readFileSync(path.join(here, '..', 'package.json'), 'utf8'));
-  assert.match(pkg.scripts['build:backend'], /^node scripts\/prune-dist\.js --quiet && tsc/);
+  // build:backend: stamp begin -> prune -> tsc ... -> stamp complete (only after every step succeeded)
+  assert.match(pkg.scripts['build:backend'], /^node scripts\/build-stamp\.js begin && node scripts\/prune-dist\.js --quiet && tsc/);
+  assert.match(pkg.scripts['build:backend'], / && node scripts\/build-stamp\.js complete$/);
   for (const name of ['build:win', 'build:mac', 'prepare:public:desktop']) {
     assert.match(pkg.scripts[name], /^npm run clean:dist && /, `${name} must start from an empty dist`);
   }

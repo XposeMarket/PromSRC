@@ -57,8 +57,8 @@ The following repository workflow is the owner's standing local process. Tool im
 10. **Smoke-test and communicate.** Check gateway health/default port (`18789`), logs, exact repaired behavior, and connected desktop/mobile clients if affected. Report commit/PR, tests, build, restart and smoke evidence separately.
 
 ### Build and sync scripts (verified in `package.json`)
-- `npm run build` = `npm run build:backend && npm run build:web`.
-- `npm run build:backend` first runs `scripts/prune-dist.js` (removes `dist/` files whose source no longer exists, keeping tsc's incremental state), then `tsc`, then `scripts/copy-creative-renderers.js`, `scripts/copy-runtime-prompt-assets.js`, and `scripts/copy-extension-descriptors.js`.
+- `npm run build` = `node scripts/build.mjs` (backend and web at the same time); `build:serial` keeps the old order.
+- `npm run build:backend` runs `scripts/build-stamp.js begin`, `scripts/prune-dist.js` (removes `dist/` files whose source no longer exists, keeping tsc's incremental state), `tsc`, `scripts/copy-creative-renderers.js`, `scripts/copy-runtime-prompt-assets.js`, `scripts/copy-extension-descriptors.js`, then `scripts/build-stamp.js complete`. The completion stamp `dist/.build-complete.json` is what lets a source checkout (the live PromSRC) launch the compiled gateway instead of tsx; a failed or interrupted backend build leaves no stamp. After pulling into live, run the build before restarting to get the fast compiled boot; restarting first still works, just through tsx ([02](02-startup-gateway-runtime.md)).
 - Release builds (`build:win`, `build:mac`, `prepare:public:desktop`) start with `npm run clean:dist` (deletes `dist/` entirely) so packages never ship compiled copies of retired modules. `npm run check:dist` reports orphaned `dist/` files without changing anything.
 - `npm run build:web` is `npm run sync:web-ui` (regenerates the untracked bundle, then checks it).
 - `npm run sync:web-ui` runs `build:thinking-orb`, `scripts/prepare-public-build.js --web-only`, then `check:web-ui`.

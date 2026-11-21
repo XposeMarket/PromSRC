@@ -205,28 +205,11 @@ export function shouldClosePreviousTerminalAfterRestart(ctx: RestartContext): bo
   return true;
 }
 
-function isSourceTreeNewerThanCompiled(root: string, compiledMtimeMs: number): boolean {
-  const sourceRoot = path.join(root, 'src');
-  const pending: string[] = [sourceRoot];
-  while (pending.length) {
-    const current = pending.pop()!;
-    let entries: fs.Dirent[];
-    try { entries = fs.readdirSync(current, { withFileTypes: true }); } catch { continue; }
-    for (const entry of entries) {
-      if (entry.name === 'node_modules' || entry.name === '.git') continue;
-      const fullPath = path.join(current, entry.name);
-      if (entry.isDirectory()) {
-        pending.push(fullPath);
-        continue;
-      }
-      if (!/\.(?:ts|tsx|js|mjs|cjs)$/.test(entry.name)) continue;
-      try {
-        if (fs.statSync(fullPath).mtimeMs > compiledMtimeMs) return true;
-      } catch {}
-    }
-  }
-  return false;
-}
+// Shared with the CLI supervisor and electron/main.js: a source checkout runs
+// dist/ only while its last completed backend build is newer than every source file.
+const { checkCompiledBuildFreshness } = require('../../electron/compiled-build-freshness.js') as {
+  checkCompiledBuildFreshness(rootDir: string): { fresh: boolean; reason: string; checkMs: number };
+};
 
 function resolveDirectGatewayLaunch(root: string): { entry: string; args: string[] } | null {
   const sourceEntry = path.join(root, 'src', 'gateway', 'server-v2.ts');
@@ -237,8 +220,7 @@ function resolveDirectGatewayLaunch(root: string): { entry: string; args: string
   const preferCompiled = process.env.PROMETHEUS_GATEWAY_USE_COMPILED === '1';
   if (compiledExists && !preferSource) {
     try {
-      const compiledMtimeMs = fs.statSync(compiledEntry).mtimeMs;
-      if (preferCompiled || !isSourceTreeNewerThanCompiled(root, compiledMtimeMs)) {
+      if (preferCompiled || !sourceExists || checkCompiledBuildFreshness(root).fresh) {
         return { entry: compiledEntry, args: [compiledEntry] };
       }
     } catch {}

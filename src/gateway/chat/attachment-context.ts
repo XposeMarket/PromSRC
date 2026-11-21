@@ -3,9 +3,15 @@ import * as path from 'path';
 import { getConfig } from '../../config/config';
 import { normalizeVisionImageBuffer, VISION_TARGET_MAX_BYTES } from './vision-image-normalize';
 
-const mammoth: any = require('mammoth');
-const pdfParse: any = require('pdf-parse');
-const XLSX: any = require('xlsx');
+// Document parsers are heavy (xlsx alone builds ~100ms of codepage tables) and are
+// only needed when an attachment of that type is read. Loading them at module
+// import put ~0.4s on every gateway boot via the chat router.
+let mammothModule: any = null;
+let pdfParseModule: any = null;
+let xlsxModule: any = null;
+const loadMammoth = (): any => (mammothModule ??= require('mammoth'));
+const loadPdfParse = (): any => (pdfParseModule ??= require('pdf-parse'));
+const loadXlsx = (): any => (xlsxModule ??= require('xlsx'));
 
 export type RuntimeVisionAttachment = {
   base64: string;
@@ -126,18 +132,19 @@ async function extractTextPreview(absPath: string, mimeType: string, ext: string
   }
 
   if (ext === '.pdf' || mimeType === 'application/pdf') {
-    const parsed = await pdfParse(await fs.promises.readFile(absPath), { max: 8 });
+    const parsed = await loadPdfParse()(await fs.promises.readFile(absPath), { max: 8 });
     const preview = truncateText(String(parsed?.text || '').replace(/\n{3,}/g, '\n\n').trim(), maxChars);
     return `${preview.text}${preview.truncated ? '\n...[truncated]' : ''}`;
   }
 
   if (ext === '.docx') {
-    const result = await mammoth.extractRawText({ path: absPath });
+    const result = await loadMammoth().extractRawText({ path: absPath });
     const preview = truncateText(String(result?.value || '').replace(/\n{3,}/g, '\n\n').trim(), maxChars);
     return `${preview.text}${preview.truncated ? '\n...[truncated]' : ''}`;
   }
 
   if (ext === '.xlsx' || ext === '.xls') {
+    const XLSX = loadXlsx();
     const workbook = XLSX.readFile(absPath, { cellDates: true });
     const sheetNames = Array.isArray(workbook?.SheetNames) ? workbook.SheetNames.slice(0, 3) : [];
     const parts: string[] = [];
