@@ -66,15 +66,14 @@ import {
   sourcePanelResourceBelongsToContext,
 } from '../source-panel-context.js';
 import {
-  archiveBackgroundAgentRound,
+  advanceBackgroundAgentLane,
   backgroundAgentAgeLabel,
   backgroundAgentFollowUpLink,
-  backgroundAgentFollowUpPromptMessage,
   backgroundAgentLaneExecutionId,
   backgroundAgentLaneKey,
+  backgroundAgentLaneRoundState,
   backgroundAgentPreview,
   backgroundAgentRecordToMessage,
-  backgroundAgentRoundTransition,
   backgroundAgentWorkForSession,
   findBackgroundAgentWork,
   mergeBackgroundAgentEvents,
@@ -85,7 +84,7 @@ import {
   resolveBackgroundAgentIdentity,
   writeBackgroundAgentWork,
 } from '../background-agent-work.js';
-import { createDesktopBackgroundAgentWork } from '../features/chat/core/desktop-background-agent-work.js';
+import { backgroundAgentFollowUpThreadHistory, createDesktopBackgroundAgentWork } from '../features/chat/core/desktop-background-agent-work.js';
 import { loadNewChatGlance, renderNewChatGlanceHtml, glanceTarget } from '../chat/new-chat-glance.js';
 installToolActivityExpansionPersistence();
 // Paints yield to typing: hold a stream paint until the composer has been idle 150ms,
@@ -14896,33 +14895,6 @@ function renderSideChatPaneHtml(timelineBudget = null) {
     </section>`;
 }
 
-// Follow-ups continue the agent's own thread: each earlier round renders as its
-// follow-up prompt, steers and answer, then the current round's prompt.
-function backgroundAgentFollowUpThreadHistory(record, identity) {
-  const history = [];
-  (Array.isArray(record?.rounds) ? record.rounds : []).forEach((round) => {
-    const prompt = round.round
-      ? backgroundAgentFollowUpPromptMessage(round.prompt, { laneId: record.id, executionId: round.executionId, round: round.round, timestamp: round.startedAt })
-      : null;
-    if (prompt) history.push(prompt);
-    (Array.isArray(round.steerMessages) ? round.steerMessages : []).forEach((steer) => {
-      const content = String(steer?.content || '').trim();
-      if (content) history.push({ role: 'user', content, timestamp: Number(steer.timestamp || 0) || Date.now(), channelLabel: 'steer', workflowGroupId: String(steer.workflowGroupId || `chat_steer_background_${round.executionId}`), workflowPart: 'interruption' });
-    });
-    history.push({
-      ...backgroundAgentRecordToMessage({ ...round, id: record.id, agentName: identity.name, agentColor: identity.color, events: round.processEntries }),
-      workflowLabel: identity.name,
-      workflowAvatarHtml: renderBackgroundAgentWorkflowAvatar(identity),
-      streaming: false,
-    });
-  });
-  const current = Number(record?.followUpRound || 0)
-    ? backgroundAgentFollowUpPromptMessage(record.roundPrompt, { laneId: record.id, executionId: record.executionId, round: record.followUpRound, timestamp: record.startedAt })
-    : null;
-  if (current) history.push(current);
-  return history;
-}
-
 function renderBackgroundAgentSidePaneHtml(record, timelineBudget = null) {
   if (!record) return '';
   const identity = resolveBackgroundAgentIdentity(record.id, {
@@ -14959,7 +14931,7 @@ function renderBackgroundAgentSidePaneHtml(record, timelineBudget = null) {
     }))
     .filter((steer) => steer.content);
   const sideSessionId = `background:${record.id}`;
-  steerHistory.unshift(...backgroundAgentFollowUpThreadHistory(record, identity));
+  steerHistory.unshift(...backgroundAgentFollowUpThreadHistory(record, identity, renderBackgroundAgentWorkflowAvatar(identity)));
   const sideHistory = running ? steerHistory : [...steerHistory, message];
   const sideEntries = desktopTimelineEntries(sideHistory, sideSessionId);
   const sideTimeline = desktopTimelineController.select(`desktop:side:${sideSessionId}`, sideEntries, {
@@ -18546,10 +18518,7 @@ function backgroundSpawnWorkRecord(lane) {
   const identity = backgroundSpawnIdentityForLane(lane, Array.from(ensureBackgroundSpawnDockMap().values()));
   return {
     id: lane.id,
-    executionId: lane.executionId,
-    followUpRound: lane.followUpRound,
-    roundPrompt: lane.roundPrompt,
-    rounds: lane.rounds,
+    ...backgroundAgentLaneRoundState(lane),
     sessionId: lane.sessionId || window.activeChatSessionId,
     agentName: identity.name,
     agentColor: identity.color,
@@ -18616,29 +18585,6 @@ function backgroundSpawnLaneId(msg = {}) {
   return backgroundAgentLaneKey(backgroundSpawnExecutionId(msg), msg, msg.data);
 }
 
-// Archive the lane's current round and reset its live per-round state.
-function beginBackgroundSpawnFollowUpRound(lane, executionId, link, msg = {}) {
-  lane.rounds = archiveBackgroundAgentRound(lane, { liveTraceEntries: backgroundSpawnLaneLiveTrace(lane), processEntries: lane.events });
-  Object.assign(lane, {
-    executionId,
-    followUpRound: link.round || Number(lane.followUpRound || 0) + 1,
-    roundPrompt: '',
-    status: 'running',
-    events: [],
-    liveTraceEntries: [],
-    __liveTraceEventsRef: null,
-    result: '',
-    error: '',
-    fileChanges: null,
-    plan: null,
-    steerMessages: [],
-    streamId: '',
-    lastSeq: 0,
-    startedAt: Number(msg.startedAt || 0) || Date.now(),
-    completedAt: 0,
-  });
-}
-
 function upsertBackgroundSpawnLane(msg = {}) {
   const id = backgroundSpawnLaneId(msg);
   if (!id) return null;
@@ -18652,10 +18598,12 @@ function upsertBackgroundSpawnLane(msg = {}) {
     if (stored) lanes.set(id, { ...stored, label: stored.agentName, events: Array.isArray(stored.events) ? stored.events : [] });
   }
   const existing = lanes.get(id) || {};
-  const transition = backgroundAgentRoundTransition(existing, executionId, link);
-  if (transition === 'stale') return null;
-  if (transition === 'new') beginBackgroundSpawnFollowUpRound(existing, executionId, link, msg);
-  else if (link && !existing.executionId) Object.assign(existing, { executionId, followUpRound: link.round || 1 });
+  // Drop a stale (earlier-round) frame; a new round archives the current one.
+  if (!advanceBackgroundAgentLane(existing, executionId, link, {
+    startedAt: msg.startedAt,
+    snapshot: () => ({ liveTraceEntries: backgroundSpawnLaneLiveTrace(existing), processEntries: existing.events }),
+    reset: { events: [], liveTraceEntries: [], __liveTraceEventsRef: null, completedAt: 0 },
+  })) return null;
   // A round's task text is its follow-up prompt; the lane's task stays the root assignment.
   const incomingTask = String(msg.task || msg.prompt || '').trim();
   if (link && incomingTask) existing.roundPrompt = incomingTask;
@@ -18667,10 +18615,7 @@ function upsertBackgroundSpawnLane(msg = {}) {
   });
   const lane = {
     id,
-    executionId: existing.executionId || (executionId !== id ? executionId : undefined),
-    followUpRound: Number(existing.followUpRound || 0) || undefined,
-    roundPrompt: existing.roundPrompt || '',
-    rounds: Array.isArray(existing.rounds) ? existing.rounds : [],
+    ...backgroundAgentLaneRoundState(existing, id, executionId),
     sessionId: String(msg.sessionId || existing.sessionId || window.activeChatSessionId || '').trim(),
     label: identity.name,
     agentName: identity.name,

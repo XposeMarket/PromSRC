@@ -17,21 +17,24 @@ globalThis.localStorage = {
 
 const work = await import('../web-ui/src/features/chat/core/background-agent-work.js');
 const compat = await import('../web-ui/src/background-agent-work.js');
-const { createDesktopBackgroundAgentWork } = await import('../web-ui/src/features/chat/core/desktop-background-agent-work.js');
+const { createDesktopBackgroundAgentWork, backgroundAgentFollowUpThreadHistory } = await import('../web-ui/src/features/chat/core/desktop-background-agent-work.js');
 const {
+  advanceBackgroundAgentLane,
   archiveBackgroundAgentRound,
   backgroundAgentFollowUpLink,
   backgroundAgentFollowUpPromptMessage,
   backgroundAgentLaneExecutionId,
   backgroundAgentLaneKey,
+  backgroundAgentLaneRoundState,
   backgroundAgentRoundTransition,
   findBackgroundAgentWork,
   normalizeBackgroundAgentRounds,
   persistBackgroundAgentWork,
 } = work;
 
-for (const name of ['archiveBackgroundAgentRound', 'backgroundAgentFollowUpLink', 'backgroundAgentFollowUpPromptMessage',
-  'backgroundAgentLaneExecutionId', 'backgroundAgentLaneKey', 'backgroundAgentRoundTransition', 'normalizeBackgroundAgentRounds']) {
+for (const name of ['advanceBackgroundAgentLane', 'archiveBackgroundAgentRound', 'backgroundAgentFollowUpLink', 'backgroundAgentFollowUpPromptMessage',
+  'backgroundAgentLaneExecutionId', 'backgroundAgentLaneKey', 'backgroundAgentLaneRoundState',
+  'backgroundAgentRoundTransition', 'normalizeBackgroundAgentRounds']) {
   assert.equal(typeof compat[name], 'function', `compat entrypoint re-exports ${name}`);
 }
 
@@ -118,13 +121,46 @@ for (const [label, persist] of [['shared', persistBackgroundAgentWork], ['deskto
 // Desktop wiring (ChatPage.js is a browser module; pin the integration points).
 const chatPage = fs.readFileSync(new URL('../web-ui/src/pages/ChatPage.js', import.meta.url), 'utf8');
 assert.match(chatPage, /function backgroundSpawnLaneId\(msg = \{\}\) \{\s*return backgroundAgentLaneKey\(/, 'desktop lanes key by conversation root');
-assert.match(chatPage, /backgroundAgentRoundTransition\(existing, executionId, link\)/, 'desktop upsert advances rounds');
-assert.match(chatPage, /if \(transition === 'stale'\) return null;/, 'desktop drops stale frames');
+assert.match(chatPage, /if \(!advanceBackgroundAgentLane\(existing, executionId, link, \{[\s\S]{0,400}?\}\)\) return null;/, 'desktop upsert advances rounds and drops stale frames');
+const mobileRenderer = fs.readFileSync(new URL('../web-ui/src/mobile/mobile-chat-renderer-runtime.js', import.meta.url), 'utf8');
+assert.match(mobileRenderer, /if \(!advanceBackgroundAgentLane\(existing, executionId, link, \{[\s\S]{0,400}?\}\)\) return null;/, 'mobile upsert advances rounds and drops stale frames');
+
+// Shared round advance: a new round archives the old answer and resets per-round state.
+{
+  const lane = { id: ROOT, status: 'completed', result: 'Root answer', events: [{ type: 'final' }], lastSeq: 9, steerMessages: [{ content: 'hi' }] };
+  assert.equal(advanceBackgroundAgentLane(lane, ROUND, link1, { startedAt: 5, snapshot: () => ({ processEntries: lane.events }), reset: { events: [] } }), true);
+  assert.equal(lane.executionId, ROUND);
+  assert.equal(lane.followUpRound, 1);
+  assert.equal(lane.result, '');
+  assert.equal(lane.status, 'running');
+  assert.equal(lane.lastSeq, 0);
+  assert.deepEqual(lane.events, []);
+  assert.equal(lane.rounds.length, 1);
+  assert.equal(lane.rounds[0].result, 'Root answer');
+  assert.equal(lane.rounds[0].processEntries.length, 1, 'snapshot is read before the reset');
+  assert.equal(advanceBackgroundAgentLane(lane, ROOT, null), false, 'a late root frame is dropped');
+  assert.deepEqual(backgroundAgentLaneRoundState({ id: ROOT }, ROOT, ROUND), { executionId: ROUND, followUpRound: undefined, roundPrompt: '', rounds: [] });
+}
+
+// Shared thread history: earlier round answers, then the current follow-up prompt.
+{
+  const history = backgroundAgentFollowUpThreadHistory({
+    id: ROOT,
+    executionId: ROUND,
+    followUpRound: 1,
+    roundPrompt: 'Which file?',
+    startedAt: 10,
+    rounds: [{ executionId: ROOT, round: 0, result: 'Root answer', status: 'completed', steerMessages: [{ content: 'also check tests', timestamp: 2 }] }],
+  }, { name: 'Daphne', color: '#087f96' }, '<i>D</i>');
+  assert.deepEqual(history.map((entry) => entry.role), ['user', 'ai', 'user'], 'steer, earlier answer, then follow-up prompt');
+  assert.equal(history[0].channelLabel, 'steer');
+  assert.equal(history[1].workflowAvatarHtml, '<i>D</i>');
+  assert.equal(history[1].workflowLabel, 'Daphne');
+  assert.equal(history[2].content, 'Which file?');
+}
 assert.match(chatPage, /\/api\/background\/\$\{encodeURIComponent\(executionId\)\}\/stream/, 'desktop replays the shown round');
 assert.match(chatPage, /const backgroundId = backgroundAgentLaneExecutionId\(ensureBackgroundSpawnDockMap\(\)\.get\(laneId\)\) \|\| laneId;/, 'desktop steers the shown round');
-assert.match(chatPage, /backgroundAgentFollowUpPromptMessage\(record\.roundPrompt/, 'desktop detail shows the follow-up prompt as the next message');
-assert.match(chatPage, /record\?\.rounds\) \? record\.rounds : \[\]\)\.forEach/, 'desktop detail renders earlier rounds in the same thread');
-assert.match(chatPage, /steerHistory\.unshift\(\.\.\.backgroundAgentFollowUpThreadHistory\(record, identity\)\)/, 'desktop detail prepends the earlier rounds');
+assert.match(chatPage, /steerHistory\.unshift\(\.\.\.backgroundAgentFollowUpThreadHistory\(record, identity, renderBackgroundAgentWorkflowAvatar\(identity\)\)\)/, 'desktop detail prepends the earlier rounds and the follow-up prompt');
 
 const mobilePage = fs.readFileSync(new URL('../web-ui/src/mobile/mobile-chat-page-runtime.js', import.meta.url), 'utf8');
 assert.match(mobilePage, /loadMobileBackgroundStatus\(executionId\)/, 'mobile polls the shown round');

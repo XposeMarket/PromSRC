@@ -17,7 +17,7 @@ import { swapKeyedTimelineSession } from '../features/chat/timeline/keyed-dom.js
 import { animateThinkingTextSwap, renderThinkingState } from '../utils.js';
 import { mergeMobileBackgroundTraceEntries } from './mobile-background-trace-merge.js';
 import { foldMobileReasoningSummaryGroups, isMobileReasoningSummaryEntry, mobileReasoningSummaryKey, mobileReasoningSummaryTitle, renderMobileReasoningLiveGroup } from './mobile-reasoning-summary-fold.js';
-import { archiveBackgroundAgentRound, backgroundAgentFollowUpLink, backgroundAgentLaneKey, backgroundAgentRoundTransition, mergeBackgroundAgentSteerMessages } from '../features/chat/core/background-agent-work.js';
+import { advanceBackgroundAgentLane, backgroundAgentFollowUpLink, backgroundAgentLaneKey, backgroundAgentLaneRoundState, backgroundAgentLaneSeed, backgroundAgentMessageRoundSnapshot, backgroundAgentRoundOf, backgroundAgentWorkIsLaneRound, mergeBackgroundAgentSteerMessages } from '../features/chat/core/background-agent-work.js';
 import { isSteerFrozenRow } from './mobile-restart-continuity.js';
 import { agentModelLabel, agentAvatarHtml } from '../components/provider-logo.js';
 import { buildMobileAttachmentInlineUrl as _aSrc } from './mobile-api.js';
@@ -3594,52 +3594,13 @@ function _mobileBackgroundSpawnId(msg = {}) {
   ).trim();
 }
 
-// A follow-up round is its own execution in its root agent's conversation.
-// Lanes are keyed by that root so the round continues the same agent thread.
+// Follow-up rounds share their root agent's lane.
 function _mobileBackgroundFollowUpLink(msg = {}) {
   return backgroundAgentFollowUpLink(_mobileBackgroundSpawnId(msg), msg, _mobileBackgroundEmbeddedPayload(msg));
 }
 
 function _mobileBackgroundLaneKey(msg = {}) {
   return backgroundAgentLaneKey(_mobileBackgroundSpawnId(msg), msg, _mobileBackgroundEmbeddedPayload(msg));
-}
-
-function _mobileBackgroundRound(record) {
-  return Math.max(0, Math.floor(Number(record?.followUpRound || 0)) || 0);
-}
-
-// Archive the lane's current round (live message, else its durable record)
-// and reset the per-round state so the follow-up streams into a fresh bubble.
-function _beginMobileBackgroundFollowUpRound(lane, stored, executionId, link, msg = {}) {
-  const live = lane.message && typeof lane.message === 'object' ? lane.message : null;
-  const durable = stored && _mobileBackgroundRound(stored) === _mobileBackgroundRound(lane) ? stored : null;
-  lane.rounds = archiveBackgroundAgentRound(lane, {
-    status: lane.status || durable?.status,
-    startedAt: lane.startedAt || durable?.startedAt,
-    completedAt: lane.completedAt || durable?.completedAt,
-    result: _mobileBackgroundText(lane.result, live?.content, live?.body?.text, durable?.result),
-    error: _mobileBackgroundText(lane.error, durable?.error),
-    steerMessages: (lane.steerMessages?.length ? lane.steerMessages : durable?.steerMessages) || [],
-    liveTraceEntries: live?.liveTraceEntries?.length ? live.liveTraceEntries : (durable?.liveTraceEntries || []),
-    processEntries: live?.processEntries?.length ? live.processEntries : _mobileBackgroundStoredProcessEntries(durable),
-  });
-  Object.assign(lane, {
-    executionId,
-    followUpRound: link.round || _mobileBackgroundRound(lane) + 1,
-    roundPrompt: '',
-    status: 'running',
-    message: null,
-    result: '',
-    error: '',
-    fileChanges: null,
-    plan: null,
-    approvalRequest: null,
-    steerMessages: [],
-    streamId: '',
-    lastSeq: 0,
-    startedAt: Number(msg.startedAt || 0) || Date.now(),
-    completedAt: null,
-  });
 }
 
 function _mobileBackgroundSpawnPromptFromMessage(msg = {}, existing = {}) {
@@ -3875,33 +3836,18 @@ function _upsertMobileBackgroundSpawnLane(msg = {}, sessionId = __pmChat.activeS
   const embedded = _mobileBackgroundEmbeddedPayload(msg);
   const rawSessionId = String(msg.sessionId || embedded.sessionId || '').trim();
   if (!lanes[id]) {
-    // Continue a dismissed or cold agent thread from its durable record.
     const seedSessionId = String(msg.spawnerSessionId || embedded.spawnerSessionId || sessionId || '').trim();
     const seed = findBackgroundAgentWork(id, seedSessionId) || findBackgroundAgentWork(id, rawSessionId) || findBackgroundAgentWork(id);
-    if (link || _mobileBackgroundRound(seed)) {
-      if (link) delete _mobileBackgroundSpawnClearedIds()[id];
-      if (seed) lanes[id] = {
-        id,
-        sessionId: seed.sessionId,
-        task: seed.task,
-        prompt: seed.task,
-        executionId: seed.executionId,
-        followUpRound: seed.followUpRound,
-        roundPrompt: seed.roundPrompt,
-        rounds: Array.isArray(seed.rounds) ? seed.rounds : [],
-        steerMessages: [],
-      };
-    }
+    if (link) delete _mobileBackgroundSpawnClearedIds()[id];
+    if (seed && (link || backgroundAgentRoundOf(seed))) lanes[id] = backgroundAgentLaneSeed(id, seed);
   }
   const existing = lanes[id] || {};
-  const transition = backgroundAgentRoundTransition(existing, executionId, link);
-  if (transition === 'stale') return null;
-  if (transition === 'new') {
-    _beginMobileBackgroundFollowUpRound(existing, findBackgroundAgentWork(id, existing.sessionId) || findBackgroundAgentWork(id), executionId, link, msg);
-  } else if (link && !existing.executionId) {
-    Object.assign(existing, { executionId, followUpRound: link.round || 1 });
-  }
-  // A round's task text is its follow-up prompt; the lane task stays the root assignment.
+  if (!advanceBackgroundAgentLane(existing, executionId, link, {
+    startedAt: msg.startedAt,
+    snapshot: () => backgroundAgentMessageRoundSnapshot(existing, findBackgroundAgentWork(id, existing.sessionId) || findBackgroundAgentWork(id), _mobileBackgroundStoredProcessEntries),
+    reset: { message: null },
+  })) return null;
+  // A round's task is its follow-up prompt, not the root task.
   const incomingPrompt = _mobileBackgroundSpawnPromptFromMessage(msg, {});
   if (link && incomingPrompt) existing.roundPrompt = _mobileBackgroundFullPrompt(incomingPrompt, existing.roundPrompt);
   const prompt = link ? _mobileBackgroundFullPrompt(existing.task, existing.prompt) : _mobileBackgroundSpawnPromptFromMessage(msg, existing);
@@ -3932,12 +3878,7 @@ function _upsertMobileBackgroundSpawnLane(msg = {}, sessionId = __pmChat.activeS
   const agentStored = findBackgroundAgentWork(id, parentSessionId)
     || findBackgroundAgentWork(id, rawSessionId)
     || findBackgroundAgentWork(id);
-  // Per-round fields restore only from a durable record of THIS round.
-  const stored = agentStored
-    && _mobileBackgroundRound(agentStored) === _mobileBackgroundRound(existing)
-    && String(agentStored.executionId || agentStored.id) === String(existing.executionId || id)
-    ? agentStored
-    : null;
+  const stored = backgroundAgentWorkIsLaneRound(agentStored, existing, id) ? agentStored : null;
   const identity = resolveBackgroundAgentIdentity(id, {
     // Durable work is normalized before it reaches this boundary, so prefer
     // its stable identity over partial live payloads.
@@ -3973,10 +3914,7 @@ function _upsertMobileBackgroundSpawnLane(msg = {}, sessionId = __pmChat.activeS
   const incomingStreamId = msg.streamId || msg.stream?.streamId || embedded.streamId || embedded.stream?.streamId;
   const lane = {
     id,
-    executionId: existing.executionId || (executionId !== id ? executionId : undefined),
-    followUpRound: _mobileBackgroundRound(existing) || undefined,
-    roundPrompt: existing.roundPrompt || '',
-    rounds: Array.isArray(existing.rounds) ? existing.rounds : [],
+    ...backgroundAgentLaneRoundState(existing, id, executionId),
     sessionId: parentSessionId,
     bgSessionId: resolvedBgSessionId,
     label: identity.name,
@@ -4094,10 +4032,7 @@ function _mobileBackgroundAgentDetailRecord(id, requestedSession, normalizeTrace
   const messageText = normalizedTask && normalizedMessageText === normalizedTask ? '' : rawMessageText;
   return {
     id: lane.id,
-    executionId: lane.executionId,
-    followUpRound: lane.followUpRound,
-    roundPrompt: lane.roundPrompt,
-    rounds: Array.isArray(lane.rounds) ? lane.rounds : [],
+    ...backgroundAgentLaneRoundState(lane),
     sessionId: lane.sessionId || requestedSession,
     backgroundSessionId: lane.bgSessionId || stored?.backgroundSessionId || '',
     model: lane.model || stored?.model || '',
@@ -4158,10 +4093,7 @@ function _mobileBackgroundSpawnWorkRecord(lane) {
   });
   return {
     id: lane.id,
-    executionId: lane.executionId,
-    followUpRound: lane.followUpRound,
-    roundPrompt: lane.roundPrompt,
-    rounds: lane.rounds,
+    ...backgroundAgentLaneRoundState(lane),
     sessionId: lane.sessionId || __pmChat.activeSessionId,
     backgroundSessionId: lane.bgSessionId || '',
     model: lane.model,
