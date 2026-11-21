@@ -265,7 +265,19 @@ function resolveVisualColor(raw) {
   }
   visualColorProbe.style.color = '';
   visualColorProbe.style.color = raw;
-  return (visualColorProbe.style.color && plainVisualColor(getComputedStyle(visualColorProbe).color)) || raw;
+  if (!visualColorProbe.style.color) return raw;
+  const computed = getComputedStyle(visualColorProbe).color;
+  const plain = plainVisualColor(computed);
+  if (plain) return plain;
+  // Convert other browser-supported spaces (e.g. Display P3) to the iframe's sRGB palette.
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = 1;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return raw;
+  ctx.fillStyle = computed;
+  ctx.fillRect(0, 0, 1, 1);
+  const [r, g, b, a] = ctx.getImageData(0, 0, 1, 1).data;
+  return `rgba(${r}, ${g}, ${b}, ${a / 255})`;
 }
 
 function readVisualTheme() {
@@ -372,7 +384,7 @@ function visualThemeCss(theme) {
 export function buildVisualSrcdoc(lang, code, themeInput) {
   const theme = normalizeVisualTheme(themeInput);
   // Mermaid parses colors itself and throws on currentColor/transparent/var().
-  const mc = (v, dark, light) => (!v || /^(currentColor|transparent|inherit)$/i.test(String(v).trim()) || /var\(/.test(String(v)) ? (theme.isDark ? dark : light) : v);
+  const mc = (v, dark, light) => (!v || /^(currentColor|transparent|inherit)$/i.test(String(v).trim()) || /var\(/.test(String(v)) ? (theme.isDark ? dark : light) : resolveVisualColor(v));
   const fg = mc(theme.text, '#e6edf3', '#1f2328');
   const mermaidThemeVariables = visualScriptJson({
     background: 'transparent',
@@ -527,21 +539,7 @@ export function buildVisualSrcdoc(lang, code, themeInput) {
   const stage = document.getElementById('mm-stage');
   const graphEl = document.getElementById('mm-graph');
   const mermaidSource = graphEl.textContent || '';
-  const toMermaidColor = (value) => {
-    const raw = String(value == null ? '' : value).trim();
-    if (!raw || /^#[0-9a-f]{3,8}$/i.test(raw) || /^rgba?\([\d\s.,%]+\)$/i.test(raw)) return raw;
-    try {
-      const cv = document.createElement('canvas'); cv.width = cv.height = 1;
-      const cx = cv.getContext('2d', { willReadFrequently: true });
-      const probe = document.createElement('span'); probe.style.color = raw; probe.style.display = 'none';
-      document.body.appendChild(probe); const resolved = getComputedStyle(probe).color; probe.remove();
-      cx.clearRect(0, 0, 1, 1); cx.fillStyle = '#000'; cx.fillStyle = resolved || raw; cx.fillRect(0, 0, 1, 1);
-      const d = cx.getImageData(0, 0, 1, 1).data;
-      return d[3] >= 255 ? 'rgb(' + d[0] + ',' + d[1] + ',' + d[2] + ')' : 'rgba(' + d[0] + ',' + d[1] + ',' + d[2] + ',' + (d[3] / 255).toFixed(3) + ')';
-    } catch { return raw; }
-  };
-  const sanitizeMermaidVars = (vars) => { const out = {}; Object.keys(vars || {}).forEach((k) => { const v = vars[k]; out[k] = (typeof v === 'string' && /color|bkg|background|border|fill|stroke/i.test(k)) ? toMermaidColor(v) : v; }); return out; };
-  const baseMermaidThemeVariables = sanitizeMermaidVars(${mermaidThemeVariables});
+  const baseMermaidThemeVariables = ${mermaidThemeVariables};
   const zoomInBtn = document.getElementById('mm-zoom-in');
   const zoomOutBtn = document.getElementById('mm-zoom-out');
   const resetBtn = document.getElementById('mm-reset');
@@ -705,7 +703,7 @@ export function buildVisualSrcdoc(lang, code, themeInput) {
       window.addEventListener('prometheus:visual-theme-change',(event)=>{
         const next=event.detail||{};
         graphEl.textContent=mermaidSource;
-        mm.initialize({startOnLoad:false,theme:'base',securityLevel:'strict',htmlLabels:false,themeVariables:sanitizeMermaidVars(Object.assign({},baseMermaidThemeVariables,{
+        mm.initialize({startOnLoad:false,theme:'base',securityLevel:'strict',htmlLabels:false,themeVariables:Object.assign({},baseMermaidThemeVariables,{
           primaryColor:next.surface||baseMermaidThemeVariables.primaryColor,
           primaryTextColor:next.text||baseMermaidThemeVariables.primaryTextColor,
           primaryBorderColor:next.borderStrong||baseMermaidThemeVariables.primaryBorderColor,
@@ -721,7 +719,7 @@ export function buildVisualSrcdoc(lang, code, themeInput) {
           nodeBorder:next.borderStrong||baseMermaidThemeVariables.nodeBorder,
           clusterBkg:next.surfaceSecondary||baseMermaidThemeVariables.clusterBkg,
           clusterBorder:next.border||baseMermaidThemeVariables.clusterBorder,
-        }))});
+        })});
         const rerun=mm.run?mm.run({querySelector:'#mm-graph'}):Promise.resolve(mm.init(undefined,graphEl));
         Promise.resolve(rerun).then(()=>{normalizeSvgSize();fitToViewport();}).catch(showRenderError);
       });
