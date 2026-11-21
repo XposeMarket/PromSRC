@@ -16,6 +16,7 @@
  * A dist file is kept when one of these owns it:
  *   - dist/.tsbuildinfo (tsc incremental state)
  *   - dist/config/build-identity.json (written by the build, no source twin)
+ *   - dist/.build-complete.json, dist/.build-in-progress.json (scripts/build-backend.mjs)
  *   - a compiled output (.js, .js.map, .d.ts, .d.ts.map) whose src/<path>.ts|.tsx|.mts|.cts exists
  *   - dist/extensions/prometheus-personal-chrome/<p> when extensions/prometheus-personal-chrome/<p> exists
  *   - any other dist/<p> when src/<p> exists (assets copied by the build: config prompts,
@@ -78,6 +79,8 @@ function isOwned(rel, root) {
   if (rel === '.tsbuildinfo') return true;
   // Written by scripts/write-build-identity.js on every build; it has no src/ twin.
   if (rel === 'config/build-identity.json') return true;
+  // Build lock + completion stamp (scripts/build-backend.mjs); launchers read them to decide dist/ vs tsx.
+  if (rel === '.build-complete.json' || rel === '.build-in-progress.json') return true;
   for (const [distDir, srcDir] of MIRRORS) {
     if (rel === distDir || rel.startsWith(distDir + '/')) {
       return exists(path.join(root, srcDir, rel.slice(distDir.length + 1)));
@@ -152,6 +155,9 @@ function main() {
   for (const rel of orphans) fs.rmSync(path.join(dist, rel), { force: true });
   if (exists(dist)) removeEmptyDirs(dist);
   if (orphans.length > 0) {
+    // dist/ no longer equals a completed backend build, so source checkouts must not
+    // launch it until the next build (inside build:backend the stamp is already gone).
+    fs.rmSync(path.join(dist, '.build-complete.json'), { force: true });
     console.log(`[build] Pruned ${summarize(orphans)} from dist/ with no source`);
   } else if (!opts.quiet) {
     console.log('[build] dist/ has no orphaned files');

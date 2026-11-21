@@ -38,6 +38,8 @@ try {
   const owned = [
     'dist/.tsbuildinfo',
     'dist/config/build-identity.json',
+    'dist/.build-complete.json',
+    'dist/.build-in-progress.json',
     'dist/cli/index.js', 'dist/cli/index.js.map', 'dist/cli/index.d.ts', 'dist/cli/index.d.ts.map',
     'dist/gateway/chat/view.js',
     'dist/config/soul.md',
@@ -69,7 +71,9 @@ try {
   r = run();
   assert.equal(r.status, 0, r.stderr);
   for (const rel of orphans) assert.ok(!has(rel), `orphan survived: ${rel}`);
-  for (const rel of owned) assert.ok(has(rel), `owned file removed: ${rel}`);
+  // Pruning output means dist/ no longer equals a completed build: the completion stamp goes too.
+  for (const rel of owned.filter((f) => f !== 'dist/.build-complete.json')) assert.ok(has(rel), `owned file removed: ${rel}`);
+  assert.ok(!has('dist/.build-complete.json'), 'pruning orphans must drop the build completion stamp');
   assert.ok(!has('dist/agents'), 'empty directories are removed');
   assert.ok(!has('dist/gateway/turn-workers'), 'empty nested directories are removed');
   assert.ok(has('dist'), 'dist itself is kept');
@@ -77,6 +81,11 @@ try {
   // now clean
   r = run('--check');
   assert.equal(r.status, 0, r.stderr);
+  // a prune that removes nothing keeps the completion stamp (stamps are never orphans)
+  write('dist/.build-complete.json');
+  r = run();
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(has('dist/.build-complete.json'), 'a no-op prune must keep the completion stamp');
 
   // --all wipes dist
   r = run('--all');
@@ -92,7 +101,11 @@ try {
 
   // package.json wiring: every build path prunes, release paths wipe
   const pkg = JSON.parse(fs.readFileSync(path.join(here, '..', 'package.json'), 'utf8'));
-  assert.match(pkg.scripts['build:backend'], /^node scripts\/prune-dist\.js --quiet && tsc/);
+  // build:backend runs scripts/build-backend.mjs: prune before tsc, under the dist/ build lock
+  assert.equal(pkg.scripts['build:backend'], 'node scripts/build-backend.mjs');
+  const pipeline = fs.readFileSync(path.join(here, 'build-backend.mjs'), 'utf8');
+  assert.ok(pipeline.indexOf("'scripts/prune-dist.js', '--quiet'") > -1, 'build-backend prunes dist/');
+  assert.ok(pipeline.indexOf("'scripts/prune-dist.js', '--quiet'") < pipeline.indexOf("typescript/bin/tsc"), 'prune runs before tsc');
   for (const name of ['build:win', 'build:mac', 'prepare:public:desktop']) {
     assert.match(pkg.scripts[name], /^npm run clean:dist && /, `${name} must start from an empty dist`);
   }

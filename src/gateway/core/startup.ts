@@ -347,12 +347,20 @@ export async function runStartup(deps: StartupDeps): Promise<LiveRuntimeSnapshot
 
   const liveConfig = getConfig().getConfig();
   const searchCfg = (liveConfig as any).search || {};
-  // HIGH-03: resolve vault references before checking presence — never log the key value itself
-  const cm = getConfig();
-  const tavilyKey = cm.resolveSecret(searchCfg.tavily_api_key);
-  const tinyfishKey = cm.resolveSecret(searchCfg.tinyfish_api_key);
-  const googleKey = cm.resolveSecret(searchCfg.google_api_key);
-  const hasSearch = tinyfishKey ? '✓ TinyFish' : tavilyKey ? '✓ Tavily' : googleKey ? '✓ Google' : '✗ None (configure in Settings → Search)';
+  // The terminal banner only needs to know whether a search key is configured.
+  // resolveSecret() would decrypt each vault entry here (a ~0.4s synchronous
+  // PBKDF2 per entry, before the listener binds), so check the reference only.
+  // Key values are never read or logged here (HIGH-03).
+  const isSearchKeyConfigured = (value: unknown): boolean => {
+    const ref = typeof value === 'string' ? value.trim() : '';
+    if (!ref) return false;
+    if (ref.startsWith('env:')) return !!process.env[ref.slice(4)];
+    return true;
+  };
+  const hasSearch = isSearchKeyConfigured(searchCfg.tinyfish_api_key) ? '✓ TinyFish'
+    : isSearchKeyConfigured(searchCfg.tavily_api_key) ? '✓ Tavily'
+      : isSearchKeyConfigured(searchCfg.google_api_key) ? '✓ Google'
+        : '✗ None (configure in Settings → Search)';
 
   const gpuDisplay = 'Detecting GPU...';
 

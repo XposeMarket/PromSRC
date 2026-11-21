@@ -47,6 +47,33 @@ async function main() {
   assert.equal(warmed, c.getAll().length);
   assert.equal(fixtures(c), 2);
 
+  // Time-sliced warm (gateway boot): with a 0ms budget every slice loads one
+  // package and yields, so the warm spans many event-loop turns, never stalls,
+  // and only publishes the catalog once it is complete.
+  for (const id of ['gamma-fixture', 'delta-fixture', 'epsilon-fixture', 'zeta-fixture', 'eta-fixture', 'theta-fixture']) writeSkill(skillsDir, id);
+  const d = new SkillsManager(skillsDir);
+  let dWarmed = -1;
+  d.warmInBackground((count) => { dWarmed = count; }, 0);
+  let ticks = 0;
+  while (dWarmed < 0 && ticks < 500) { await new Promise((r) => setImmediate(r)); ticks++; }
+  assert.ok(ticks >= 8, `a sliced warm must yield between packages (finished after ${ticks} ticks)`);
+  assert.equal(d.hasScanned(), true);
+  assert.equal(fixtures(d), 8, 'the sliced warm must load every package');
+  assert.equal(dWarmed, d.getAll().length);
+
+  // A synchronous access during the warm wins: it scans immediately, and the
+  // warm discards its partial work instead of replacing the catalog later.
+  const e = new SkillsManager(skillsDir);
+  let eWarmed = -1;
+  e.warmInBackground((count) => { eWarmed = count; }, 0);
+  await new Promise((r) => setImmediate(r));
+  await new Promise((r) => setImmediate(r));
+  assert.equal(e.hasScanned(), false, 'warm still in progress');
+  assert.equal(fixtures(e), 8, 'a synchronous access mid-warm must return the full catalog');
+  for (let i = 0; i < 40; i++) await new Promise((r) => setImmediate(r));
+  assert.equal(eWarmed, -1, 'a warm overtaken by a synchronous scan must not publish its partial catalog');
+  assert.equal(fixtures(e), 8);
+
   console.log('skills-manager-lazy-scan regression: ok');
 }
 

@@ -744,15 +744,77 @@ export class SkillsManager {
     }
   }
 
-  /** Perform the initial scan off the startup critical path. */
-  warmInBackground(onDone?: (count: number, ms: number) => void): void {
+  /**
+   * Perform the initial scan off the startup critical path. The ~200 packages
+   * (~1.4s of synchronous reads on Windows) load in short time slices with an
+   * event-loop yield between them, so the UI's first requests after listen are
+   * served instead of waiting for the whole scan. A synchronous access or a
+   * mutation rescan during the warm wins: the warm then discards its partial work.
+   */
+  warmInBackground(onDone?: (count: number, ms: number) => void, sliceMs = 12): void {
     if (this.scannedOnce) return;
     setImmediate(() => {
       if (this.scannedOnce) return;
       const started = Date.now();
-      try { this.scanSkills(); } catch (e) { console.error('[Skills] Background warm failed:', e); }
-      try { onDone?.(this.skillsStore.size, Date.now() - started); } catch {}
+      let entries: fs.Dirent[] = [];
+      let signature = '';
+      try {
+        this.ensureTreeWatcher();
+        // Same order as scanSkills(): clear the dirty flag and take the
+        // signature before reading, so a change made during the warm keeps
+        // the tree dirty and triggers a rescan on the next refresh.
+        this.treeDirty = false;
+        signature = this.computeTreeSignature();
+        entries = fs.existsSync(this.skillsDir) ? fs.readdirSync(this.skillsDir, { withFileTypes: true }) : [];
+      } catch (e) {
+        console.error('[Skills] Background warm failed:', e);
+        return;
+      }
+      const staged = new Map<string, Skill>();
+      let index = 0;
+      const step = () => {
+        if (this.scannedOnce) return; // a synchronous scan already loaded the catalog
+        const sliceEnd = Date.now() + sliceMs;
+        let processed = 0; // always make progress, even when a slice is already over budget
+        while (index < entries.length && (processed++ === 0 || Date.now() < sliceEnd)) {
+          const entry = entries[index++];
+          if (!entry.isDirectory() || entry.name.startsWith('_') || entry.name.startsWith('.')) continue;
+          this.loadSkillInto(staged, path.join(this.skillsDir, entry.name), entry.name);
+        }
+        if (index < entries.length) { setImmediate(step); return; }
+        try {
+          this.scanConnectorSkillsInto(staged);
+        } catch (e) {
+          console.error('[Skills] Background warm failed:', e);
+        }
+        this.skillsStore = staged;
+        this.lastTreeSignature = signature;
+        this.lastSignatureCheckAt = started;
+        this.lastScanAt = started;
+        this.scannedOnce = true;
+        console.log(`[Skills] ${staged.size} skills in ${this.skillsDir}`);
+        try { onDone?.(staged.size, Date.now() - started); } catch {}
+      };
+      step();
     });
+  }
+
+  private loadSkillInto(target: Map<string, Skill>, dir: string, name: string): void {
+    try {
+      const pkg = loadSkillPackage(dir, name);
+      if (!pkg) return;
+      // Boot/rescan path: reuse the previous verdict when the skill's files are unchanged.
+      const safety = scanSkillDirectoryCached(pkg.rootDir);
+      const eligibility = resolveSkillEligibility({
+        status: pkg.status,
+        safety,
+        requires: pkg.requires,
+        permissions: pkg.permissions,
+      });
+      target.set(pkg.id, { ...pkg, safety, eligibility });
+    } catch (e) {
+      console.error(`[Skills] Failed to load ${name}:`, e);
+    }
   }
 
   // Cheap change detector for the skills tree: one readdir of the skills root
@@ -852,29 +914,10 @@ export class SkillsManager {
     for (const entry of fs.readdirSync(this.skillsDir, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
       if (entry.name.startsWith('_') || entry.name.startsWith('.')) continue;
-
-      try {
-        const pkg = loadSkillPackage(path.join(this.skillsDir, entry.name), entry.name);
-        if (!pkg) continue;
-        // Boot/rescan path: reuse the previous verdict when the skill's files are unchanged.
-        const safety = scanSkillDirectoryCached(pkg.rootDir);
-        const eligibility = resolveSkillEligibility({
-          status: pkg.status,
-          safety,
-          requires: pkg.requires,
-          permissions: pkg.permissions,
-        });
-        this.skills.set(pkg.id, {
-          ...pkg,
-          safety,
-          eligibility,
-        });
-      } catch (e) {
-        console.error(`[Skills] Failed to load ${entry.name}:`, e);
-      }
+      this.loadSkillInto(this.skillsStore, path.join(this.skillsDir, entry.name), entry.name);
     }
 
-    this.scanConnectorSkills();
+    this.scanConnectorSkillsInto(this.skillsStore);
     console.log(`[Skills] ${this.skills.size} skills in ${this.skillsDir}`);
   }
 
@@ -884,7 +927,7 @@ export class SkillsManager {
    * `connector-<id>` unless the workspace already has a skill with that id
    * (user copies always win).
    */
-  private scanConnectorSkills(): void {
+  private scanConnectorSkillsInto(target: Map<string, Skill>): void {
     let connectorsRoot = '';
     try {
       const { resolveBundledExtensionsDir } = require('../../extensions/loader');
@@ -896,13 +939,13 @@ export class SkillsManager {
       const skillDir = path.join(connectorsRoot, entry.name, 'skill');
       if (!fs.existsSync(path.join(skillDir, 'SKILL.md'))) continue;
       const id = `connector-${entry.name.replace(/_/g, '-')}`;
-      if (this.skillsStore.has(id)) continue;
+      if (target.has(id)) continue;
       try {
         const pkg = loadSkillPackage(skillDir, id);
         if (!pkg) continue;
         const safety = scanSkillDirectoryCached(pkg.rootDir);
         const eligibility = resolveSkillEligibility({ status: pkg.status, safety, requires: pkg.requires, permissions: pkg.permissions });
-        this.skillsStore.set(pkg.id, { ...pkg, safety, eligibility });
+        target.set(pkg.id, { ...pkg, safety, eligibility });
       } catch (e) {
         console.error(`[Skills] Failed to load connector skill ${entry.name}:`, e);
       }

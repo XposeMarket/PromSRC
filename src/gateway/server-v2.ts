@@ -460,13 +460,33 @@ const skillsDir = resolveSkillsDir(configuredSkillsDir);
 // PROMETHEUS_BUNDLED_SKILLS_DIR is set (Electron desktop builds).
 if (process.env.PROMETHEUS_BUNDLED_SKILLS_DIR) {
   try {
-    const {
-      seedBundledSkills,
-      seedBundledSkillsIntoDir,
-    } = require('../config/public-workspace.js') as typeof import('../config/public-workspace');
+    const { seedBundledSkillsIntoDir } = require('../config/public-workspace.js') as typeof import('../config/public-workspace');
+    const bundledSkillsDir = process.env.PROMETHEUS_BUNDLED_SKILLS_DIR;
     const wp = getConfig().getWorkspacePath();
-    if (wp) seedBundledSkills(wp, process.env.PROMETHEUS_BUNDLED_SKILLS_DIR);
-    seedBundledSkillsIntoDir(skillsDir, process.env.PROMETHEUS_BUNDLED_SKILLS_DIR);
+    // The workspace skills folder and the configured skills dir are usually the
+    // same folder (.prometheus/skills is a junction to workspace/skills). Seed each
+    // real folder once, and derive the shipped trigger baseline once: every
+    // trigger-policy pass re-reads all skill.json files (~0.5s per target on Windows).
+    const folderKey = (dir: string): string => {
+      let resolved = path.resolve(dir);
+      try { resolved = fs.realpathSync.native(dir); } catch { /* not created yet */ }
+      return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+    };
+    const seedTargets: string[] = [];
+    const seenFolders = new Set<string>();
+    for (const dir of [wp ? path.join(wp, 'skills') : '', skillsDir]) {
+      if (!dir || seenFolders.has(folderKey(dir))) continue;
+      seenFolders.add(folderKey(dir));
+      seedTargets.push(dir);
+    }
+    let triggerBaseline: unknown;
+    if (seedTargets.length > 1) {
+      try {
+        const { deriveTriggerBaseline } = require('../config/skill-trigger-migration.js') as typeof import('../config/skill-trigger-migration');
+        triggerBaseline = deriveTriggerBaseline(bundledSkillsDir).baseline;
+      } catch { /* each seed pass derives (and reports) it on its own */ }
+    }
+    for (const dir of seedTargets) seedBundledSkillsIntoDir(dir, bundledSkillsDir, triggerBaseline);
   } catch (e: any) {
     console.warn('[Skills] Could not seed bundled skills:', e?.message);
   }
@@ -1443,7 +1463,10 @@ async function startGatewayListeners(): Promise<void> {
     skillsManager.warmInBackground((count, ms) => startupMark(`skills warmed after listen (${count} in ${ms}ms)`));
     // The mobile model picker's first open after a restart used to pay a
     // ~1.5s cold build of the provider catalog. Build it once off the
-    // critical path so the first picker open is served warm.
+    // critical path so the first picker open is served warm. The build is
+    // ~0.6-0.9s of synchronous work (vault key derivation for provider
+    // tokens), so it waits until the UI's first burst of requests after
+    // listen has been served instead of blocking them.
     setTimeout(() => {
       const startedAt = Date.now();
       import('../extensions/catalog-service.js')
@@ -1452,7 +1475,7 @@ async function startGatewayListeners(): Promise<void> {
           startupMark(`provider catalog warmed after listen (${Date.now() - startedAt}ms)`);
         })
         .catch(() => {});
-    }, 250);
+    }, 5_000).unref?.();
     // Boot the warm model-call worker now so the first turn after a restart
     // (usually a resumed one) does not pay a cold child boot before the
     // provider request is even sent.
