@@ -28,6 +28,7 @@ const {
 } = require('electron');
 const { spawn, execSync, execFile, execFileSync }  = require('child_process');
 const { checkCompiledBuildFreshness } = require('./compiled-build-freshness');
+const { createGatewayLog } = require('./gateway-log');
 const path       = require('path');
 const http       = require('http');
 const net        = require('net');
@@ -1282,27 +1283,23 @@ function forceCleanupOwnedGatewayPort(
 // In packaged builds stdout/stderr have no terminal — write to a log file so
 // crashes are diagnosable. Also keeps the last 200 lines in memory for the
 // error dialog shown when the gateway fails to start.
+// electron/gateway-log.js stamps every line with an ISO-8601 UTC time and
+// rotates the file by size (20 MB, gateway.log.1-.3 kept by default). Appending
+// across restarts is intentional: truncating at open erased the restart
+// trigger before the replacement could report it.
 const GATEWAY_LOG_PATH = path.join(USER_DATA_DIR, 'gateway.log');
-let gatewayLogStream = null;
 const gatewayLogLines = [];   // rolling last-200-lines buffer for error dialog
 const MAX_LOG_LINES = 200;
+const gatewayLog = createGatewayLog({
+  filePath: GATEWAY_LOG_PATH,
+  onLine: (line) => {
+    gatewayLogLines.push(line);
+    if (gatewayLogLines.length > MAX_LOG_LINES) gatewayLogLines.shift();
+  },
+});
 
 function openGatewayLog() {
-  try {
-    const logsDir = path.dirname(GATEWAY_LOG_PATH);
-    if (!fs.existsSync(logsDir)) fs.mkdirSync(logsDir, { recursive: true });
-    try { gatewayLogStream?.end(); } catch {}
-    // Keep the previous gateway lifetime in the same log. Truncating here
-    // erased the restart trigger before the replacement could report it.
-    gatewayLogStream = fs.createWriteStream(GATEWAY_LOG_PATH, { flags: 'a' });
-    gatewayLogStream.on('error', (err) => {
-      if (err?.code !== 'EPIPE') {
-        console.warn('[Prometheus] Gateway log stream error:', err?.message || err);
-      }
-    });
-  } catch (e) {
-    console.warn('[Prometheus] Could not open gateway log:', e.message);
-  }
+  gatewayLog.open();
 }
 
 function safeWriteMainStdout(text) {
@@ -1316,19 +1313,10 @@ function safeWriteMainStdout(text) {
   }
 }
 
-function writeGatewayLog(data) {
+// source keeps chunked child output from different streams on separate lines.
+function writeGatewayLog(data, source = 'main') {
   const text = String(data);
-  if (gatewayLogStream) {
-    try { gatewayLogStream.write(text); } catch {}
-  }
-  // Keep rolling buffer for error dialog
-  const lines = text.split('\n');
-  for (const line of lines) {
-    if (line.trim()) {
-      gatewayLogLines.push(line);
-      if (gatewayLogLines.length > MAX_LOG_LINES) gatewayLogLines.shift();
-    }
-  }
+  try { gatewayLog.write(text, source); } catch {}
   // Also forward to main-process stdio (visible in dev / when run from terminal)
   safeWriteMainStdout(`[gateway] ${text}`);
 }
@@ -1893,8 +1881,14 @@ async function startGateway() {
     writeGatewayLog(`[main] Vault key handoff write failed: ${err && err.message ? err.message : err}\n`);
   }
 
-  supervisor.stdout?.on('data', (d) => writeGatewayLog(d));
-  supervisor.stderr?.on('data', (d) => writeGatewayLog(d));
+  const supervisorStdout = `supervisor-${supervisor.pid}-stdout`;
+  const supervisorStderr = `supervisor-${supervisor.pid}-stderr`;
+  supervisor.stdout?.on('data', (d) => writeGatewayLog(d, supervisorStdout));
+  supervisor.stderr?.on('data', (d) => writeGatewayLog(d, supervisorStderr));
+  supervisor.on('close', () => {
+    gatewayLog.flush(supervisorStdout);
+    gatewayLog.flush(supervisorStderr);
+  });
 
   supervisor.on('error', (err) => {
     writeGatewayLog(`[main] Spawn error: ${err.message}\n`);
