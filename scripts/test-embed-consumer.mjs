@@ -35,7 +35,9 @@ try {
     const unpack = spawnSync('tar', ['-xzf', tarball, '--strip-components=1', '-C', target], { encoding: 'utf8', timeout: 120_000 });
     if (unpack.status !== 0) throw new Error(`Tar extraction failed: ${unpack.error || unpack.stderr}`);
   } else {
-    npm(['install', ...(process.argv.includes('--online-install') ? ['--prefer-online'] : ['--offline']), '--ignore-scripts', '--include=optional', '--no-audit', '--no-fund', tarball], project);
+    // --online-install: the registry serves anything the npm cache lacks, but cached package metadata is
+    // used without revalidating each of the ~1,400 packages (--prefer-online did that and cost ~60 s in CI).
+    npm(['install', ...(process.argv.includes('--online-install') ? ['--prefer-offline'] : ['--offline']), '--ignore-scripts', '--include=optional', '--no-audit', '--no-fund', tarball], project);
     // node-pty ships a Windows binary, but Unix requires its native lifecycle
     // build. Keep general install scripts disabled and build this dependency
     // explicitly in the isolated consumer, as the CI checkout does.
@@ -55,5 +57,8 @@ try {
   }
   console.log(`packed consumer: PASS (${packed[0].filename}; ${process.argv.includes('--shared-dependencies') ? 'shared external dependencies (not independent install)' : process.argv.includes('--online-install') ? 'registry-assisted install; runtime network denied' : 'offline install'}; public export; no source link)`);
 } finally {
-  try { fs.rmSync(project, { recursive: true, force: true, maxRetries: 3 }); } catch {}
+  // GitHub runners are discarded after the job; deleting the consumer's ~1 GB node_modules there took ~10 s.
+  if (process.env.GITHUB_ACTIONS !== 'true') {
+    try { fs.rmSync(project, { recursive: true, force: true, maxRetries: 3 }); } catch {}
+  }
 }

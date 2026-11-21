@@ -19,6 +19,7 @@ export const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)
 export const manifestPath = path.join(repoRoot, 'scripts', 'ci', 'regressions.json');
 export const DEFAULT_SECONDS = 5;
 export const DEFAULT_TIMEOUT_SECONDS = 600;
+export const TIMINGS_TITLE = 'Regression timings';
 const ENTRY_KEYS = new Set(['name', 'run', 'needs', 'seconds', 'timeoutSeconds']);
 const SETUP_KEYS = new Set(['description', 'run', 'seconds', 'timeoutSeconds']);
 
@@ -281,6 +282,9 @@ export async function main(argv) {
   const summary = summarize(run);
   console.log(`\n${summary.text}`);
   console.log(`CI_TIMINGS_JSON=${JSON.stringify(summary.timings)}`);
+  // Annotations are readable through the public API (logs are not), so `npm run ci:rebalance -- <run id>`
+  // can refresh the manifest's seconds from a real run.
+  if (inActions()) console.log(`::notice title=${TIMINGS_TITLE} ${label.replace(/[:,]/g, ' ')}::${escapeData(JSON.stringify(summary.timings))}`);
   if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary.markdown);
   if (run.interrupted) return run.interrupted === 'SIGINT' ? 130 : 143;
   return summary.verdict === 'PASS' ? 0 : 1;

@@ -63,9 +63,10 @@ npm run test:ci -- --only "mobile"   # run the regressions whose name matches
 npm run test:ci -- --shard 2/4       # reproduce one CI shard
 ```
 
-Each shard's log ends with a `CI_TIMINGS_JSON=` line and a per-regression
-table in the job summary; refresh `seconds` from them when the shards drift
-out of balance.
+Each shard publishes its per-regression timings as a "Regression timings"
+annotation (plus a table in the job summary). When the shards drift out of
+balance, `npm run ci:rebalance -- <workflow run id>` rewrites every `seconds`
+from that run's measurements and prints the new plan.
 
 ## The replay harness: testing the real agent loop headless
 

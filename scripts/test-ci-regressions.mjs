@@ -122,4 +122,15 @@ try {
 } finally {
   fs.rmSync(temp, { recursive: true, force: true });
 }
+// 5. Rebalancing merges measured timings into the manifest (setups too) and ignores unknown names.
+const { applyTimings } = await import('./ci/update-estimates.mjs');
+const rebalance = { setups: { backend: { run: 'x', seconds: 35 } }, regressions: [{ name: 'a', run: 'x', seconds: 9 }, { name: 'b', run: 'x' }] };
+const changes = applyTimings(rebalance, { 'setup: backend': 29.2, a: 0.3, b: 12.01, gone: 4, bad: Number.NaN });
+assert.equal(rebalance.setups.backend.seconds, 30);
+assert.equal(rebalance.regressions[0].seconds, 1, 'measured seconds round up with a floor of 1');
+assert.equal(rebalance.regressions[1].seconds, 13);
+assert.deepEqual(changes.map((change) => change.name), ['setup: backend', 'a', 'b']);
+validateManifest(rebalance);
+ok('ci:rebalance merges measured timings into setups and regressions');
+
 console.log(`PASS: ${checks} CI regression runner checks`);
