@@ -144,10 +144,16 @@ $tsTouched = @($src | ? { $_ -match '\.(ts|tsx)$' -or $_ -like 'tsconfig*' -or $
 $tscProc = $null
 $tscLog = Join-Path $prDir 'tsc.log'
 if (-not $SkipTsc -and $tsTouched) {
+  # A pr-start warm-up still running owns .pr\tsc.tsbuildinfo: queue the typecheck behind it (inside
+  # the background command) so the web-ui and test gates run meanwhile instead of waiting here.
+  $waitFor = ''
   $warmPid = Join-Path $prDir 'tsc-warmup.pid'
   if (Test-Path $warmPid) {
     $wp = Get-Process -Id ([int]((Get-Content $warmPid -Raw).Trim())) -ErrorAction SilentlyContinue
-    if ($wp -and $wp.ProcessName -in @('cmd', 'node')) { Write-Host '  waiting for the pr-start typecheck warm-up'; [void]$wp.WaitForExit(180000) }
+    if ($wp -and $wp.ProcessName -in @('cmd', 'node')) {
+      $waitFor = "powershell -NoProfile -Command Wait-Process -Id $($wp.Id) -Timeout 180 -ErrorAction SilentlyContinue & "
+      Write-Host '  typecheck queued behind the pr-start warm-up (other gates run meanwhile)'
+    }
     Remove-Item $warmPid -Force -ErrorAction SilentlyContinue
   }
   # dist\ and .pr\ sit at the same depth, so a copied buildinfo's relative paths stay valid; tsc still
@@ -156,7 +162,7 @@ if (-not $SkipTsc -and $tsTouched) {
   $distInfo = Join-Path $wt 'dist\.tsbuildinfo'
   if ((Test-Path $distInfo) -and (-not (Test-Path $tscInfo) -or (Get-Item $distInfo).LastWriteTimeUtc -gt (Get-Item $tscInfo).LastWriteTimeUtc)) { Copy-Item $distInfo $tscInfo -Force }
   $tscBin = if (Test-Path "$wt\node_modules\typescript\bin\tsc") { 'node node_modules/typescript/bin/tsc' } else { 'npx tsc' }
-  $tscProc = StartBg "$tscBin --noEmit -p tsconfig.json --incremental --tsBuildInfoFile .pr/tsc.tsbuildinfo" $tscLog
+  $tscProc = StartBg "$waitFor$tscBin --noEmit -p tsconfig.json --incremental --tsBuildInfoFile .pr/tsc.tsbuildinfo" $tscLog
 }
 
 # Open-PR conflict helpers (gate 12) only read git state, so they all start now and run in parallel.
