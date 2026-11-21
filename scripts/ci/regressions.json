@@ -560,6 +560,11 @@
       "name": "Verify CI regression runner, shard plan and required verify gate",
       "run": "npm run test:ci-runner",
       "seconds": 2
+    },
+    {
+      "name": "Verify web-ui syntax-check cache (content-addressed, passes only)",
+      "run": "node scripts/test-syntax-check-cache.mjs",
+      "seconds": 1
     }
   ]
 }

@@ -148,6 +148,12 @@ Most subsystem suites are single files: `npx tsx path/to/thing.regression.ts`
 or `node scripts/test-*.mjs`. `self/generated/tests.md` in the runtime
 workspace indexes them by area.
 
+`npm run check:web-ui` (also the last step of `sync:web-ui` and the build) syntax-checks
+every `web-ui/src` file with `node --check` and esbuild. Files whose exact bytes already
+passed under the same Node and esbuild versions are skipped, using
+`node_modules/.cache/prometheus/web-ui-syntax.json` (failures are never recorded). Set
+`PROMETHEUS_NO_SYNTAX_CACHE=1` to check every file.
+
 ## What is not covered yet
 
 Stated so reviewers do not have to infer it:

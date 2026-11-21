@@ -5,8 +5,12 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const esbuild = require('esbuild');
+const syntaxCache = require('./lib/syntax-check-cache.cjs');
 
 const ROOT = path.join(__dirname, '..');
+// Files whose exact bytes already passed both syntax checks are not re-checked (see the lib).
+const SYNTAX_CACHE_FILE = path.join(ROOT, 'node_modules', '.cache', 'prometheus', 'web-ui-syntax.json');
+const SYNTAX_CACHE_SALT = `node ${process.version}|esbuild ${esbuild.version}|node --check + esbuild esm chrome100`;
 const SRC_WEB_UI = path.join(ROOT, 'web-ui');
 const SRC_WEB_UI_SRC = path.join(SRC_WEB_UI, 'src');
 const OUT_ROOT = path.join(ROOT, 'generated', 'public-web-ui');
@@ -263,6 +267,7 @@ function verifyJavaScriptSyntax(filePath) {
 let nodeCheckResults = new Map();
 function runNodeChecks(files) {
   const results = new Map();
+  if (!files.length) return Promise.resolve(results);
   const cpuCount = typeof os.availableParallelism === 'function' ? os.availableParallelism() : os.cpus().length;
   const limit = Math.max(1, Math.min(16, cpuCount || 1, files.length));
   let next = 0;
@@ -324,7 +329,22 @@ function verifyProductionManifest() {
 
 async function main() {
   const sourceFiles = walkFiles(SRC_WEB_UI_SRC).filter((file) => file.endsWith('.js'));
-  [nodeCheckResults, esbuildCheckResults] = await Promise.all([runNodeChecks(sourceFiles), runEsbuildChecks(sourceFiles)]);
+  const useCache = syntaxCache.enabled();
+  const passed = useCache ? syntaxCache.load(SYNTAX_CACHE_FILE, SYNTAX_CACHE_SALT) : new Set();
+  const keys = new Map(sourceFiles.map((file) => [file, syntaxCache.cacheKey(fs.readFileSync(file), SYNTAX_CACHE_SALT)]));
+  const toCheck = sourceFiles.filter((file) => !passed.has(keys.get(file)));
+  [nodeCheckResults, esbuildCheckResults] = await Promise.all([runNodeChecks(toCheck), runEsbuildChecks(toCheck)]);
+  for (const file of sourceFiles) {
+    if (nodeCheckResults.has(file)) continue;
+    nodeCheckResults.set(file, { status: 0, output: '' });
+    esbuildCheckResults.set(file, null);
+  }
+  if (useCache) {
+    for (const file of toCheck) {
+      if (nodeCheckResults.get(file).status === 0 && esbuildCheckResults.get(file) === null) passed.add(keys.get(file));
+    }
+    syntaxCache.save(SYNTAX_CACHE_FILE, SYNTAX_CACHE_SALT, passed, [...keys.values()]);
+  }
   verifySourceWebUi(sourceFiles);
   verifyGeneratedWebUiIsCurrent();
   verifyGeneratedWebUi();
@@ -339,7 +359,7 @@ async function main() {
     process.exit(1);
   }
 
-  console.log('[check-public-web-ui-sync] web-ui and generated/public-web-ui are in sync');
+  console.log(`[check-public-web-ui-sync] web-ui and generated/public-web-ui are in sync (syntax-checked ${toCheck.length}, unchanged since a passing check ${sourceFiles.length - toCheck.length})`);
 }
 
 main().catch((error) => {
