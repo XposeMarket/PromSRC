@@ -76,6 +76,40 @@ const freshIdentity = resolveBackgroundLaneIdentity('bg_fresh-4444', { sources: 
 assert.notEqual(freshIdentity.color, rootLane.agentColor, 'unrelated agents still get distinct colors');
 assert.notEqual(freshIdentity.name, rootLane.agentName);
 
+// Review finding (Astra, PR #925): a round that already has a generated identity
+// (cached before upgrade, or first seen from an unlinked partial frame) must adopt
+// the root's identity as soon as the link arrives.
+const cachedRound = { id: ROUND, sessionId: 'main', agentName: 'Atlas', agentColor: '#1677d2' };
+assert.notEqual(cachedRound.agentName, rootLane.agentName);
+assert.deepEqual(
+  resolveBackgroundLaneIdentity(ROUND, {
+    existingName: cachedRound.agentName,
+    existingColor: cachedRound.agentColor,
+    sources: [roundFrame, cachedRound],
+    lanes: [rootLane, cachedRound, otherLane],
+    sessionId: 'main',
+  }),
+  rootIdentity,
+  'a cached / partial-then-linked round adopts its root identity once linked',
+);
+// Its own unlinked lane never counts as a peer, so it cannot recolor itself.
+const loneRound = { id: ROUND, sessionId: 'main', agentName: 'Atlas', agentColor: '#1677d2' };
+assert.deepEqual(
+  resolveBackgroundLaneIdentity(ROUND, { existingName: 'Atlas', existingColor: '#1677d2', sources: [{ bgId: ROUND }], lanes: [loneRound] }),
+  { name: 'Atlas', color: '#1677d2' },
+  'an unlinked lane keeps its own identity (self is not a peer)',
+);
+// Root gone everywhere but a named sibling round is live: borrow it, do not reseed.
+const ROUND2 = 'bg_round-5555';
+assert.deepEqual(
+  resolveBackgroundLaneIdentity(ROUND2, {
+    sources: [{ bgId: ROUND2, conversationId: ROOT, followUpRound: 2 }],
+    lanes: [{ ...roundLane, agentName: 'Hera', agentColor: '#b52d68' }],
+  }),
+  { name: 'Hera', color: '#b52d68' },
+  'a later round matches its sibling when the root is unknown',
+);
+
 // Root cleared from the dock: inherit from durable work, else seed by the conversation.
 persistBackgroundAgentWork({ id: ROOT, sessionId: 'main', agentName: 'Iris', agentColor: '#087f96', status: 'completed' }, { immediate: true });
 assert.deepEqual(

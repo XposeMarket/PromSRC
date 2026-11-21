@@ -140,19 +140,31 @@ function backgroundAgentConversationKey(source) {
  * would otherwise rename or recolor either side.
  */
 export function resolveBackgroundLaneIdentity(id, options = {}) {
+  const selfId = String(id || '').trim();
   const followUp = backgroundAgentFollowUp(...(Array.isArray(options.sources) ? options.sources : []));
-  const key = followUp?.conversationId || String(id || '').trim();
+  const key = followUp?.conversationId || selfId;
   const lanes = (Array.isArray(options.lanes) ? options.lanes : []).filter((lane) => lane && typeof lane === 'object');
-  const peers = lanes.filter((lane) => backgroundAgentConversationKey(lane) !== key);
+  // This execution's own (possibly still unlinked) lane is never a peer.
+  const peers = lanes.filter((lane) => backgroundAgentRecordId(lane) !== selfId && backgroundAgentConversationKey(lane) !== key);
   let existingName = String(options.existingName || '').trim();
   let existingColor = String(options.existingColor || '').trim();
-  if (followUp && (isGenericBackgroundAgentName(existingName) || !existingColor)) {
+  if (followUp) {
+    // Authoritative once linked: a round wears its root's identity even if it
+    // was cached before the link existed or first seen from an unlinked frame.
     const root = lanes.find((lane) => backgroundAgentRecordId(lane) === key)
       || findBackgroundAgentWork(key, options.sessionId)
-      || findBackgroundAgentWork(key)
-      || lanes.find((lane) => backgroundAgentConversationKey(lane) === key && !isGenericBackgroundAgentName(lane.agentName));
-    if (isGenericBackgroundAgentName(existingName)) existingName = String(root?.agentName || root?.label || '').trim();
-    existingColor ||= String(root?.agentColor || root?.color || '').trim();
+      || findBackgroundAgentWork(key);
+    const rootName = String(root?.agentName || root?.label || '').trim();
+    const rootColor = String(root?.agentColor || root?.color || '').trim();
+    if (!isGenericBackgroundAgentName(rootName)) existingName = rootName;
+    if (rootColor) existingColor = rootColor;
+    if (!root && isGenericBackgroundAgentName(existingName)) {
+      // Root gone everywhere: borrow a sibling round's identity before reseeding.
+      const sibling = lanes.find((lane) => backgroundAgentRecordId(lane) !== selfId
+        && backgroundAgentConversationKey(lane) === key && !isGenericBackgroundAgentName(lane.agentName));
+      existingName = String(sibling?.agentName || '').trim();
+      existingColor ||= String(sibling?.agentColor || '').trim();
+    }
   }
   // Seed by the conversation, so a round whose root is gone still lands on
   // the identity the root would have had.
