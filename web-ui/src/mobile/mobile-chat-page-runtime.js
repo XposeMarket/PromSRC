@@ -3,7 +3,7 @@ import { noteMobilePendingEvent } from './mobile-ttft-state.js';
 
 import { createAdaptiveStreamScheduler } from '../features/chat/timeline/adaptive-stream-scheduler.js';
 import { shouldShowActivityPill } from '../features/chat/tool-wait-countdown.js';
-import { backgroundAgentText, mergeBackgroundAgentSteerMessages } from '../features/chat/core/background-agent-work.js';
+import { backgroundAgentFollowUpPromptMessage, backgroundAgentLaneExecutionId, backgroundAgentText, mergeBackgroundAgentSteerMessages } from '../features/chat/core/background-agent-work.js';
 import { formatModelWithReasoning } from '../model-display.js';
 import { pinRuntimeChrome as pinChrome, restorableBackgroundStatuses as restorableBg, agentTitleHtml, alignBottomAbove as alignAbove } from './mobile-runtime-chrome.js';
 import { splitBackgroundAgentTimeline } from '../features/chat/core/background-agent-timeline.js';
@@ -4243,6 +4243,9 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
     }
     if (streamId) lane.streamId = streamId;
     let changed = false;
+    // Replay frames belong to the round this lane shows; keep their link.
+    const executionId = backgroundAgentLaneExecutionId(lane) || lane.id;
+    const roundLink = executionId !== lane.id ? { conversationId: lane.id, followUpRound: lane.followUpRound } : {};
     (Array.isArray(replay.events) ? replay.events : [])
       .slice()
       .sort((a, b) => Number(a?.seq || 0) - Number(b?.seq || 0))
@@ -4252,8 +4255,9 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
         const data = frame?.data && typeof frame.data === 'object' ? frame.data : {};
         changed = _pushMobileBackgroundSpawnEvent({
           ...data,
-          bgId: lane.id,
-          backgroundId: lane.id,
+          ...roundLink,
+          bgId: executionId,
+          backgroundId: executionId,
           sessionId: lane.sessionId,
           spawnerSessionId: lane.sessionId,
           eventType: frame.type,
@@ -4267,6 +4271,10 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
 
   function _mergeMobileBackgroundAgentSessionSnapshot(lane, session) {
     if (!lane?.message || !session || typeof session !== 'object') return false;
+    // The worker session holds every round of the conversation; merging its
+    // process log would leak earlier rounds into the current follow-up, which
+    // the live stream and replay of its own execution already cover.
+    if (Number(lane.followUpRound || 0) > 0) return false;
     const assignment = (Array.isArray(session.history) ? session.history : []).find((turn) =>
       turn?.role === 'user' && turn?.messageKind !== 'background_agent_steer'
       && String(turn?.backgroundAgentId || lane.id) === String(lane.id));
@@ -4356,9 +4364,11 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
     backgroundDetailPollInFlight = true;
     try {
       const currentLane = _mobileBackgroundSpawnLanes()[cleanId];
+      // The lane is keyed by its conversation root; poll the round it shows.
+      const executionId = backgroundAgentLaneExecutionId(currentLane) || cleanId;
       let [statusResponse, replay, session] = await Promise.all([
-        loadMobileBackgroundStatus(cleanId).catch(() => null),
-        loadMobileBackgroundStreamReplay(cleanId, currentLane?.lastSeq || 0).catch(() => null),
+        loadMobileBackgroundStatus(executionId).catch(() => null),
+        loadMobileBackgroundStreamReplay(executionId, currentLane?.lastSeq || 0).catch(() => null),
         currentLane?.bgSessionId
           ? loadMobileChatSession(currentLane.bgSessionId, { force: true, historyLimit: 24, processLimit: 500, fullProcess: true }).catch(() => null)
           : Promise.resolve(null),
@@ -4378,7 +4388,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
       const streamChanged = !!requestedAfter && !!replayStreamId && !!previousStreamId && replayStreamId !== previousStreamId;
       const replayGap = !!requestedAfter && replayFirstSeq > requestedAfter + 1;
       if ((streamChanged || replayGap) && requestedAfter > 0) {
-        replay = await loadMobileBackgroundStreamReplay(cleanId, 0).catch(() => replay);
+        replay = await loadMobileBackgroundStreamReplay(executionId, 0).catch(() => replay);
       }
       if (refreshedLane && replay) _applyMobileBackgroundStreamReplay(refreshedLane, replay);
       if (!session && refreshedLane?.bgSessionId) {
@@ -4550,6 +4560,56 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
             `background-prompt:${backgroundRecord.id}`,
           )
         : '';
+      // Follow-ups continue this same thread: each earlier round renders as
+      // its follow-up prompt, steers and answer, then the current round's prompt.
+      const priorRoundsHtml = (Array.isArray(backgroundRecord.rounds) ? backgroundRecord.rounds : []).map((round) => {
+        const roundKey = `background:${backgroundRecord.id}:round:${round.executionId}`;
+        const prompt = round.round
+          ? backgroundAgentFollowUpPromptMessage(round.prompt, { laneId: backgroundRecord.id, executionId: round.executionId, round: round.round, timestamp: round.startedAt })
+          : null;
+        const promptRowHtml = prompt ? _renderChatMessageHtml(prompt, -2, prompt._backgroundFollowUpRowKey, `background-follow-up:${backgroundRecord.id}:${round.executionId}`) : '';
+        const steersHtml = (Array.isArray(round.steerMessages) ? round.steerMessages : []).map((steer, index) => {
+          const content = String(steer?.content || '').trim();
+          if (!content) return '';
+          const rowKey = `${roundKey}:steer:${String(steer.id || index)}`;
+          return _renderChatMessageHtml({
+            role: 'user', content, body: { text: content }, timestamp: Number(steer.timestamp || 0) || Date.now(),
+            actor: String(steer.actor || 'User'), channelLabel: 'steer', workflowPart: 'interruption',
+            workflowGroupId: String(steer.workflowGroupId || `background_steer_${steer.id || index}`),
+            workflowLabel: String(steer.workflowLabel || '') || (steer.actor === 'Prometheus' ? 'Prometheus steered agent' : 'Message sent as steer'),
+          }, index, rowKey, `background-round-steer:${rowKey}`);
+        }).join('');
+        const answer = String(round.result || round.error || '').trim()
+          || (round.status === 'completed' ? 'Background task completed with no textual output.' : '');
+        const answerHtml = _renderMobileAgentChatBubble({
+          role: 'ai',
+          from: agentName,
+          content: answer,
+          body: { sender: agentName, text: answer },
+          processEntries: Array.isArray(round.processEntries) ? round.processEntries : [],
+          liveTraceEntries: Array.isArray(round.liveTraceEntries) ? round.liveTraceEntries : [],
+          streaming: false,
+          _done: true,
+          createdAt: Number(round.startedAt || 0) || Date.now(),
+          workStartedAt: Number(round.startedAt || 0) || undefined,
+          workEndedAt: Number(round.completedAt || 0) || undefined,
+          traceExpanded: sideState.backgroundTraceExpandedBySegment[`round:${round.executionId}`] ?? false,
+        }, {
+          sender: agentName,
+          live: false,
+          keepLiveTraceVisible: true,
+          backgroundAgentId: backgroundRecord.id,
+          backgroundSegmentKey: `round:${round.executionId}`,
+          backgroundActions: false,
+        });
+        return `${promptRowHtml}${steersHtml}${answerHtml}`;
+      }).join('');
+      const currentFollowUp = Number(backgroundRecord.followUpRound || 0)
+        ? backgroundAgentFollowUpPromptMessage(backgroundRecord.roundPrompt, { laneId: backgroundRecord.id, executionId: backgroundRecord.executionId, round: backgroundRecord.followUpRound, timestamp: backgroundRecord.startedAt })
+        : null;
+      const currentFollowUpHtml = currentFollowUp
+        ? _renderChatMessageHtml(currentFollowUp, -2, currentFollowUp._backgroundFollowUpRowKey, `background-follow-up:${backgroundRecord.id}:${backgroundRecord.executionId}`)
+        : '';
       const timeline = splitBackgroundAgentTimeline(message, steerHistory, backgroundRecord.streamId);
       const timelineHtml = timeline.segments.map((segment, index) => {
         const segmentKey = index === timeline.steers.length ? 'latest' : `before:${timeline.steers[index]?._backgroundSteerRowKey || index}`;
@@ -4576,7 +4636,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
         ) : '';
         return `${segmentHtml}${steerHtml}`;
       }).join('');
-      _reconcileMobileBackgroundAgentSideThread(sideThreadEl, `${promptHtml}${timelineHtml}`);
+      _reconcileMobileBackgroundAgentSideThread(sideThreadEl, `${promptHtml}${priorRoundsHtml}${currentFollowUpHtml}${timelineHtml}`);
     } else {
       const visible = (Array.isArray(sideState.thread) ? sideState.thread : [])
         .map((msg, index) => ({ msg, index }))
@@ -4903,7 +4963,9 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
       if (sideState.busy) return;
       setMobileSideBusy(true);
       try {
-        const steerResult = await sendMobileBackgroundSteer(backgroundId, msg);
+        // The lane is keyed by its conversation root; steer the round it shows.
+        const steerTarget = backgroundAgentLaneExecutionId(_mobileBackgroundSpawnLanes()[backgroundId]) || backgroundId;
+        const steerResult = await sendMobileBackgroundSteer(steerTarget, msg);
         const steer = {
           id: String(steerResult?.eventId || `background_steer_${backgroundId}_${Date.now()}`),
           role: 'user',

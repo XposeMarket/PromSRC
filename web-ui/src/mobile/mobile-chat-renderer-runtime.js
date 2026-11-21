@@ -17,7 +17,7 @@ import { swapKeyedTimelineSession } from '../features/chat/timeline/keyed-dom.js
 import { animateThinkingTextSwap, renderThinkingState } from '../utils.js';
 import { mergeMobileBackgroundTraceEntries } from './mobile-background-trace-merge.js';
 import { foldMobileReasoningSummaryGroups, isMobileReasoningSummaryEntry, mobileReasoningSummaryKey, mobileReasoningSummaryTitle, renderMobileReasoningLiveGroup } from './mobile-reasoning-summary-fold.js';
-import { mergeBackgroundAgentSteerMessages } from '../features/chat/core/background-agent-work.js';
+import { advanceBackgroundAgentLane, backgroundAgentFollowUpLink, backgroundAgentLaneKey, backgroundAgentLaneRoundState, backgroundAgentLaneSeed, backgroundAgentMessageRoundSnapshot, backgroundAgentRoundOf, backgroundAgentWorkIsLaneRound, mergeBackgroundAgentSteerMessages } from '../features/chat/core/background-agent-work.js';
 import { isSteerFrozenRow } from './mobile-restart-continuity.js';
 import { agentModelLabel, agentAvatarHtml } from '../components/provider-logo.js';
 import { buildMobileAttachmentInlineUrl as _aSrc } from './mobile-api.js';
@@ -3594,6 +3594,15 @@ function _mobileBackgroundSpawnId(msg = {}) {
   ).trim();
 }
 
+// Follow-up rounds share their root agent's lane.
+function _mobileBackgroundFollowUpLink(msg = {}) {
+  return backgroundAgentFollowUpLink(_mobileBackgroundSpawnId(msg), msg, _mobileBackgroundEmbeddedPayload(msg));
+}
+
+function _mobileBackgroundLaneKey(msg = {}) {
+  return backgroundAgentLaneKey(_mobileBackgroundSpawnId(msg), msg, _mobileBackgroundEmbeddedPayload(msg));
+}
+
 function _mobileBackgroundSpawnPromptFromMessage(msg = {}, existing = {}) {
   const embedded = _mobileBackgroundEmbeddedPayload(msg);
   const direct = String(
@@ -3795,8 +3804,9 @@ async function _recoverMobileBackgroundSpawnDock({ sessionId = __pmChat.activeSe
 
 function _mobileBackgroundSpawnMatchesSession(msg = {}, sessionId = __pmChat.activeSessionId) {
   if (_mobileBackgroundSpawnIsVoiceWorker(msg)) return false;
-  const id = _mobileBackgroundSpawnId(msg);
-  if (id && _mobileBackgroundSpawnClearedIds()[id]) return false;
+  const id = _mobileBackgroundLaneKey(msg);
+  // A follow-up reopens a dismissed agent: it is new activity in that thread.
+  if (id && _mobileBackgroundSpawnClearedIds()[id] && !_mobileBackgroundFollowUpLink(msg)) return false;
   const activeSid = String(sessionId || '').trim();
   const lane = id ? _mobileBackgroundSpawnLanes()[id] : null;
   const parentSid = String(
@@ -3818,13 +3828,29 @@ function _mobileBackgroundSpawnMatchesSession(msg = {}, sessionId = __pmChat.act
 }
 
 function _upsertMobileBackgroundSpawnLane(msg = {}, sessionId = __pmChat.activeSessionId) {
-  const id = _mobileBackgroundSpawnId(msg);
+  const id = _mobileBackgroundLaneKey(msg);
   if (!id) return null;
+  const executionId = _mobileBackgroundSpawnId(msg) || id;
+  const link = _mobileBackgroundFollowUpLink(msg);
   const lanes = _mobileBackgroundSpawnLanes();
-  const existing = lanes[id] || {};
   const embedded = _mobileBackgroundEmbeddedPayload(msg);
-  const prompt = _mobileBackgroundSpawnPromptFromMessage(msg, existing);
   const rawSessionId = String(msg.sessionId || embedded.sessionId || '').trim();
+  if (!lanes[id]) {
+    const seedSessionId = String(msg.spawnerSessionId || embedded.spawnerSessionId || sessionId || '').trim();
+    const seed = findBackgroundAgentWork(id, seedSessionId) || findBackgroundAgentWork(id, rawSessionId) || findBackgroundAgentWork(id);
+    if (link) delete _mobileBackgroundSpawnClearedIds()[id];
+    if (seed && (link || backgroundAgentRoundOf(seed))) lanes[id] = backgroundAgentLaneSeed(id, seed);
+  }
+  const existing = lanes[id] || {};
+  if (!advanceBackgroundAgentLane(existing, executionId, link, {
+    startedAt: msg.startedAt,
+    snapshot: () => backgroundAgentMessageRoundSnapshot(existing, findBackgroundAgentWork(id, existing.sessionId) || findBackgroundAgentWork(id), _mobileBackgroundStoredProcessEntries),
+    reset: { message: null },
+  })) return null;
+  // A round's task is its follow-up prompt, not the root task.
+  const incomingPrompt = _mobileBackgroundSpawnPromptFromMessage(msg, {});
+  if (link && incomingPrompt) existing.roundPrompt = _mobileBackgroundFullPrompt(incomingPrompt, existing.roundPrompt);
+  const prompt = link ? _mobileBackgroundFullPrompt(existing.task, existing.prompt) : _mobileBackgroundSpawnPromptFromMessage(msg, existing);
   const bgSessionId = String(
     msg.bgSessionId
       || msg.backgroundSessionId
@@ -3849,14 +3875,15 @@ function _upsertMobileBackgroundSpawnLane(msg = {}, sessionId = __pmChat.activeS
   // Status/event payloads are intentionally partial. Read durable work before
   // resolving identity so a generic lane update cannot erase the stable name
   // and color that were already persisted for this background run.
-  const stored = findBackgroundAgentWork(id, parentSessionId)
+  const agentStored = findBackgroundAgentWork(id, parentSessionId)
     || findBackgroundAgentWork(id, rawSessionId)
     || findBackgroundAgentWork(id);
+  const stored = backgroundAgentWorkIsLaneRound(agentStored, existing, id) ? agentStored : null;
   const identity = resolveBackgroundAgentIdentity(id, {
     // Durable work is normalized before it reaches this boundary, so prefer
     // its stable identity over partial live payloads.
-    existingName: String(stored?.agentName || existing.agentName || existing.label || '').trim(),
-    existingColor: String(stored?.agentColor || stored?.color || existing.agentColor || '').trim(),
+    existingName: String(agentStored?.agentName || existing.agentName || existing.label || '').trim(),
+    existingColor: String(agentStored?.agentColor || agentStored?.color || existing.agentColor || '').trim(),
     usedNames: Object.values(lanes)
       .filter((lane) => lane !== existing)
       .map((lane) => lane.agentName || lane.label),
@@ -3870,7 +3897,7 @@ function _upsertMobileBackgroundSpawnLane(msg = {}, sessionId = __pmChat.activeS
   const storedLiveTraceEntries = canRestoreTrace && Array.isArray(stored?.liveTraceEntries) ? stored.liveTraceEntries.slice() : [];
   const storedStatus = String(stored?.status || '').toLowerCase();
   const storedTerminal = ['completed', 'failed', 'timed_out'].includes(storedStatus);
-  const resolvedBgSessionId = bgSessionId || String(stored?.backgroundSessionId || '').trim();
+  const resolvedBgSessionId = bgSessionId || String(agentStored?.backgroundSessionId || '').trim();
   const eventType = _mobileBackgroundEventType(msg).toLowerCase();
   // A background tool result is still only a timeline event. Treating it as
   // lane.result made mobile render the tool output as the agent's final answer
@@ -3887,16 +3914,17 @@ function _upsertMobileBackgroundSpawnLane(msg = {}, sessionId = __pmChat.activeS
   const incomingStreamId = msg.streamId || msg.stream?.streamId || embedded.streamId || embedded.stream?.streamId;
   const lane = {
     id,
+    ...backgroundAgentLaneRoundState(existing, id, executionId),
     sessionId: parentSessionId,
     bgSessionId: resolvedBgSessionId,
     label: identity.name,
     agentName: identity.name,
     agentColor: identity.color,
-    task: _mobileBackgroundFullPrompt(prompt, stored?.task, stored?.prompt, stored?.taskPrompt),
-    prompt: _mobileBackgroundFullPrompt(prompt, stored?.task, stored?.prompt, stored?.taskPrompt),
-    model: msg.model || embedded.model || existing.model || stored?.model || '',
-    providerId: msg.providerId || embedded.providerId || existing.providerId || stored?.providerId || '',
-    reasoningEffort: msg.reasoningEffort || msg.executor_reasoning_effort || embedded.reasoningEffort || embedded.executor_reasoning_effort || existing.reasoningEffort || stored?.reasoningEffort || '',
+    task: _mobileBackgroundFullPrompt(prompt, agentStored?.task, agentStored?.prompt, agentStored?.taskPrompt),
+    prompt: _mobileBackgroundFullPrompt(prompt, agentStored?.task, agentStored?.prompt, agentStored?.taskPrompt),
+    model: msg.model || embedded.model || existing.model || agentStored?.model || '',
+    providerId: msg.providerId || embedded.providerId || existing.providerId || agentStored?.providerId || '',
+    reasoningEffort: msg.reasoningEffort || msg.executor_reasoning_effort || embedded.reasoningEffort || embedded.executor_reasoning_effort || existing.reasoningEffort || agentStored?.reasoningEffort || '',
     status: String(incomingState || existing.status || stored?.status || 'running').trim(),
     expanded: existing.expanded === true,
     startedAt: Number(existing.startedAt || stored?.startedAt || msg.startedAt || Date.now()),
@@ -4004,6 +4032,7 @@ function _mobileBackgroundAgentDetailRecord(id, requestedSession, normalizeTrace
   const messageText = normalizedTask && normalizedMessageText === normalizedTask ? '' : rawMessageText;
   return {
     id: lane.id,
+    ...backgroundAgentLaneRoundState(lane),
     sessionId: lane.sessionId || requestedSession,
     backgroundSessionId: lane.bgSessionId || stored?.backgroundSessionId || '',
     model: lane.model || stored?.model || '',
@@ -4037,13 +4066,16 @@ function _mobileBackgroundAgentDetailRecord(id, requestedSession, normalizeTrace
 }
 
 function _hydrateMobileBackgroundSpawnLane(record, id, sessionId) {
+  // Hydrate the round the record is showing, keeping its conversation link.
+  const executionId = String(record.executionId || id).trim();
   return _upsertMobileBackgroundSpawnLane({
     ...record,
-    bgId: id,
-    backgroundId: id,
+    ...(executionId !== id ? { conversationId: id, followUpRound: record.followUpRound } : {}),
+    bgId: executionId,
+    backgroundId: executionId,
     state: record.status || 'running',
-    prompt: record.task || '',
-    taskPrompt: record.task || '',
+    prompt: (executionId !== id ? record.roundPrompt : record.task) || '',
+    taskPrompt: (executionId !== id ? record.roundPrompt : record.task) || '',
     sessionId: record.sessionId || sessionId,
     spawnerSessionId: record.sessionId || sessionId,
     bgSessionId: record.backgroundSessionId || '',
@@ -4061,6 +4093,7 @@ function _mobileBackgroundSpawnWorkRecord(lane) {
   });
   return {
     id: lane.id,
+    ...backgroundAgentLaneRoundState(lane),
     sessionId: lane.sessionId || __pmChat.activeSessionId,
     backgroundSessionId: lane.bgSessionId || '',
     model: lane.model,
@@ -4229,7 +4262,7 @@ function _mobileBackgroundSpawnTraceEntries(lane) {
 
 function _pushMobileBackgroundSpawnEvent(msg = {}, sessionId = __pmChat.activeSessionId) {
   if (!_mobileBackgroundSpawnMatchesSession(msg, sessionId)) return false;
-  const laneId = _mobileBackgroundSpawnId(msg);
+  const laneId = _mobileBackgroundLaneKey(msg);
   const previousLane = laneId ? _mobileBackgroundSpawnLanes()[laneId] : null;
   const previousStatus = String(previousLane?.status || '').trim().toLowerCase();
   const lane = _upsertMobileBackgroundSpawnLane(msg, sessionId);

@@ -66,7 +66,12 @@ import {
   sourcePanelResourceBelongsToContext,
 } from '../source-panel-context.js';
 import {
+  advanceBackgroundAgentLane,
   backgroundAgentAgeLabel,
+  backgroundAgentFollowUpLink,
+  backgroundAgentLaneExecutionId,
+  backgroundAgentLaneKey,
+  backgroundAgentLaneRoundState,
   backgroundAgentPreview,
   backgroundAgentRecordToMessage,
   backgroundAgentWorkForSession,
@@ -79,7 +84,7 @@ import {
   resolveBackgroundAgentIdentity,
   writeBackgroundAgentWork,
 } from '../background-agent-work.js';
-import { createDesktopBackgroundAgentWork } from '../features/chat/core/desktop-background-agent-work.js';
+import { backgroundAgentFollowUpThreadHistory, createDesktopBackgroundAgentWork } from '../features/chat/core/desktop-background-agent-work.js';
 import { loadNewChatGlance, renderNewChatGlanceHtml, glanceTarget } from '../chat/new-chat-glance.js';
 installToolActivityExpansionPersistence();
 // Paints yield to typing: hold a stream paint until the composer has been idle 150ms,
@@ -928,8 +933,10 @@ function rememberBackgroundAgentSteer(backgroundId, text) {
 }
 
 async function sendBackgroundAgentSteerMessage(message = null) {
-  const backgroundId = String(window.backgroundAgentDetailId || '').trim();
-  if (!backgroundId) return;
+  const laneId = String(window.backgroundAgentDetailId || '').trim();
+  if (!laneId) return;
+  // The lane is keyed by its conversation root; steer the round it is showing.
+  const backgroundId = backgroundAgentLaneExecutionId(ensureBackgroundSpawnDockMap().get(laneId)) || laneId;
   const input = document.getElementById('background-agent-chat-input');
   const text = String(message == null ? input?.value || '' : message).trim();
   if (!text) return;
@@ -948,7 +955,7 @@ async function sendBackgroundAgentSteerMessage(message = null) {
       input.value = '';
       input.style.height = 'auto';
     }
-    rememberBackgroundAgentSteer(backgroundId, text);
+    rememberBackgroundAgentSteer(laneId, text);
     renderBackgroundAgentDetail();
   } catch (error) {
     showToast('Could not steer background agent', String(error?.message || error || 'The live agent is no longer available.'), 'error');
@@ -14924,6 +14931,7 @@ function renderBackgroundAgentSidePaneHtml(record, timelineBudget = null) {
     }))
     .filter((steer) => steer.content);
   const sideSessionId = `background:${record.id}`;
+  steerHistory.unshift(...backgroundAgentFollowUpThreadHistory(record, identity, renderBackgroundAgentWorkflowAvatar(identity)));
   const sideHistory = running ? steerHistory : [...steerHistory, message];
   const sideEntries = desktopTimelineEntries(sideHistory, sideSessionId);
   const sideTimeline = desktopTimelineController.select(`desktop:side:${sideSessionId}`, sideEntries, {
@@ -18510,6 +18518,7 @@ function backgroundSpawnWorkRecord(lane) {
   const identity = backgroundSpawnIdentityForLane(lane, Array.from(ensureBackgroundSpawnDockMap().values()));
   return {
     id: lane.id,
+    ...backgroundAgentLaneRoundState(lane),
     sessionId: lane.sessionId || window.activeChatSessionId,
     agentName: identity.name,
     agentColor: identity.color,
@@ -18555,22 +18564,49 @@ function backgroundSpawnIsVoiceWorker(msg = {}) {
 function backgroundSpawnEventSessionMatches(msg = {}) {
   if (backgroundSpawnIsVoiceWorker(msg)) return false;
   const id = backgroundSpawnLaneId(msg);
-  if (id && ensureBackgroundSpawnClearedIds().has(id)) return false;
+  // A follow-up reopens a dismissed agent: it is new activity in that thread.
+  if (id && ensureBackgroundSpawnClearedIds().has(id) && !backgroundSpawnFollowUpLink(msg)) return false;
   const sid = String(msg.sessionId || msg.spawnerSessionId || '').trim();
   if (!sid) return true;
   return sid === String(window.activeChatSessionId || '').trim()
     || sid === String(window.agentSessionId || '').trim();
 }
 
-function backgroundSpawnLaneId(msg = {}) {
+function backgroundSpawnExecutionId(msg = {}) {
   return String(msg.bgId || msg.backgroundId || msg.serverAgentId || msg.agentId || '').trim();
+}
+
+function backgroundSpawnFollowUpLink(msg = {}) {
+  return backgroundAgentFollowUpLink(backgroundSpawnExecutionId(msg), msg, msg.data);
+}
+
+// Lanes are keyed by conversation root: a follow-up round lands in its agent.
+function backgroundSpawnLaneId(msg = {}) {
+  return backgroundAgentLaneKey(backgroundSpawnExecutionId(msg), msg, msg.data);
 }
 
 function upsertBackgroundSpawnLane(msg = {}) {
   const id = backgroundSpawnLaneId(msg);
   if (!id) return null;
+  const executionId = backgroundSpawnExecutionId(msg) || id;
+  const link = backgroundSpawnFollowUpLink(msg);
   const lanes = ensureBackgroundSpawnDockMap();
+  if (link && !lanes.has(id)) {
+    // The agent's lane was dismissed or cleared: continue its stored thread.
+    ensureBackgroundSpawnClearedIds().delete(id);
+    const stored = findBackgroundAgentWork(id, String(msg.sessionId || msg.spawnerSessionId || window.activeChatSessionId || '').trim()) || findBackgroundAgentWork(id);
+    if (stored) lanes.set(id, { ...stored, label: stored.agentName, events: Array.isArray(stored.events) ? stored.events : [] });
+  }
   const existing = lanes.get(id) || {};
+  // Drop a stale (earlier-round) frame; a new round archives the current one.
+  if (!advanceBackgroundAgentLane(existing, executionId, link, {
+    startedAt: msg.startedAt,
+    snapshot: () => ({ liveTraceEntries: backgroundSpawnLaneLiveTrace(existing), processEntries: existing.events }),
+    reset: { events: [], liveTraceEntries: [], __liveTraceEventsRef: null, completedAt: 0 },
+  })) return null;
+  // A round's task text is its follow-up prompt; the lane's task stays the root assignment.
+  const incomingTask = String(msg.task || msg.prompt || '').trim();
+  if (link && incomingTask) existing.roundPrompt = incomingTask;
   const identity = resolveBackgroundAgentIdentity(id, {
     existingName: existing.agentName,
     existingColor: existing.agentColor,
@@ -18579,11 +18615,12 @@ function upsertBackgroundSpawnLane(msg = {}) {
   });
   const lane = {
     id,
+    ...backgroundAgentLaneRoundState(existing, id, executionId),
     sessionId: String(msg.sessionId || existing.sessionId || window.activeChatSessionId || '').trim(),
     label: identity.name,
     agentName: identity.name,
     agentColor: identity.color,
-    task: String(msg.task || msg.prompt || existing.task || '').trim(),
+    task: String((link ? '' : incomingTask) || existing.task || incomingTask || '').trim(),
     model: msg.model || existing.model || '',
     providerId: msg.providerId || existing.providerId || '',
     reasoningEffort: msg.reasoningEffort || msg.executor_reasoning_effort || existing.reasoningEffort || '',
@@ -19014,7 +19051,7 @@ document.addEventListener('prom-mode-change', () => scheduleBackgroundAgentUiUpd
 function completeBackgroundSpawnLane(msg = {}) {
   const clearedId = backgroundSpawnLaneId(msg);
   const clearedSessionId = String(msg.sessionId || msg.spawnerSessionId || window.activeChatSessionId || '').trim();
-  if (clearedId && ensureBackgroundSpawnClearedIds().has(clearedId)) {
+  if (clearedId && ensureBackgroundSpawnClearedIds().has(clearedId) && !backgroundSpawnFollowUpLink(msg)) {
     const existing = findBackgroundAgentWork(clearedId, clearedSessionId) || {};
     const failed = msg.state === 'failed' || msg.state === 'timed_out' || !!msg.error;
     const completedAt = Number(msg.completedAt || Date.now()) || Date.now();
@@ -19099,7 +19136,7 @@ function renderBackgroundAgentDetail() {
     }
     const list = pane.querySelector('#background-agent-side-messages');
     if (!list) return;
-    const signature = `${record.status}:${record.updatedAt}:${record.lastSeq}:${record.events?.length}:${record.result}:${record.steerMessages?.length}`;
+    const signature = `${record.status}:${record.updatedAt}:${record.lastSeq}:${record.events?.length}:${record.result}:${record.steerMessages?.length}:${record.followUpRound || 0}:${record.rounds?.length || 0}`;
     if (list.dataset.streamVersion === signature) return;
     const template = document.createElement('div');
     template.innerHTML = renderBackgroundAgentSidePaneHtml(record);
@@ -19140,16 +19177,20 @@ async function refreshBackgroundAgentStream(backgroundId) {
   const id = String(backgroundId || '').trim();
   const lane = id ? ensureBackgroundSpawnDockMap().get(id) : null;
   if (!id || !lane) return;
+  // Replay the round this lane is showing; its frames keep their conversation link.
+  const executionId = backgroundAgentLaneExecutionId(lane) || id;
+  const roundLink = executionId !== id ? { conversationId: id, followUpRound: lane.followUpRound } : {};
   try {
-    const replay = await api(`/api/background/${encodeURIComponent(id)}/stream?after=${encodeURIComponent(String(lane.lastSeq || 0))}`);
+    const replay = await api(`/api/background/${encodeURIComponent(executionId)}/stream?after=${encodeURIComponent(String(lane.lastSeq || 0))}`);
     const stream = replay?.stream || null;
     if (stream?.streamId && lane.streamId && stream.streamId !== lane.streamId) lane.lastSeq = 0;
     if (stream?.streamId) lane.streamId = String(stream.streamId);
     (Array.isArray(replay?.events) ? replay.events : []).forEach((frame) => {
       pushBackgroundSpawnEvent({
         ...(frame.data || {}),
-        bgId: id,
-        backgroundId: id,
+        ...roundLink,
+        bgId: executionId,
+        backgroundId: executionId,
         sessionId: lane.sessionId,
         eventType: frame.type,
         streamId: frame.streamId || stream?.streamId,

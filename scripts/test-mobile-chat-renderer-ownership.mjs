@@ -179,6 +179,11 @@ const measurements = {
 // Harness follow-ups: harness models grouped into families in the existing model sheet,
 // the P1 landing (mark, title, quote) on every new mobile chat, and the empty-state
 // override module removed: measured 307881 gzip (+587 over 307294). Retain ~0.1% allowance.
-assert(measurements.gzipBytes <= 308200, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
+// #925 background follow-ups continue the original agent's thread on mobile: one lane per
+// conversation, archived rounds rendered in the agent sheet, stale-round frames dropped and
+// round-aware durable work (shared core round helpers + mobile thread rendering; the
+// desktop-only thread-history builder lives in desktop-background-agent-work.js and is not
+// in this slice): measured 309197 gzip vs main 88bd0577f's 308092 (+1105). Retain ~0.1% allowance.
+assert(measurements.gzipBytes <= 309500, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
 console.log(JSON.stringify({ buildId: manifest.buildId, measurements, rendererOutput }, null, 2));
 console.log('Mobile Chat renderer ownership contract passed.');
