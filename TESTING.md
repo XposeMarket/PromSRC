@@ -7,15 +7,22 @@ and how to reproduce it locally. Paths and scripts named here are checked by
 ## What CI enforces
 
 Every pull request and every push to `main` runs
-`.github/workflows/pr-regression.yml` (about 60 steps, ~5 minutes on
-`ubuntu-latest`, Node 22). `main` is branch-protected: the **`verify`** job and
-the **`audit`** job (privacy and secret scan,
+`.github/workflows/pr-regression.yml` on `ubuntu-24.04` with Node 22. The
+regression list lives in `scripts/ci/regressions.json`; the `regressions` job
+runs it as five parallel shards through `scripts/ci/run-regressions.mjs`
+(about 2-3 minutes end to end), and each shard reports every failing
+regression in one run instead of stopping at the first. Installed
+dependencies and the Playwright browser are cached by lockfile and Playwright
+version, and shards that build the backend restore the previous incremental
+`dist/` so `tsc` only rebuilds what changed. `main` is branch-protected: the **`verify`** job (it passes only when
+every shard passed) and the **`audit`** job (privacy and secret scan,
 `.github/workflows/privacy-secret-scan.yml`) are *required status checks*, and
 admins are not exempt. Nothing merges red.
 
-The `verify` job runs, in order:
+Between them the shards run:
 
-1. `npx tsc --noEmit` over the whole backend.
+1. The full backend type-check: the `backend` setup runs `npm run build:backend`
+   (`tsc` over the whole backend) once in each shard that needs `dist/`.
 2. Contract regressions for each subsystem (provider evidence, Brain, memory,
    connectors, tool categories, composites, web UI architecture and size
    budgets, mobile and desktop chat recovery, restart continuity, context
@@ -40,6 +47,29 @@ The `verify` job runs, in order:
    (`npm run test:docs-evidence`).
 
 `storage-layout-contract.yml` additionally pins the on-disk data layout.
+
+### Adding a test to CI, and running CI locally
+
+Append an entry to `scripts/ci/regressions.json`: `name`, `run` (one command,
+or a list run in order that stops at the first failure), optional `needs` (a
+setup such as `backend`, which runs once per shard before its first user) and
+`seconds` (typical CI duration; it only balances the shards). A regression
+that imports compiled code from `dist/` must declare `"needs": ["backend"]`;
+shards only build the backend when one of their regressions needs it. Do not
+add test steps to the workflow file: `npm run test:ci-runner` rejects that, and checks
+that every entry's npm script or file exists. Shard count is the workflow's
+matrix; the split is deterministic, so every shard computes the same plan.
+
+```
+npm run test:ci -- --plan 4          # how the suite splits across 4 shards
+npm run test:ci -- --only "mobile"   # run the regressions whose name matches
+npm run test:ci -- --shard 2/4       # reproduce one CI shard
+```
+
+Each shard publishes its per-regression timings as a "Regression timings"
+annotation (plus a table in the job summary). When the shards drift out of
+balance, `npm run ci:rebalance -- <workflow run id>` rewrites every `seconds`
+from that run's measurements and prints the new plan.
 
 ## The replay harness: testing the real agent loop headless
 
@@ -117,6 +147,12 @@ npm run check:dist           # no compiled output without source
 Most subsystem suites are single files: `npx tsx path/to/thing.regression.ts`
 or `node scripts/test-*.mjs`. `self/generated/tests.md` in the runtime
 workspace indexes them by area.
+
+`npm run check:web-ui` (also the last step of `sync:web-ui` and the build) syntax-checks
+every `web-ui/src` file with `node --check` and esbuild. Files whose exact bytes already
+passed under the same Node and esbuild versions are skipped, using
+`node_modules/.cache/prometheus/web-ui-syntax.json` (failures are never recorded). Set
+`PROMETHEUS_NO_SYNTAX_CACHE=1` to check every file.
 
 ## What is not covered yet
 

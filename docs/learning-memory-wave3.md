@@ -16,4 +16,4 @@ Memory facts remain data, never executable instructions. Contradiction detection
 
 ## Verification
 
-Run `npx tsc --noEmit -p .`, `npm run test:memory-recall`, and `npm run test:skill-promotion`. The two benchmarks also run in `.github/workflows/pr-regression.yml`. No UI bundling or live gateway restart is needed for this backend-only source branch; deploying it requires the normal build/restart workflow.
+Run `npx tsc --noEmit -p .`, `npm run test:memory-recall`, and `npm run test:skill-promotion`. The two benchmarks also run in pull-request CI (`scripts/ci/regressions.json`). No UI bundling or live gateway restart is needed for this backend-only source branch; deploying it requires the normal build/restart workflow.

@@ -247,6 +247,17 @@ try {
     assert.equal(readBuildIdentity(path.join(tempRoot, 'helper-ignored-src-output', 'build-identity.json')).status, 'modified');
   });
 
+  test('ignored node_modules under source inputs does not mark the build dirty', () => {
+    const fixture = path.join(tempRoot, 'helper-ignored-node-modules-clean');
+    makeGitRepo(fixture);
+    fs.appendFileSync(path.join(fixture, '.git', 'info', 'exclude'), '\nnode_modules/\n');
+    fs.mkdirSync(path.join(fixture, 'scripts', 'preview', 'node_modules', 'pkg'), { recursive: true });
+    fs.writeFileSync(path.join(fixture, 'scripts', 'preview', 'node_modules', 'pkg', 'index.js'), 'module.exports = 1;\n');
+    const manifest = writeBuildIdentity(fixture, path.join(tempRoot, 'helper-ignored-node-modules-output'));
+    assert.match(manifest.commit, /^[a-f0-9]{40}$/);
+    assert.equal(manifest.dirty, false);
+  });
+
   test('nested source under a parent repository yields unknown identity', () => {
     const parent = path.join(tempRoot, 'helper-parent-repo');
     makeGitRepo(parent);

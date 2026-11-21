@@ -2,10 +2,15 @@
 
 const childProcess = require('child_process');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const esbuild = require('esbuild');
+const syntaxCache = require('./lib/syntax-check-cache.cjs');
 
 const ROOT = path.join(__dirname, '..');
+// Files whose exact bytes already passed both syntax checks are not re-checked (see the lib).
+const SYNTAX_CACHE_FILE = path.join(ROOT, 'node_modules', '.cache', 'prometheus', 'web-ui-syntax.json');
+const SYNTAX_CACHE_SALT = `node ${process.version}|esbuild ${esbuild.version}|node --check + esbuild esm chrome100`;
 const SRC_WEB_UI = path.join(ROOT, 'web-ui');
 const SRC_WEB_UI_SRC = path.join(SRC_WEB_UI, 'src');
 const OUT_ROOT = path.join(ROOT, 'generated', 'public-web-ui');
@@ -208,49 +213,99 @@ function verifyRelativeImports(filePath) {
   }
 }
 
+// `node --check` can accept a module graph that Chromium later rejects before
+// any mobile UI mounts. Parse source through esbuild as a browser ES module too,
+// so the static check uses a second, strict parser and reports an actionable
+// source location. The async API lets esbuild parse every file concurrently.
+async function runEsbuildChecks(files) {
+  const results = new Map();
+  await Promise.all(files.map(async (filePath) => {
+    const source = fs.readFileSync(filePath, 'utf8');
+    try {
+      await esbuild.transform(source, {
+        loader: 'js',
+        format: 'esm',
+        target: 'chrome100',
+        sourcefile: toPosix(path.relative(ROOT, filePath)),
+      });
+      results.set(filePath, null);
+    } catch (error) {
+      const details = Array.isArray(error?.errors) && error.errors.length
+        ? error.errors.map((entry) => {
+          const loc = entry.location ? `:${entry.location.line}:${entry.location.column}` : '';
+          return `${entry.text || String(entry)}${loc}`;
+        }).join('\n')
+        : String(error?.message || error);
+      results.set(filePath, details);
+    }
+  }));
+  return results;
+}
+
+let esbuildCheckResults = new Map();
 function verifyJavaScriptSyntax(filePath) {
-  const source = fs.readFileSync(filePath, 'utf8');
-  try {
-    // `node --check` can accept a module graph that Chromium later rejects
-    // before any mobile UI mounts. Parse source through esbuild as a browser
-    // ES module too, so the static check uses a second, strict parser and
-    // reports an actionable source location.
-    esbuild.transformSync(source, {
-      loader: 'js',
-      format: 'esm',
-      target: 'chrome100',
-      sourcefile: toPosix(path.relative(ROOT, filePath)),
-    });
-  } catch (error) {
-    const details = Array.isArray(error?.errors) && error.errors.length
-      ? error.errors.map((entry) => {
-        const loc = entry.location ? `:${entry.location.line}:${entry.location.column}` : '';
-        return `${entry.text || String(entry)}${loc}`;
-      }).join('\n')
-      : String(error?.message || error);
+  if (!esbuildCheckResults.has(filePath)) {
+    fail(`Browser module syntax check did not run for ${toPosix(path.relative(ROOT, filePath))}`);
+  } else if (esbuildCheckResults.get(filePath) !== null) {
     fail(
-      `Browser module syntax check failed for ${toPosix(path.relative(ROOT, filePath))}\n${details}`,
+      `Browser module syntax check failed for ${toPosix(path.relative(ROOT, filePath))}\n${esbuildCheckResults.get(filePath)}`,
     );
   }
 
-  const result = childProcess.spawnSync(process.execPath, ['--check', filePath], {
-    cwd: ROOT,
-    encoding: 'utf8',
-  });
-
-  if (result.status !== 0) {
+  const result = nodeCheckResults.get(filePath);
+  if (!result || result.status !== 0) {
     fail(
       `JavaScript syntax check failed for ${toPosix(path.relative(ROOT, filePath))}\n` +
-      `${(result.stderr || result.stdout || '').trim()}`
+      `${(result ? result.output : 'node --check did not run').trim()}`
     );
   }
 }
 
-function verifySourceWebUi() {
+// `node --check` needs one process per file (~60 ms each on Windows, ~270 files), which
+// made this check the slowest part of every build. Run the processes concurrently up
+// front; failures are still reported per file, in the same order as before.
+let nodeCheckResults = new Map();
+function runNodeChecks(files) {
+  const results = new Map();
+  if (!files.length) return Promise.resolve(results);
+  const cpuCount = typeof os.availableParallelism === 'function' ? os.availableParallelism() : os.cpus().length;
+  const limit = Math.max(1, Math.min(16, cpuCount || 1, files.length));
+  let next = 0;
+  const worker = () => new Promise((resolve) => {
+    const launch = () => {
+      if (next >= files.length) {
+        resolve();
+        return;
+      }
+      const filePath = files[next++];
+      let output = '';
+      let settled = false;
+      const finish = (status, extra = '') => {
+        if (settled) return;
+        settled = true;
+        results.set(filePath, { status, output: `${output}${extra}` });
+        launch();
+      };
+      const child = childProcess.spawn(process.execPath, ['--check', filePath], {
+        cwd: ROOT,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: true,
+      });
+      child.stdout.on('data', (chunk) => { output += chunk; });
+      child.stderr.on('data', (chunk) => { output += chunk; });
+      child.on('error', (error) => finish(1, `\n${error && error.message ? error.message : error}`));
+      child.on('close', (code, signal) => finish(code === 0 && !signal ? 0 : (code || 1), signal ? `\nterminated by ${signal}` : ''));
+    };
+    launch();
+  });
+  return Promise.all(Array.from({ length: limit }, worker)).then(() => results);
+}
+
+function verifySourceWebUi(sourceFiles) {
   verifyIndexAssets(SRC_WEB_UI, path.join(SRC_WEB_UI, 'index.html'), 'src');
   verifyIndexAssets(SRC_WEB_UI, path.join(SRC_WEB_UI, 'mobile.html'), 'src');
 
-  for (const filePath of walkFiles(SRC_WEB_UI_SRC).filter((file) => file.endsWith('.js'))) {
+  for (const filePath of sourceFiles) {
     verifyJavaScriptSyntax(filePath);
     verifyRelativeImports(filePath);
   }
@@ -272,18 +327,42 @@ function verifyProductionManifest() {
   }
 }
 
-verifySourceWebUi();
-verifyGeneratedWebUiIsCurrent();
-verifyGeneratedWebUi();
-verifyProductionManifest();
-
-if (failures.length > 0) {
-  console.error('[check-public-web-ui-sync] Web UI check failed:');
-  for (const failure of failures) {
-    console.error(`- ${failure}`);
+async function main() {
+  const sourceFiles = walkFiles(SRC_WEB_UI_SRC).filter((file) => file.endsWith('.js'));
+  const useCache = syntaxCache.enabled();
+  const passed = useCache ? syntaxCache.load(SYNTAX_CACHE_FILE, SYNTAX_CACHE_SALT) : new Set();
+  const keys = new Map(sourceFiles.map((file) => [file, syntaxCache.cacheKey(fs.readFileSync(file), SYNTAX_CACHE_SALT)]));
+  const toCheck = sourceFiles.filter((file) => !passed.has(keys.get(file)));
+  [nodeCheckResults, esbuildCheckResults] = await Promise.all([runNodeChecks(toCheck), runEsbuildChecks(toCheck)]);
+  for (const file of sourceFiles) {
+    if (nodeCheckResults.has(file)) continue;
+    nodeCheckResults.set(file, { status: 0, output: '' });
+    esbuildCheckResults.set(file, null);
   }
-  console.error('\nRun `npm run sync:web-ui` to regenerate generated/public-web-ui from web-ui.');
-  process.exit(1);
+  if (useCache) {
+    for (const file of toCheck) {
+      if (nodeCheckResults.get(file).status === 0 && esbuildCheckResults.get(file) === null) passed.add(keys.get(file));
+    }
+    syntaxCache.save(SYNTAX_CACHE_FILE, SYNTAX_CACHE_SALT, passed, [...keys.values()]);
+  }
+  verifySourceWebUi(sourceFiles);
+  verifyGeneratedWebUiIsCurrent();
+  verifyGeneratedWebUi();
+  verifyProductionManifest();
+
+  if (failures.length > 0) {
+    console.error('[check-public-web-ui-sync] Web UI check failed:');
+    for (const failure of failures) {
+      console.error(`- ${failure}`);
+    }
+    console.error('\nRun `npm run sync:web-ui` to regenerate generated/public-web-ui from web-ui.');
+    process.exit(1);
+  }
+
+  console.log(`[check-public-web-ui-sync] web-ui and generated/public-web-ui are in sync (syntax-checked ${toCheck.length}, unchanged since a passing check ${sourceFiles.length - toCheck.length})`);
 }
 
-console.log('[check-public-web-ui-sync] web-ui and generated/public-web-ui are in sync');
+main().catch((error) => {
+  console.error('[check-public-web-ui-sync] check crashed:', error && error.stack ? error.stack : error);
+  process.exit(1);
+});

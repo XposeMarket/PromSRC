@@ -35,13 +35,22 @@ const rawPatterns = {
 };
 
 function stripCssComments(css) { return css.replace(/\/\*[\s\S]*?\*\//g, ''); }
-function blocksForSelectors(css, selector) {
-  const blocks = [];
-  const re = /([^{}]+)\{([^{}]*)\}/g;
-  for (let match; (match = re.exec(stripCssComments(css))); ) {
-    if (match[1].split(',').map((part) => part.trim()).includes(selector)) blocks.push(match[2]);
+// Parse each stylesheet's rules once. (The loop used to call stripCssComments inside the
+// exec() condition, re-stripping the whole file for every rule: ~3.5 s per run.)
+const parsedRules = new Map();
+function rulesOf(css) {
+  let rules = parsedRules.get(css);
+  if (!rules) {
+    rules = [];
+    const text = stripCssComments(css);
+    const re = /([^{}]+)\{([^{}]*)\}/g;
+    for (let match; (match = re.exec(text)); ) rules.push({ selectors: match[1].split(',').map((part) => part.trim()), body: match[2] });
+    parsedRules.set(css, rules);
   }
-  return blocks;
+  return rules;
+}
+function blocksForSelectors(css, selector) {
+  return rulesOf(css).filter((rule) => rule.selectors.includes(selector)).map((rule) => rule.body);
 }
 function declarations(blocks) {
   return new Set(blocks.flatMap((block) => [...block.matchAll(/(--[\w-]+)\s*:/g)].map((match) => match[1])));

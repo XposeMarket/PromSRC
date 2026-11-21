@@ -5,10 +5,13 @@
   powershell -File pr-finish.ps1 -Worktree C:\dev\promsrc-pr\my-slug -OpenPrBranches "perf/a,fix/b"
   powershell -File pr-finish.ps1 -NoPush        # dry run: gates only
 .NOTES
-  Run with workspace_run action:"start" + "wait" (tsc takes minutes). Never pass -SkipTsc
+  Run with workspace_run action:"start" + "wait". Never pass -SkipTsc
   except when the repository owner explicitly waives it; the waiver is printed into the PR body.
-  Gates: location, spec, clean tree, rebased, forbidden paths, spec scope, size, test exists+passes,
-  tsc, check:web-ui, parity, open-PR conflicts, PR body. Writes .pr\PR_BODY.md and .pr\GATES.md.
+  Gates: location, spec, clean tree, rebased, forbidden paths, spec scope, size, web-ui sync (once,
+  before the tests), test exists+passes, tsc, parity, open-PR conflicts, PR body.
+  Speed: tsc --noEmit runs in the background from the start (incremental, .pr\tsc.tsbuildinfo seeded
+  from dist\.tsbuildinfo), overlapping the web-ui and test gates; open-PR conflict helpers run in
+  parallel. Writes .pr\PR_BODY.md and .pr\GATES.md (with a TIMING line).
 .PARAMETER Live
   Windows local developer convention: defaults to PromSRC under the current user's home.
   Override -Live with the actual live checkout path. The live-checkout exclusion always applies.
@@ -42,12 +45,44 @@ function Field($lines, $name) {
   return ''
 }
 function Run($label, $cmd, $log) {
-  Write-Output "  > $cmd"
+  Write-Host "  > $cmd"
   $o = cmd /c "$cmd 2>&1"
   $code = $LASTEXITCODE
   if ($log) { $o | Set-Content -Path $log -Encoding UTF8 }
   return @{ Code = $code; Tail = (($o | Select-Object -Last 12) -join "`n") }
 }
+# Background command (cmd /c, output to a log file so a full pipe can never stall it). Returns the Process.
+function StartBg($cmd, $log) {
+  Write-Host "  > (background) $cmd"
+  $psi = New-Object System.Diagnostics.ProcessStartInfo
+  $psi.FileName = $env:ComSpec
+  $psi.Arguments = "/d /s /c `"$cmd > `"$log`" 2>&1`""
+  $psi.WorkingDirectory = (Get-Location).Path
+  $psi.UseShellExecute = $false
+  $psi.CreateNoWindow = $true
+  return [System.Diagnostics.Process]::Start($psi)
+}
+function WaitBg($p, $log) {
+  $p.WaitForExit()
+  $tail = if (Test-Path $log) { (Get-Content $log -Tail 12) -join "`n" } else { '' }
+  return @{ Code = $p.ExitCode; Tail = $tail }
+}
+# Child process with stdout+stderr read asynchronously (no pipe stall); collect with .P.WaitForExit().
+function StartCaptured($file, $argLine) {
+  $psi = New-Object System.Diagnostics.ProcessStartInfo
+  $psi.FileName = $file
+  $psi.Arguments = $argLine
+  $psi.WorkingDirectory = (Get-Location).Path
+  $psi.UseShellExecute = $false
+  $psi.CreateNoWindow = $true
+  $psi.RedirectStandardOutput = $true
+  $psi.RedirectStandardError = $true
+  $p = [System.Diagnostics.Process]::Start($psi)
+  return @{ P = $p; Out = $p.StandardOutput.ReadToEndAsync(); Err = $p.StandardError.ReadToEndAsync() }
+}
+$script:clock = [Diagnostics.Stopwatch]::StartNew()
+$script:timing = [ordered]@{}
+function Mark($label, $sw) { $script:timing[$label] = [Math]::Round($sw.Elapsed.TotalSeconds, 1) }
 
 $wt = (Resolve-Path $Worktree).Path.TrimEnd('\')
 Set-Location $wt
@@ -103,6 +138,42 @@ $src = @($changed | ? { $_ -notlike 'generated/public-web-ui/*' })
 $webTouched = @($src | ? { $_ -like 'web-ui/*' }).Count -gt 0
 $tsTouched = @($src | ? { $_ -match '\.(ts|tsx)$' -or $_ -like 'tsconfig*' -or $_ -eq 'package.json' }).Count -gt 0
 
+# ---------- typecheck starts now, in the background ----------
+# It reads src/ only and keeps its own .pr\tsc.tsbuildinfo, so it never races a test's build:backend
+# (which writes dist/). The result is collected in gate 10 after the web-ui and test gates.
+$tscProc = $null
+$tscLog = Join-Path $prDir 'tsc.log'
+if (-not $SkipTsc -and $tsTouched) {
+  # A pr-start warm-up still running owns .pr\tsc.tsbuildinfo: queue the typecheck behind it (inside
+  # the background command) so the web-ui and test gates run meanwhile instead of waiting here.
+  $waitFor = ''
+  $warmPid = Join-Path $prDir 'tsc-warmup.pid'
+  if (Test-Path $warmPid) {
+    $wp = Get-Process -Id ([int]((Get-Content $warmPid -Raw).Trim())) -ErrorAction SilentlyContinue
+    if ($wp -and $wp.ProcessName -in @('cmd', 'node')) {
+      $waitFor = "powershell -NoProfile -Command Wait-Process -Id $($wp.Id) -Timeout 180 -ErrorAction SilentlyContinue & "
+      Write-Host '  typecheck queued behind the pr-start warm-up (other gates run meanwhile)'
+    }
+    Remove-Item $warmPid -Force -ErrorAction SilentlyContinue
+  }
+  # dist\ and .pr\ sit at the same depth, so a copied buildinfo's relative paths stay valid; tsc still
+  # rechecks every file whose content hash changed. Use whichever state is newer.
+  $tscInfo = Join-Path $prDir 'tsc.tsbuildinfo'
+  $distInfo = Join-Path $wt 'dist\.tsbuildinfo'
+  if ((Test-Path $distInfo) -and (-not (Test-Path $tscInfo) -or (Get-Item $distInfo).LastWriteTimeUtc -gt (Get-Item $tscInfo).LastWriteTimeUtc)) { Copy-Item $distInfo $tscInfo -Force }
+  $tscBin = if (Test-Path "$wt\node_modules\typescript\bin\tsc") { 'node node_modules/typescript/bin/tsc' } else { 'npx tsc' }
+  $tscProc = StartBg "$waitFor$tscBin --noEmit -p tsconfig.json --incremental --tsBuildInfoFile .pr/tsc.tsbuildinfo" $tscLog
+}
+
+# Open-PR conflict helpers (gate 12) only read git state, so they all start now and run in parallel.
+$conflictJobs = @()
+$helper = Join-Path $PSScriptRoot 'pr-open-conflicts.ps1'
+foreach ($ob in @($OpenPrBranches -split ',' | % { $_.Trim() } | ? { $_ -and $_ -ne $branch })) {
+  $argLine = "-NoProfile -ExecutionPolicy Bypass -File `"$helper`" -Branch `"origin/$ob`" -Head HEAD -Base origin/main"
+  if ($changed.Count) { $argLine += " -ChangedCsv `"$($changed -join ',')`"" }
+  $conflictJobs += @{ Branch = $ob; Job = (StartCaptured 'powershell.exe' $argLine) }
+}
+
 $specFiles = @((Section $spec 'Files') | ? { $_ -match '^\s*-\s+`?([^`\s]+)`?' } | % { $Matches[1] })
 $scopeNotes = ((Section $spec 'Scope notes') -join "`n")
 function InSpec($f) {
@@ -135,7 +206,30 @@ if (($lines -gt $MaxLines -or $src.Count -gt $MaxFiles) -and -not $sizeWhy) { Ga
 elseif ($lines -gt $MaxLines -or $src.Count -gt $MaxFiles) { Gate 'size' 'WARN' "$lines lines / $($src.Count) files (justified: $sizeWhy)" }
 else { Gate 'size' 'PASS' "$lines lines / $($src.Count) files" }
 
-# ---------- 8. regression test exists + passes ----------
+# ---------- 8. web-ui: regenerate ONCE, before the tests ----------
+# Tests read generated/public-web-ui and sync wipes it first, so it must finish before the test gate.
+# sync:web-ui already ends with check:web-ui on current branches; older branches get it run separately.
+if ($webTouched) {
+  $webSw = [Diagnostics.Stopwatch]::StartNew()
+  $syncScript = ''
+  try { $syncScript = [string]((Get-Content (Join-Path $wt 'package.json') -Raw | ConvertFrom-Json).scripts.'sync:web-ui') } catch {}
+  # The bundle is gitignored build output: regenerate it and make sure nothing under it is tracked again.
+  $r2 = Run 'sync:web-ui' 'npm run -s sync:web-ui' (Join-Path $prDir 'webui-sync.log')
+  $r = $r2
+  if ($r2.Code -eq 0 -and $syncScript -notmatch 'check:web-ui') { $r = Run 'check:web-ui' 'npm run -s check:web-ui' (Join-Path $prDir 'webui.log') }
+  if ($r.Code -eq 0) { Gate 'web-ui-sync' 'PASS' 'sync:web-ui + check:web-ui clean (bundle regenerated from source)' }
+  else { Gate 'web-ui-sync' 'FAIL' ("sync:web-ui / check:web-ui failed (see .pr\webui-sync.log; generated/public-web-ui is untracked build output). " + $r.Tail) }
+  $genDirty = @(git -c core.quotepath=off status --porcelain --untracked-files=all -- generated/public-web-ui)
+  if ($r2.Code -ne 0) { Gate 'web-ui-committed' 'FAIL' ("sync:web-ui failed: " + $r2.Tail) }
+  elseif ($genDirty.Count) { Gate 'web-ui-committed' 'FAIL' ("$($genDirty.Count) generated/public-web-ui files are tracked again; the bundle is untracked build output. Fix: git rm -r --cached generated/public-web-ui. e.g. " + (($genDirty | Select -First 4) -join '; ')) }
+  else { Gate 'web-ui-committed' 'PASS' 'bundle regenerated; untracked build output, nothing to commit' }
+  # Deleted paths still count for scope/size gates but cannot be syntax-checked.
+  $nodeCheck = @($src | ? { $_ -like 'web-ui/*.js' -and (Test-Path -LiteralPath $_) } | % { node --check $_ 2>&1; if ($LASTEXITCODE) { "BAD $_" } } | ? { $_ -like 'BAD *' })
+  if ($nodeCheck.Count) { Gate 'web-ui-syntax' 'FAIL' ($nodeCheck -join ', ') }
+  Mark 'web-ui' $webSw
+}
+
+# ---------- 9. regression test exists + passes ----------
 $testCmd = Field $spec 'Test'
 $kind = ($branch -split '/')[0]
 if (-not $testCmd -or $testCmd -match '^none') {
@@ -144,32 +238,19 @@ if (-not $testCmd -or $testCmd -match '^none') {
 } else {
   $testFile = ([regex]::Matches($testCmd, '[\w./-]+\.(regression\.ts|test\.(ts|js|mjs)|mjs|ts|js)') | % Value | Select -Last 1)
   if ($testFile -and -not ($changed -contains $testFile)) { Gate 'test-in-diff' 'FAIL' "$testFile is not added/changed in this PR. The test must exercise THIS change (both should-fire and should-not-fire)." }
+  $testSw = [Diagnostics.Stopwatch]::StartNew()
   $r = Run 'test' $testCmd (Join-Path $prDir 'test.log')
+  Mark 'test' $testSw
   if ($r.Code -eq 0) { Gate 'test' 'PASS' "$testCmd" } else { Gate 'test' 'FAIL' ("exit $($r.Code): " + $r.Tail) }
 }
 
-# ---------- 9. typecheck ----------
+# ---------- 10. typecheck (started in the background above) ----------
 if ($SkipTsc) { Gate 'tsc' 'WARN' 'SKIPPED by -SkipTsc (only valid with the repository owner''s explicit waiver)' }
-elseif ($tsTouched) {
-  $r = Run 'tsc' 'npx tsc --noEmit -p tsconfig.json' (Join-Path $prDir 'tsc.log')
-  if ($r.Code -eq 0) { Gate 'tsc' 'PASS' 'npx tsc --noEmit clean' } else { Gate 'tsc' 'FAIL' ("errors (see .pr\tsc.log): " + $r.Tail) }
+elseif ($tscProc) {
+  $r = WaitBg $tscProc $tscLog
+  $script:timing['tsc (background, overlapped)'] = [Math]::Round(($tscProc.ExitTime - $tscProc.StartTime).TotalSeconds, 1)
+  if ($r.Code -eq 0) { Gate 'tsc' 'PASS' 'tsc --noEmit clean (incremental, .pr\tsc.tsbuildinfo)' } else { Gate 'tsc' 'FAIL' ("errors (see .pr\tsc.log): " + $r.Tail) }
 } else { Gate 'tsc' 'PASS' 'no .ts/package/tsconfig changes (n/a)' }
-
-# ---------- 10. web-ui sync ----------
-if ($webTouched) {
-  $r = Run 'check:web-ui' 'npm run -s check:web-ui' (Join-Path $prDir 'webui.log')
-  if ($r.Code -eq 0) { Gate 'web-ui-sync' 'PASS' 'check:web-ui clean (generated bundle matches source)' }
-  else { Gate 'web-ui-sync' 'FAIL' ("run 'npm run sync:web-ui' (generated/public-web-ui is untracked build output). " + $r.Tail) }
-  # The bundle is gitignored build output: regenerate it and make sure nothing under it is tracked again.
-  $r2 = Run 'sync:web-ui' 'npm run -s sync:web-ui' (Join-Path $prDir 'webui-sync.log')
-  $genDirty = @(git -c core.quotepath=off status --porcelain --untracked-files=all -- generated/public-web-ui)
-  if ($r2.Code -ne 0) { Gate 'web-ui-committed' 'FAIL' ("sync:web-ui failed: " + $r2.Tail) }
-  elseif ($genDirty.Count) { Gate 'web-ui-committed' 'FAIL' ("$($genDirty.Count) generated/public-web-ui files are tracked again; the bundle is untracked build output. Fix: git rm -r --cached generated/public-web-ui. e.g. " + (($genDirty | Select -First 4) -join '; ')) }
-  else { Gate 'web-ui-committed' 'PASS' 'bundle regenerated; untracked build output, nothing to commit' }
-  # Deleted paths still count for scope/size gates but cannot be syntax-checked.
-  $nodeCheck = @($src | ? { $_ -like 'web-ui/*.js' -and (Test-Path -LiteralPath $_) } | % { node --check $_ 2>&1; if ($LASTEXITCODE) { "BAD $_" } } | ? { $_ -like 'BAD *' })
-  if ($nodeCheck.Count) { Gate 'web-ui-syntax' 'FAIL' ($nodeCheck -join ', ') }
-}
 
 # ---------- 11. parity ----------
 $mob = @($src | ? { $_ -like 'web-ui/src/mobile/*' -or $_ -eq 'web-ui/mobile.html' -or $_ -match '^web-ui/src/features/chat/.*mobile-' })
@@ -183,11 +264,12 @@ elseif (-not ($results | ? { $_.Gate -eq 'parity' })) { Gate 'parity' 'PASS' $(i
 if ($surface -eq 'both') { Gate 'parity-evidence' 'WARN' 'Surface=both: review requires desktop (?desktop=1) AND mobile (390x844) screenshots before approve' }
 
 # ---------- 12. conflicts with other open PRs ----------
-foreach ($ob in @($OpenPrBranches -split ',' | % { $_.Trim() } | ? { $_ -and $_ -ne $branch })) {
-  # Delegates to scripts/pr-open-conflicts.ps1 (merge-tree stage records, baseline vs task, regression-tested).
-  $helper = Join-Path $PSScriptRoot 'pr-open-conflicts.ps1'
-  $out = @(powershell -NoProfile -File $helper -Branch "origin/$ob" -Head HEAD -Base origin/main -ChangedCsv ($changed -join ',') 2>&1 | ForEach-Object { "$_" })
-  $st = [int]$LASTEXITCODE
+# Delegates to scripts/pr-open-conflicts.ps1 (merge-tree stage records, baseline vs task, regression-tested).
+foreach ($cj in $conflictJobs) {
+  $ob = $cj.Branch
+  $cj.Job.P.WaitForExit()
+  $out = @((($cj.Job.Out.Result + "`n" + $cj.Job.Err.Result) -split "`r?`n") | ? { $_ -ne '' })
+  $st = [int]$cj.Job.P.ExitCode
   $statuses = @($out | ? { $_ -match '^STATUS:' })
   $status = (($statuses -replace '^STATUS:\s*', '') -join '').Trim()
   $detail = (($out | ? { $_ -match '^(FAIL|WARN): ' }) -replace '^(FAIL|WARN): ', '') -join '; '
@@ -229,10 +311,13 @@ $gateTable
 Test: ``$testCmd``
 "@
 $body | Set-Content -Path (Join-Path $prDir 'PR_BODY.md') -Encoding UTF8
-"# pr-finish $(Get-Date -Format o) on $branch`n`n| Gate | Status | Detail |`n|---|---|---|`n$gateTable" | Set-Content (Join-Path $prDir 'GATES.md') -Encoding UTF8
+$script:timing['total'] = [Math]::Round($script:clock.Elapsed.TotalSeconds, 1)
+$timingLine = 'TIMING ' + (($script:timing.GetEnumerator() | % { "$($_.Key) $($_.Value)s" }) -join ' | ')
+"# pr-finish $(Get-Date -Format o) on $branch`n`n| Gate | Status | Detail |`n|---|---|---|`n$gateTable`n`n$timingLine" | Set-Content (Join-Path $prDir 'GATES.md') -Encoding UTF8
 
 # ---------- verdict / push ----------
 Write-Output ''
+Write-Output $timingLine
 if ($fails.Count) {
   Write-Output "BLOCKED: $($fails.Count) gate(s) failed. Fix them in this worktree and rerun. Nothing was pushed."
   exit 1
