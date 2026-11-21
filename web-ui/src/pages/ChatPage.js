@@ -67,6 +67,8 @@ import {
 } from '../source-panel-context.js';
 import {
   backgroundAgentAgeLabel,
+  backgroundAgentFollowUpFields,
+  backgroundAgentFollowUpLabel,
   backgroundAgentPreview,
   backgroundAgentRecordToMessage,
   backgroundAgentWorkForSession,
@@ -77,6 +79,7 @@ import {
   normalizeBackgroundAgentWork,
   readBackgroundAgentWork,
   resolveBackgroundAgentIdentity,
+  resolveBackgroundLaneIdentity,
   writeBackgroundAgentWork,
 } from '../background-agent-work.js';
 import { createDesktopBackgroundAgentWork } from '../features/chat/core/desktop-background-agent-work.js';
@@ -14946,7 +14949,7 @@ function renderBackgroundAgentSidePaneHtml(record, timelineBudget = null) {
     <section class="side-chat-pane background-agent-side-pane" data-background-agent-id="${escHtml(record.id)}" data-chat-pane-key="side:${escHtml(sideSessionId)}" aria-label="${escHtml(identity.name)} background work" style="--background-agent-color:${escHtml(identity.color)}">
       <div class="side-chat-header">
         <div class="side-chat-title-wrap">
-          <div class="side-chat-kicker">${escHtml(record.model ? formatModelWithReasoning(record.model, record.providerId, record.reasoningEffort) : statusLabel)}</div>
+          <div class="side-chat-kicker">${escHtml([backgroundAgentFollowUpLabel(record), record.model ? formatModelWithReasoning(record.model, record.providerId, record.reasoningEffort) : statusLabel].filter(Boolean).join(' \u00b7 '))}</div>
           <div class="side-chat-title" style="color:${escHtml(identity.color)}">${escHtml(identity.name)}</div>
         </div>
         <button class="side-chat-close" type="button" onclick="closeBackgroundAgentDetail()" title="Close background work" aria-label="Close background work">×</button>
@@ -18491,17 +18494,13 @@ function setBackgroundSpawnDockOpen(sessionId, open) {
 }
 
 function backgroundSpawnIdentityForLane(lane, allLanes = []) {
-  const usedNames = allLanes
-    .filter((item) => item && item !== lane && String(item.sessionId || '') === String(lane?.sessionId || ''))
-    .map((item) => item.agentName || item.label);
-  const usedColors = allLanes
-    .filter((item) => item && item !== lane && String(item.sessionId || '') === String(lane?.sessionId || ''))
-    .map((item) => item.agentColor);
-  return resolveBackgroundAgentIdentity(lane?.id, {
+  // Same-conversation lanes (a root and its follow-up rounds) share identity.
+  return resolveBackgroundLaneIdentity(lane?.id, {
     existingName: lane?.agentName,
     existingColor: lane?.agentColor,
-    usedNames,
-    usedColors,
+    sources: [lane],
+    lanes: allLanes.filter((item) => item && item !== lane && String(item.sessionId || '') === String(lane?.sessionId || '')),
+    sessionId: lane?.sessionId,
   });
 }
 
@@ -18510,6 +18509,7 @@ function backgroundSpawnWorkRecord(lane) {
   const identity = backgroundSpawnIdentityForLane(lane, Array.from(ensureBackgroundSpawnDockMap().values()));
   return {
     id: lane.id,
+    ...backgroundAgentFollowUpFields(lane),
     sessionId: lane.sessionId || window.activeChatSessionId,
     agentName: identity.name,
     agentColor: identity.color,
@@ -18571,14 +18571,16 @@ function upsertBackgroundSpawnLane(msg = {}) {
   if (!id) return null;
   const lanes = ensureBackgroundSpawnDockMap();
   const existing = lanes.get(id) || {};
-  const identity = resolveBackgroundAgentIdentity(id, {
+  const identity = resolveBackgroundLaneIdentity(id, {
     existingName: existing.agentName,
     existingColor: existing.agentColor,
-    usedNames: Array.from(lanes.values()).filter((lane) => lane !== existing).map((lane) => lane.agentName || lane.label),
-    usedColors: Array.from(lanes.values()).filter((lane) => lane !== existing).map((lane) => lane.agentColor),
+    sources: [msg, existing],
+    lanes: Array.from(lanes.values()).filter((lane) => lane !== existing),
+    sessionId: String(msg.sessionId || existing.sessionId || window.activeChatSessionId || '').trim(),
   });
   const lane = {
     id,
+    ...backgroundAgentFollowUpFields(msg, existing),
     sessionId: String(msg.sessionId || existing.sessionId || window.activeChatSessionId || '').trim(),
     label: identity.name,
     agentName: identity.name,
@@ -19253,7 +19255,7 @@ function renderBackgroundSpawnDock() {
       toolSummary: liveTraceToolSummary,
     });
     const identity = resolveBackgroundAgentIdentity(lane.id, { existingName: lane.agentName, existingColor: lane.agentColor });
-    const modelLabel = agentModelLabel(lane);
+    const modelLabel = [backgroundAgentFollowUpLabel(lane), agentModelLabel(lane)].filter(Boolean).join(' \u00b7 ');
     return `
       <section class="background-spawn-lane ${escHtml(status)}" data-bg-id="${escHtml(lane.id)}" style="--background-agent-color:${escHtml(identity.color)}">
         <button type="button" class="background-spawn-summary" data-bg-open-detail="${escHtml(lane.id)}" aria-label="Open ${escHtml(identity.name)} background work">
@@ -48655,7 +48657,7 @@ wsEventBus.on('bg_agent_done', (msg) => {
       sessionId,
       'Background agent',
       msg?.result || msg?.error || msg?.taskPrompt || (failed ? 'The background task needs attention.' : 'The background task is ready.'),
-      { state: failed ? 'failed' : 'complete', title: failed ? 'Background agent needs attention' : 'Background agent complete' },
+      { state: failed ? 'failed' : 'complete', title: `Background ${msg?.conversationId ? 'follow-up' : 'agent'} ${failed ? 'needs attention' : 'complete'}` },
     );
   }
   // The server owns synthesis and durable internal evidence. A late completion

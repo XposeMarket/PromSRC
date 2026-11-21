@@ -13,8 +13,30 @@ const other = path.resolve('/synthetic/other');
 const always = (_p: string) => true;
 const inside = (root: string, target: string) => {
   const rel = path.relative(path.resolve(root), path.resolve(target));
-  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
 };
+
+// A child directory whose name merely starts with `..` (e.g. `..cache`) is inside its root, so a
+// worktree there keeps its scope; a real parent escape is still rejected.
+{
+  const dotted = path.join(ws, '..cache');
+  const kept = recomputeFollowUpScope({
+    original: { workDir: dotted, scopedWorkDir: true, allowedWorkPaths: [ws] },
+    current: { workDir: dotted, roots: [ws], scoped: true },
+    isDirectory: always,
+  });
+  assert.equal(kept.ok, true, `..cache child must stay in scope: ${JSON.stringify(kept)}`);
+  if (!kept.ok) throw new Error('unreachable');
+  assert.equal(kept.workDir, dotted);
+  assert.deepEqual(kept.allowedWorkPaths, [dotted, ws], 'the dotted child root is kept, not dropped as an escape');
+  const sibling = path.resolve(ws, '..', 'main-sibling');
+  const escaped = recomputeFollowUpScope({
+    original: { workDir: sibling, scopedWorkDir: true, allowedWorkPaths: [sibling] },
+    current: { workDir: ws, roots: [ws], scoped: true },
+    isDirectory: always,
+  });
+  assert.equal(escaped.ok, false, 'a sibling reached through `..` stays outside the root');
+}
 
 // Removed grant: original may reach the main workspace; the requester now only holds the worktree.
 {

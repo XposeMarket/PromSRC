@@ -29,7 +29,9 @@ const key = (p: string) => (WIN ? p.toLowerCase() : p);
 
 function isInside(root: string, target: string): boolean {
   const rel = path.relative(path.resolve(root), path.resolve(target));
-  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+  // Only `..` itself or a `..<sep>` prefix leaves the root; `..cache` is a child.
+  // path.relative always emits the platform separator, whatever the input used.
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
 }
 
 function dedupe(paths: string[]): string[] {

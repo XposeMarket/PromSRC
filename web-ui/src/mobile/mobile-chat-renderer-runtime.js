@@ -17,7 +17,7 @@ import { swapKeyedTimelineSession } from '../features/chat/timeline/keyed-dom.js
 import { animateThinkingTextSwap, renderThinkingState } from '../utils.js';
 import { mergeMobileBackgroundTraceEntries } from './mobile-background-trace-merge.js';
 import { foldMobileReasoningSummaryGroups, isMobileReasoningSummaryEntry, mobileReasoningSummaryKey, mobileReasoningSummaryTitle, renderMobileReasoningLiveGroup } from './mobile-reasoning-summary-fold.js';
-import { mergeBackgroundAgentSteerMessages } from '../features/chat/core/background-agent-work.js';
+import { backgroundAgentFollowUpFields, backgroundAgentFollowUpLabel, mergeBackgroundAgentSteerMessages, resolveBackgroundLaneIdentity } from '../features/chat/core/background-agent-work.js';
 import { isSteerFrozenRow } from './mobile-restart-continuity.js';
 import { agentModelLabel, agentAvatarHtml } from '../components/provider-logo.js';
 import { buildMobileAttachmentInlineUrl as _aSrc } from './mobile-api.js';
@@ -3852,17 +3852,15 @@ function _upsertMobileBackgroundSpawnLane(msg = {}, sessionId = __pmChat.activeS
   const stored = findBackgroundAgentWork(id, parentSessionId)
     || findBackgroundAgentWork(id, rawSessionId)
     || findBackgroundAgentWork(id);
-  const identity = resolveBackgroundAgentIdentity(id, {
+  const identity = resolveBackgroundLaneIdentity(id, {
     // Durable work is normalized before it reaches this boundary, so prefer
-    // its stable identity over partial live payloads.
+    // its stable identity over partial live payloads. A follow-up round
+    // shares its root agent's name and color.
     existingName: String(stored?.agentName || existing.agentName || existing.label || '').trim(),
     existingColor: String(stored?.agentColor || stored?.color || existing.agentColor || '').trim(),
-    usedNames: Object.values(lanes)
-      .filter((lane) => lane !== existing)
-      .map((lane) => lane.agentName || lane.label),
-    usedColors: Object.values(lanes)
-      .filter((lane) => lane !== existing)
-      .map((lane) => lane.agentColor),
+    sources: [msg, embedded, existing, stored],
+    lanes: Object.values(lanes),
+    sessionId: parentSessionId,
   });
   const eventStream = String(msg.streamId || embedded.streamId || existing.streamId || '').trim();
   const canRestoreTrace = !eventStream || !stored?.streamId || eventStream === stored.streamId;
@@ -3887,6 +3885,7 @@ function _upsertMobileBackgroundSpawnLane(msg = {}, sessionId = __pmChat.activeS
   const incomingStreamId = msg.streamId || msg.stream?.streamId || embedded.streamId || embedded.stream?.streamId;
   const lane = {
     id,
+    ...backgroundAgentFollowUpFields(msg, embedded, existing, stored),
     sessionId: parentSessionId,
     bgSessionId: resolvedBgSessionId,
     label: identity.name,
@@ -4004,6 +4003,8 @@ function _mobileBackgroundAgentDetailRecord(id, requestedSession, normalizeTrace
   const messageText = normalizedTask && normalizedMessageText === normalizedTask ? '' : rawMessageText;
   return {
     id: lane.id,
+    ...backgroundAgentFollowUpFields(lane, stored),
+    followUpLabel: backgroundAgentFollowUpLabel(lane, stored),
     sessionId: lane.sessionId || requestedSession,
     backgroundSessionId: lane.bgSessionId || stored?.backgroundSessionId || '',
     model: lane.model || stored?.model || '',
@@ -4061,6 +4062,7 @@ function _mobileBackgroundSpawnWorkRecord(lane) {
   });
   return {
     id: lane.id,
+    ...backgroundAgentFollowUpFields(lane),
     sessionId: lane.sessionId || __pmChat.activeSessionId,
     backgroundSessionId: lane.bgSessionId || '',
     model: lane.model,
@@ -4571,7 +4573,7 @@ function _renderMobileBackgroundSpawnDock(dock, sessionId = __pmChat.activeSessi
         <button type="button" class="pm-background-spawn-summary" data-pm-bg-open-detail="${escapeHtml(lane.id)}" aria-label="Open ${escapeHtml(identity.name)} background work">
           <span class="pm-background-spawn-avatar" style="--background-agent-color:${escapeHtml(identity.color)}">${agentAvatarHtml(lane, identity.name)}</span>
           <span class="pm-background-spawn-main">
-            <strong><b style="color:${escapeHtml(identity.color)}">${escapeHtml(identity.name)}</b><small>${escapeHtml(agentModelLabel(lane))}</small></strong>
+            <strong><b style="color:${escapeHtml(identity.color)}">${escapeHtml(identity.name)}</b><small>${escapeHtml([backgroundAgentFollowUpLabel(lane), agentModelLabel(lane)].filter(Boolean).join(' \u00b7 '))}</small></strong>
             <em>${escapeHtml(latestText)}</em>
           </span>
           <span class="pm-background-spawn-status">${escapeHtml(statusLabel)}</span>

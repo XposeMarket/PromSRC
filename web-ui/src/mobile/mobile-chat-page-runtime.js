@@ -4507,7 +4507,8 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
     renderMobileSideSheetPlan(backgroundRecord);
     sideSheet?.classList.toggle('background-agent-detail-mode', !!backgroundRecord);
     if (backgroundRecord) {
-      if (sideSubtitleEl && backgroundRecord.model) sideSubtitleEl.textContent = formatModelWithReasoning(backgroundRecord.model, backgroundRecord.providerId, backgroundRecord.reasoningEffort);
+      const backgroundSubtitle = [backgroundRecord.followUpLabel, backgroundRecord.model ? formatModelWithReasoning(backgroundRecord.model, backgroundRecord.providerId, backgroundRecord.reasoningEffort) : ''].filter(Boolean).join(' \u00b7 ');
+      if (sideSubtitleEl && backgroundSubtitle) sideSubtitleEl.textContent = backgroundSubtitle;
       const status = String(backgroundRecord.status || 'running').toLowerCase();
       const running = ['queued', 'running', 'in_progress'].includes(status);
       const agentName = String(backgroundRecord.agentName || 'Background agent');

@@ -128,6 +128,8 @@ export interface EphemeralBackgroundStatus {
   /** Follow-up rounds: root execution id of the worker conversation, and the round it continues. */
   conversationId?: string;
   predecessorId?: string;
+  /** Follow-up round number within its conversation (root run = 0, first follow-up = 1). */
+  followUpRound?: number;
   stream?: Record<string, any> | null;
   startedAt: number;
   completedAt?: number;
@@ -511,6 +513,20 @@ function backgroundRuntimeSessionId(record: Pick<EphemeralBackgroundRecord, 'id'
   return `background_${String(record.conversationId || record.id || '').trim()}`;
 }
 
+/**
+ * Follow-up rounds are fresh executions in their root's conversation. Live
+ * frames and status carry that link so clients show one agent labelled with
+ * the round, instead of what looks like a brand-new spawn.
+ */
+function backgroundFollowUpMetadata(record: Pick<EphemeralBackgroundRecord, 'conversationId' | 'predecessorId' | 'followUpRound'>): Record<string, unknown> {
+  if (!record.conversationId) return {};
+  return {
+    conversationId: record.conversationId,
+    predecessorId: record.predecessorId,
+    ...(record.followUpRound ? { followUpRound: record.followUpRound } : {}),
+  };
+}
+
 function broadcastBackgroundAgentMessage(record: EphemeralBackgroundRecord, message: Record<string, any>): void {
   const broadcast = _bgDeps?.broadcastWS || gatewayBroadcastWS;
   try {
@@ -549,6 +565,7 @@ function emitBackgroundAgentEvent(
     ...livePayload,
     event,
     ...backgroundVoiceDispatchMetadata(record),
+    ...backgroundFollowUpMetadata(record),
     type: 'bg_agent_event',
     sessionId: spawnerSessionId,
     spawnerSessionId,
@@ -578,6 +595,7 @@ function emitBackgroundAgentDone(
   if (!spawnerSessionId) return;
   broadcastBackgroundAgentMessage(record, {
     ...backgroundVoiceDispatchMetadata(record),
+    ...backgroundFollowUpMetadata(record),
     type: 'bg_agent_done',
     sessionId: spawnerSessionId,
     spawnerSessionId,
@@ -1455,6 +1473,8 @@ export function backgroundFollowUp(backgroundId: string, message: string, option
         resourceIds: conv.resourceIds,
         conversationId: conv.rootId,
         predecessorId: headId,
+        // rounds[0] is the root run, so this round's index is the current length.
+        followUpRound: conv.rounds.length,
         followUp: true,
         followUpRequestId: requestId,
         parentTurnId,
@@ -1626,7 +1646,7 @@ function backgroundPublicStatus(rec: EphemeralBackgroundRecord): EphemeralBackgr
     tags: rec.tags,
     spawnerSessionId: rec.spawnerSessionId,
     backgroundSessionId: backgroundRuntimeSessionId(rec),
-    ...(rec.conversationId ? { conversationId: rec.conversationId, predecessorId: rec.predecessorId } : {}),
+    ...backgroundFollowUpMetadata(rec),
     resourceIds: rec.resourceIds,
     // Poll responses (status/wait/progress) deliberately omit the full prompt:
     // the caller wrote it and re-ingesting 2-4 KB per agent per poll is pure
