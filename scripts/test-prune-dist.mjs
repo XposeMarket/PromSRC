@@ -101,9 +101,11 @@ try {
 
   // package.json wiring: every build path prunes, release paths wipe
   const pkg = JSON.parse(fs.readFileSync(path.join(here, '..', 'package.json'), 'utf8'));
-  // build:backend: stamp begin -> prune -> tsc ... -> stamp complete (only after every step succeeded)
-  assert.match(pkg.scripts['build:backend'], /^node scripts\/build-stamp\.js begin && node scripts\/prune-dist\.js --quiet && tsc/);
-  assert.match(pkg.scripts['build:backend'], / && node scripts\/build-stamp\.js complete$/);
+  // build:backend runs scripts/build-backend.mjs: prune before tsc, under the dist/ build lock
+  assert.equal(pkg.scripts['build:backend'], 'node scripts/build-backend.mjs');
+  const pipeline = fs.readFileSync(path.join(here, 'build-backend.mjs'), 'utf8');
+  assert.ok(pipeline.indexOf("'scripts/prune-dist.js', '--quiet'") > -1, 'build-backend prunes dist/');
+  assert.ok(pipeline.indexOf("'scripts/prune-dist.js', '--quiet'") < pipeline.indexOf("typescript/bin/tsc"), 'prune runs before tsc');
   for (const name of ['build:win', 'build:mac', 'prepare:public:desktop']) {
     assert.match(pkg.scripts[name], /^npm run clean:dist && /, `${name} must start from an empty dist`);
   }

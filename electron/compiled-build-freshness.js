@@ -12,11 +12,13 @@
 // dist/ counts as current only when `npm run build:backend` completed and no
 // file or directory in a tree the backend build reads was modified after that
 // build started. Directory mtimes change when an entry is added, removed or
-// renamed, so deletions and renames count as changes too.
-// `build-stamp.js begin` (first build step) removes the completion stamp and
-// records the start time plus the owning build; `build-stamp.js complete` (last
-// step, after tsc and every copy step succeeded) writes dist/.build-complete.json
-// only for that same build. A failed, interrupted or still-running build never
+// renamed, so deletions and renames count as changes too; a source root that
+// existed at build time and is now gone (deleted or renamed tree) also counts.
+// scripts/build-backend.mjs (`npm run build:backend`) takes an exclusive build
+// lock (dist/.build-in-progress.json, O_EXCL create) for the whole pipeline,
+// which also drops the previous completion stamp, and publishes
+// dist/.build-complete.json only after every step succeeded and only while it
+// still holds the lock. A failed, interrupted or still-running build never
 // counts, an edit made while the build was running keeps the checkout on tsx
 // until the next build, and a second concurrent build of the same checkout is
 // refused instead of interleaving its output. prune-dist drops the completion
@@ -33,8 +35,6 @@ const REQUIRED_COMPILED_ENTRIES = [
   path.join('dist', 'gateway', 'server-v2.js'),
 ];
 const SKIPPED_DIRS = new Set(['node_modules', '.git']);
-// An in-progress stamp older than this is treated as abandoned even if its pid was reused.
-const ABANDONED_BUILD_MS = 30 * 60_000;
 
 const toPosix = (p) => p.split(path.sep).join('/');
 
@@ -45,13 +45,6 @@ function readJson(file) {
 function isProcessAlive(pid) {
   if (!Number.isInteger(pid) || pid <= 0) return false;
   try { process.kill(pid, 0); return true; } catch (error) { return !!error && error.code === 'EPERM'; }
-}
-
-// build:backend runs `begin` ... `complete` as children of one npm script shell,
-// so that shell's pid identifies the build. A shell may exec the last command of
-// a chain (same pid), so `complete` also accepts its own pid.
-function defaultBuildOwner() {
-  return { token: process.ppid, pids: [process.ppid, process.pid] };
 }
 
 /**
@@ -86,11 +79,13 @@ function readCompletedBuild(rootDir) {
   const stampPath = path.join(rootDir, BUILD_COMPLETE_STAMP);
   let stat;
   try { stat = fs.statSync(stampPath); } catch { return null; }
-  let startedAtMs = NaN;
-  try { startedAtMs = Number(JSON.parse(fs.readFileSync(stampPath, 'utf8')).startedAtMs); } catch {}
-  // Without a readable start time fall back to the stamp's own mtime (later, so stricter is not
-  // possible; this only happens for a hand-made stamp).
-  return { startedAtMs: Number.isFinite(startedAtMs) && startedAtMs > 0 ? startedAtMs : stat.mtimeMs };
+  const stamp = readJson(stampPath) || {};
+  const startedAtMs = Number(stamp.startedAtMs);
+  return {
+    // Without a readable start time fall back to the stamp's own mtime (only a hand-made stamp).
+    startedAtMs: Number.isFinite(startedAtMs) && startedAtMs > 0 ? startedAtMs : stat.mtimeMs,
+    sourceRoots: Array.isArray(stamp.sourceRoots) ? stamp.sourceRoots.map(String) : [],
+  };
 }
 
 /**
@@ -107,58 +102,89 @@ function checkCompiledBuildFreshness(rootDir) {
   }
   const build = readCompletedBuild(rootDir);
   if (!build) return result(false, 'no completed backend build stamp (run npm run build)');
+  const goneRoot = build.sourceRoots.find((root) => !fs.existsSync(path.join(rootDir, root)));
+  if (goneRoot) return result(false, `${goneRoot}/ was removed or renamed after the last backend build`);
   const changed = findSourceModifiedAfter(rootDir, build.startedAtMs);
   if (changed) return result(false, `${changed} changed after the last backend build`);
   return result(true, 'dist/ matches the source tree');
 }
 
-function beginBuildStamp(rootDir, now = Date.now(), owner = defaultBuildOwner()) {
-  const inProgress = path.join(rootDir, BUILD_IN_PROGRESS_STAMP);
-  const active = readJson(inProgress);
-  const activeOwner = Number(active && active.ownerPid);
-  if (
-    active
-    && activeOwner !== owner.token
-    && isProcessAlive(activeOwner)
-    && now - Number(active.startedAtMs) < ABANDONED_BUILD_MS
-  ) {
-    throw new Error(
-      `another backend build (pid ${activeOwner}) is writing dist/ in this checkout; `
-      + `wait for it to finish, or delete ${toPosix(BUILD_IN_PROGRESS_STAMP)} if that process is not a build`,
-    );
-  }
-  fs.rmSync(path.join(rootDir, BUILD_COMPLETE_STAMP), { force: true });
+/**
+ * Take the dist/ build lock (dist/.build-in-progress.json, created with O_EXCL so
+ * two builds can never both acquire it). A lock whose owner process is alive is
+ * never taken over; one whose owner is gone (hard-killed build) is replaced.
+ * Acquiring drops any previous completion stamp. scripts/build-backend.mjs holds
+ * the lock for the whole pipeline and releases it in a finally block.
+ * @returns {{ startedAtMs: number, ownerPid: number, token: string, sourceRoots: string[] }}
+ */
+function acquireBuildLock(rootDir, { now = Date.now(), pid = process.pid } = {}) {
+  const lockPath = path.join(rootDir, BUILD_IN_PROGRESS_STAMP);
   fs.mkdirSync(path.join(rootDir, 'dist'), { recursive: true });
-  fs.writeFileSync(inProgress, `${JSON.stringify({ startedAtMs: now, ownerPid: owner.token }, null, 2)}\n`);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let fd;
+    try {
+      fd = fs.openSync(lockPath, 'wx');
+    } catch (error) {
+      if (!error || error.code !== 'EEXIST') throw error;
+      const raw = (() => { try { return fs.readFileSync(lockPath, 'utf8'); } catch { return null; } })();
+      if (raw === null) continue; // released between our open and read: retry
+      let active = null;
+      try { active = JSON.parse(raw); } catch {}
+      const owner = Number(active && active.ownerPid);
+      if (isProcessAlive(owner)) {
+        throw new Error(
+          `another backend build (pid ${owner}) is writing dist/ in this checkout; wait for it to finish, `
+          + `or delete ${toPosix(BUILD_IN_PROGRESS_STAMP)} if pid ${owner} is not a build`,
+        );
+      }
+      // Abandoned lock: remove it only if it is still the one we inspected, then retry the exclusive create.
+      try { if (fs.readFileSync(lockPath, 'utf8') === raw) fs.rmSync(lockPath, { force: true }); } catch {}
+      continue;
+    }
+    const lock = {
+      startedAtMs: now,
+      ownerPid: pid,
+      token: `${pid}-${now}-${Math.random().toString(36).slice(2)}`,
+      sourceRoots: SOURCE_TREES.filter((tree) => fs.existsSync(path.join(rootDir, tree))).map(toPosix),
+    };
+    try { fs.writeSync(fd, `${JSON.stringify(lock, null, 2)}\n`); } finally { fs.closeSync(fd); }
+    fs.rmSync(path.join(rootDir, BUILD_COMPLETE_STAMP), { force: true });
+    return lock;
+  }
+  throw new Error('could not acquire the dist/ build lock: another build took it at the same moment');
 }
 
-/** @returns {boolean} true when this build published the completion stamp. */
-function completeBuildStamp(rootDir, now = Date.now(), owner = defaultBuildOwner()) {
-  const inProgress = path.join(rootDir, BUILD_IN_PROGRESS_STAMP);
-  const active = readJson(inProgress);
-  const startedAtMs = Number(active && active.startedAtMs);
-  if (!active || !Number.isFinite(startedAtMs) || startedAtMs <= 0) {
-    throw new Error(`${toPosix(BUILD_IN_PROGRESS_STAMP)} is missing; run build-stamp.js begin before the build`);
-  }
-  if (active.ownerPid !== undefined && !owner.pids.includes(Number(active.ownerPid))) {
-    // A different build owns dist/ now; only its own completion step may publish the stamp.
-    return false;
-  }
+function holdsBuildLock(rootDir, lock) {
+  const active = readJson(path.join(rootDir, BUILD_IN_PROGRESS_STAMP));
+  return !!(active && lock && active.token === lock.token);
+}
+
+/**
+ * Publish dist/.build-complete.json for the build holding `lock`, after every
+ * build step succeeded. Returns false (publishes nothing) if the lock is no
+ * longer ours.
+ */
+function completeBuild(rootDir, lock, now = Date.now()) {
+  if (!holdsBuildLock(rootDir, lock)) return false;
   fs.writeFileSync(
     path.join(rootDir, BUILD_COMPLETE_STAMP),
-    `${JSON.stringify({ startedAtMs, completedAtMs: now, node: process.version }, null, 2)}\n`,
+    `${JSON.stringify({ startedAtMs: lock.startedAtMs, completedAtMs: now, node: process.version, sourceRoots: lock.sourceRoots }, null, 2)}\n`,
   );
-  fs.rmSync(inProgress, { force: true });
   return true;
 }
 
+/** Release the lock if we still hold it (success or failure). */
+function releaseBuildLock(rootDir, lock) {
+  if (holdsBuildLock(rootDir, lock)) fs.rmSync(path.join(rootDir, BUILD_IN_PROGRESS_STAMP), { force: true });
+}
 
 module.exports = {
   BUILD_COMPLETE_STAMP,
   BUILD_IN_PROGRESS_STAMP,
   SOURCE_TREES,
-  beginBuildStamp,
+  acquireBuildLock,
   checkCompiledBuildFreshness,
-  completeBuildStamp,
+  completeBuild,
   findSourceModifiedAfter,
+  releaseBuildLock,
 };

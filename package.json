@@ -74,7 +74,7 @@
     "test:gateway-boot-speed": "node scripts/test-gateway-boot-speed.mjs",
     "ci:rebalance": "node scripts/ci/update-estimates.mjs",
     "release:prep": "node scripts/release-prep.mjs",
-    "build:backend": "node scripts/build-stamp.js begin && node scripts/prune-dist.js --quiet && tsc && node scripts/copy-creative-renderers.js && node scripts/copy-runtime-prompt-assets.js && node scripts/copy-extension-descriptors.js && node scripts/build-stamp.js complete",
+    "build:backend": "node scripts/build-backend.mjs",
     "clean:dist": "node scripts/prune-dist.js --all",
     "check:dist": "node scripts/prune-dist.js --check",
     "test:prune-dist": "node scripts/test-prune-dist.mjs",
