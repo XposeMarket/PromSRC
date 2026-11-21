@@ -4,6 +4,11 @@
  * admitted only for the owning chat, serialized per conversation, idempotent per
  * request, narrowed to current permissions, and retained until the parent chat
  * is deleted (even after execution snapshots/receipts are pruned and restart).
+ *
+ * Turn identity: a follow-up is keyed by the CANONICAL root turn id (the original
+ * runtime id, carried as turnContextId / recoveryData.rootTurnId). A restart-recovered
+ * turn gets a NEW runtime id but keeps the root id, so retries dedupe and results
+ * deliver to the recovered runtime. Client request ids are not turn identity.
  */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -57,7 +62,14 @@ const historyCount = (sid: string, content: string) => sessions.getSession(sid).
   .filter((entry: any) => entry.role === 'user' && (entry.content === content || String(entry.content).endsWith(`\n${content}`))).length;
 const steersFor = (id: string) => registry.consumePendingRuntimeSteersForSession(PARENT, 50)
   .filter((event: any) => event.backgroundAgentId === id);
-const opts = (requestId: string, parentTurnId = 'turn-2', spawnerSessionId = PARENT) => ({ spawnerSessionId, requestId, parentTurnId });
+// Pending steers queued on one specific runtime (checked before any session-wide consumption).
+const pendingOn = (runtimeId: string) => {
+  const snapshot = registry.listLiveRuntimes().find((entry: any) => entry.id === runtimeId);
+  return Number(snapshot?.checkpoint?.pendingSteerCount || 0);
+};
+// The requesting turn is identified by the id the chat pipeline passes (the live runtime id).
+let currentTurn = '';
+const opts = (requestId: string, parentTurnId = currentTurn, spawnerSessionId = PARENT) => ({ spawnerSessionId, requestId, parentTurnId });
 async function settle(id: string) {
   const waited = await runner.backgroundWait({ backgroundId: id, timeoutMs: 10_000 });
   assert.equal(waited.running, 0, `${id} must settle`);
@@ -65,6 +77,10 @@ async function settle(id: string) {
 
 async function main() {
   assert.equal(typeof runner.backgroundFollowUp, 'function', 'backgroundFollowUp must be exported');
+  // The chat pipeline must bind follow-ups to the canonical stable turn id, not the per-attempt runtime id.
+  const handleChatSource = fs.readFileSync(path.join(__dirname, '../routes/chat/pipeline/handle-chat.ts'), 'utf8');
+  assert.match(handleChatSource, /backgroundParentTurnId: editLogTurnId,/,
+    'follow-up parent must be the canonical turn id (editLogTurnId), never the restart-replaced runtime id');
   let turn = registry.registerLiveRuntime({ kind: 'main_chat', label: 'parent turn 1', sessionId: PARENT, clientRequestId: 'turn-1' });
   ceiling.recordSessionToolCeiling(PARENT, ['web_fetch', 'workspace_read']);
   const first = runner.backgroundSpawn({ prompt: 'ORIGINAL_REVIEW', spawnerSessionId: PARENT, workDir: root,
@@ -92,7 +108,9 @@ async function main() {
   // Current, narrower permissions; requesting parent turn changes.
   ceiling.recordSessionToolCeiling(PARENT, ['web_fetch']);
   registry.finishLiveRuntime(turn);
+  // Ordinary initial turn: runtime id, client request id and edit id are all distinct.
   turn = registry.registerLiveRuntime({ kind: 'main_chat', label: 'parent turn 2', sessionId: PARENT, clientRequestId: 'turn-2' });
+  currentTurn = turn;
   let release!: () => void;
   hold = new Promise<void>((resolve) => { release = resolve; });
   const second = runner.backgroundFollowUp(first.id, 'WHY_OBJECT?', opts('req-1'));
@@ -166,6 +184,37 @@ async function main() {
   assert.equal(afterResume.predecessorId, failed.id);
   await settle(afterResume.id);
 
+  // Restart-recovered turn: the original runtime and the recovered runtime have DIFFERENT ids,
+  // but the same client request id and the same canonical root turn id.
+  const originalTurn = registry.registerLiveRuntime({ kind: 'main_chat', label: 'turn 3 original', sessionId: PARENT, clientRequestId: 'edit-3' });
+  registry.finishLiveRuntime(originalTurn);
+  const recoveredTurn = registry.registerLiveRuntime({ kind: 'main_chat', label: 'turn 3 (restart recovery)', sessionId: PARENT,
+    clientRequestId: 'edit-3', recoveryPolicy: 'mark_interrupted',
+    recoveryData: { recoveredFromRuntimeId: originalTurn, rootTurnId: originalTurn } });
+  assert.notEqual(recoveredTurn, originalTurn, 'recovered runtime gets a new id');
+  // The pipeline binds the follow-up to the canonical root id (editLogTurnId), not to recoveredTurn.
+  const restartQ = runner.backgroundFollowUp(first.id, 'RESTART_Q', opts('req-restart', originalTurn));
+  assert.equal(restartQ.queued, true, String(restartQ.error));
+  await settle(restartQ.id);
+  assert.equal(pendingOn(recoveredTurn), 1, 'canonical root turn id delivers to the recovered runtime exactly once');
+  // Stable dedupe: a retry of the same tool call and message after recovery returns the same execution, no new round.
+  const callsBeforeRetry = calls;
+  const restartRetry = runner.backgroundFollowUp(first.id, 'RESTART_Q', opts('req-restart', originalTurn));
+  assert.equal(restartRetry.id, restartQ.id, 'retry after recovery dedupes to the same execution');
+  assert.equal(restartRetry.deduplicated, true);
+  assert.equal(calls, callsBeforeRetry, 'deduplicated retry spends no model call');
+  assert.equal(pendingOn(recoveredTurn), 1, 'deduplicated retry does not deliver a second time');
+  // Negative: an unrelated newer turn in the same chat never receives the recovered round's result.
+  registry.finishLiveRuntime(recoveredTurn);
+  const newerTurn = registry.registerLiveRuntime({ kind: 'main_chat', label: 'newer unrelated turn', sessionId: PARENT, clientRequestId: 'edit-4' });
+  const newerQ = runner.backgroundFollowUp(first.id, 'NEWER_Q', opts('req-newer', originalTurn));
+  assert.equal(newerQ.queued, true, String(newerQ.error));
+  await settle(newerQ.id);
+  assert.equal(pendingOn(newerTurn), 0, 'unrelated newer turn never receives the result');
+  assert.equal(steersFor(newerQ.id).length, 0, 'requesting recovered turn already ended: result retained for retrieval, not injected anywhere');
+  registry.finishLiveRuntime(newerTurn);
+  registry.finishLiveRuntime(turn);
+
   // Revoked workspace fails closed before a model call.
   const goneDir = path.join(root, 'gone-dir'); fs.mkdirSync(goneDir);
   const other = runner.backgroundSpawn({ prompt: 'ORIGINAL_REVIEW', spawnerSessionId: PARENT, workDir: goneDir,
@@ -177,9 +226,8 @@ async function main() {
   assert.equal(revoked.queued, false);
   assert.match(String(revoked.error), /working directory/i);
   assert.equal(calls, before);
-  registry.finishLiveRuntime(turn);
 
-  fs.writeFileSync(idsFile, JSON.stringify({ first: first.id, second: second.id }));
+  fs.writeFileSync(idsFile, JSON.stringify({ first: first.id, second: second.id, turn: currentTurn }));
   sessions.flushAllSessions();
   await sessions.flushPendingSessionWrites();
   // Ordinary snapshot/receipt pruning must not end the conversation.
@@ -189,7 +237,7 @@ async function main() {
   const child = spawnSync(process.execPath, ['--import', 'tsx', __filename], { cwd: process.cwd(), encoding: 'utf8', timeout: 90_000,
     env: { ...process.env, BG_FOLLOWUP_STAGE: 'restart', BG_FOLLOWUP_ROOT: root } });
   assert.equal(child.status, 0, `restart stage failed:\n${child.stdout}\n${child.stderr}`);
-  console.log('PASS background follow-up: fresh immutable rounds, same conversation/history/evidence, owner/request/turn gates, serialization, idempotency, permission narrowing, failed-resume retained, revoked workspace');
+  console.log('PASS background follow-up: fresh immutable rounds, same conversation/history/evidence, owner/request/turn gates, serialization, idempotency, permission narrowing, failed-resume retained, restart-recovered turn identity (original vs recovered ids, unrelated newer turn negative, stable dedupe), revoked workspace');
 }
 
 async function restart() {
@@ -197,11 +245,11 @@ async function restart() {
   assert.deepEqual(runner.recoverBackgroundExecutions(), []);
   assert.equal(calls, 0, 'nothing re-executes on boot');
   const convSid = `background_${ids.first}`;
-  registry.registerLiveRuntime({ kind: 'main_chat', label: 'parent turn 9', sessionId: PARENT, clientRequestId: 'turn-9' });
-  // Same turn (turn-2), same tool-call id, same message: a genuine retry across restart returns the same run.
-  assert.equal(runner.backgroundFollowUp(ids.first, 'WHY_OBJECT?', opts('req-1', 'turn-2')).id, ids.second, 'admission dedupe survives restart');
+  const turn9 = registry.registerLiveRuntime({ kind: 'main_chat', label: 'parent turn 9', sessionId: PARENT, clientRequestId: 'turn-9' });
+  // Same turn (the original turn id), same tool-call id, same message: a genuine retry across restart returns the same run.
+  assert.equal(runner.backgroundFollowUp(ids.first, 'WHY_OBJECT?', opts('req-1', ids.turn)).id, ids.second, 'admission dedupe survives restart');
   assert.equal(calls, 0);
-  const next = runner.backgroundFollowUp(ids.first, 'AFTER_RESTART', opts('req-9', 'turn-9'));
+  const next = runner.backgroundFollowUp(ids.first, 'AFTER_RESTART', opts('req-9', turn9));
   assert.equal(next.queued, true, String(next.error));
   await settle(next.id);
   assert.equal(calls, 1);
@@ -217,7 +265,7 @@ async function restart() {
   await sessions.flushPendingSessionWrites();
   // Deleting the parent chat removes continuations.
   assert.equal(sessions.deleteSession(PARENT), true);
-  const after = runner.backgroundFollowUp(ids.first, 'AFTER_DELETE', opts('req-10', 'turn-9'));
+  const after = runner.backgroundFollowUp(ids.first, 'AFTER_DELETE', opts('req-10', turn9));
   assert.equal(after.queued, false);
   assert.match(String(after.error), /not found|deleted|no longer/i);
   assert.equal(fs.existsSync(path.join(root, 'background-conversations', `${ids.first}.json`)), false, 'conversation metadata removed');

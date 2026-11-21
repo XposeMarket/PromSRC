@@ -418,7 +418,9 @@ export async function handleChatUntraced(
     handleTaskControlAction,
     makeBroadcastForTask,
     sendSSE,
-    backgroundParentTurnId: runtimeOptions?.runtimeId || editLogTurnId,
+    // Canonical stable turn id (root turn for restart-recovered turns), never the
+    // per-attempt runtime id, so retries and deliveries survive a restart.
+    backgroundParentTurnId: editLogTurnId,
     toolCallId: String(toolCallId || '').trim() || undefined,
     supportsDirectMediaObservation: currentModelCapabilities.hasVision,
     executionPolicy: handleChatGoalExecutionPolicy,

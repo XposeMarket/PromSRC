@@ -442,9 +442,12 @@ function queueBackgroundResultForForeground(record: EphemeralBackgroundRecord): 
  */
 function queueFollowUpResultForRequestingTurn(record: EphemeralBackgroundRecord, spawnerSessionId: string, outcome: string): boolean {
   const turnId = String(record.parentTurnId || '').trim();
+  // Canonical turn identity: the root turn id. A live runtime matches when it IS
+  // the root turn, or when it is a restart recovery of that root (its
+  // recoveryData.rootTurnId). Client request ids are not turn identity.
   const runtime = turnId ? findLiveRuntime((entry) => isSteerableChatRuntimeKind(entry.kind)
     && String(entry.sessionId || '') === spawnerSessionId
-    && (entry.id === turnId || String(entry.clientRequestId || '') === turnId)) : null;
+    && (entry.id === turnId || String(entry.recoveryData?.rootTurnId || '') === turnId)) : null;
   if (!runtime) {
     console.log(`[Background Agent] follow-up ${record.id} finished after its requesting turn ${turnId || '(none)'} ended; result retained for explicit retrieval.`);
     return false;
