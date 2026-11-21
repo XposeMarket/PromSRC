@@ -173,11 +173,12 @@ export function buildMobileGatewayWsUrl(path, params = {}) {
 
 async function mfetch(path, opts = {}) {
   assertSafeChatRequest(path, opts.body);
-  _assertMobileRequestTarget();
+  if (!opts._pinnedGateway) _assertMobileRequestTarget();
   const method = String(opts.method || 'GET').trim().toUpperCase() || 'GET';
   const canRetryGatewayRestart = method === 'GET' || method === 'HEAD' || method === 'OPTIONS';
   const gatewayRestartAttempt = Math.max(0, Math.floor(Number(opts._gatewayRestartAttempt || 0) || 0));
-  const token = _mobileRequestToken();
+  const pinned = opts._pinnedGateway;
+  const token = pinned ? pinned.token : _mobileRequestToken();
   const headers = new Headers(opts.headers || {});
   if (!headers.has('Content-Type') && opts.body && !(opts.body instanceof FormData)) headers.set('Content-Type', 'application/json');
   if (token) headers.set('X-Pairing-Token', token);
@@ -198,11 +199,11 @@ async function mfetch(path, opts = {}) {
     else parentSignal.addEventListener('abort', onParentAbort, { once: true });
   }
   const timeout = setTimeout(() => controller.abort(), remainingMs);
-  const { timeoutMs: _timeoutMs, signal: _signal, _gatewayRestartAttempt: _restartAttempt, _gatewayDeadline: _deadline, ...fetchOpts } = opts;
+  const { timeoutMs: _timeoutMs, signal: _signal, _gatewayRestartAttempt: _restartAttempt, _gatewayDeadline: _deadline, _pinnedGateway: _pinned, ...fetchOpts } = opts;
   let res;
   let text;
   try {
-    res = await fetch(_buildUrl(path), { ...fetchOpts, headers, signal: controller.signal });
+    res = await fetch(pinned ? new URL(path, pinned.base) : _buildUrl(path), { ...fetchOpts, headers, signal: controller.signal });
     // Body consumption remains inside the same abort deadline.
     text = await res.text();
   } catch (err) {
@@ -226,7 +227,7 @@ async function mfetch(path, opts = {}) {
     clearTimeout(timeout);
     if (parentSignal) parentSignal.removeEventListener('abort', onParentAbort);
   }
-  if (res.status === 401 && token && _isCurrentMobileRequestTarget()) {
+  if (res.status === 401 && token && (pinned ? pinned.local && token === getDeviceToken() : _isCurrentMobileRequestTarget())) {
     // Device token rejected — invalidate locally so the router sends user to pairing.
     clearDeviceToken();
     window.dispatchEvent(new Event('pm-device-revoked'));
@@ -272,6 +273,20 @@ async function mfetchWithRetry(path, opts = {}, retry = {}) {
     }
   }
   throw lastErr;
+}
+
+// Bind a queue operation (including uploads and read retries) to the gateway
+// selected at the start. A route change must not redirect it or reuse its token.
+export function pinMobileGatewayFetch(gatewayId) {
+  if (!gatewayId || gatewayId !== window.__pmMobileActiveGatewayId) throw new Error('This chat’s gateway changed. Reopen the chat and retry.');
+  _assertMobileRequestTarget();
+  const token = _mobileRequestToken();
+  if (!token) throw new Error('Pair this device before using the gateway queue.');
+  const pinned = { token, local: _isCurrentMobileRequestTarget(), base: new URL(_buildUrl('/'), window.location.origin) };
+  return (path, opts = {}) => {
+    if (!path.startsWith('/api/') || new URL(path, pinned.base).origin !== pinned.base.origin) throw new Error('Invalid gateway API path.');
+    return mfetch(path, { ...opts, _pinnedGateway: pinned });
+  };
 }
 
 export async function mobileGatewayFetch(path, opts = {}) {
@@ -2616,6 +2631,7 @@ export function streamChat({ message, sessionId = MOBILE_CHAT_SESSION_ID, attach
       const normalized = new Error(presentation.summary);
       normalized.chatPresentation = presentation;
       normalized.rawBody = body;
+      normalized.code = payload?.code;
       cb('onError', normalized);
       cb('onDone');
       return;

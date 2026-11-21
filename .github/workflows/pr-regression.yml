@@ -216,6 +216,10 @@ jobs:
         run: node scripts/test-mobile-stale-gateway-route-recovery.mjs
       - name: Verify mobile chat recovery
         run: node scripts/test-mobile-chat-recovery.mjs
+      - name: Verify durable mobile main-chat queue store and browser lifecycle
+        run: |
+          npx tsx src/gateway/chat/mobile-main-chat-queue.regression.ts
+          node --import tsx scripts/test-mobile-durable-queue.mjs
       - name: Verify mobile stream receipt idempotency
         run: node scripts/test-mobile-stream-receipts.mjs
       - name: Verify static asset compression

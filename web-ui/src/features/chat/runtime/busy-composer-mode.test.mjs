@@ -74,9 +74,9 @@ assertBefore(
 );
 assertBefore(
   mobileSrc,
-  'await window.__pmSteerMobileQueuedPrompt(',
-  'queue.push(_makeMobileQueuedPrompt(',
-  ['resetComposerInput()', '_pmClearActiveSlashCommand(', '_renderMobileQueuedPromptsPanel('],
+  "await durableQueue.act('steer', receipt.id)",
+  'await durableQueue.enqueue(',
+  ['resetComposerInput()', '_pmClearActiveSlashCommand('],
   'mobile',
 );
 

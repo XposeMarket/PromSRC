@@ -22,7 +22,9 @@ import { registerStatusRoutes } from './chat/status';
 import { registerMobileRoutes } from './chat/mobile';
 import { registerEmailComposerRoutes } from './chat/email-composer';
 import { splitComposerEmailList, findStoredEmailComposerArtifact, buildSentEmailComposerArtifact } from './chat/email-composer';
-import { registerSteerRoutes } from './chat/steer';
+import { applyChatSteer, registerSteerRoutes } from './chat/steer';
+import { registerMobileMainChatQueue, mobileQueueBlocksNewTurn, pauseMobileMainChatQueue } from './chat/mobile-queue';
+import { isMobileQueueRequestId } from '../chat/mobile-main-chat-queue';
 import { registerPushRoutes } from './chat/push';
 import { configureContextWindowDependencies } from './chat/context-window';
 import { estimateJsonTokensForModel, safeTokenSessionFileName, rawToolTokenCache, estimateToolObservationRawTokens, estimateStoredThreadFootprint, aggregateModelUsageEvents, aggregateSessionModelUsage, summarizeTurnToolResultBudget, buildActiveSkillsContextEstimate, ContextWindowRow, allocateContextChildren, friendlyContextToolCategory, estimateCurrentSystemToolSchemaTokens, estimateCurrentSystemPromptTokens, buildSystemToolSchemaChildren, buildContextWindowSubagentsRosterEstimate, getLastUserContextText, isBrainMemoryContextSession, resolveContextWindowMemoryMode, buildContextWindowMemoryAtomEstimate, buildContextWindowThoughtPacketEstimate, buildSystemPromptChildren, buildProviderUsageGroup, buildToolUsageGroup, buildContextWindowCurrentState } from './chat/context-window';
@@ -2133,12 +2135,25 @@ registerDispatchVoiceRoutes(router, requireSafeSessionParam);
 registerEmailComposerRoutes(router);
 
 registerSteerRoutes(router, { getMainChatStream });
+export const startMobileMainChatQueue = registerMobileMainChatQueue(router, {
+  isBusy: (sid) => reconcileMainChatTurn(sid).active || mainChatTurnCoordinator.isActive(sid),
+  steer: (body) => applyChatSteer(body, getMainChatStream),
+  run: (item, admissionLease) => runAdmittedMainChatTurn({
+    body: item.body, resolvedSessionId: item.sessionId, admissionLease,
+    clientRequestId: item.id, requestFingerprint: fingerprintMainChatRequest(item.body),
+    turnTiming: createTurnTimingRecorder(item.sessionId),
+    turnOrigin: normalizeTurnOrigin(undefined, item.sessionId, { channel: 'mobile', surface: 'mobile_app', device: 'phone', source: 'api_chat' }),
+    excludedSkillIds: normalizeExcludedSkillIdsInput(item.body.excludedSkillIds),
+    forcedSkillIds: normalizeForcedSkillIdsInput(item.body.selectedSkillIds),
+    isMobileChatRequest: true,
+  }),
+});
 
 
 registerPushRoutes(router);
 
 router.post('/api/chat', async (req, res) => {
-  const { message, sessionId = 'default', pinnedMessages, attachments, attachmentPreviews, reasoning, callerContext } = req.body;
+  const { message, sessionId = 'default', attachments, attachmentPreviews } = req.body;
   if (!message || typeof message !== 'string') { res.status(400).json({ error: 'Message required' }); return; }
   let resolvedSessionId: string;
   try {
@@ -2226,6 +2241,10 @@ router.post('/api/chat', async (req, res) => {
   });
   turnTiming.mark('admission_decided', { kind: admission.kind });
 
+  if (isMobileQueueRequestId(clientRequestId) || (admission.kind !== 'duplicate' && admission.kind !== 'idempotency_conflict' && mobileQueueBlocksNewTurn(resolvedSessionId))) {
+    res.status(409).json({ success: false, code: 'MOBILE_CHAT_QUEUE_PENDING', error: 'This chat has queued work. Wait for it or manage its queue on mobile.' });
+    return;
+  }
   if (admission.kind === 'busy') {
     // A server-started watch review can become active between the phone's last
     // websocket frame and its POST. Treat that narrow race as a live steer,
@@ -2406,6 +2425,38 @@ router.post('/api/chat', async (req, res) => {
       return;
   }
 
+  const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'http').split(',')[0].trim() || 'http';
+  const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
+  await runAdmittedMainChatTurn({
+    body: req.body, resolvedSessionId, admissionLease, turnTiming, turnOrigin, clientRequestId,
+    requestFingerprint, excludedSkillIds, forcedSkillIds, benchmarkToolFilter, benchmarkPromptMemoryMode,
+    requestOrigin: host ? `${proto}://${host}` : undefined, isMobileChatRequest, res,
+  });
+});
+
+/** Shared turn execution after the coordinator has granted the session lease. */
+async function runAdmittedMainChatTurn({
+  body, resolvedSessionId, admissionLease, turnTiming, turnOrigin, clientRequestId,
+  requestFingerprint, excludedSkillIds, forcedSkillIds, benchmarkToolFilter, benchmarkPromptMemoryMode,
+  requestOrigin, isMobileChatRequest, res,
+}: {
+  body: express.Request['body'];
+  resolvedSessionId: string;
+  admissionLease: SessionTurnLease;
+  turnTiming: ReturnType<typeof createTurnTimingRecorder>;
+  turnOrigin: TurnOrigin;
+  clientRequestId: ReturnType<typeof normalizeClientRequestId>;
+  requestFingerprint: ReturnType<typeof fingerprintMainChatRequest>;
+  excludedSkillIds: ReturnType<typeof normalizeExcludedSkillIdsInput>;
+  forcedSkillIds: ReturnType<typeof normalizeForcedSkillIdsInput>;
+  benchmarkToolFilter?: string[];
+  benchmarkPromptMemoryMode?: 'compact';
+  requestOrigin?: string;
+  isMobileChatRequest: boolean;
+  res?: express.Response;
+}): Promise<'finished' | 'aborted' | 'failed' | 'not_started'> {
+  const { message, pinnedMessages, attachments, attachmentPreviews, reasoning, callerContext } = body;
+  const traceId = turnTiming.turnId;
   const chatStream = beginMainChatStream(resolvedSessionId, undefined, admissionLease.leaseId);
   turnTiming.mark('main_stream_started', { streamId: chatStream.streamId });
   if (clientRequestId) {
@@ -2417,8 +2468,12 @@ router.post('/api/chat', async (req, res) => {
     });
   }
 
-  const httpSendSSE = createSSESender(res);
+  const httpSendSSE = res ? createSSESender(res) : () => {};
+  let plannedRunFailed = false;
+  let modelUnavailable = false;
   let sendSSE = (event: string, data: any) => {
+    if (event === 'error' || event === 'blocked') plannedRunFailed = true;
+    if (event === 'error' && data?.code === 'chat_model_route_unavailable') modelUnavailable = true;
     const attachTrace = event === 'latency_mark'
       || event === 'runtime_registered'
       || event === 'ui_preflight'
@@ -2462,7 +2517,7 @@ router.post('/api/chat', async (req, res) => {
       }
     }
     try {
-      if (!res.destroyed && !res.writableEnded) res.write(': ping\n\n');
+      if (res && !res.destroyed && !res.writableEnded) res.write(': ping\n\n');
     } catch {}
     sendSSE('heartbeat', payload);
   }, 5000);
@@ -2475,7 +2530,10 @@ router.post('/api/chat', async (req, res) => {
   const abortSignal: { aborted: boolean; signal: AbortSignal; reason?: string; abort?: (reason?: string) => void } = { aborted: false, signal: abortController.signal };
   abortSignal.abort = (reason?: string) => {
     const normalizedReason = String(reason || 'operator_abort').slice(0, 160);
-    if (normalizedReason === 'operator_abort') stopMainChatGoalByUser(resolvedSessionId);
+    if (normalizedReason === 'operator_abort') {
+      pauseMobileMainChatQueue(resolvedSessionId, 'stopped');
+      stopMainChatGoalByUser(resolvedSessionId);
+    }
     abortSignal.aborted = true;
     abortSignal.reason = normalizedReason;
     if (!abortSignal.signal.aborted) abortController.abort(normalizedReason);
@@ -2484,7 +2542,6 @@ router.post('/api/chat', async (req, res) => {
     abortSignal.abort?.(reason);
   };
   let requestCompleted = false;
-  let plannedRunFailed = false;
   let mainChatAbortSettled = false;
   const settleMainChatAbort = (reason: string) => {
     if (mainChatAbortSettled) return;
@@ -2502,7 +2559,7 @@ router.post('/api/chat', async (req, res) => {
       httpSendSSE('error', frame ? { ...payload, seq: frame.seq, streamId: chatStream.streamId } : payload);
     } catch {}
     finishMainChatStream(resolvedSessionId, chatStream.streamId);
-    if (!requestCompleted && !res.destroyed && !res.writableEnded) {
+    if (res && !requestCompleted && !res.destroyed && !res.writableEnded) {
       try { res.end(); } catch {}
     }
   };
@@ -2702,7 +2759,7 @@ router.post('/api/chat', async (req, res) => {
     });
     recordWorkingContextPacket(resolvedSessionId, packet, { flush: true });
   };
-  res.on('close', () => {
+  res?.on('close', () => {
     if (!requestCompleted && !abortSignal.aborted) {
       if (isMobileChatRequest) {
         console.log(`[v2] Mobile client disconnected â€” keeping task alive for session ${resolvedSessionId}`);
@@ -2730,13 +2787,11 @@ router.post('/api/chat', async (req, res) => {
 			    );
 		    if (!abortSignal.aborted) {
 		      markProviderStatus(true);
-          const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'http').split(',')[0].trim() || 'http';
-          const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
           notifyChatCompletion({
             sessionId: resolvedSessionId,
             source: turnOrigin.channel === 'mobile' ? 'mobile' : 'desktop',
             finalText: result.text,
-            requestOrigin: host ? `${proto}://${host}` : undefined,
+            requestOrigin,
             clientRequestId,
           });
         const finalSendStartedAt = Date.now();
@@ -2818,6 +2873,7 @@ router.post('/api/chat', async (req, res) => {
       sendSSE('error', { message: err.message || 'Unknown error' });
     }
   } finally {
+    if (plannedRunFailed) pauseMobileMainChatQueue(resolvedSessionId, 'turn_failed');
     finishPlannedChatRun(runtimeId, abortSignal.aborted
       ? (/watchdog|restart|shutdown/i.test(String(abortSignal.reason || '')) ? 'interrupted' : 'cancelled')
       : plannedRunFailed ? 'failed' : 'completed');
@@ -2856,9 +2912,10 @@ router.post('/api/chat', async (req, res) => {
       const resumeTimer = setTimeout(() => startMainChatGoalRunner(resolvedSessionId, 'post_user_turn'), 450);
       resumeTimer.unref?.();
     }
-    if (!res.destroyed && !res.writableEnded) res.end();
+    if (res && !res.destroyed && !res.writableEnded) res.end();
   }
-});
+  return abortSignal.aborted ? 'aborted' : modelUnavailable ? 'not_started' : plannedRunFailed ? 'failed' : 'finished';
+}
 
 /** Provider errors that cannot be recovered by continuing this same turn. */
 function isTerminalProviderCapacityFailure(error: unknown): boolean {

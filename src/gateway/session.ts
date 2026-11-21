@@ -3699,7 +3699,31 @@ export function markSessionReadForMobile(id: string, readAt: number = Date.now()
 }
 
 
+type SessionDeletedListener = (sessionId: string) => void;
+const sessionDeletedListeners = new Set<SessionDeletedListener>();
+
+/**
+ * Observe successful chat deletion. Owners of chat-scoped durable state (for
+ * example background worker conversations retained for follow-ups) use this
+ * to remove that state together with the parent chat.
+ */
+export function onSessionDeleted(listener: SessionDeletedListener): () => void {
+  sessionDeletedListeners.add(listener);
+  return () => { sessionDeletedListeners.delete(listener); };
+}
+
 export function deleteSession(id: string): boolean {
+  const deleted = deleteSessionStorage(id);
+  if (deleted) {
+    const sessionId = String(id);
+    for (const listener of Array.from(sessionDeletedListeners)) {
+      try { listener(sessionId); } catch (error) { console.warn('[session] deletion listener failed:', error); }
+    }
+  }
+  return deleted;
+}
+
+function deleteSessionStorage(id: string): boolean {
   const sessionId = assertSafeStorageId(id, 'session id');
   deleteCachedSession(sessionId);
   clearToolObservationSnapshotCache(sessionId);
