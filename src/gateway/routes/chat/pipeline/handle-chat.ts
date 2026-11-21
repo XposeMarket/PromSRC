@@ -1,3 +1,4 @@
+import { pendingReviewerRounds } from './reviewer-rounds';
 import { findResumableChatPlan } from '../../../tasks/planned-chat-runs';
 
 
@@ -417,6 +418,9 @@ export async function handleChatUntraced(
     handleTaskControlAction,
     makeBroadcastForTask,
     sendSSE,
+    // Canonical stable turn id (root turn for restart-recovered turns), never the
+    // per-attempt runtime id, so retries and deliveries survive a restart.
+    backgroundParentTurnId: editLogTurnId,
     toolCallId: String(toolCallId || '').trim() || undefined,
     supportsDirectMediaObservation: currentModelCapabilities.hasVision,
     executionPolicy: handleChatGoalExecutionPolicy,
@@ -1120,11 +1124,9 @@ export async function handleChatUntraced(
   const MAX_PLAN_FINALIZATION_GUARD = 4;
   let writeNoteFinalizationGuard = 0;
   const MAX_WRITE_NOTE_FINALIZATION_GUARD = 1;
-  let backgroundFinalizationGuard = 0;
-  const MAX_BACKGROUND_FINALIZATION_GUARD = 1;
   let visualFinalizationGuard = 0;
   const MAX_VISUAL_FINALIZATION_GUARD = 2;
-  const backgroundResultInjectedIds = new Set<string>(getHistory(sessionId, 100_000)
+  const backgroundResultInjectedIds = new Set<string>(history
     .filter((entry) => entry.messageKind === 'background_agent_result')
     .map((entry) => String(entry.deliveryBatchId || '').replace(/^background_agent_result:/, ''))
     .filter(Boolean));
@@ -3533,12 +3535,11 @@ Do not produce prose. Use the canonical thread tool now.` });
           continue;
         }
         const content = buildChatSteerContextBlock(steer);
-        const committed = persistBackgroundResultMessage(sessionId, steer.backgroundAgentId, content);
+        persistBackgroundResultMessage(sessionId, steer.backgroundAgentId, content);
         acknowledgeBackgroundResult(sessionId, steer.backgroundAgentId);
         backgroundResultInjectedIds.add(steer.backgroundAgentId);
-        // A pre-ACK crash may have committed the message already. In that case
-        // the new turn loaded it from history, so don't append a second copy.
-        if (!committed.inserted) continue;
+        // Join can persist the result after the prompt was assembled. A durable
+        // receipt is not evidence that this model request already includes it.
         messages.push({ role: 'user', content });
       } else {
         await appendSteerEventToMessages(steer);
@@ -4759,26 +4760,9 @@ Do not produce prose. Use the canonical thread tool now.` });
         messages.pop();
       }
 
-      const pendingSpawnedBgRuns: Array<{ id: string; timeoutMs?: number }> = allToolResults
-        .filter((r) => r.name === 'background_spawn' && !r.error)
-        .map((r) => {
-          try {
-            const parsed = JSON.parse(r.result);
-            const id = String(parsed?.id || '').trim();
-            if (!id || backgroundResultInjectedIds.has(id)) return null;
-            const timeoutMs = Number(parsed?.timeoutMs);
-            return {
-              id,
-              timeoutMs: Number.isFinite(timeoutMs) && timeoutMs > 0 ? Math.floor(timeoutMs) : undefined,
-            };
-          } catch {
-            return null;
-          }
-        })
-        .filter(Boolean) as Array<{ id: string; timeoutMs?: number }>;
+      const pendingSpawnedBgRuns = pendingReviewerRounds(allToolResults, backgroundResultInjectedIds);
 
-      if (pendingSpawnedBgRuns.length > 0 && backgroundFinalizationGuard < MAX_BACKGROUND_FINALIZATION_GUARD) {
-        backgroundFinalizationGuard++;
+      if (pendingSpawnedBgRuns.length > 0) {
         const pendingBgIds = pendingSpawnedBgRuns.map((run) => run.id);
         console.log(
           `[v2] FINALIZATION BLOCKED: waiting for ${pendingSpawnedBgRuns.length} background agent(s) before synthesized final response`,
@@ -4798,7 +4782,6 @@ Do not produce prose. Use the canonical thread tool now.` });
         const resultBlocks = joinedResults
           .map((r, i) => {
             const bgId = pendingBgIds[i];
-            backgroundResultInjectedIds.add(bgId);
             if (!r) return `[Background Agent ${bgId} â€” missing]\nNo background agent record was found.`;
             const state = r.state === 'completed' ? 'completed' : r.state === 'timed_out' ? 'timed out' : 'failed';
             const body = r.state === 'completed' ? (r.result || '(no output)') : (r.error || r.state);
@@ -4875,23 +4858,7 @@ Do not produce prose. Use the canonical thread tool now.` });
       // â”€â”€ Background agent finalization gate â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 	      // Collect all background_spawn IDs from this turn, join them, and merge
 	      // their results without starting another foreground model request.
-      const spawnedBgRuns: Array<{ id: string; timeoutMs?: number }> = allToolResults
-        .filter((r) => r.name === 'background_spawn' && !r.error)
-        .map((r) => {
-          try {
-            const parsed = JSON.parse(r.result);
-            const id = String(parsed?.id || '').trim();
-            if (!id || backgroundResultInjectedIds.has(id)) return null;
-            const timeoutMs = Number(parsed?.timeoutMs);
-            return {
-              id,
-              timeoutMs: Number.isFinite(timeoutMs) && timeoutMs > 0 ? Math.floor(timeoutMs) : undefined,
-            };
-          } catch {
-            return null;
-          }
-        })
-        .filter(Boolean) as Array<{ id: string; timeoutMs?: number }>;
+      const spawnedBgRuns = pendingReviewerRounds(allToolResults, backgroundResultInjectedIds);
       const spawnedBgIds = spawnedBgRuns.map((run) => run.id);
 
       if (spawnedBgRuns.length > 0) {
