@@ -130,15 +130,15 @@ body.pm-mobile-active .pm-mobile-queued-prompts {
   right: var(--pm-composer-stack-inset);
   width: auto;
   max-width: none;
-  bottom: calc(var(--pm-composer-stack-base-bottom) + var(--pm-goal-live-height, 0px));
+  bottom: var(--pm-composer-stack-base-bottom);
   border-radius: 18px;
 }
 
-/* Goal is the first optional layer immediately above the composer. */
+/* Goal clears the queue when present. */
 body.pm-mobile-active .pm-mobile-goal-strip {
   left: var(--pm-composer-stack-inset);
   right: var(--pm-composer-stack-inset);
-  bottom: var(--pm-composer-stack-base-bottom);
+  bottom: calc(var(--pm-composer-stack-base-bottom) + var(--pm-queued-live-height, 0px));
 }
 
 /* Tool progress follows queue/goal while remaining content-sized. */
@@ -170,7 +170,7 @@ body.pm-mobile-active .pm-page.pm-runtime-goal-agent-pills-paired #pm-mobile-run
   position: fixed;
   left: var(--pm-composer-stack-inset);
   right: var(--pm-composer-stack-inset);
-  bottom: var(--pm-composer-stack-base-bottom);
+  bottom: calc(var(--pm-composer-stack-base-bottom) + var(--pm-queued-live-height, 0px));
   z-index: 6;
   display: flex;
   flex-direction: row;
@@ -339,7 +339,7 @@ body.pm-mobile-active .pm-chat-connection-status .pm-chat-connection-text {
 /* When recovery has priority the other docks are hidden. Do not retain their
    stale measured heights — pin the recovery pill straight to the composer. */
 body.pm-mobile-active .pm-page.pm-chat-status-priority-active .pm-chat-connection-status {
-  bottom: var(--pm-composer-stack-base-bottom);
+  bottom: calc(var(--pm-composer-stack-base-bottom) + var(--pm-queued-live-height, 0px));
 }
 
 /* Catch dedicated recovery/reconnect toast variants if a transport path emits
@@ -558,10 +558,10 @@ body.pm-mobile-active .pm-scroll-latest {
    variable above supersedes them, so repeat the stack contract at higher
    specificity to keep all layers attached during visualViewport changes. */
 body.pm-mobile-active.pm-keyboard-open .pm-mobile-goal-strip {
-  bottom: var(--pm-composer-stack-base-bottom);
+  bottom: calc(var(--pm-composer-stack-base-bottom) + var(--pm-queued-live-height, 0px));
 }
 body.pm-mobile-active.pm-keyboard-open .pm-mobile-queued-prompts {
-  bottom: calc(var(--pm-composer-stack-base-bottom) + var(--pm-goal-live-height, 0px));
+  bottom: var(--pm-composer-stack-base-bottom);
 }
 
 /* Turn-summary diffs are a compact receipt, not the full workspace viewer. */
@@ -631,7 +631,7 @@ body.pm-mobile-active.pm-keyboard-open .pm-chat-connection-status {
   bottom: calc(var(--pm-composer-stack-base-bottom) + var(--pm-goal-live-height, 0px) + var(--pm-queued-live-height, 0px) + var(--pm-tool-progress-live-height, 0px) + var(--pm-background-dock-live-height, 0px));
 }
 body.pm-mobile-active.pm-keyboard-open .pm-page.pm-chat-status-priority-active .pm-chat-connection-status {
-  bottom: var(--pm-composer-stack-base-bottom);
+  bottom: calc(var(--pm-composer-stack-base-bottom) + var(--pm-queued-live-height, 0px));
 }
 body.pm-mobile-active.pm-keyboard-open .pm-scroll-latest {
   bottom: calc(var(--pm-composer-stack-base-bottom) + var(--pm-scroll-latest-stack-height, 0px));
@@ -988,12 +988,12 @@ body.pm-mobile-active .pm-mobile-queued-prompts {
   right: var(--pm-composer-stack-inset);
   width: auto;
   max-width: none;
-  bottom: calc(var(--pm-composer-stack-base-bottom) + var(--pm-goal-live-height, 0px));
+  bottom: var(--pm-composer-stack-base-bottom);
   border-radius: 18px;
 }
 
 body.pm-mobile-active.pm-keyboard-open .pm-mobile-queued-prompts {
-  bottom: calc(var(--pm-composer-stack-base-bottom) + var(--pm-goal-live-height, 0px));
+  bottom: var(--pm-composer-stack-base-bottom);
 }
 
 /* Slash-command and skill popovers use the open-composer glass. The base fill

@@ -3459,8 +3459,8 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
       sendBtn.disabled = messageComposerEdit.submitting || !input.value.trim();
       sendBtn.classList.remove('is-abort', 'is-voice', 'is-stop-locked');
       sendBtn.style.opacity = '';
-      sendBtn.title = 'Save and resend';
-      sendBtn.setAttribute('aria-label', 'Save and resend');
+      sendBtn.title = messageComposerEdit.saveQueueEdit ? 'Save queued message' : 'Save and resend';
+      sendBtn.setAttribute('aria-label', sendBtn.title);
       sendBtn.innerHTML = ICONS.send;
       updateComposerExpandedState();
       return;
@@ -3553,6 +3553,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
     target: () => requestedSession === MOBILE_CHAT_SESSION_ID || voiceRoomTranscript ? null : {
       sessionId: requestedSession, gatewayId: currentChatGateway()?.gatewayId,
     },
+    openEditor: (row, save) => startMobileComposerEditor(-1, row.message, save),
     pinFetch: pinMobileGatewayFetch, report: pmToast, escape: escapeHtml,
     runtimeId: () => _readMobileActiveRun(requestedSession)?.runtimeId,
     upload: (files, fetch) => _uploadMobileChatAttachments(files, { fetch }),
@@ -6263,18 +6264,23 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
     const thread = _activeMobileThread();
     const msg = thread[index];
     if (!msg || msg.role !== 'user') return;
+    startMobileComposerEditor(index, _mobileMessageCopyText(msg));
+  }
+
+  function startMobileComposerEditor(index, text, saveQueueEdit = null) {
     if (messageComposerEdit?.submitting) return;
     const previousDraft = messageComposerEdit?.previousDraft ?? input.value;
     finishMobileComposerEdit();
-    messageComposerEdit = { index, previousDraft, submitting: false };
+    messageComposerEdit = { index, previousDraft, saveQueueEdit, submitting: false };
     __pmChat.editingMessageIndex = index;
     const status = document.createElement('div');
     status.className = 'pm-composer-edit-status';
     status.innerHTML = '<span>Editing message</span><button type="button" aria-label="Cancel message edit">Cancel</button>';
+    if (saveQueueEdit) status.querySelector('span').textContent = 'Editing queued message';
     status.querySelector('button').addEventListener('click', () => cancelMobileEditUserMessage(index));
     form.prepend(status);
     form.classList.add('is-message-editing');
-    input.value = _mobileMessageCopyText(msg);
+    input.value = text;
     setChatComposerMode(true, { animate: true, preserveScroll: true, reason: 'edit' });
     resizeComposerInput();
     _pmUpdateComposerRichPreview(page, input);
@@ -6298,7 +6304,9 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
     input.readOnly = true;
     updateComposerSubmitState();
     try {
-      await rerunMobileEditedUserMessage(index, nextText);
+      if (edit.saveQueueEdit) {
+        if (!await edit.saveQueueEdit(nextText)) throw new Error('The queue changed or the update failed. Your edit is still here.');
+      } else await rerunMobileEditedUserMessage(index, nextText);
       if (messageComposerEdit === edit) finishMobileComposerEdit();
       renderThreadNow();
     } catch (error) {

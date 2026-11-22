@@ -250,3 +250,6 @@ Mobile composer Stop targets only the mounted and selected session. An explicit 
 
 ### Tasks header indicators
 Task categories show no numeric totals. A nonempty In Progress category shows a green dot in parentheses; Needs You and Paused show red. All other categories and empty categories have plain labels. Counts used inside cards or for paging are unchanged.
+
+### Mobile chat layout and queued edits
+The drawer long-press menu uses the drawer folder icon for project actions and scrolls on short screens. New Chat running text follows the actual provider stack. The queue sits immediately above the composer; `mobile-runtime-chrome.js` measures the combined queue wrapper, not the legacy client queue alone. Tap a pending message to edit its text in the composer. Save updates the same gateway queue item and preserves attachment references and skills; Cancel restores the prior draft. Opening the editor does not pause gateway dispatch. Steer/Delete remain in the overflow menu.

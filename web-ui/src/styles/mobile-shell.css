@@ -937,7 +937,8 @@ body.pm-model-badge-pressing * {
   top: auto !important;
   bottom: calc(var(--pm-tabbar-h, 68px) + env(safe-area-inset-bottom, 0px) + 16px) !important;
   width: min(296px, calc(100vw - 48px)) !important;
-  max-height: min(58dvh, 320px);
+  box-sizing: border-box;
+  max-height: calc(100dvh - 24px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
   padding: 13px 8px 10px;
   border-radius: 14px;
   transform: translate(-50%, 16px) scale(.98);
@@ -968,7 +969,7 @@ body.pm-model-badge-pressing * {
 .pm-msheet-session-context .pm-msheet-head { margin: 0 4px 7px; }
 .pm-msheet-session-context .pm-msheet-title { font-size: 15px; font-weight: 650; color: var(--pm-text-soft, var(--pm-text)); }
 .pm-msheet-session-context .pm-msheet-close { display: none; }
-.pm-msheet-session-context .pm-msheet-body { overflow: visible; padding: 0; }
+.pm-msheet-session-context .pm-msheet-body { overflow-y: auto; overscroll-behavior: contain; padding: 0; }
 .pm-msheet-session-context .pm-msheet-rows { gap: 0; }
 .pm-msheet-session-context .pm-sess-action-row {
   min-height: 43px;

@@ -79,6 +79,9 @@
 #chat-welcome.chat-welcome-glance .pm-glance-mark { width: 40px; height: 40px; }
 .chat-welcome-pane.chat-welcome-glance .pm-glance-greet { font-size: 22px; }
 
+/* Mobile: hug the actual provider stack instead of reserving three logos. */
+.pm-mobile-empty-chat .pm-glance-row[data-glance-open="tasks"] { gap: 8px; }
+.pm-mobile-empty-chat .pm-glance-pile { width: auto; }
 /* Mobile: the empty-chat container already centers its content vertically. */
 .pm-mobile-empty-chat .pm-glance { width: 100%; max-width: 400px; box-sizing: border-box; padding: 0 2px; }
 .pm-glance-card { box-sizing: border-box; width: 100%; }
