@@ -87,7 +87,7 @@ export async function runInteractiveTurn(
 	  attachments?: Array<{ base64: string; mimeType: string; name: string }>,
     attachmentPreviews?: any[],
     modelOverride?: string,
-    flags?: { syntheticGoalContinuation?: boolean; syntheticSubagentCompletion?: boolean; syntheticThreadSupervisionReview?: boolean; supervisionLoop?: boolean; silentSupervisionLoop?: boolean; supervisionOwnerSessionId?: string; supervisionId?: string; syntheticInternalWatch?: boolean; syntheticRestartRecovery?: boolean; internalWatchContextInstalled?: boolean; internalWatchContext?: { watchId: string; actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed'; targetTaskId?: string; delivery: 'follow_up' | 'live_steer' }; directSubagentChat?: boolean; excludedSkillIds?: string[]; forcedSkillIds?: string[]; toolFilter?: string[]; timingRecorder?: TurnTimingRecorder; preAcquiredTurnLease?: SessionTurnLease; runtimeId?: string; turnContextId?: string; promptMemoryMode?: 'full' | 'compact'; brainRunBudget?: BrainRunBudgetOptions },
+    flags?: { syntheticGoalContinuation?: boolean; syntheticSubagentCompletion?: boolean; syntheticThreadSupervisionReview?: boolean; supervisionLoop?: boolean; silentSupervisionLoop?: boolean; supervisionOwnerSessionId?: string; supervisionId?: string; syntheticInternalWatch?: boolean; syntheticRestartRecovery?: boolean; predecessorRuntimeId?: string; internalWatchContextInstalled?: boolean; internalWatchContext?: { watchId: string; actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed'; targetTaskId?: string; delivery: 'follow_up' | 'live_steer' }; directSubagentChat?: boolean; excludedSkillIds?: string[]; forcedSkillIds?: string[]; toolFilter?: string[]; timingRecorder?: TurnTimingRecorder; preAcquiredTurnLease?: SessionTurnLease; runtimeId?: string; turnContextId?: string; promptMemoryMode?: 'full' | 'compact'; brainRunBudget?: BrainRunBudgetOptions },
     turnOriginInput?: TurnOrigin,
     requestMeta?: { clientRequestId?: string },
     /** Optional token-stream sink forwarded to handleChat (see callerOnToken there). */
@@ -683,6 +683,7 @@ export async function runInteractiveTurn(
         turnRouteSnapshot,
         promptMemoryMode: flags?.promptMemoryMode,
         brainRunBudget: flags?.brainRunBudget,
+        predecessorRuntimeId: flags?.predecessorRuntimeId,
         runtimeId: flags?.runtimeId,
         // Restart-resumed turns keep the root turn id so the cross-turn edit
         // log files pre- and post-restart edits under one turn.

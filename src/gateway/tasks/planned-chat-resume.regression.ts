@@ -39,6 +39,36 @@ async function main() {
    for(let i=0;i<100 && plans.listPlannedChatRuns()[0]?.status!==expected;i++) await sleep();
    assert.equal(plans.listPlannedChatRuns()[0].status,expected);
  }
+ // A gateway restart replays the original request, not a typed "Continue".
+ const items = [{text:'Build',status:'done'},{text:'Deploy',status:'done'},{text:'Verify restart',status:'in_progress'}];
+ const checkpoint = { ...progress, items, activeIndex:2 };
+ plans.recordPlannedChatProgress('pre-restart',sid,checkpoint,'Deploy');
+ plans.finishPlannedChatRun('pre-restart','interrupted');
+ for(let i=0;i<100 && !plans.getPlannedChatRunDetail('pre-restart');i++) await sleep();
+ const restored = plans.findResumableChatPlan(sid,'Deploy it please','pre-restart');
+ assert.deepEqual(restored?.runtimeProgress.items.map(({text,status}:any)=>({text,status})),items,'restart must restore the exact checklist without a resume phrase');
+ assert.equal(restored.runtimeProgress.activeIndex,2);
+ assert.equal(plans.findResumableChatPlan('another_chat','Continue','pre-restart'),undefined);
+ assert.equal(plans.findResumableChatPlan(sid,'Continue','missing-runtime'),undefined,'must not fall back to a different plan');
+ // Real chat loop with a scripted local model; no live gateway, network or real tasks.
+ const {SkillsManager} = require('../skills-runtime/skills-manager');
+ require('../routes/chat.router').initChatRouter({skillsManager:new SkillsManager(root),telegramChannel:null,cronScheduler:null});
+ const client = require('../../agents/ollama-client').getOllamaClient();
+ const {handleChat} = require('../routes/chat/pipeline/handle-chat');
+ for (const finish of [true,false]) {
+   const events: Array<[string,any]> = []; let passes=0;
+   client.chatWithThinking = async (_messages:any, _role:any, opts:any) => {
+     assert(++passes < 24,'finalization retries are bounded');
+     if (finish && passes===2) return {message:{role:'assistant',content:'',tool_calls:[{id:'step3',type:'function',function:{name:'complete_plan_step',arguments:{note:'Verified restarted instance is healthy.'}}}]}};
+     const content = finish && passes>2 ? 'Verification complete.' : 'PREMATURE SUCCESS';
+     opts.onToken?.(content); return {message:{role:'assistant',content}};
+   };
+   const answer = await handleChat('Deploy it please',sid,(e:string,p:any)=>events.push([e,p]),undefined,undefined,undefined,undefined,'interactive',undefined,undefined,undefined,undefined,undefined,{predecessorRuntimeId:'pre-restart'});
+   assert(events.some(([e,p])=>e==='progress_state' && p.activeIndex===2 && p.items[2]?.status==='in_progress'));
+   assert(!events.some(([e,p])=>e==='token' && String(p.text).includes('PREMATURE SUCCESS')));
+   assert.match(answer.text,finish?/Verification complete/:/paused.*Verify restart/i);
+   assert.equal(events.some(([e,p])=>e==='progress_state' && p.items[2]?.status==='done'),finish);
+ }
  const {buildNeedsYouItems}=require('../needs-you');
  const pending=buildNeedsYouItems({proposals:[{id:'approval',status:'pending',requiresSrcEdit:true,sourceSessionId:sid}]});
  assert.equal(pending[0].sessionId,sid,'sourceSessionId normalized before resume guard');

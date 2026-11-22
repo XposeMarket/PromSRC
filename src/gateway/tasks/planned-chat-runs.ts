@@ -316,7 +316,7 @@ function store() {
 export function recordPlannedChatProgress(runtimeId: string, sessionId: string, payload: any, title: string, resumedFromRuntimeId?: string, originPrompt?: string) {
   try {
     // Serialized async write; broadcast only after it lands.
-    const prior = payload?.reason === 'plan_resumed' ? findResumableChatPlan(sessionId, 'Continue') : undefined;
+    const prior = !resumedFromRuntimeId && payload?.reason === 'plan_resumed' ? findResumableChatPlan(sessionId, 'Continue') : undefined;
     void store().progress(runtimeId, sessionId, payload, title, resumedFromRuntimeId || prior?.runtimeId, originPrompt || prior?.originPrompt).then(() => {
       if (payload?.source === 'declared') broadcastWS({ type: 'planned_chat_updated', runtimeId, sessionId });
     }).catch(error => console.warn('[planned-chat] Could not save progress:', error));
@@ -353,7 +353,11 @@ export function getPlannedChatRunDetail(id: string, pending: PendingRequest[] = 
 
 
 /** Explicit continuation only; unrelated messages never adopt a previous plan. */
-export function findResumableChatPlan(sessionId: string, message: string) {
+export function findResumableChatPlan(sessionId: string, message: string, predecessorRuntimeId?: string) {
+  if (predecessorRuntimeId !== undefined) {
+    const prior = store().get(predecessorRuntimeId);
+    return prior?.sessionId === sessionId && prior.status !== 'cancelled' ? prior : undefined;
+  }
   if (!/^(?:continue|resume|pick up|keep going)(?:\s+(?:the |this |that )?(?:paused |previous )?(?:plan|task))?[.!]?$/i.test(message.trim())) return undefined;
   const newest = listPlannedChatRuns().find(row => row.sessionId === sessionId);
   if (newest?.status === 'paused') return store().get(newest.runtimeId);

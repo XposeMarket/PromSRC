@@ -50,7 +50,7 @@ export function describeRestartProvenance(runtime: any): string {
     return `Interruption provenance: TURN WATCHDOG. The foreground execution watchdog interrupted this turn (${reason}); this is not evidence of a gateway process restart or downtime. Neither you nor the user requested this interruption. Re-check the pending tool or question before continuing; do not repeat completed work.`;
   }
   if (/^(gateway_restart|prom_apply_dev_changes)$/i.test(toolName)) {
-    return `Restart provenance: PLANNED. You (Prometheus, in this chat) started this restart yourself by calling ${toolName}; it was not a crash and the user did not cancel anything.${downtime} Treat the restart as a completed step of your own plan.`;
+    return `Restart provenance: PLANNED. You (Prometheus, in this chat) started this restart yourself by calling ${toolName}; it was not a crash and the user did not cancel anything.${downtime} The restart operation is over; it does not complete a checklist step. Verify the result, then explicitly mark the current step complete.`;
   }
   if (/watchdog/i.test(reason)) {
     return `Restart provenance: UNPLANNED. The gateway watchdog interrupted this turn (${reason.slice(0, 120)}) because it stopped reporting progress. Neither you nor the user asked for it.${downtime} Re-check whatever was in flight at the last tool boundary before relying on it.`;
@@ -346,7 +346,7 @@ export function retriggerInterruptedMainChat(runtime: InterruptedMainChatRuntime
     undefined,
     undefined,
     undefined,
-    { syntheticRestartRecovery: true, preAcquiredTurnLease: admissionLease, runtimeId, turnContextId: rootTurnContextId },
+    { syntheticRestartRecovery: true, predecessorRuntimeId: runtime.id, preAcquiredTurnLease: admissionLease, runtimeId, turnContextId: rootTurnContextId },
     origin,
     { clientRequestId: runtime.clientRequestId },
   ).catch((err: any) => {
