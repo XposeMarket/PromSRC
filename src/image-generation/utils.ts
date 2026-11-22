@@ -4,6 +4,7 @@ import path from 'path';
 import sharp from 'sharp';
 import { getConfig } from '../config/config.js';
 import { getActiveWorkspace } from '../tools/workspace-context.js';
+import { resolveMediaReadPath } from '../tools/media-read-path.js';
 import { fetchPublicUrl } from '../tools/outbound-url-guard.js';
 import type {
   GeneratedImageAsset,
@@ -251,7 +252,7 @@ export async function resolveReferenceImages(referenceImages: string[]): Promise
       continue;
     }
 
-    const filePath = ensurePathInWorkspace(workspaceRoot, reference);
+    const filePath = resolveMediaReadPath(workspaceRoot, reference);
     const stat = await fsp.stat(filePath).catch(() => null);
     if (!stat?.isFile()) {
       throw new Error(`Reference image "${reference}" was not found.`);
