@@ -9,7 +9,7 @@ async function uploadNativeFiles(wc, payload) {
   if (!paths.length) throw new Error('file_path or file_paths is required.');
   for (const p of paths) if (!fs.statSync(p).isFile()) throw new Error('Upload path must be a regular file.');
   const selector = typeof payload.selector === 'string' && payload.selector.trim()
-    ? payload.selector : Number.isInteger(payload.ref) && payload.ref > 0 ? `[data-sc-ref="${payload.ref}"]` : '';
+    ? payload.selector : Number.isInteger(payload.ref) && payload.ref > 0 ? `[data-prometheus-native-ref="${payload.ref}"]` : '';
   if (!selector) throw new Error('Upload requires a file input selector or snapshot ref.');
   const dbg = wc.debugger;
   const attachedHere = !dbg.isAttached();

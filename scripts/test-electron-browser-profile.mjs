@@ -32,6 +32,13 @@ try {
   assert.equal(detected.length, 1);
   assert.equal(detected[0].name, 'Test Chrome');
   assert.equal(detected[0].directory, 'Default');
+  assert.equal(detected[0].sourceLabel, 'Google Chrome');
+  for (const [leaf,label] of [['chromium','Chromium'],['google-chrome','Google Chrome'],['google-chrome-unstable','Google Chrome']]) {
+    const candidate = path.join(root,'.config',leaf);
+    fs.mkdirSync(path.join(candidate,'Default'), { recursive:true });
+    fs.writeFileSync(path.join(candidate,'Default','History'),'fixture');
+    assert.equal(detectChromeProfiles({userDataCandidates:[candidate]})[0]?.sourceLabel,label);
+  }
 
   const imported = copyChromeProfile(appData, detected[0].id, { userDataCandidates: [chromeRoot] });
   assert.match(imported.id, /^imported-/);
