@@ -253,3 +253,5 @@ Task categories show no numeric totals. A nonempty In Progress category shows a 
 
 ### Mobile chat layout and queued edits
 The drawer long-press menu uses the drawer folder icon for project actions and scrolls on short screens. New Chat running text follows the actual provider stack. The queue sits immediately above the composer; `mobile-runtime-chrome.js` measures the combined queue wrapper, not the legacy client queue alone. Tap a pending message to edit its text in the composer. Save updates the same gateway queue item and preserves attachment references and skills; Cancel restores the prior draft. Opening the editor does not pause gateway dispatch. Steer/Delete remain in the overflow menu.
+
+Subagents and Teams show a preview only for the most recently run entry, not the first configured one. The fixed, borderless single-line search filters tiles above the tab bar or on the keyboard edge. Active runs have a glowing outline. Both chat sidebars prioritize pending questions and approvals over Working/Unread; a pause alone does not imply Needs you.

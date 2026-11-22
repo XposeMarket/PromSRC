@@ -681,7 +681,9 @@ router.get('/api/teams', (req, res) => {
   // List payload stays small; see summarizeTeamForList.
   try {
     const full = String(req.query.full || '') === '1';
-    const teams = listManagedTeams().map((t: any) => (full ? t : summarizeTeamForList(t)));
+    const running = new Map<string, number>();
+    for (const r of listLiveRuntimes()) if (r.teamId && r.status === 'running' && !r.abortRequestedAt) running.set(r.teamId, Math.max(r.startedAt, running.get(r.teamId) || 0));
+    const teams = listManagedTeams().map((t: any) => (full ? t : summarizeTeamForList(t, running.get(t.id))));
     const teamMemberIds = getTeamMemberAgentIds();
     res.json({ success: true, teams, teamMemberIds: Array.from(teamMemberIds) });
   } catch (err: any) {

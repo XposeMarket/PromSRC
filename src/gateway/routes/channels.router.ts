@@ -16,7 +16,7 @@ import {
 import { addMessage, getActiveHistoryForPersistence, getSession, replaceHistory, restoreSessionContextState, setActivatedToolCategories, setWorkspace } from '../session';
 import { handleTaskRecoveryMessage } from '../tasks/task-router';
 import { getEvidenceBusSnapshot, listTaskSummaries, loadTask, type TaskRecord, type TaskSummary } from '../tasks/task-store';
-import { finishLiveRuntime, registerLiveRuntime, updateLiveRuntimeCheckpoint } from '../live-runtime-registry';
+import { listLiveRuntimes, finishLiveRuntime, registerLiveRuntime, updateLiveRuntimeCheckpoint } from '../live-runtime-registry';
 import * as fs from 'fs';
 import * as path from 'path';
 import { getTeamMemberAgentIds } from '../teams/managed-teams';
@@ -1416,6 +1416,8 @@ router.get('/api/agents', (_req, res) => {
     }
   }
 
+  const liveStarts = new Map<string, number>();
+  for (const r of listLiveRuntimes()) if (r.agentId && r.status === 'running' && !r.abortRequestedAt) liveStarts.set(r.agentId, Math.max(r.startedAt, liveStarts.get(r.agentId) || 0));
   const agents = getAgents().map((agent) => {
     const workspace = resolveAgentWorkspace(agent as any);
     const lastRun = getAgentLastRun(agent.id);
@@ -1431,6 +1433,7 @@ router.get('/api/agents', (_req, res) => {
 	      workspaceExists: fs.existsSync(workspace),
       isSynthetic: agent.id === 'main' && !explicitAgents.some((a: any) => _sanitizeAgentId(a.id) === 'main'),
       lastRun: lastRun || null,
+      liveStartedAt: liveStarts.get(agent.id) || 0,
       lastHeartbeatAt: findLastCronRunAt(agent.id),
       isTeamMember: teamMemberIds.has(agent.id),
       isTeamManager: isManager,

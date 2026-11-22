@@ -26,3 +26,8 @@ assert.ok(JSON.stringify(s).length < 1000, 'summary is small');
 assert.equal(team.teamChat.length, 40, 'input not mutated');
 assert.equal(summarizeTeamForList(null), null);
 console.log('team-list-summary regression: PASS');
+assert.equal(s.lastRunAt, 9000);
+assert.equal(s.running, false);
+assert.equal(summarizeTeamForList({ teamChat: [{ createdAt: 15000 }] }).lastRunAt, 0, 'chat alone is not a run');
+assert.equal(summarizeTeamForList(team, 12000).lastRunAt, 12000);
+assert.equal(summarizeTeamForList(team, 12000).running, true);

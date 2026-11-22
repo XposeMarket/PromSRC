@@ -1,4 +1,5 @@
 // Subagents route owner. Loaded only when its route or a shared dependent feature is requested.
+import { latestRosterRun, wireRosterSearch } from './mobile-roster.js';
 import { renderAgentPetPickerHtml, wireAgentPetPicker } from '../components/agent-pets.js';
 import {
   ICONS,
@@ -106,7 +107,7 @@ const SUBAGENT_STATUS_PILL = {
 function _subagentTileHtml(a) {
   const pill = SUBAGENT_STATUS_PILL[a.status] || SUBAGENT_STATUS_PILL.idle;
   return `
-    <button class="pm-team-tile pm-subagent-tile" data-subagent="${escapeHtml(a.id)}" type="button">
+    <button class="pm-team-tile pm-subagent-tile ${a.status === 'running' ? 'is-roster-working' : ''}" data-subagent="${escapeHtml(a.id)}" type="button">
       <span class="pm-subagent-robot">${_drawAgentSVG(a.id, { scale: 0.5 })}</span>
       <span class="pm-team-tile-meta">
         <strong>${escapeHtml(a.name)}</strong>
@@ -145,6 +146,7 @@ export async function renderSubagentsPage(page, { navigate } = {}) {
   const body = page.querySelector('#pm-subagents-body');
   const countEl = page.querySelector('#pm-subagents-count');
 
+  const filterRoster = wireRosterSearch(page, body, 'subagents', () => paint({ force: true }));
   async function paint({ force = false } = {}) {
     let agents = [];
     try {
@@ -159,9 +161,9 @@ export async function renderSubagentsPage(page, { navigate } = {}) {
       body.innerHTML = `<div class="pm-empty"><div class="pm-empty-icon">${ICONS.robot}</div><h2>No subagents yet</h2><p>Create agents from the desktop Settings → Agents page.</p></div>`;
       return;
     }
-    const featured = agents[0];
-    const previewHtml = `
-      <div class="pm-team-preview">
+    const featured = latestRosterRun(agents);
+    const previewHtml = !featured ? '' : `
+      <div class="pm-team-preview ${featured.status === 'running' ? 'is-roster-working' : ''}">
         <div class="pm-team-preview-head">
           <span class="pm-subagent-robot pm-subagent-robot-sm">${_drawAgentSVG(featured.id, { scale: 0.45 })}</span>
           <h3>${escapeHtml(featured.name)}</h3>
@@ -179,6 +181,7 @@ export async function renderSubagentsPage(page, { navigate } = {}) {
       <div class="pm-team-grid">${agents.map(_subagentTileHtml).join('')}</div>
       ${previewHtml}
     `;
+    filterRoster();
     body.querySelectorAll('[data-subagent]').forEach(btn => {
       btn.addEventListener('click', () => navigate?.(`#mobile/subagents/${btn.getAttribute('data-subagent')}`));
     });
