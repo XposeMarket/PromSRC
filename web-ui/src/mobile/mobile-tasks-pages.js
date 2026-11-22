@@ -1,3 +1,4 @@
+import { taskHeaderIndicator } from '../features/tasks/task-header-indicator.js';
 import { renderContentReview } from '../components/ContentReview.js';
 
 import { renderTaskTool, renderTaskEvidence, rememberTaskTools } from '../features/tasks/task-detail-render.js';
@@ -406,12 +407,12 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
   try { await window.__PROM_ENSURE_MARKDOWN_LIBS?.(); } catch { /* escaped fallback */ }
   let taskInteractions = null;
   const taskPageSize = 40;
-  const extras = `<span class="pm-spacer"></span><span class="pm-count-pill" id="pm-tasks-count"></span><button class="pm-icon-btn" id="pm-tasks-refresh" aria-label="Refresh" style="background:var(--pm-surface);border:1px solid var(--pm-border);">${ICONS.refresh}</button>`;
+  const extras = `<span class="pm-spacer"></span><button class="pm-icon-btn" id="pm-tasks-refresh" aria-label="Refresh" style="background:var(--pm-surface);border:1px solid var(--pm-border);">${ICONS.refresh}</button>`;
   page.innerHTML = `
     ${renderMobileHeader({ title: 'Tasks', online: true, extras, hideTitle: true, hideBrand: true })}
     <div class="pm-body" id="pm-tasks-body">
       <div class="pm-tabs" id="pm-tasks-filter" style="margin-top:4px;overflow-x:auto;justify-content:flex-start;">
-        ${PM_TASK_FILTERS.map((f) => `<button class="${f.key === 'running' ? 'active' : ''}" data-filter="${f.key}">${escapeHtml(f.label)} <span data-count="${f.key}"></span></button>`).join('')}
+        ${PM_TASK_FILTERS.map((f) => `<button class="${f.key === 'running' ? 'active' : ''}" data-filter="${f.key}">${escapeHtml(f.label)}<span data-indicator="${f.key}"></span></button>`).join('')}
       </div>
       <div id="pm-tasks-list">${_tasksSkeleton()}</div>
     </div>
@@ -419,7 +420,6 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
   wireHeaderActions(page, {});
 
   const listEl = page.querySelector('#pm-tasks-list');
-  const countEl = page.querySelector('#pm-tasks-count');
   const filterEl = page.querySelector('#pm-tasks-filter');
   let allTasks = [];
   let currentFilter = 'running';
@@ -456,8 +456,8 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
     }
     counts.needs_you = needsYouCount(allTasks, needsYouItems);
     for (const f of PM_TASK_FILTERS) {
-      const el = filterEl.querySelector(`[data-count="${f.key}"]`);
-      if (el) el.textContent = counts[f.key] ? `(${counts[f.key]})` : '';
+      const el = filterEl.querySelector(`[data-indicator="${f.key}"]`);
+      if (el) el.innerHTML = taskHeaderIndicator(f.key, counts[f.key]);
     }
 
     const nyEntries = currentFilter === 'needs_you' ? needsYouEntries(needsYouItems) : [];
@@ -732,8 +732,6 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
         });
       }
     }
-    const activeCount = allTasks.filter(t => !['complete','failed'].includes(_pmTaskFilter(t.status))).length;
-    countEl.textContent = `${activeCount} active`;
     paint();
   }
 

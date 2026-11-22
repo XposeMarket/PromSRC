@@ -215,3 +215,6 @@ Desktop SSE and replay use source reasoning_summary, visibility summary, exact d
 `features/tasks/task-detail-render.js` is shared by desktop TasksPage and mobile Tasks. Tool activity uses native details/summary with tool name and timestamp; arguments/results are hidden initially and use escaped pretty JSON or existing sanitized Markdown. Evidence renders actual content/value as Markdown, not raw object JSON. Open disclosures survive polling replacement. Existing compact activity retention/truncation is unchanged. No glass/navigation redesign. Not merged/live.
 
 Desktop Sources floats over chat; selecting a changed file opens its diff in the docked File Canvas. Overview, file rows, lineage, and timeline markup live in `web-ui/src/components/desktop-sources-renderers.js`; ChatPage owns session state and navigation.
+
+### Tasks header indicators
+Task categories show no numeric totals. A nonempty In Progress category shows a green dot in parentheses; Needs You and Paused show red. All other categories and empty categories have plain labels. Counts used inside cards or for paging are unchanged.
