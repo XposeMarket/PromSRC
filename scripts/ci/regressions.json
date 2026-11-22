@@ -305,6 +305,7 @@
       "name": "Verify Prom Bot persistent-agent stack",
       "run": [
         "node scripts/test-desktop-prom-bot.mjs",
+        "node scripts/test-desktop-prom-bot-history.mjs",
         "node scripts/test-desktop-prom-bot-roster.mjs",
         "node scripts/test-desktop-prom-bot-collab.mjs",
         "node scripts/test-prom-bot-team-flow.mjs",
