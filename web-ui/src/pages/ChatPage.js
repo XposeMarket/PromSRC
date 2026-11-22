@@ -1,3 +1,4 @@
+import { createDesktopSourcesRenderers } from '../components/desktop-sources-renderers.js';
 import { renderContentReview } from '../components/ContentReview.js';
 import { stripOnboardingControlBlock } from '../onboarding/onboarding-block.js';
 
@@ -19606,6 +19607,8 @@ function resetSourcePanelContextState() {
   if (sourcePanelState.processRefreshTimer) clearTimeout(sourcePanelState.processRefreshTimer);
   sourcePanelState.workRefreshTimer = null;
   sourcePanelState.processRefreshTimer = null;
+  sourceDockReturn = null;
+  sourcePanelState.timelineFilter = 'All';
   sourcePanelState.tab = 'overview';
   sourcePanelState.scope = 'thread';
   sourcePanelState.query = '';
@@ -20386,7 +20389,7 @@ function sourcePanelResourceRowMarkup(item, { mini = false } = {}) {
 function sourcePanelEditRowMarkup(item) {
   const age = sourcePanelAge(item.updatedAt);
   const counts = `${item.insertions ? `<span class="source-count-add">+${item.insertions}</span>` : ''}${item.deletions ? `${item.insertions ? '<span class="source-count-muted"> • </span>' : ''}<span class="source-count-del">-${item.deletions}</span>` : ''}`;
-  const meta = [counts, item.displayPath, age].filter(Boolean).join('<span class="source-count-muted"> • </span>');
+  const meta = [counts, escHtml(item.displayPath), age].filter(Boolean).join('<span class="source-count-muted"> • </span>');
   return `<button type="button" class="source-panel-row source-panel-row--edit" onclick="openSourcePanelItem(${encodeInlineJsString(item.key)})" title="Open ${escHtml(item.displayPath)}" data-source-item="${escHtml(item.key)}">
     ${sourcePanelIconMarkup('edit', 'Δ')}
     <span class="source-item-copy"><span class="source-item-title">${escHtml(item.title)}</span><span class="source-item-meta"><span class="source-meta-path">${meta}</span></span></span>
@@ -20442,47 +20445,16 @@ function sourcePanelCountMarkup(label, value, glyph) {
   return `<div class="source-panel-count-card"><span class="count-label"><span aria-hidden="true">${escHtml(glyph)}</span>${escHtml(label)}</span><span class="count-value">${escHtml(String(value))}</span></div>`;
 }
 
-function renderSourcePanelOverview(data) {
-  if (sourcePanelState.surface === SOURCE_PANEL_SURFACE.SUBAGENT_CHAT) {
-    return `<section class="source-panel-section" title="Only sources from this subagent's chat"><h3 class="source-panel-section-title">Recent sources</h3>${data.recent.length ? `<div class="source-panel-list">${data.recent.slice(0, 8).map((item) => sourcePanelItemMarkup(item)).join('')}</div>` : '<div class="source-panel-empty">No sources yet.</div>'}</section>`;
-  }
-  const project = sourcePanelState.project || {};
-  const context = sourcePanelState.codingContext || {};
-  const repository = sourcePanelSnapshot();
-  const projectName = String(project.name || project.projectName || project.label || 'Current project').trim();
-  const root = String(context.root || project.workspacePath || project.root || '').trim();
-  const fileCount = Number(context.counts?.files || data.workspaceFiles.length || data.inputs.length + data.outputs.length + data.edits.length);
-  const commitCount = repository && Number.isFinite(Number(repository.commitCount)) ? Number(repository.commitCount) : '—';
-  const remoteData = sourcePanelState.gitRemoteData;
-  const prCount = remoteData && remoteData.root && sourcePanelRootKey(remoteData.root) === sourcePanelRootKey(sourcePanelRemoteRoot()?.root) ? Number(remoteData.prs?.length || 0) : '—';
-  return `<section class="source-panel-section source-panel-project-context">
-    <p class="source-panel-project-name"${root ? ` title="${escHtml(root)}"` : ''}>${escHtml(projectName)}</p>
-    ${root ? `<p class="source-panel-subtitle"><span class="source-panel-project-root">${escHtml(root)}</span></p>` : ''}
-    <div class="source-panel-count-grid">
-      ${sourcePanelCountMarkup('Files', fileCount, '▤')}
-      ${sourcePanelCountMarkup('Web links', data.links.length, '◎')}
-      ${sourcePanelCountMarkup('Git commits', commitCount, '⌘')}
-      ${sourcePanelCountMarkup('Open PRs', prCount, '↗')}
-    </div>
-  </section>
-  ${renderSourcePanelEnvironment(data)}
-  ${renderSourcePanelProcesses(data)}
-  ${renderSourcePanelBrowser(data)}
-  <section class="source-panel-section"><h3 class="source-panel-section-title">Recent sources</h3>${data.recent.length ? `<div class="source-panel-list">${data.recent.slice(0, 5).map((item) => sourcePanelItemMarkup(item)).join('')}</div>` : '<div class="source-panel-empty">No sources yet.</div>'}${data.recent.length > 5 ? '<button class="source-panel-link-button" type="button" onclick="clearSourcePanelFilter()">View all project sources →</button>' : ''}</section>`;
-}
-
-function renderSourcePanelFiles(data) {
-  const sections = [
-    sourcePanelSectionMarkup('Inputs', data.inputs, 'No input files yet.', `View all inputs (${data.inputs.length})`),
-    sourcePanelSectionMarkup('Changed files', data.workspaceFiles, 'No workspace changes in this scope.', `View all changes (${data.workspaceFiles.length})`),
-    sourcePanelSectionMarkup('Recorded edits', data.edits, 'No recorded edits yet.', `View all edits (${data.edits.length})`),
-    sourcePanelSectionMarkup('Outputs', data.outputs, 'No output files yet.', `View all outputs (${data.outputs.length})`),
-  ];
-  return sections.join('<div class="source-panel-group-divider"></div>');
-}
+const { sourceDockEnvironment, sourceDockLineage, renderSourcePanelOverview, renderSourcePanelTimeline, renderSourcePanelFiles } = createDesktopSourcesRenderers({
+  sourcePanelState, SOURCE_PANEL_SURFACE, sourcePanelWorkItems, sourcePanelMatchesItem,
+  sourcePanelActiveSessionId, sourcePanelItemMarkup, sourcePanelWorkRowMarkup, sourcePanelAge,
+  sourcePanelTimestamp, renderSourcePanelEnvironment, renderSourcePanelProcesses, renderSourcePanelBrowser,
+  encodeInlineJsString
+});
 
 function sourcePanelWorkItems(sessionId = sourcePanelState.activeSessionId || window.activeChatSessionId) {
   const contextWork = Array.isArray(sourcePanelState.codingContext?.work) ? sourcePanelState.codingContext.work : [];
+  if (!sessionId) return [];
   const items = backgroundAgentWorkForSession(sessionId).map((record) => ({
     key: `work:background:${record.id}`,
     type: 'work',
@@ -20492,6 +20464,7 @@ function sourcePanelWorkItems(sessionId = sourcePanelState.activeSessionId || wi
     updatedAt: Number(record.completedAt || record.updatedAt || 0),
     workType: 'background',
     workId: record.id,
+    provider: record.providerId, model: record.model, effort: record.reasoningEffort,
     agentName: record.agentName,
     agentColor: record.agentColor,
     preview: record.result || record.error || record.task || 'Background work',
@@ -20557,12 +20530,7 @@ function sourcePanelWorkRowMarkup(item) {
   </button>`;
 }
 
-function renderSourcePanelWork(data) {
-  const items = sourcePanelWorkItems().filter((item) => sourcePanelMatchesItem(item));
-  return `<section class="source-panel-section"><h3 class="source-panel-section-title">Linked work</h3>${items.length ? `<div class="source-panel-list">${items.slice(0, 8).map(sourcePanelWorkRowMarkup).join('')}</div>` : '<div class="source-panel-empty">Tasks and agent work created in this thread will stay linked here.</div>'}</section>
-    <section class="source-panel-section"><h3 class="source-panel-section-title">Change sets</h3>${data.workspaceFiles.length ? `<div class="source-panel-list">${data.workspaceFiles.slice(0, 5).map(sourcePanelWorkspaceFileRowMarkup).join('')}</div>` : '<div class="source-panel-empty">No change set recorded yet.</div>'}</section>`;
-}
-
+window.setDockTimelineFilter = filter => { sourcePanelState.timelineFilter = filter; renderSourcePanel(); };
 function sourcePanelGitEnvRow(glyph, label, value, valueClass = '') {
   return `<div class="source-panel-env-row"><span aria-hidden="true">${escHtml(glyph)}</span><span>${escHtml(label)}</span><span class="env-value ${valueClass}">${escHtml(String(value || '—'))}</span></div>`;
 }
@@ -20647,7 +20615,7 @@ function renderSourcePanel() {
   if (!body) return;
   const subagentChatSurface = sourcePanelState.surface === SOURCE_PANEL_SURFACE.SUBAGENT_CHAT;
   if (subagentChatSurface) sourcePanelState.tab = 'overview';
-  const tab = ['overview', 'work', 'files', 'git'].includes(sourcePanelState.tab) ? sourcePanelState.tab : 'overview';
+  const tab = ['overview', 'timeline', 'files', 'git'].includes(sourcePanelState.tab) ? sourcePanelState.tab : 'overview';
   sourcePanelState.tab = tab;
   document.querySelectorAll('[data-source-tab]').forEach((button) => {
     const isOverview = button.getAttribute('data-source-tab') === 'overview';
@@ -20661,14 +20629,16 @@ function renderSourcePanel() {
   const filterButton = document.getElementById('source-panel-filter');
   if (filterButton) filterButton.setAttribute('aria-pressed', sourcePanelState.filterOpen ? 'true' : 'false');
   const data = sourcePanelData();
-  body.innerHTML = `${sourcePanelScopeMarkup()}${tab === 'overview' ? renderSourcePanelOverview(data) : tab === 'work' ? renderSourcePanelWork(data) : tab === 'files' ? renderSourcePanelFiles(data) : renderSourcePanelGit(data)}`;
+  const expanded = new Set(Array.from(body.querySelectorAll('details[open]'), d => d.dataset.run || 'environment'));
+  body.innerHTML = `${sourcePanelScopeMarkup()}${tab === 'overview' ? renderSourcePanelOverview(data) : tab === 'timeline' ? renderSourcePanelTimeline(data) : tab === 'files' ? renderSourcePanelFiles(data) : renderSourcePanelGit(data)}`;
+  for (const d of body.querySelectorAll('details')) if (expanded.has(d.dataset.run || 'environment')) d.open = true;
   const mini = document.getElementById('sources-minimized-panel');
   if (mini?.classList.contains('is-visible')) renderSourcesMinimizedPanel();
 }
 
 function setSourcePanelTab(tab = 'overview') {
   if (sourcePanelState.surface === SOURCE_PANEL_SURFACE.SUBAGENT_CHAT) tab = 'overview';
-  sourcePanelState.tab = ['overview', 'work', 'files', 'git'].includes(tab) ? tab : 'overview';
+  sourcePanelState.tab = ['overview', 'timeline', 'files', 'git'].includes(tab) ? tab : 'overview';
   renderSourcePanel();
   if (sourcePanelState.tab === 'git') {
     const sid = sourcePanelState.activeSessionId || window.activeChatSessionId;
@@ -21019,7 +20989,7 @@ function announceSourcePanelFileChanges(sessionId = window.activeChatSessionId) 
 function scheduleSourcePanelWorkRefresh() {
   if (!sourcePanelState.activeSessionId || !sourcePanelState.initialized) return;
   const rightPanel = document.getElementById('right-panel');
-  if (!rightPanel?.classList.contains('open') && sourcePanelState.tab !== 'work') return;
+  if (!rightPanel?.classList.contains('open') && !document.body.classList.contains('sources-minimized-open')) return;
   if (sourcePanelState.workRefreshTimer) clearTimeout(sourcePanelState.workRefreshTimer);
   sourcePanelState.workRefreshTimer = setTimeout(() => {
     sourcePanelState.workRefreshTimer = null;
@@ -21394,12 +21364,8 @@ function openSourcePanelItem(key) {
     else openChatResourceFile(item.resource?.id);
     return;
   }
-  if (item.type === 'edit') {
-    if (item.path && item.status !== 'deleted' && typeof canvasPresentFile === 'function') Promise.resolve(canvasPresentFile(item.path, item.title)).catch(() => {});
-    return;
-  }
-  if (item.type === 'workspace-file') {
-    openCodingWorkspace(sourcePanelDiffRoot(item), item);
+  if (item.type === 'edit' || item.type === 'workspace-file') {
+    openSourceDockChange(item);
     return;
   }
   if (item.type === 'git-repo') {
@@ -21414,6 +21380,27 @@ function openSourcePanelItem(key) {
   }
 }
 
+let sourceDockReturn = null;
+function openSourceDockChange(item) {
+  if (!item.path) return;
+  const sid = sourcePanelActiveSessionId();
+  const mini = document.body.classList.contains('sources-minimized-open');
+  sourceDockReturn = {sid, tab:mini ? 'files' : sourcePanelState.tab, key:item.key, scroll:mini ? 0 : document.getElementById('source-panel-body')?.scrollTop || 0};
+  hideSourcesMinimizedPanel();
+  const view = item.type === 'edit' || /snapshot/.test(item.baselineKind || '') ? 'turn' : item.baselineKind === 'git-index' ? 'staged' : 'working';
+  const options = {openMode:'diff', diffView:view, diffRoot:sourcePanelDiffRoot(item), diffSessionId:sid, skipTreeFocus:true};
+  if (item.status === 'deleted') {
+    const id = `deleted:${JSON.stringify([sid,options.diffRoot,item.path])}`;
+    if (!canvasTabs.some(t => t.id === id)) canvasTabs.push({id,name:item.title,originalPath:item.path,mode:'code',diffOnly:true,diffAvailable:true,...options});
+    toggleCanvas(true); canvasOpenTab(id);
+  } else canvasPresentFile(item.path, item.title, options).catch(() => showToast('Could not open this file.', 'error'));
+}
+window.returnToSources = () => {
+  const from = sourceDockReturn; sourceDockReturn = null;
+  toggleCanvas(false); setSourcePanelTab(from?.sid === sourcePanelActiveSessionId() ? from.tab : 'overview');
+  const body = document.getElementById('source-panel-body');
+  if (body && from?.sid === sourcePanelActiveSessionId()) {body.scrollTop = from.scroll; body.querySelector(`[data-source-item="${CSS.escape(from.key)}"]`)?.focus({preventScroll:true});}
+};
 function sourcePanelMiniFilterLabel(filter) {
   return ({ all: 'All sources', links: 'Web links', files: 'Files', git: 'Git' })[filter] || 'All sources';
 }
@@ -21460,20 +21447,22 @@ function renderSourcesMinimizedPanel() {
   const all = sourcePanelMiniItems('all');
   const srcSlice = sourcePanelMiniSlice(all, 3, 8, sourcePanelState.miniSourcesExpanded);
   const items = srcSlice.visible;
+  const expanded = new Set(Array.from(panel.querySelectorAll('details[open]'), d => d.dataset.run || 'environment'));
   panel.innerHTML = `<div class="sources-minimized-card">
-    <div class="sources-minimized-header"><strong>Sources</strong><span class="sources-minimized-header-actions"><button class="source-panel-icon-btn source-panel-add-btn" type="button" aria-label="Open Sources" title="Open Sources" onclick="openFullSourcePanel()">＋</button><button class="source-panel-icon-btn" type="button" aria-label="Refresh sources" title="Refresh sources" onclick="refreshSourcePanel()">↻</button><button class="source-panel-close-btn" type="button" aria-label="Close minimized sources" title="Close" onclick="hideSourcesMinimizedPanel()">×</button></span></div>
+    <div class="sources-minimized-header"><strong>Sources</strong><span class="sources-minimized-header-actions"><button class="source-panel-icon-btn source-panel-add-btn" type="button" aria-label="Open Sources" title="Open Sources" onclick="openFullSourcePanel()">↗</button><button class="source-panel-icon-btn" type="button" aria-label="Refresh sources" title="Refresh sources" onclick="refreshSourcePanel()">↻</button><button class="source-panel-close-btn" type="button" aria-label="Close minimized sources" title="Close" onclick="hideSourcesMinimizedPanel()">×</button></span></div>
     <div class="sources-minimized-body">
-      ${renderSourcePanelEnvironment(data, { mini: true })}
-      ${renderSourcePanelProcesses(data, { mini: true })}
+      ${sourceDockEnvironment(data, true)}${sourceDockLineage()}
+      ${data.processes.length ? renderSourcePanelProcesses(data, { mini: true }) : ''}
       ${renderSourcePanelBrowser(data, { mini: true })}
       <section class="source-panel-section source-panel-sources-section source-panel-section--mini">
-        <div class="source-panel-section-heading"><h3 class="source-panel-section-title">Sources</h3><button class="source-panel-section-add" type="button" aria-label="Open Sources" title="Open Sources" onclick="openFullSourcePanel()">＋</button></div>
+        <div class="source-panel-section-heading"><h3 class="source-panel-section-title">Sources</h3><button class="source-panel-section-add" type="button" aria-label="Open Sources" title="Open Sources" onclick="openFullSourcePanel()">↗</button></div>
         <div class="source-mini-list">${items.length ? items.map((item) => sourcePanelItemMarkup(item, { mini: true })).join('') : '<div class="source-panel-empty">No sources yet.</div>'}</div>
       </section>
       ${srcSlice.expandable ? `<button class="source-panel-link-button source-panel-mini-more" type="button" onclick="toggleSourcePanelMiniSources()">${sourcePanelMiniToggleLabel(srcSlice, sourcePanelState.miniSourcesExpanded)}</button>` : ''}
-      <button class="sources-minimized-footer" type="button" onclick="openFullSourcePanel()">View all sources →</button>
+      <div class="dock-jump">${(sourcePanelState.surface === SOURCE_PANEL_SURFACE.SUBAGENT_CHAT ? ['Overview'] : ['Overview','Timeline','Files','Git']).map(t => `<button type="button" onclick="openFullSourcePanel();setSourcePanelTab('${t.toLowerCase()}')">${t}</button>`).join('')}</div>
     </div>
   </div>`;
+  for (const d of panel.querySelectorAll('details')) if (expanded.has(d.dataset.run || 'environment')) d.open = true;
 }
 
 function setSourcePanelMiniFilter(filter = 'all') {
@@ -42214,6 +42203,7 @@ function canvasCloseTab(id, ev) {
 function setCanvasMode(mode) {
   const tab = canvasTabs.find(t => t.id === activeCanvasTabId);
   if (!tab) return;
+  if (tab.diffOnly && mode !== 'diff') return;
   if (mode === 'diff') {
     tab.openMode = 'diff';
     tab.diffAvailable = true;
@@ -42264,29 +42254,30 @@ async function renderCanvasDiffInto(host, tab) {
     const params = new URLSearchParams({
       file: filePath,
       view: String(tab.diffView || 'turn'),
-      sessionId: String(window.activeChatSessionId || window.agentSessionId || ''),
+      sessionId: String(tab.diffSessionId || window.activeChatSessionId || window.agentSessionId || ''),
     });
     const root = canvasDiffRoot(tab);
     if (root) params.set('root', root);
     const data = await api(`/api/coding/diff?${params.toString()}`, { timeoutMs: 12000, dedupe: false });
     if (requestVersion !== canvasDiffRequestVersion || activeCanvasTabId !== tab.id || tab.openMode !== 'diff') return;
-    const { renderUnifiedDiffMarkup } = await loadCodingDiffRenderer();
+    const { renderUnifiedDiffMarkup, mountDiffControls } = await loadCodingDiffRenderer();
     if (requestVersion !== canvasDiffRequestVersion || activeCanvasTabId !== tab.id || tab.openMode !== 'diff') return;
-    const baseline = data?.baselineKind === 'none'
-      ? 'No baseline'
-      : data?.baselineKind === 'turn-snapshot' || data?.baselineKind === 'session-snapshot'
-        ? 'Snapshot'
-        : data?.baselineKind === 'git-index'
-          ? 'Staged'
-          : 'Git working tree';
+    const baseline = data?.baselineKind === 'none' ? 'No baseline' : tab.diffView === 'turn' ? 'Session change record' : /snapshot/.test(data?.baselineKind || '') ? 'Snapshot → working copy' : data?.baselineKind === 'git-index' ? 'HEAD → index' : 'Working tree changes';
     const additions = Number(data?.insertions) || 0;
     const deletions = Number(data?.deletions) || 0;
     host.innerHTML = `
       <div class="canvas-diff-toolbar">
-        <span class="canvas-diff-title">Turn diff · ${escHtml(tab.name || filePath)}</span>
+        <span class="canvas-diff-title">Changes</span>
         <span class="canvas-diff-meta">${escHtml(baseline)} · +${additions} · -${deletions}</span>
       </div>
       ${renderUnifiedDiffMarkup(data?.diff, { emptyText: data?.baselineKind === 'none' ? 'No comparison baseline is available for this file.' : undefined })}`;
+    const selector = document.createElement('select');
+    selector.setAttribute('aria-label','Comparison baseline');
+    for (const [value,label] of [['working','Working copy'],['staged','Staged'],['turn','Session record']]) selector.add(new Option(label,value));
+    selector.value = tab.diffView || 'turn';
+    selector.onchange = () => { tab.diffView = selector.value; renderCanvasDiffInto(host,tab); };
+    host.querySelector('.canvas-diff-title').replaceWith(selector);
+    mountDiffControls(host, tab);
   } catch (error) {
     if (requestVersion !== canvasDiffRequestVersion) return;
     host.innerHTML = `<div class="canvas-diff-loading">${escHtml(error?.message || 'Unable to load diff.')}</div>`;
@@ -42294,6 +42285,8 @@ async function renderCanvasDiffInto(host, tab) {
 }
 
 function applyCanvasViewMode(mode, tab) {
+  const back = document.getElementById('sources-return');
+  if (back) back.hidden = !sourceDockReturn || sourceDockReturn.sid !== sourcePanelActiveSessionId();
   const creativeShell = document.getElementById('canvas-creative-shell');
   const browserShell = document.getElementById('canvas-browser-shell');
   const editorWrap = document.getElementById('canvas-editor-wrap');
@@ -42381,6 +42374,8 @@ function applyCanvasViewMode(mode, tab) {
   if (diffModeBtn) diffModeBtn.style.display = tab.diffAvailable || tab.openMode === 'diff' ? '' : 'none';
   if (previewModeBtn) previewModeBtn.style.display = '';
   if (tab.openMode === 'diff') {
+    if (tab.diffOnly && codeModeBtn) codeModeBtn.style.display = 'none';
+    if (tab.diffOnly && previewModeBtn) previewModeBtn.style.display = 'none';
     if (editorWrap) editorWrap.style.display = 'none';
     if (diffWrap) diffWrap.style.display = 'flex';
     if (previewShell) previewShell.style.display = 'none';
@@ -44181,15 +44176,20 @@ async function canvasPresentFile(diskPath, label, options = {}) {
   const requestedDiffRoot = String(options.diffRoot || '').trim();
   const applyRequestedOpenMode = (candidate) => {
     if (!candidate || !requestedDiff) return;
+    candidate.diffSessionId = options.diffSessionId || window.activeChatSessionId || '';
     candidate.openMode = 'diff';
     candidate.diffAvailable = true;
     candidate.diffView = String(options.diffView || candidate.diffView || 'turn');
     if (requestedDiffRoot) candidate.diffRoot = requestedDiffRoot;
   };
   const requestedOpenMode = requestedDiff
-    ? { openMode: 'diff', diffAvailable: true, diffView: String(options.diffView || 'turn'), ...(requestedDiffRoot ? { diffRoot: requestedDiffRoot } : {}) }
+    ? { openMode: 'diff', diffSessionId:options.diffSessionId || window.activeChatSessionId || '', diffAvailable: true, diffView: String(options.diffView || 'turn'), ...(requestedDiffRoot ? { diffRoot: requestedDiffRoot } : {}) }
     : {};
   let tab = canvasTabs.find((candidate) => candidate.diskPath === diskPath);
+  if (tab && requestedDiff) {
+    // Review the disk comparison; never replace an editor buffer with the disk copy.
+    applyRequestedOpenMode(tab); if (!canvasOpen && shouldAutoOpen) toggleCanvas(true); canvasOpenTab(tab.id); return;
+  }
   if (tab) {
     try {
       const response = await fetch(`/api/canvas/file?path=${encodeURIComponent(diskPath)}`);
