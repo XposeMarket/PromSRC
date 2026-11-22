@@ -68,6 +68,11 @@ function getChromeUserDataCandidates({ platform = process.platform, homeDir = os
   ]);
 }
 
+function chromeSourceLabel(userDataPath) {
+  const root = path.basename(userDataPath).toLowerCase() === 'user data' ? path.dirname(userDataPath) : userDataPath;
+  return /^(?:google-chrome(?:-unstable)?|chrome)$/i.test(path.basename(root)) ? 'Google Chrome' : 'Chromium';
+}
+
 function readJson(filePath, fallback = null) {
   try {
     return JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -119,7 +124,7 @@ function detectChromeProfiles(options = {}) {
         directory,
         sourceRoot: userDataPath,
         sourcePath: profilePath,
-        sourceLabel: path.basename(path.dirname(userDataPath)) === 'Google' ? 'Google Chrome' : 'Chromium',
+        sourceLabel: chromeSourceLabel(userDataPath),
       });
     }
 
@@ -140,7 +145,7 @@ function detectChromeProfiles(options = {}) {
         directory: entry.name,
         sourceRoot: userDataPath,
         sourcePath: profilePath,
-        sourceLabel: path.basename(path.dirname(userDataPath)) === 'Google' ? 'Google Chrome' : 'Chromium',
+        sourceLabel: chromeSourceLabel(userDataPath),
       });
     }
   }
