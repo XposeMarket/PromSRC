@@ -35,7 +35,39 @@ async function main() {
       await reject(unrelated); await reject(denied); await reject(path.relative(worker, upload));
     }, [parent]);
     await runWithWorkspace(worker, () => reject(upload));
-    console.log('PASS: granted parent upload, preview bytes, local read, unrelated/blocked/relative/ungranted denials');
+    const { executeAnalyzeVideo } = await import('./media-analysis.js');
+    const { executeVideoSocialCut } = await import('./video-social-cut.js');
+    const { resolveReferenceImages, validateMaskImage } = await import('../image-generation/utils.js');
+    const { resolveVideoInput } = await import('../video-generation/utils.js');
+    const video = path.join(uploads, 'source.mp4');
+    const missing = path.join(uploads, 'missing.mp4');
+    const outsideOutput = path.join(uploads, 'output');
+    const videoBytes = Buffer.from('local video input fixture');
+    fs.writeFileSync(video, videoBytes);
+    const cut = (source: string, output_dir?: string) => executeVideoSocialCut({ source, output_dir, captions: false });
+    await runWithWorkspace(worker, async () => {
+      assert.deepEqual((await resolveReferenceImages([upload]))[0].bytes, bytes);
+      await validateMaskImage(upload, upload);
+      assert.deepEqual((await resolveVideoInput(video)).bytes, videoBytes);
+      assert.deepEqual((await resolveVideoInput(upload)).bytes, bytes);
+      // A missing granted source reaches file lookup, without invoking a codec or provider.
+      assert.match((await executeAnalyzeVideo({ file_path: missing })).error || '', /File not found/i);
+      assert.match((await cut(missing)).error || '', /Local source not found/i);
+      for (const r of [await executeAnalyzeVideo({ file_path: video, output_dir: outsideOutput }), await cut(video, outsideOutput)]) {
+        assert.ok(r.error?.includes(outsideOutput), r.error); assert.equal(r.success, false);
+      }
+      assert.equal(fs.existsSync(outsideOutput), false);
+    }, [parent]);
+    for (const [file, grants] of [[denied, [parent]], [unrelated, [parent]], [upload, []]] as const) {
+      await runWithWorkspace(worker, async () => {
+        const refusal = /outside workspace|blocked/i;
+        await assert.rejects(resolveReferenceImages([file]), refusal);
+        await assert.rejects(resolveVideoInput(file), refusal);
+        assert.match((await executeAnalyzeVideo({ file_path: file })).error || '', refusal);
+        assert.match((await cut(file)).error || '', refusal);
+      }, [...grants]);
+    }
+    console.log('PASS: granted media inputs, reference and mask bytes, denied reads and output confinement');
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

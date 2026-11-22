@@ -153,5 +153,5 @@ For `generate_video`, follow the job-oriented media engine guide rather than cop
 - [15 Media engine & video](15-media-engine-video.md) · [18 Mobile app](18-mobile-app.md) · [21 Security/approvals](21-security-approvals-permissions.md)
 - [Source map](generated/source-map.md) · [Tests inventory](generated/tests.md)
 
-### Image analysis from a separate work directory
-`src/tools/media-analysis.ts` → `executeAnalyzeImage`: pass the absolute upload path from chat. A run in a separate work directory can inspect images under the main workspace’s `uploads/` only within its existing grants. Relative paths still resolve in the current work directory; previews stay there. This does not grant a standalone agent access to the main workspace.
+### Using chat uploads from a separate work directory
+Pass the absolute upload path shown in chat. Image and video analysis, `video_social_cut`, image generation/editing (references and masks), and xAI video generation/editing (source videos, starting images and references) share `src/tools/media-read-path.ts` for local inputs. A worker can read an upload under the main workspace’s `uploads/` only with an existing grant. Relative paths start in the working directory; blocked locations remain denied. The grant is for input only: it does not change output destinations or provider approvals.

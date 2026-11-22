@@ -51,6 +51,7 @@ import { creativeTranscribeAudio } from '../gateway/creative/generative-pipeline
 import type { CreativeAssetStorage } from '../gateway/creative/assets.js';
 import { executeDownloadMedia } from './download-tools.js';
 import { getActiveWorkspace } from './workspace-context.js';
+import { resolveMediaReadPath } from './media-read-path.js';
 
 type TranscriptSelection = {
   startSeconds: number;
@@ -363,7 +364,7 @@ async function acquireSource(
   onProgress: VideoSocialCutArgs['onProgress'],
 ): Promise<AcquiredSource> {
   if (!isRemoteSource(source)) {
-    const local = ensureWorkspacePath(root, source);
+    const local = resolveMediaReadPath(root, source);
     if (!fs.existsSync(local) || !fs.statSync(local).isFile()) throw new Error(`Local source not found: ${source}`);
     return { videoPath: local, sourceRelPath: relativePath(root, local), reused: true, downloadWarnings: [] };
   }
