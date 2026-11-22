@@ -19341,9 +19341,8 @@ function updateBackgroundSpawnDockOffset() {
     backgroundSpawnDockOffsetFrame = null;
     const chatView = document.getElementById('chat-view');
     const inputArea = document.querySelector('#chat-view > .chat-input-area');
-    const shelf = document.getElementById('desktop-composer-shelf');
     if (!chatView || !inputArea || document.hidden) return;
-    const edge = shelf?.offsetHeight ? shelf.getBoundingClientRect().top : inputArea.getBoundingClientRect().top;
+    const edge = inputArea.getBoundingClientRect().top;
     const bottom = Math.ceil(chatView.getBoundingClientRect().bottom - edge + 8);
     const value = `${bottom}px`;
     if (chatView.style.getPropertyValue('--background-spawn-dock-bottom') !== value) {

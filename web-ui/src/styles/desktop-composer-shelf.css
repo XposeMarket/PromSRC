@@ -1,20 +1,19 @@
-/* Attached desktop shelf. Its children take normal flow; empty hosts contribute
-   no height. Only the decorative border meets the foreground composer. */
+/* First row of the composer, not a second floating card. The named grid line
+   handles both desktop column counts; the + toolbar uses normal flex flow. */
 #desktop-composer-shelf {
-  position: absolute; inset: auto 12px 100%; z-index: 2;
+  position: relative; grid-column: 1 / -1; grid-row: span 1 / staging-start;
+  align-self: stretch; min-width: 0; z-index: 2;
   max-height: min(46dvh, 440px); overflow: auto; overscroll-behavior: contain;
-  scrollbar-width: thin; border-radius: 15px 15px 0 0;
-  background: color-mix(in srgb, var(--composer-bg) 92%, var(--panel));
-  box-shadow: inset 0 0 0 1px var(--composer-border);
+  scrollbar-width: thin;
   font-family: var(--t-font-ui, system-ui); color: var(--text);
 }
 #desktop-composer-shelf > :is(.queued-prompts-panel, .chat-question-popover, .chat-slash-command-popover) {
   position: relative; inset: auto; width: 100%; max-width: none; margin: 0; transform: none;
-  clip-path: none; border-radius: 0; box-shadow: none;
+  border: none; background: transparent; clip-path: none; border-radius: 0; box-shadow: none;
 }
 #desktop-composer-shelf > .queued-prompts-panel { padding: 3px 5px; }
 #desktop-plan-slot .inline-runtime-plan {
-  display: block; width: 100%; margin: 0; padding: 10px 14px;
+  display: block; width: 100%; margin: 0; padding: 3px 2px 6px;
   background: none; border: 0; box-shadow: none;
 }
 #desktop-plan-slot .inline-runtime-plan-head {
@@ -36,3 +35,21 @@
 }
 #desktop-plan-slot .in_progress .progress-step-dot { color: var(--text); }
 #desktop-plan-slot .done .progress-step-dot { border-color: transparent; }
+
+/* Match the rich overlay and real textarea; input-driven autosize still owns
+   the height for wrapped and multiline drafts. Keep voice mode independent. */
+body:not(.pm-mobile-active) #chat-view:not(.desktop-voice-mode) > .chat-input-area :is(#chat-input, #chat-composer-input-wrap, #chat-composer-rich-preview) {
+  min-height: 28px;
+}
+body:not(.pm-mobile-active) #chat-view:not(.desktop-voice-mode) > .chat-input-area :is(#chat-input, #chat-composer-rich-preview) {
+  padding-block: 3px !important;
+}
+#chat-view #desktop-composer-shelf > #queued-prompts-panel {
+  background: transparent !important;
+  box-shadow: none !important;
+  border: 0 !important;
+}
+/* Voice mode has fixed control tracks. Let the shelf add its intrinsic row. */
+body:not(.pm-mobile-active) #chat-view.desktop-voice-mode > .chat-input-area:has(#desktop-composer-shelf) {
+  height: auto;
+}

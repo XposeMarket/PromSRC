@@ -25,7 +25,7 @@ try {
           p === "/api/account/status"
             ? { authenticated: true, accountRequired: false }
             : p === "/api/onboarding/status"
-              ? { nextStep: "done" }
+              ? { nextStep: "done", modelConnected: true }
               : {},
       });
     const f = path.resolve(root, "." + (p === "/" ? "/index.html" : p));
@@ -68,7 +68,7 @@ try {
     Object.assign(st, {
       turnStartedAt: Date.now() - 24000,
       streamingAIText:
-        "I’m checking how the plan sits alongside the other composer controls.",
+        "IÃ¢â‚¬â„¢m checking how the plan sits alongside the other composer controls.",
       finalResponseStarted: true,
       runtimeProgressState: {
         source: "declared",
@@ -97,6 +97,26 @@ try {
       });
     }
   };
+  const area = page.locator("#chat-view > .chat-input-area");
+  const toolbar = (enabled) =>
+    page.evaluate(async (enabled) => {
+      const { mountMinimalAgentComposer } =
+        await import("/src/chat/external-agent-composer.js");
+      mountMinimalAgentComposer(enabled);
+    }, enabled);
+  await toolbar(true);
+  const integrated = async () => {
+    const shell = await area.boundingBox(),
+      plan = await slot.boundingBox();
+    assert.ok(
+      plan.y >= shell.y && plan.y + plan.height <= shell.y + shell.height,
+    );
+    assert.equal(
+      await slot.locator("..").evaluate((e) => getComputedStyle(e).boxShadow),
+      "none",
+    );
+  };
+  await integrated();
   await shot("after-plan");
   await page.evaluate(() => {
     const f = window.planFixture;
@@ -147,6 +167,9 @@ try {
   await check();
   await page.setViewportSize({ width: 900, height: 650 });
   await check();
+  await toolbar(false);
+  await integrated();
+  await check();
   await page.evaluate(() => {
     const f = window.planFixture;
     f.getSessionStreamState(
@@ -181,6 +204,25 @@ try {
       .locator("#desktop-composer-shelf")
       .evaluate((e) => e.offsetHeight),
     0,
+  );
+  await toolbar(true);
+  await shot("empty");
+  const input = page.locator("#chat-input");
+  const emptyHeight = (await area.boundingBox()).height;
+  assert.ok(emptyHeight < 95, `empty composer is ${emptyHeight}px`);
+  await input.fill("First line\nSecond line\nThird line\nFourth line");
+  const grownHeight = (await area.boundingBox()).height;
+  assert.ok(grownHeight > emptyHeight + 40);
+  assert.ok(await input.evaluate((e) => e.scrollHeight <= e.clientHeight + 1));
+  await above("#chat-input", ".ea-composer-plus");
+  await input.fill("");
+  assert.ok(Math.abs((await area.boundingBox()).height - emptyHeight) <= 1);
+  await page.locator(".ea-composer-plus").click();
+  await page
+    .locator(".ea-composer-add-menu .chat-attach-btn")
+    .click({ trial: true });
+  console.log(
+    `Empty ${emptyHeight}px, four lines ${grownHeight}px; + menu accessible`,
   );
   assert.deepEqual(errors, []);
   console.log(
