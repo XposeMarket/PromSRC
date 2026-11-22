@@ -73,7 +73,7 @@ const hiddenForm = { classList: cls('pm-composer-mode-hidden'), getBoundingClien
 const launcherPage = { querySelector: (s) => (s === '#pm-chat-mode-launcher' ? { hidden: false, getBoundingClientRect: () => launcherRect } : null) };
 assert.deepEqual(runtimeChromeAnchor({ form: hiddenForm, page: launcherPage }), launcherRect, 'hidden composer anchors on the launcher');
 const rectEl = (top, height) => ({ hidden: false, getBoundingClientRect: () => ({ top, bottom: top + height, height }) });
-const stackPage = { classList: cls(), querySelector: (s) => (s === '#pm-mobile-queued-prompts' ? rectEl(444, 76) : null) };
+const stackPage = { classList: cls(), querySelector: (s) => (s === '#pm-mobile-queue-stack' ? rectEl(444, 76) : null) };
 assert.equal(runtimeStackBase({ anchorRect: launcherRect, page: stackPage }), 444, 'plan/agent level starts at the queued card top');
 const s2 = new Map([['bottom', '100px']]);
 globalThis.window = { visualViewport: { height: 844, offsetTop: 0 }, innerHeight: 844 };

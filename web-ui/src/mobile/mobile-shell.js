@@ -2866,6 +2866,7 @@ function _openSessionContextSheet(sessionId, sessionTitle, callbacks, anchor = n
   const renameIconSvg = ICONS.compose;
   const unreadIconSvg = ICONS.unread;
   const settleIconSvg = ICONS.clock;
+  const projectIcon = '<span class="pm-sess-action-icon pm-i" aria-hidden="true">' + ICONS.folder + '</span>';
 
   sheet.innerHTML =
     '<div class="pm-msheet-handle"></div>' +
@@ -2891,8 +2892,8 @@ function _openSessionContextSheet(sessionId, sessionTitle, callbacks, anchor = n
           '<span class="pm-sess-action-icon pm-i">' + settleIconSvg + '</span>' +
           '<span class="pm-msheet-row-label">' + (settled ? 'Unsettle chat' : 'Settle chat') + '</span>' +
         '</button>' +
-        (isProject ? '<button type="button" class="pm-msheet-row pm-sess-action-row" data-sess-action="project-settings"><span class="pm-msheet-row-label">Instructions & folder\u2026</span></button>' : '<button type="button" class="pm-msheet-row pm-sess-action-row" data-sess-action="move-project"><span class="pm-msheet-row-label">Move to project\u2026</span></button>') +
-        (owningProject ? '<button type="button" class="pm-msheet-row pm-sess-action-row" data-sess-action="remove-project"><span class="pm-msheet-row-label">Remove from project</span></button>' : '') +
+        (isProject ? '<button type="button" class="pm-msheet-row pm-sess-action-row" data-sess-action="project-settings">' + projectIcon + '<span class="pm-msheet-row-label">Instructions & folder\u2026</span></button>' : '<button type="button" class="pm-msheet-row pm-sess-action-row" data-sess-action="move-project">' + projectIcon + '<span class="pm-msheet-row-label">Move to project\u2026</span></button>') +
+        (owningProject ? '<button type="button" class="pm-msheet-row pm-sess-action-row" data-sess-action="remove-project">' + projectIcon + '<span class="pm-msheet-row-label">Remove from project</span></button>' : '') +
         '<button type="button" class="pm-msheet-row pm-sess-action-row pm-sess-action-delete" data-sess-action="delete">' +
           '<span class="pm-sess-action-icon pm-i">' + trashIconSvg + '</span>' +
           '<span class="pm-msheet-row-label pm-sess-delete-label">Delete ' + itemLabel.toLowerCase() + '</span>' +
