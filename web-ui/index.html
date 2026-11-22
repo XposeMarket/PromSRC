@@ -359,6 +359,7 @@
 <link rel="stylesheet" href="src/styles/external-agents.css?v=external-agents-v1">
 <link rel="stylesheet" href="src/styles/new-chat-glance.css?v=glance-v1">
 <link rel="stylesheet" href="src/styles/surfaces-polish.css?v=ui-polish-2026-10">
+<link rel="stylesheet" href="src/styles/desktop-sources-dock.css">
 <link rel="stylesheet" href="src/styles/refined-markdown.css?v=refined-markdown-v2">
 
 <!-- ── Prometheus Mobile PWA ─────────────────────────────────────── -->
@@ -3117,8 +3118,9 @@
         </div>
         <div id="canvas-publish-controls" style="display:none;align-items:center;gap:6px;padding-right:6px;margin-right:2px;border-right:1px solid rgba(255,255,255,0.09)"></div>
         <div style="display:inline-flex;align-items:center;border:1px solid rgba(255,255,255,0.12);border-radius:8px;overflow:hidden;background:rgba(255,255,255,0.06)">
-          <button id="canvas-code-btn" onclick="setCanvasMode('code')" class="canvas-mode-btn active" style="border:0;background:transparent;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer;font-family:'Manrope',sans-serif;color:#9a9890">Code</button>
-          <button id="canvas-diff-btn" onclick="setCanvasMode('diff')" class="canvas-mode-btn" style="display:none;border:0;background:transparent;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer;font-family:'Manrope',sans-serif;color:#9a9890">Diff</button>
+          <button type="button" id="sources-return" hidden onclick="returnToSources()">← Sources</button>
+          <button id="canvas-code-btn" onclick="setCanvasMode('code')" class="canvas-mode-btn active" style="border:0;background:transparent;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer;font-family:'Manrope',sans-serif;color:#9a9890">File</button>
+          <button id="canvas-diff-btn" onclick="setCanvasMode('diff')" class="canvas-mode-btn" style="display:none;border:0;background:transparent;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer;font-family:'Manrope',sans-serif;color:#9a9890">Changes</button>
           <button id="canvas-preview-btn" onclick="setCanvasMode('preview')" class="canvas-mode-btn" style="border:0;background:transparent;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer;font-family:'Manrope',sans-serif;color:#9a9890">Preview</button>
         </div>
         <div id="canvas-save-controls" style="display:flex;align-items:stretch;position:relative;z-index:1000">
@@ -3455,6 +3457,7 @@
   <div id="right-panel-topbar" class="source-panel-topbar" style="display:flex">
     <div class="source-panel-heading">Sources</div>
     <div class="source-panel-actions">
+      <button id="source-panel-filter" class="source-panel-icon-btn" type="button" aria-label="Filter sources" title="Filter sources" onclick="toggleSourcePanelFilter()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="10" cy="10" r="6"/><path d="m15 15 5 5"/></svg></button>
       <button id="source-panel-refresh" class="source-panel-icon-btn" type="button" aria-label="Refresh sources" title="Refresh sources" onclick="refreshSourcePanel()">
         <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 0 0-14.9-4L3 10m0-4v4h4M4 13a8 8 0 0 0 14.9 4L21 14m0 4v-4h-4"/></svg>
       </button>
@@ -3471,7 +3474,7 @@
   <section id="source-panel-shell" class="source-panel-shell" aria-label="Sources">
     <nav id="source-panel-tabs" class="source-panel-tabs" aria-label="Source categories">
       <button class="source-panel-tab is-active" type="button" data-source-tab="overview" aria-selected="true" onclick="setSourcePanelTab('overview')">Overview</button>
-      <button class="source-panel-tab" type="button" data-source-tab="work" aria-selected="false" onclick="setSourcePanelTab('work')">Work</button>
+      <button class="source-panel-tab" type="button" data-source-tab="timeline" aria-selected="false" onclick="setSourcePanelTab('timeline')">Timeline</button>
       <button class="source-panel-tab" type="button" data-source-tab="files" aria-selected="false" onclick="setSourcePanelTab('files')">Files</button>
       <button class="source-panel-tab" type="button" data-source-tab="git" aria-selected="false" onclick="setSourcePanelTab('git')">Git</button>
     </nav>
