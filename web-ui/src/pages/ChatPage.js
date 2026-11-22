@@ -9317,8 +9317,9 @@ function updateAgentMode() {
 
 // ---- Chat ----
 function renderReactSteps(steps) {
-  if (!steps || steps.length === 0) return '';
-  const toolSteps = steps.filter(s => s.action);
+  // Subagent history can carry a numeric step count, not a list of actions.
+  if (!Array.isArray(steps)) return '';
+  const toolSteps = steps.filter(s => s?.action);
   if (toolSteps.length === 0) return '';
 
   const getSearchDiagnostics = (s) => s?.toolData?.search_diagnostics || s?.diagnostics || null;
