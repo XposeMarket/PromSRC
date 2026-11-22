@@ -1,0 +1,38 @@
+/* Attached desktop shelf. Its children take normal flow; empty hosts contribute
+   no height. Only the decorative border meets the foreground composer. */
+#desktop-composer-shelf {
+  position: absolute; inset: auto 12px 100%; z-index: 2;
+  max-height: min(46dvh, 440px); overflow: auto; overscroll-behavior: contain;
+  scrollbar-width: thin; border-radius: 15px 15px 0 0;
+  background: color-mix(in srgb, var(--composer-bg) 92%, var(--panel));
+  box-shadow: inset 0 0 0 1px var(--composer-border);
+  font-family: var(--t-font-ui, system-ui); color: var(--text);
+}
+#desktop-composer-shelf > :is(.queued-prompts-panel, .chat-question-popover, .chat-slash-command-popover) {
+  position: relative; inset: auto; width: 100%; max-width: none; margin: 0; transform: none;
+  clip-path: none; border-radius: 0; box-shadow: none;
+}
+#desktop-composer-shelf > .queued-prompts-panel { padding: 3px 5px; }
+#desktop-plan-slot .inline-runtime-plan {
+  display: block; width: 100%; margin: 0; padding: 10px 14px;
+  background: none; border: 0; box-shadow: none;
+}
+#desktop-plan-slot .inline-runtime-plan-head {
+  color: var(--text); font: 600 13px/1.4 var(--t-font-ui, system-ui);
+  text-transform: none; letter-spacing: normal; margin: 0 0 6px;
+}
+#desktop-plan-slot .inline-runtime-plan-head span:last-child {
+  font: inherit; font-size: 11px; font-variant-numeric: tabular-nums; color: var(--muted);
+}
+#desktop-plan-slot .inline-runtime-plan-list { gap: 3px; }
+#desktop-plan-slot .progress-item { min-height: 20px; align-items: baseline; }
+#desktop-plan-slot .progress-step-text { color: var(--text); font: 400 13px/1.45 var(--t-font-ui, system-ui); overflow-wrap: anywhere; }
+#desktop-plan-slot .progress-item.in_progress .progress-step-text { font-weight: 600; }
+#desktop-plan-slot :is(.done,.pending) .progress-step-text { color: var(--muted); }
+#desktop-plan-slot .progress-step-dot {
+  align-self: center; width: 16px; height: 16px; flex-basis: 16px;
+  font: 600 10px/1 var(--t-font-ui, system-ui); color: var(--muted);
+  background: transparent; border: 1px solid var(--composer-border);
+}
+#desktop-plan-slot .in_progress .progress-step-dot { color: var(--text); }
+#desktop-plan-slot .done .progress-step-dot { border-color: transparent; }

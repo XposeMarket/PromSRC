@@ -16,6 +16,7 @@ const SECONDARY_COMPOSER_SELECTOR = [
 const MAIN_COMPOSER_SELECTOR = '#chat-view > .chat-input-area:not([data-canonical-secondary-composer])';
 const MAIN_ONLY_SELECTOR = [
   '#main-goal-strip',
+  '#desktop-composer-shelf',
   '#chat-design-selection-pills',
   '#chat-skill-trigger-pill',
   '#chat-question-popover',
@@ -60,7 +61,12 @@ function syncDesktopComposerLayout(composer) {
 
   const messagesRect = messages.getBoundingClientRect();
   const composerRect = composer.getBoundingClientRect();
-  const overlap = Math.max(0, messagesRect.bottom - composerRect.top);
+  const shelf = composer.querySelector('#desktop-composer-shelf');
+  const dock = shelf && document.getElementById('background-spawn-dock');
+  const edge = Math.min(composerRect.top,
+    shelf?.offsetHeight ? shelf.getBoundingClientRect().top : Infinity,
+    dock?.offsetHeight ? dock.getBoundingClientRect().top : Infinity);
+  const overlap = Math.max(0, messagesRect.bottom - edge);
   // Keep the original breathing room for short composers, then grow the
   // clearance when attachments, queue rows, or a taller textarea expand it.
   const clearance = Math.max(180, Math.ceil(overlap + 24));
@@ -84,6 +90,15 @@ function observeDesktopComposer(composer) {
   if (!(composer instanceof HTMLElement) || observedDesktopComposers.has(composer)) return;
   observedDesktopComposers.add(composer);
   desktopComposerResizeObserver?.observe(composer);
+  const shelf = composer.querySelector('#desktop-composer-shelf');
+  if (shelf && desktopComposerResizeObserver) {
+    const dock = document.getElementById('background-spawn-dock');
+    const observer = new ResizeObserver(() => {
+      window.updateBackgroundSpawnDockOffset?.();
+      queueDesktopComposerLayoutSync();
+    });
+    [composer, shelf, dock].filter(Boolean).forEach(node => observer.observe(node));
+  }
   syncDesktopComposerLayout(composer);
 }
 

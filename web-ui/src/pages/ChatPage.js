@@ -14760,11 +14760,12 @@ function renderSessionThinkingBodyHtml(sessionId) {
   // keep the three-dot placeholder until reasoning, tools or an answer arrive.
   const liveTraceHtml = renderLiveTurnTrace(st.liveTraceEntries || [], { streaming: true });
   const liveApprovalsHtml = renderStreamingApprovals(st.pendingApprovals || []);
-  const inlinePlanHtml = renderInlineRuntimePlanHtml(st.runtimeProgressState);
+  const inlinePlanHtml = sessionId === window.activeChatSessionId ? '' : renderInlineRuntimePlanHtml(st.runtimeProgressState);
+  const hasPlan = !!getRuntimePlanItems(st.runtimeProgressState).length;
   const answerStarted = !!(st.finalResponseStarted || String(st.streamingAIText || '').trim());
   const showAnswerText = answerStarted && !!String(st.streamingAIText || '');
   const showLiveTrace = !!liveTraceHtml;
-  const thinkingOnly = !showAnswerText && !showLiveTrace && !liveApprovalsHtml && !inlinePlanHtml;
+  const thinkingOnly = !showAnswerText && !showLiveTrace && !liveApprovalsHtml && !hasPlan;
   const sess = getChatSessionById(sessionId);
   const startIndex = Number.isFinite(Number(st.currentTurnStartIndex)) ? Number(st.currentTurnStartIndex) : -1;
   const rawCurrentTurnEntries = startIndex >= 0 && Array.isArray(sess?.processLog) ? sess.processLog.slice(startIndex) : [];
@@ -14790,7 +14791,7 @@ function renderSessionThinkingBodyHtml(sessionId) {
             ${pendingImageHtml}
             ${showAnswerText
               ? `<div id="streaming-text-content">${renderAssistantContent(st.streamingAIText)}</div>`
-              : (showLiveTrace || pendingImageHtml || liveApprovalsHtml || inlinePlanHtml ? '' : (window.PROM_THEME_ENGINE?.thinkingDotsHtml(String(st.turnStartedAt || '')) || '<div class="thinking" role="status" aria-label="Thinking"><div class="thinking-dot"></div><div class="thinking-dot"></div><div class="thinking-dot"></div></div>'))
+              : (showLiveTrace || pendingImageHtml || liveApprovalsHtml || hasPlan ? '' : (window.PROM_THEME_ENGINE?.thinkingDotsHtml(String(st.turnStartedAt || '')) || '<div class="thinking" role="status" aria-label="Thinking"><div class="thinking-dot"></div><div class="thinking-dot"></div><div class="thinking-dot"></div></div>'))
             }
             ${liveApprovalsHtml}
             ${inlinePlanHtml}`;
@@ -15229,6 +15230,7 @@ function restoreApprovalDetailsState(map) {
 }
 
 function renderChatMessages() {
+  syncDesktopPlanSlot();
   if (typeof window.updateTokenCount === 'function') window.updateTokenCount();
   const container = document.getElementById('chat-messages');
   const chatView = document.getElementById('chat-view');
@@ -17049,6 +17051,18 @@ function normalizeDeclaredRuntimeProgressState(progressState) {
   };
 }
 
+function syncDesktopPlanSlot() {
+  const slot = document.getElementById('desktop-plan-slot');
+  if (!slot) return;
+  const id = window.activeChatSessionId;
+  const html = isSessionThinking(id) && !window.backgroundAgentDetailId
+    ? renderInlineRuntimePlanHtml(getSessionStreamState(id)?.runtimeProgressState) : '';
+  if (slot._planHtml === html) return;
+  slot._planHtml = html;
+  slot.innerHTML = html;
+  slot.hidden = !html;
+}
+
 function renderInlineRuntimePlanHtml(progressState) {
   const items = getRuntimePlanItems(progressState);
   if (!items.length) return '';
@@ -17233,6 +17247,7 @@ function getTaskProgressItems(task) {
 }
 
 function renderProgressPanel() {
+  syncDesktopPlanSlot();
   const list = document.getElementById('progress-list');
   const empty = document.getElementById('progress-empty');
   if (!list || !empty) return;
@@ -19326,18 +19341,10 @@ function updateBackgroundSpawnDockOffset() {
     backgroundSpawnDockOffsetFrame = null;
     const chatView = document.getElementById('chat-view');
     const inputArea = document.querySelector('#chat-view > .chat-input-area');
-    const queuedPanel = document.getElementById('queued-prompts-panel');
+    const shelf = document.getElementById('desktop-composer-shelf');
     if (!chatView || !inputArea || document.hidden) return;
-    const chatRect = chatView.getBoundingClientRect?.();
-    const inputRect = inputArea.getBoundingClientRect?.();
-    const height = Math.ceil(inputRect?.height || 0);
-    const composerBottomGutter = Math.max(0, Math.ceil((chatRect?.bottom || 0) - (inputRect?.bottom || 0)));
-    const queuedVisible = queuedPanel && getComputedStyle(queuedPanel).display !== 'none';
-    const queuedHeight = queuedVisible ? Math.ceil(queuedPanel.getBoundingClientRect?.().height || 0) : 0;
-    // The queue nests behind the composer by 34px. Only its exposed height
-    // needs docking room; the overlap is intentionally occupied by composer.
-    const queueLift = queuedHeight ? Math.max(0, queuedHeight - 34) + 10 : 16;
-    const bottom = Math.max(128, composerBottomGutter + height + queueLift);
+    const edge = shelf?.offsetHeight ? shelf.getBoundingClientRect().top : inputArea.getBoundingClientRect().top;
+    const bottom = Math.ceil(chatView.getBoundingClientRect().bottom - edge + 8);
     const value = `${bottom}px`;
     if (chatView.style.getPropertyValue('--background-spawn-dock-bottom') !== value) {
       chatView.style.setProperty('--background-spawn-dock-bottom', value);
@@ -45548,6 +45555,7 @@ window.pauseAgentExecution = pauseAgentExecution;
 window.renderAgentExecutionPanel = renderAgentExecutionPanel;
 window.toggleAgentPanel = toggleAgentPanel;
 window.toggleBackgroundSpawnLane = toggleBackgroundSpawnLane;
+window.updateBackgroundSpawnDockOffset = updateBackgroundSpawnDockOffset;
 window.renderBackgroundSpawnDock = renderBackgroundSpawnDock;
 window.openProcessLogFile = openProcessLogFile;
 window.clearChat = clearChat;
@@ -47218,6 +47226,7 @@ function handleMainChatStreamEvent(msg = {}, options = {}) {
       })) : [],
     });
     sess.progressState = streamState.runtimeProgressState;
+    if (sid === window.activeChatSessionId) syncDesktopPlanSlot();
     renderIfViewing();
   } else if (evt.type === 'done') {
     _settlePendingChatSteerPresentation(sid, streamState);

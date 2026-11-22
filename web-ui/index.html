@@ -347,6 +347,7 @@
 <link rel="stylesheet" href="src/styles/fonts.css">
 <link rel="stylesheet" href="src/styles/base.css?v=electron-titlebar-overlay-v6">
 <link rel="stylesheet" href="src/styles/components.css?v=desktop-sidebar-priority-v2">
+<link rel="stylesheet" href="src/styles/desktop-composer-shelf.css">
 <link rel="stylesheet" href="src/styles/agent-pets.css?v=agent-pets-v1">
 <link rel="stylesheet" href="src/styles/workspace-file-tree.css?v=workspace-file-tree-v1">
 <link rel="stylesheet" href="src/styles/onboarding.css">
@@ -2477,19 +2478,23 @@
     </div>
     <div class="chat-input-area">
       <div id="main-goal-strip" class="main-goal-strip" style="display:none"></div>
+      <!-- One measured shelf: only its empty lower lip meets the composer. -->
+      <div id="desktop-composer-shelf">
+        <div id="desktop-plan-slot" hidden></div>
       <!-- Queued prompts panel -->
 	      <div class="queued-prompts-panel" id="queued-prompts-panel">
 	        <div class="queued-prompts-list" id="queued-prompts-list"></div>
 	      </div>
+      <div id="chat-question-popover" class="chat-question-popover" style="display:none"></div>
+      <div id="chat-slash-command-popover" class="chat-slash-command-popover" style="display:none"></div>
+      <div id="chat-skill-command-popover" class="chat-slash-command-popover chat-skill-command-popover" style="display:none"></div>
+      </div>
       <!-- Design selections and staged files share the attachment row above the message input. -->
       <div id="chat-composer-attachment-stack" class="chat-composer-attachment-stack" style="display:none">
       <div id="chat-design-selection-pills" class="chat-file-staging" style="display:none"></div>
       <div id="chat-file-staging" class="chat-file-staging" style="display:none"></div>
       </div>
       <div id="chat-skill-trigger-pill" class="chat-skill-trigger-pill" style="display:none" aria-live="polite"></div>
-      <div id="chat-question-popover" class="chat-question-popover" style="display:none"></div>
-      <div id="chat-slash-command-popover" class="chat-slash-command-popover" style="display:none"></div>
-      <div id="chat-skill-command-popover" class="chat-slash-command-popover chat-skill-command-popover" style="display:none"></div>
       <!-- Hidden file input -->
       <input type="file" id="chat-file-input" multiple style="display:none" onchange="onChatFileInputChange(event)">
       <!-- Input row -->
