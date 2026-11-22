@@ -152,3 +152,6 @@ For `generate_video`, follow the job-oriented media engine guide rather than cop
 - [05 Tools & categories](05-tools-and-categories.md) · [07 Source editing & PR workflow](07-source-editing-and-pr-workflow.md)
 - [15 Media engine & video](15-media-engine-video.md) · [18 Mobile app](18-mobile-app.md) · [21 Security/approvals](21-security-approvals-permissions.md)
 - [Source map](generated/source-map.md) · [Tests inventory](generated/tests.md)
+
+### Image analysis from a separate work directory
+`src/tools/media-analysis.ts` → `executeAnalyzeImage`: pass the absolute upload path from chat. A run in a separate work directory can inspect images under the main workspace’s `uploads/` only within its existing grants. Relative paths still resolve in the current work directory; previews stay there. This does not grant a standalone agent access to the main workspace.

@@ -7,7 +7,8 @@ import { execFile, spawn, type ChildProcess } from 'child_process';
 import { promisify } from 'util';
 import type { ToolResult } from '../types.js';
 
-import { getActiveWorkspace } from './workspace-context.js';
+import { getActiveWorkspace, getActiveAllowedWorkspaces, isPathInWorkspace, isPathInAnyWorkspace } from './workspace-context.js';
+import { canonicalizePathForBoundarySync } from './workspace-boundary.js';
 import { getProvider, getPrimaryModel } from '../providers/factory.js';
 import { contentToString } from '../providers/content-utils.js';
 import { buildVisionImagePart, primarySupportsVision } from '../gateway/vision-chat.js';
@@ -470,13 +471,30 @@ export async function executeAnalyzeVisionFrames(args: {
   }
 }
 
+// A work_dir changes cwd, not the grants on a delegated chat upload. Keep
+// the exception read-only and image-specific; video output paths use a separate guard.
+function resolveImageInput(workspaceRoot: string, requested: string): string {
+  const cfg = getConfig().getConfig();
+  const candidate = canonicalizePathForBoundarySync(path.resolve(workspaceRoot, requested));
+  if (isPathInAnyWorkspace(cfg.tools.permissions.files.blocked_paths || [], candidate)) {
+    throw new Error(`Path "${requested}" is in a blocked directory.`);
+  }
+  if (isPathInWorkspace(workspaceRoot, candidate)) return candidate;
+  const parent = cfg.workspace.path;
+  const uploads = path.join(canonicalizePathForBoundarySync(parent), 'uploads');
+  const withinUploads = path.relative(uploads, candidate);
+  if (path.isAbsolute(requested) && withinUploads && !withinUploads.startsWith('..') && !path.isAbsolute(withinUploads)
+    && isPathInAnyWorkspace(getActiveAllowedWorkspaces(parent), candidate)) return candidate;
+  throw new Error(`Path "${requested}" is outside workspace.`);
+}
+
 export async function executeAnalyzeImage(args: AnalyzeImageArgs): Promise<ToolResult> {
   const workspaceRoot = getWorkspaceRoot();
   const requestedPath = String(args?.file_path || '').trim();
   if (!requestedPath) return { success: false, error: 'file_path is required' };
 
   try {
-    const absPath = ensureWorkspacePath(workspaceRoot, requestedPath);
+    const absPath = resolveImageInput(workspaceRoot, requestedPath);
     if (!fs.existsSync(absPath)) return { success: false, error: `File not found: ${requestedPath}` };
     if (!fs.statSync(absPath).isFile()) return { success: false, error: `"${requestedPath}" is not a file` };
 
