@@ -247,3 +247,6 @@ Verified against base 9cfb1f007 plus this fix: `web-ui/src/features/secure-acces
 PR857 paired-entry extension: the shared entry card uses `status.entry.canEnter` for new credentials, independent of `owner.canApprove`; replacement cards still require owner approval. This permits typing on an active paired phone without enabling sign-in approval. Unpaired/unknown status fails closed. Existing dock/scroll geometry remains. Actual iPhone verification awaits deployment; Chromium mobile/desktop component fixtures are not full-app proof.
 
 Mobile composer Stop targets only the mounted and selected session. An explicit runtime ID is never substituted, and an unscoped or ambiguous Stop request is rejected.
+
+### Tasks header indicators
+Task categories show no numeric totals. A nonempty In Progress category shows a green dot in parentheses; Needs You and Paused show red. All other categories and empty categories have plain labels. Counts used inside cards or for paging are unchanged.

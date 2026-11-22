@@ -1,3 +1,4 @@
+import { taskHeaderIndicator } from '../features/tasks/task-header-indicator.js';
 import { renderContentReview } from '../components/ContentReview.js';
 
 import { renderTaskTool, renderTaskEvidence, rememberTaskTools } from '../features/tasks/task-detail-render.js';
@@ -267,14 +268,14 @@ function toggleBgtEditMode() {
 
 // --- Columns config ---------------------------------------------------------
 const BGT_COLUMNS = [
-  { key: 'running',          label: '● In Progress', color: '#0d4faf', bg: '#eaf2ff' },
-  { key: 'queued',           label: '◷ Queued',      color: '#7c4d00', bg: '#fff8e1' },
-  { key: 'paused',           label: '‖ Paused',      color: '#555',    bg: '#f5f5f5' },
-  { key: 'stalled',          label: '▲ Stalled',     color: '#9c1a1a', bg: '#fff0f0' },
-  { key: 'needs_assistance', label: '⚠️ Needs You',  color: '#6d2d9e', bg: '#f5eeff' },
-  { key: 'complete',         label: '✓ Complete',    color: '#1a6e35', bg: '#efffea' },
-  { key: 'failed',           label: '✕ Failed',      color: '#9c1a1a', bg: '#fff0f0' },
-  { key: 'cancelled',        label: '⊘ Stopped',     color: '#555',    bg: '#f5f5f5' },
+  { key: 'running',          label: 'In Progress' },
+  { key: 'queued',           label: 'Queued' },
+  { key: 'paused',           label: 'Paused' },
+  { key: 'stalled',          label: 'Stalled' },
+  { key: 'needs_assistance', label: 'Needs You' },
+  { key: 'complete',         label: 'Complete' },
+  { key: 'failed',           label: 'Failed' },
+  { key: 'cancelled',        label: 'Stopped' },
 ];
 
 const STATUS_ICON = {
@@ -708,17 +709,6 @@ function renderBgTasks() {
   const plannedSessions = new Set(visibleTasks.filter(t => t.sourceKind === 'planned_chat' && t.status === 'running').map(t => t.sessionId));
   const visibleManagedThreads = bgtManagedThreads.filter(record => !plannedSessions.has(record.targetSessionId) && bgtManagedThreadMatchesSearch(record, searchQuery));
 
-  // Update count badge
-  const countEl = document.getElementById('bgt-count');
-  if (countEl) {
-    const activeTasks = visibleTasks.filter(t => {
-      const status = bgtNormalizeStatus(t.status);
-      return status !== 'complete' && status !== 'failed';
-    }).length;
-    const activeManagedThreads = visibleManagedThreads.filter(record => String(record.status || '').toLowerCase() === 'active').length;
-    countEl.textContent = `${activeTasks + activeManagedThreads} active`;
-  }
-
   updateBgtHeartbeatLabel();
   updateBgtSearchUI(visibleTasks.length + visibleManagedThreads.length);
 
@@ -751,15 +741,13 @@ function renderBgTasks() {
   for (const col of orderedCols) {
     const items = byStatus[col.key];
     const olderCount = unloadedFinished?.[col.key] || 0;
-    const columnTotal = items.length + olderCount;
     const expanded = bgtExpandedColumns.has(col.key);
     if (items.length === 0 && (col.key === 'complete' || col.key === 'failed' || col.key === 'stalled' || col.key === 'needs_assistance' || col.key === 'cancelled')) continue;
     const colEl = document.createElement('div');
     colEl.className = 'bgt-col';
     colEl.innerHTML = `
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-        <span style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.06em;color:${col.color}">${col.label}</span>
-        <span style="font-size:10px;background:${col.bg};color:${col.color};border-radius:999px;padding:1px 8px;font-weight:700">${columnTotal}</span>
+        <span style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.06em;color:var(--text)">${col.label}${taskHeaderIndicator(col.key, items.length)}</span>
       </div>
       <div class="bgt-col-cards" data-bgt-drop-status="${col.key}" ondragover="bgtHandleColumnDragOver(event,'${col.key}')" ondragenter="bgtHandleColumnDragEnter(event,'${col.key}')" ondragleave="bgtHandleColumnDragLeave(event,'${col.key}')" ondrop="bgtHandleColumnDrop(event,'${col.key}')" style="display:flex;flex-direction:column;gap:8px;min-height:60px;border-radius:12px;transition:outline 0.15s,background 0.15s">
         ${items.slice(0,5).map(item => bgtColumnItemHTML(item, col)).join('')}
@@ -773,7 +761,7 @@ function renderBgTasks() {
     board.appendChild(colEl);
     if (items.length === 0) {
       // Empty placeholder
-      colEl.querySelector('.bgt-col-cards').innerHTML = `<div style="text-align:center;padding:20px 8px;color:var(--muted);font-size:11px;border:1.5px dashed var(--line);border-radius:10px">No ${col.label.split(' ').slice(1).join(' ').toLowerCase()} tasks</div>`;
+      colEl.querySelector('.bgt-col-cards').innerHTML = `<div style="text-align:center;padding:20px 8px;color:var(--muted);font-size:11px;border:1.5px dashed var(--line);border-radius:10px">No ${col.label.toLowerCase()} tasks</div>`;
     }
   }
 
