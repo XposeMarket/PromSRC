@@ -64,6 +64,8 @@ export function createMobileDurableQueue({ panel, target, pinFetch, report, esca
   function render() {
     const signature = JSON.stringify([key, state, actionPending]);
     if (!panel || signature === rendered) return;
+    const openId = panel.dataset.queueKey === key && panel.querySelector('[data-queue-menu][aria-expanded="true"]')?.dataset.itemId;
+    panel.dataset.queueKey = key;
     rendered = signature;
     const items = state?.items || [];
     panel.hidden = !items.length;
@@ -72,11 +74,13 @@ export function createMobileDurableQueue({ panel, target, pinFetch, report, esca
       ${state.paused ? `<div class="pm-mobile-queued-item"><span role="status">${escape(pauseText[state.paused] || 'Queue paused.')}</span>
         ${state.paused === 'storage_unavailable' || items.some(item => item.state === 'uncertain') ? '' : `<button type="button" data-queue-action="resume" ${actionPending ? 'disabled' : ''}>Resume</button>`}</div>` : ''}
       ${items.map((item, index) => `<div class="pm-mobile-queued-item">
-        <span class="pm-mobile-queued-text">${escape(String(item.message || '').slice(0, 140))}${item.attachmentCount ? ` <em>+${Number(item.attachmentCount)}</em>` : ''}</span>
+        ${item.state === 'pending' ? `<button type="button" class="pm-mobile-queued-text" data-queue-action="edit" data-index="${index}" title="Edit queued prompt" ${actionPending ? 'disabled' : ''}>` : '<span class="pm-mobile-queued-text">'}${escape(String(item.message || '').slice(0, 140))}${item.attachmentCount ? ` <em>+${Number(item.attachmentCount)}</em>` : ''}${item.state === 'pending' ? '</button>' : '</span>'}
         <div class="pm-mobile-queued-actions">${item.state === 'claimed' ? '<span>Starting</span>' : `
-          ${item.state === 'pending' ? `<button type="button" data-queue-action="edit" data-index="${index}" ${actionPending ? 'disabled' : ''}>Edit</button>
-          <button type="button" data-queue-action="steer" data-index="${index}" ${actionPending || state.paused ? 'disabled' : ''}>Steer</button>` : '<span>Held</span>'}
-          <button type="button" data-queue-action="cancel" data-index="${index}" ${actionPending ? 'disabled' : ''}>Delete</button>`}
+          ${item.state === 'pending' ? '' : '<span>Held</span>'}<div class="pm-mobile-queued-menu-wrap">
+          <button type="button" class="pm-mobile-queued-icon pm-mobile-queued-menu-trigger" data-queue-menu data-item-id="${escape(item.id)}" aria-label="Queued prompt actions" aria-expanded="${openId === item.id}" ${actionPending ? 'disabled' : ''}>&#8943;</button>
+          <div class="pm-mobile-queued-popover" ${openId === item.id ? '' : 'hidden'}>
+          ${item.state === 'pending' ? `<button type="button" class="pm-mobile-queued-menu-item pm-mobile-queued-steer" data-queue-action="steer" data-index="${index}" ${actionPending || state.paused ? 'disabled' : ''}>Steer</button>` : ''}
+          <button type="button" class="pm-mobile-queued-menu-item pm-mobile-queued-remove" data-queue-action="cancel" data-index="${index}" ${actionPending ? 'disabled' : ''}>Delete</button></div></div>`}
         </div></div>`).join('')}
       </div>`;
   }
@@ -188,7 +192,28 @@ export function createMobileDurableQueue({ panel, target, pinFetch, report, esca
       return false;
     } finally { actionPending = false; render(); void refresh(); }
   }
+  const listeners = new AbortController();
+  function closeMenu(restoreFocus = false) {
+    const trigger = panel?.querySelector('[data-queue-menu][aria-expanded="true"]');
+    if (!trigger) return;
+    trigger.nextElementSibling.hidden = true;
+    trigger.setAttribute('aria-expanded', 'false');
+    if (restoreFocus) trigger.focus();
+  }
+  panel?.ownerDocument.addEventListener('pointerdown', event => {
+    if (!panel.contains(event.target.closest('.pm-mobile-queued-menu-wrap'))) closeMenu();
+  }, {signal:listeners.signal});
+  panel?.ownerDocument.addEventListener('keydown', event => { if (event.key === 'Escape') closeMenu(true); }, {signal:listeners.signal});
   panel?.addEventListener('click', event => {
+    const trigger = event.target.closest('[data-queue-menu]');
+    if (trigger) {
+      const open = trigger.nextElementSibling.hidden;
+      closeMenu();
+      trigger.nextElementSibling.hidden = !open;
+      trigger.setAttribute('aria-expanded', String(open));
+      return;
+    }
+    closeMenu();
     const button = event.target.closest('[data-queue-action]');
     if (!button || actionPending) return;
     const action = button.dataset.queueAction;
@@ -198,6 +223,6 @@ export function createMobileDurableQueue({ panel, target, pinFetch, report, esca
     const message = action === 'edit' ? window.prompt('Edit queued prompt', row.message) : undefined;
     if (message === null) return;
     void act(action, row.id, message);
-  });
-  return { enqueue, refresh, act, matchesRetry, invalidateDraft, dispose() { disposed = true; ++generation; } };
+  }, {signal:listeners.signal});
+  return { enqueue, refresh, act, matchesRetry, invalidateDraft, dispose() { listeners.abort(); disposed = true; ++generation; } };
 }

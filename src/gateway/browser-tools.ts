@@ -1029,7 +1029,11 @@ export async function browserClickAndDownload(
   ref: number,
   options?: { timeout_ms?: number; filename_hint?: string; output_dir?: string; observe?: BrowserObserveMode },
 ): Promise<string> {
-  const session = sessions.get(resolveSessionId(sessionId));
+  const resolved = resolveSessionId(sessionId);
+  if (getInHouseSession(resolved) && shouldUseInHouseBrowser(resolved)) {
+    return 'ERROR: Saving a clicked download to the workspace is not supported in the in-app browser. Use Prometheus Chrome (target=prometheus) for this task; it has a separate sign-in profile.';
+  }
+  const session = sessions.get(resolved);
   if (!session) return 'ERROR: No browser session. Use browser_open first.';
   if (session.transport === 'extension') {
     try {

@@ -152,3 +152,6 @@ For `generate_video`, follow the job-oriented media engine guide rather than cop
 - [05 Tools & categories](05-tools-and-categories.md) · [07 Source editing & PR workflow](07-source-editing-and-pr-workflow.md)
 - [15 Media engine & video](15-media-engine-video.md) · [18 Mobile app](18-mobile-app.md) · [21 Security/approvals](21-security-approvals-permissions.md)
 - [Source map](generated/source-map.md) · [Tests inventory](generated/tests.md)
+
+### Using chat uploads from a separate work directory
+Pass the absolute upload path shown in chat. Image and video analysis, `video_social_cut`, image generation/editing (references and masks), and xAI video generation/editing (source videos, starting images and references) share `src/tools/media-read-path.ts` for local inputs. A worker can read an upload under the main workspace’s `uploads/` only with an existing grant. Relative paths start in the working directory; blocked locations remain denied. The grant is for input only: it does not change output destinations or provider approvals.

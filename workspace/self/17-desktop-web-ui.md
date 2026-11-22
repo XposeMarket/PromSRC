@@ -29,6 +29,7 @@ TasksPage renders planned_chat records as passive cards with authoritative steps
 | Teams | `web-ui/src/pages/TeamsPage.js` | Team rooms, manager/runs, files, context, memory and websocket updates. |
 | Schedule | `web-ui/src/pages/SchedulePage.js` | Jobs, run/enable/edit, Brain schedule cards. |
 | Subagents | `web-ui/src/pages/SubagentsPage.js` | Standalone agent detail/home/runs/recovery, memory and configuration. |
+| Prom Bot direct chats | `web-ui/src/prom-bot.js` → `openPromBotAgent()`; `web-ui/src/pages/ChatPage.js` → `renderReactSteps()` | The sidebar mounts the Subagents chat board with the shared desktop history renderer. Subagent history can carry a numeric `steps` count; the legacy tool footer only accepts an action array. Counts do not suppress message text or the separate workflow trace. |
 | Proposals | `web-ui/src/pages/ProposalsPage.js` | Review/approval management. |
 | Hub | `web-ui/src/pages/HubPage.js` | Hub and tool/skill activity surfaces. |
 | Audit and memory | `web-ui/src/pages/AuditPage.js`, `MemoryPage.js` | Separate activity/audit vs memory browsing. |

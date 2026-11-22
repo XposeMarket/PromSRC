@@ -3,6 +3,7 @@ import fsp from 'fs/promises';
 import path from 'path';
 import { getConfig } from '../config/config.js';
 import { getActiveWorkspace } from '../tools/workspace-context.js';
+import { resolveMediaReadPath } from '../tools/media-read-path.js';
 import { fetchPublicUrl } from '../tools/outbound-url-guard.js';
 import type {
   GeneratedVideoAsset,
@@ -215,7 +216,7 @@ export async function resolveVideoInput(input: string): Promise<ResolvedVideoInp
   }
 
   const workspaceRoot = getWorkspaceRoot();
-  const filePath = ensurePathInWorkspace(workspaceRoot, source);
+  const filePath = resolveMediaReadPath(workspaceRoot, source);
   const stat = await fsp.stat(filePath).catch(() => null);
   if (!stat?.isFile()) {
     throw new Error(`Input media "${source}" was not found.`);

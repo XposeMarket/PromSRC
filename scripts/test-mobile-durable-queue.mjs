@@ -109,6 +109,15 @@ try {
     await window.queue.enqueue({ gatewayId:'local-test', sessionId:window.sessionId }, 'Second follow-up', [], {}),
   ]);
   assert.equal(new Set(receipts.map(item => item.id)).size, 2);
+  const triggers = page.getByRole('button', {name:'Queued prompt actions'});
+  const menu = page.locator('.pm-mobile-queued-popover:visible');
+  assert.equal(await triggers.count(), 2); assert.equal(await menu.count(), 0);
+  await triggers.first().click(); await page.evaluate(()=>window.queue.refresh());
+  assert.deepEqual(await menu.locator('button').allTextContents(), ['Steer','Delete']);
+  if (process.env.QUEUE_SHOT) await page.screenshot({path:process.env.QUEUE_SHOT});
+  await triggers.last().click(); assert.equal(await menu.count(), 1); assert.equal(await menu.locator('button').first().getAttribute('data-index'),'1');
+  await page.keyboard.press('Escape'); assert.equal(await menu.count(),0);
+  await triggers.first().click(); await page.locator('#draft').click(); assert.equal(await menu.count(),0);
   assert.deepEqual(await page.locator('.pm-mobile-queued-text').allTextContents(), ['First follow-up', 'Second follow-up']);
   assert.deepEqual(messages, []);
   await page.evaluate(async id => { window.sessionId = id; await window.queue.refresh(); }, other);

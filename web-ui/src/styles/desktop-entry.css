@@ -2,6 +2,7 @@
 
 @import './base.css';
 @import './components.css';
+@import './desktop-composer-shelf.css';
 @import './onboarding.css';
 @import './pages.css';
 @import './projects.css';

@@ -164,15 +164,15 @@ body.pm-mobile-active .ea-card-fallback.ea-card-fallback-float { left: 10px; rig
 }
 
 /* Override the native desktop display:contents grid only while this layout owns it. */
-body:not(.pm-mobile-active) #chat-view > .chat-input-area.ea-minimal-composer { display: flex; flex-direction: column; gap: 6px; }
+body:not(.pm-mobile-active) #chat-view > .chat-input-area.ea-minimal-composer { display: flex; flex-direction: column; gap: 3px; }
 body:not(.pm-mobile-active) #chat-view > .chat-input-area.ea-minimal-composer > .chat-input-row { display: flex; width: 100%; }
 body:not(.pm-mobile-active) #chat-view > .chat-input-area.ea-minimal-composer > .agent-toggle { display: flex; width: 100%; margin-bottom: 0; }
 body:not(.pm-mobile-active) #chat-view > .chat-input-area.ea-minimal-composer .chat-hint { flex: 1; }
 
 /* Fidelity to owner-selected C desktop / B mobile, not a second visual design. */
 .ea-tile-prometheus { background: var(--ea-accent); color: var(--text-on-accent, var(--bg)); border-color: transparent; }
-body:not(.pm-mobile-active) #chat-view > .chat-input-area.ea-minimal-composer { min-height: 136px; padding: 16px 16px 10px; border: 1px solid var(--ea-line); border-radius: 22px; background: var(--panel); }
-body:not(.pm-mobile-active) #chat-view > .chat-input-area.ea-minimal-composer > .chat-input-row { flex: 1; min-height: 72px; }
+body:not(.pm-mobile-active) #chat-view > .chat-input-area.ea-minimal-composer { min-height: 0; padding: 8px 16px; border: 1px solid var(--ea-line); border-radius: 22px; background: var(--panel); }
+body:not(.pm-mobile-active) #chat-view > .chat-input-area.ea-minimal-composer > .chat-input-row { flex: none; min-height: 0; }
 body:not(.pm-mobile-active) #chat-view > .chat-input-area.ea-minimal-composer .ea-switcher-btn { border: 0; border-radius: 6px; padding: 3px 5px; gap: 7px; }
 body:not(.pm-mobile-active) #chat-view > .chat-input-area.ea-minimal-composer .ea-composer-plus { border-radius: 8px; width: 28px; height: 28px; }
 body:not(.pm-mobile-active) #chat-view > .chat-input-area.ea-minimal-composer #send-btn { border-radius: 11px; width: 34px; height: 34px; }

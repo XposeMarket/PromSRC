@@ -8,6 +8,7 @@ import { promisify } from 'util';
 import type { ToolResult } from '../types.js';
 
 import { getActiveWorkspace } from './workspace-context.js';
+import { resolveMediaReadPath } from './media-read-path.js';
 import { getProvider, getPrimaryModel } from '../providers/factory.js';
 import { contentToString } from '../providers/content-utils.js';
 import { buildVisionImagePart, primarySupportsVision } from '../gateway/vision-chat.js';
@@ -476,7 +477,7 @@ export async function executeAnalyzeImage(args: AnalyzeImageArgs): Promise<ToolR
   if (!requestedPath) return { success: false, error: 'file_path is required' };
 
   try {
-    const absPath = ensureWorkspacePath(workspaceRoot, requestedPath);
+    const absPath = resolveMediaReadPath(workspaceRoot, requestedPath);
     if (!fs.existsSync(absPath)) return { success: false, error: `File not found: ${requestedPath}` };
     if (!fs.statSync(absPath).isFile()) return { success: false, error: `"${requestedPath}" is not a file` };
 
@@ -532,7 +533,7 @@ export async function executeAnalyzeVideo(args: AnalyzeVideoArgs): Promise<ToolR
   try {
     args.onProgress?.({ phase: 'starting', message: 'Preparing video analysis…' });
     if (args.signal?.aborted) throw new Error('video analysis canceled by user');
-    const absPath = ensureWorkspacePath(workspaceRoot, requestedPath);
+    const absPath = resolveMediaReadPath(workspaceRoot, requestedPath);
     if (!fs.existsSync(absPath)) return { success: false, error: `File not found: ${requestedPath}` };
     if (!fs.statSync(absPath).isFile()) return { success: false, error: `"${requestedPath}" is not a file` };
 
