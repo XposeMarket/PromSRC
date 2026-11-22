@@ -269,7 +269,7 @@ body:not(.pm-mobile-active) .sidebar.collapsed ~ .workspace .page-view { left: 6
 /* One menu surface contract. Keep positioning and visibility owned by each
    menu; search and the Prom Bot flyout use the same surface without pretending
    their richer content is a list of actions. Priority is an inline sidebar view. */
-body:not(.pm-mobile-active) :is(.model-switcher-panel, .chat-attach-menu, .chat-header-menu, .chat-session-context-menu, .session-context-menu, .sidebar-search, .sidebar.collapsed #prom-bot-sidebar-section, .more-popover, #chat-text-selection-popover, #chat-new-context-popover, #voice-settings-popover) {
+body:not(.pm-mobile-active) :is(.model-switcher-panel, .chat-attach-menu, .chat-header-menu, .chat-session-context-menu, .session-context-menu, .sidebar-search, .more-popover, #chat-text-selection-popover, #chat-new-context-popover, #voice-settings-popover) {
   box-sizing: border-box; padding: 6px; border-radius: 13px;
   border: 1px solid color-mix(in srgb, var(--text) 8%, transparent) !important;
   background: var(--panel) !important; color: var(--text);
@@ -300,7 +300,7 @@ body:not(.pm-mobile-active) .model-switcher-popover .model-switcher-row strong {
 /* Rail controls open usable flyouts rather than clipping into the 64px lane. */
 body:not(.pm-mobile-active) .sidebar.collapsed.sidebar-search-open .sidebar-search:not([hidden]) { display: flex !important; position: fixed; left: 74px; top: 56px; width: 280px; z-index: 1100; }
 body:not(.pm-mobile-active) .sidebar.collapsed #sidebar-priority-panel { display: none; }
-body:not(.pm-mobile-active) .sidebar.collapsed #prom-bot-sidebar-section:not([hidden]) { display: block !important; position: fixed; left: 74px; top: 144px; width: 280px; max-height: calc(100vh - 164px); overflow: auto; z-index: 1100; }
+body:not(.pm-mobile-active) .sidebar.collapsed :is(#prom-bot-sidebar-section, #prom-bot-bots-section) { display: none !important; }
 /* Explicit geometry wins over the legacy themed header's fixed-height row. */
 body:not(.pm-mobile-active) #sidebar.collapsed .sidebar-top { height: auto !important; min-height: 0 !important; flex: 0 0 auto; padding: 0 !important; align-items: center; }
 body:not(.pm-mobile-active) #sidebar.collapsed .sidebar-top-actions { position: static !important; height: auto !important; transform: none !important; flex: 0 0 auto; }
