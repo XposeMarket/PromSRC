@@ -1253,8 +1253,7 @@ body.pm-mobile-active.pm-mobile-drawer-open .pm-tabbar-haptic-gesture-surface {
 .pm-ny-entry .pm-approval-actions { flex-wrap:wrap; }
 
 /* Roster search stays a single line, even while the virtual keyboard animates. */
-.pm-roster-search { position:fixed; z-index:10030; left:var(--pm-mobile-chrome-inset,22px); right:var(--pm-mobile-chrome-inset,22px); bottom:calc(var(--pm-tabbar-h) + env(safe-area-inset-bottom) + var(--pm-mobile-composer-gap, 22px)); height:54px; box-sizing:border-box; display:flex; align-items:center; padding:0 18px; background:var(--pm-surface); color:var(--pm-text); border:1px solid var(--pm-border); border-radius:999px; box-shadow:0 3px 16px rgba(0,0,0,.1); }
-.pm-roster-search:focus-within { border-color:var(--pm-accent); }
+.pm-roster-search { position:fixed; z-index:10030; left:var(--pm-mobile-chrome-inset,22px); right:var(--pm-mobile-chrome-inset,22px); bottom:calc(var(--pm-tabbar-h) + env(safe-area-inset-bottom) + var(--pm-mobile-composer-gap, 22px)); height:54px; box-sizing:border-box; display:flex; align-items:center; padding:0 18px; background:var(--pm-surface); color:var(--pm-text); border:0; border-radius:999px; box-shadow:0 3px 16px rgba(0,0,0,.1); }
 .pm-roster-search input { width:100%; min-width:0; margin:0; padding:0; border:0; outline:0; background:transparent; color:inherit; font:inherit; font-size:16px; }
 #pm-teams-body, #pm-subagents-body { padding-bottom:calc(var(--pm-tabbar-h) + env(safe-area-inset-bottom) + 108px); }
 :is(#pm-teams-body,#pm-subagents-body) [hidden] { display:none !important; }

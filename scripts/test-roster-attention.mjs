@@ -15,6 +15,8 @@ try { for(const [kind,width] of [['subagents',390],['teams',320]]) {
   await page.evaluate(k=>location.hash='#mobile/'+k,kind);
   const dock=page.locator('.pm-roster-search'),search=dock.locator('input'),preview=page.locator('.pm-team-preview h3');
   await preview.waitFor({timeout:10000});assert.equal(await preview.textContent(),'Latest');assert.equal(await page.locator('.pm-team-tile.is-roster-working').count(),1);
+  const assertBorderless=async()=>{for(const el of [dock,search]) assert.deepEqual(await el.evaluate(node=>{const css=getComputedStyle(node);return ['Top','Right','Bottom','Left'].map(side=>css[`border${side}Width`]);}),Array(4).fill('0px'));};
+  await assertBorderless();await search.focus();await assertBorderless();await search.blur();
   const bounds=await dock.boundingBox();assert.equal(bounds.height,composer.height);assert.ok(Math.abs(bounds.width-composer.width)<1);console.log(kind,{bounds,composer});
   if(shots) await page.screenshot({path:path.join(shots,kind+'.png')});
   await search.fill('Earlier');assert.equal(await page.locator('.pm-team-tile:visible').count(),1);assert.equal(await preview.isVisible(),false);
