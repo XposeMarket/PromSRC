@@ -1,11 +1,16 @@
-/* The source list and the file editor alternate in this dock. Only the list hugs its contents. */
+/* Only the file editor participates in workspace layout. Sources floats over chat. */
+body:not(.pm-mobile-active) .workspace:has(> #right-panel.open:not(.canvas-open)) { position:relative; }
 body:not(.pm-mobile-active) .workspace > #right-panel.open:not(.canvas-open) {
   --dock-width: clamp(278px, 23vw, 316px);
-  align-self: flex-start; flex: 0 1 var(--dock-width);
-  width: var(--dock-width) !important; min-width: 0 !important; max-width: var(--dock-width) !important;
-  height: fit-content !important; max-height: min(520px, 68dvh, calc(100% - 24px)) !important;
-  margin: 10px 10px 0 4px; border-radius: 12px; box-shadow: 0 5px 18px #0002;
+  position:absolute; inset:54px 16px auto auto; z-index:90; margin:0;
+  box-sizing:border-box; width:min(var(--dock-width), calc(100% - 32px)) !important;
+  min-width:0 !important; max-width:calc(100% - 32px) !important;
+  height:fit-content !important; max-height:min(520px,68dvh,calc(100% - 70px)) !important;
+  border:1px solid color-mix(in srgb,var(--text) 14%,transparent) !important;
+  border-radius:18px; overflow:hidden; background:var(--panel);
+  box-shadow:0 10px 34px rgb(0 0 0 / 30%),0 2px 6px rgb(0 0 0 / 16%);
 }
+body:not(.pm-mobile-active) #right-panel.open:not(.canvas-open) > .rp-resize-handle {display:none}
 #right-panel:not(.canvas-open) #right-panel-topbar { height:38px;min-height:38px;padding:0 7px 0 12px }
 #right-panel .source-panel-heading {font-size:14px}
 #right-panel .source-panel-shell {flex:1 1 auto;overflow:hidden}
@@ -52,3 +57,14 @@ body:not(.pm-mobile-active) .workspace > #right-panel.open:not(.canvas-open) {
 :is(#right-panel,#sources-minimized-panel) :is(.source-panel-info-card,.source-panel-environment-card) {border:0;background:none;box-shadow:none;padding:0}
 #right-panel .source-panel-empty {padding:5px 2px;font-size:12px}
 #right-panel .source-panel-icon-btn {width:27px;height:27px}
+
+/* Center the two window actions within the tab rail rather than below its midpoint. */
+body:not(.pm-mobile-active) .topbar :is(#theme-toggle,#drawerToggle) {
+  box-sizing:border-box; width:26px; min-width:26px; height:26px; min-height:26px;
+  padding:0; flex:0 0 26px; display:inline-flex; align-items:center; justify-content:center;
+}
+@media(min-width:901px) {
+  body:not(.pm-mobile-active):not(.electron-shell) .main-shell-wrap:has(> .topbar + .main-shell > .prom-multi-chat-tabs:not([hidden])) > .topbar > .topbar-right {
+    top:0; height:40px; align-items:center; flex-wrap:nowrap;
+  }
+}
