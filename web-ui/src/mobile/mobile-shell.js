@@ -2616,6 +2616,7 @@ async function _localSessionSearchFallback(loadSessions, query) {
 }
 
 function _sessionStateMeta(session) {
+  if (session?.needsYou === true) return { activeRun: false, unread: false, stateClass: ' is-needs-you', stateName: 'needs-you', stateLabel: '<span class="pm-session-state">Needs you</span>' };
   const cachedState = _drawerSessionStateView(session);
   const activeRun = cachedState.activeRun;
   const unread = cachedState.mobileUnread === true && !activeRun;
@@ -4590,7 +4591,7 @@ function _drawerPriorityDayLabel(timestamp) {
 
 function _drawerSessionNeedsAttention(session) {
   const meta = _sessionStateMeta(session);
-  return meta.activeRun === true || meta.unread === true;
+  return meta.stateName === 'needs-you' || meta.activeRun === true || meta.unread === true;
 }
 
 function _drawerPriorityAttentionCount() {

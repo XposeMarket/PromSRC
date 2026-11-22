@@ -1,4 +1,5 @@
 // Teams route owner. Loaded only when its route or a shared dependent feature is requested.
+import { latestRosterRun, wireRosterSearch } from './mobile-roster.js';
 import { renderAgentPet, renderAgentPetStack } from '../components/agent-pets.js';
 import {
   ICONS,
@@ -63,8 +64,8 @@ import {
 /* ---------------- TEAMS OVERVIEW ---------------- */
 function teamTileHtml(t) {
   return `
-    <button class="pm-team-tile ${t.featured ? 'featured' : ''}" data-team="${t.id}">
-      ${t.featured ? '<span class="pm-star">★</span>' : ''}
+    <button class="pm-team-tile ${t.running ? 'is-roster-working' : ''}" data-team="${t.id}">
+      ${t.running ? '<span class="pm-star" aria-label="Running">&#9679;</span>' : ''}
       <span class="pm-team-lead">${renderAgentPet(t.leadId || t.id, { size: 36 })}</span>
       ${t.crewIds?.length ? renderAgentPetStack(t.crewIds, { size: 16, max: 5 }) : ''}
       <span class="pm-team-name">${escapeHtml(t.name)}</span>
@@ -95,6 +96,7 @@ export async function renderTeamsPage(page, { navigate }) {
   const countEl = page.querySelector('#pm-teams-count');
   const refresh = page.querySelector('#pm-teams-refresh');
 
+  const filterRoster = wireRosterSearch(page, body, 'teams', () => paint({ force: true }));
   async function paint({ force = false } = {}) {
     let teams = [];
     try {
@@ -111,12 +113,12 @@ export async function renderTeamsPage(page, { navigate }) {
       return;
     }
 
-    const featured = teams.find(t => t.featured) || teams[0];
+    const featured = latestRosterRun(teams);
     let detail = null;
-    try { detail = await loadMobileTeamDetail(featured.id); } catch {}
+    try { if (featured) detail = await loadMobileTeamDetail(featured.id); } catch {}
 
     const previewHtml = detail ? `
-      <div class="pm-team-preview">
+      <div class="pm-team-preview ${featured.running ? 'is-roster-working' : ''}">
         <div class="pm-team-preview-head">
           <span class="pm-mini-house">${renderAgentPet(detail.leadId || detail.id, { size: 24 })}</span>
           <h3>${escapeHtml(detail.name)}</h3>
@@ -143,6 +145,7 @@ export async function renderTeamsPage(page, { navigate }) {
       <div class="pm-team-grid">${teams.map(teamTileHtml).join('')}</div>
       ${previewHtml}
     `;
+    filterRoster();
     body.querySelectorAll('[data-team]').forEach(btn => {
       btn.addEventListener('click', () => navigate(`#mobile/teams/${btn.getAttribute('data-team')}`));
     });

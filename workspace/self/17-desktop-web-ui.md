@@ -218,3 +218,5 @@ Desktop Sources floats over chat; selecting a changed file opens its diff in the
 
 ### Tasks header indicators
 Task categories show no numeric totals. A nonempty In Progress category shows a green dot in parentheses; Needs You and Paused show red. All other categories and empty categories have plain labels. Counts used inside cards or for paging are unchanged.
+
+Sidebar session lists expose a `needsYou` boolean for outstanding chat questions and approvals, ahead of Working and Unread. No interaction payload is added to the list. Active team and subagent cards have a glowing outline, static when reduced motion is requested.

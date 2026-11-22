@@ -2799,7 +2799,7 @@ function renderTeamsCanvas() {
     const hasPending = (team.pendingChanges || []).length > 0;
     const isPaused = team.manager?.paused === true;
     return `
-      <div class="team-house-wrap" data-team-id="${team.id}"
+      <div class="team-house-wrap${team.running ? ' is-roster-working' : ''}" data-team-id="${team.id}"
            onclick="openTeamBoard('${team.id}')"
            onmouseenter="showHousePopover(this, '${team.id}')"
            onmouseleave="hideHousePopover()"
