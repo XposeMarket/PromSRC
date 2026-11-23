@@ -227,7 +227,7 @@ export async function handleChatUntraced(
    * sized bubble splitting. Errors thrown by this callback are swallowed.
    */
   callerOnToken?: (token: string) => void,
-  runtimeOptions?: { personalReferenceAccess?: boolean; directSubagentChat?: boolean; syntheticThreadSupervisionReview?: boolean; supervisionLoop?: boolean; silentSupervisionLoop?: boolean; supervisionOwnerSessionId?: string; supervisionId?: string; excludedSkillIds?: string[]; forcedSkillIds?: string[]; instructionCallerRequirements?: string[]; timingRecorder?: TurnTimingRecorder; turnRouteSnapshot?: TurnRouteSnapshot; promptMemoryMode?: 'full' | 'compact'; brainThoughtRuntime?: boolean; allowNativeWorkspaceTools?: boolean; runtimeId?: string; admissionLease?: RuntimeAdmissionLease; skipAutomaticToolCategoryActivation?: boolean; toolCategoryDetectionText?: string; speedOverride?: 'standard' | 'fast'; brainRunBudget?: BrainRunBudgetOptions; internalWatchContext?: { watchId: string; actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed'; targetTaskId?: string; delivery: 'follow_up' | 'live_steer' } },
+  runtimeOptions?: { personalReferenceAccess?: boolean; directSubagentChat?: boolean; syntheticThreadSupervisionReview?: boolean; supervisionLoop?: boolean; silentSupervisionLoop?: boolean; supervisionOwnerSessionId?: string; supervisionId?: string; excludedSkillIds?: string[]; forcedSkillIds?: string[]; instructionCallerRequirements?: string[]; timingRecorder?: TurnTimingRecorder; turnRouteSnapshot?: TurnRouteSnapshot; promptMemoryMode?: 'full' | 'compact'; brainThoughtRuntime?: boolean; allowNativeWorkspaceTools?: boolean; runtimeId?: string; predecessorRuntimeId?: string; admissionLease?: RuntimeAdmissionLease; skipAutomaticToolCategoryActivation?: boolean; toolCategoryDetectionText?: string; speedOverride?: 'standard' | 'fast'; brainRunBudget?: BrainRunBudgetOptions; internalWatchContext?: { watchId: string; actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed'; targetTaskId?: string; delivery: 'follow_up' | 'live_steer' } },
 ): Promise<HandleChatResult> {
   const latencyStartAt = Date.now();
   // Stable key for this turn's cross-turn edit-log entries. Restart-resumed
@@ -1538,14 +1538,14 @@ export async function handleChatUntraced(
   if (seedProgressFromStoredGoalPlan()) {
     tools = buildProviderToolSurface(initialGenerationOverride).provider;
   } else if (!backgroundPlanToolsActive && !hasDurableTaskPlan) {
-    const prior = findResumableChatPlan(sessionId, message);
+    const prior = findResumableChatPlan(sessionId, message, runtimeOptions?.predecessorRuntimeId);
     if (prior) {
       declaredPlanSummary = prior.title;
       resumedPlanContext = `Continue this saved plan without repeating completed steps:\n${prior.runtimeProgress.items.map((item, i) => `${i + 1}. [${item.status}] ${item.text}`).join('\n')}`;
       progressState.source = 'declared';
       progressState.items = prior.runtimeProgress.items.map((item, index) => ({ id: `resumed_${index}`, text: item.text, status: item.status === 'completed' ? 'done' : item.status === 'failed' ? 'pending' : item.status as RuntimeProgressItem['status'] }));
       progressState.activeIndex = progressState.items.findIndex(item => !['done', 'skipped'].includes(item.status));
-      stepCursor = Math.max(0, progressState.activeIndex);
+      stepCursor = progressState.activeIndex < 0 ? progressState.items.length : progressState.activeIndex;
       progressState.manualStepAdvance = true;
       planStepToolsActive = true;
       emitProgressState('plan_resumed');
@@ -1765,6 +1765,7 @@ export async function handleChatUntraced(
   const getProgressRemaining = (): number => (
     progressState.items.filter((item) => item.status === 'pending' || item.status === 'in_progress').length
   );
+  const openRecoveryStep = () => runtimeOptions?.predecessorRuntimeId && resumedPlanContext ? progressState.items.find(i => i.status === 'pending' || i.status === 'in_progress') : undefined;
   emitProgressState('reset');
 
   htime('before preempt watchdog setup');
@@ -3807,7 +3808,7 @@ Do not produce prose. Use the canonical thread tool now.` });
 	      const emitStreamToken = (chunk: string) => {
 	        if (abortSignal?.aborted) return;
 	        const text = String(chunk || '');
-	        if (!text || suppressRunawayStream) return;
+	        if (!text || suppressRunawayStream || openRecoveryStep()) return;
           noteProviderPassEvent('assistant_delta');
           if (!providerPassFirstVisibleTokenAt) providerPassFirstVisibleTokenAt = Date.now();
           if (!firstVisibleTokenAt) {
@@ -4818,7 +4819,7 @@ Do not produce prose. Use the canonical thread tool now.` });
       // If model dumped massive reasoning with no usable reply, generate a fallback
       const emptyModelFinalFallback = 'ERROR: The model returned an empty response. Please retry the message or switch models.';
       let finalText = sanitizeFinalReply(
-        String(reply || rawAssistantText || ''),
+        openRecoveryStep() ? `Plan paused: the step “${openRecoveryStep()!.text}” has not been marked complete.` : String(reply || rawAssistantText || ''),
         { preflightReason: preflightReasonForTurn },
       );
       finalText = stripInvisibleFillerRuns(finalText);
@@ -5642,6 +5643,13 @@ Do not produce prose. Use the canonical thread tool now.` });
 
       // â”€â”€ declare_plan: seed the progress panel and short-circuit (no executeTool needed) â”€â”€
       if (toolName === 'declare_plan') {
+        const savedStep = openRecoveryStep();
+        if (savedStep) {
+          const result = `Continue the saved plan at "${savedStep.text}". Do not replace it; use complete_plan_step after verification.`;
+          messages.push({ role: 'tool', tool_name: toolName, tool_call_id: toolCallId || undefined, content: result });
+          sendSSE('tool_result', { action: toolName, result, error: true });
+          continue;
+        }
         const rawSteps = Array.isArray(toolArgs.steps) ? toolArgs.steps : [];
         const steps = rawSteps.map((s: any) => String(s || '').trim()).filter(Boolean);
         const plannedSteps = steps.slice(0, 6);
@@ -5990,7 +5998,7 @@ Do not produce prose. Use the canonical thread tool now.` });
       if (toolName === 'write_note' && !toolResult.error) {
         const tag = String(toolArgs?.tag || toolArgs?.step || '').trim().replace(/\s+/g, '_').toLowerCase();
         const completedDevEdit = toolResult.extra?.dev_edit_complete === true || toolResult.data?.dev_edit_complete === true || tag === 'dev_edit_complete';
-        if (completedDevEdit && progressState.manualStepAdvance && progressState.items.length >= 2) {
+        if (completedDevEdit && !openRecoveryStep() && progressState.manualStepAdvance && progressState.items.length >= 2) {
           let guard = progressState.items.length + 1;
           while (guard-- > 0 && progressState.items.some((item) => item.status === 'pending' || item.status === 'in_progress')) {
             advanceProgressStep('dev_edit_complete');

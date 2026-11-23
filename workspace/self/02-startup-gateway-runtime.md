@@ -236,3 +236,6 @@ A pending question/login card with a live resolver suspends both foreground age 
 ## Mobile main-chat queue ownership
 
 The paired mobile follow-up queue in `src/gateway/routes/chat/mobile-queue.ts` starts after handoff adoption and foreground recovery setup. The draining predecessor must not write the shared queue file once it yields dispatch. The replacement reconciles stale claims against persisted user-message/steer IDs and pauses a backlog behind an interrupted or adopted runtime. A queued admission's user row is not proof that tools or the model finished. Unexpected crash recovery does not replay a queue-owned prompt; an explicitly planned restart retains the normal continuation mechanism. See `18-mobile-app.md` for the composer and operator behavior.
+
+### Declared plans on restart recovery
+An eligible ordinary chat turn resumes the checklist saved for its exact interrupted runtime and session, without requiring a “continue” message. Completed steps stay closed. The restart itself is not proof that post-restart verification succeeded: the assistant must call `complete_plan_step` with a note before reporting success. If it exhausts its retries, the user sees the outstanding step and Tasks keeps it paused. Recovery does not sweep or retry historical paused cards.
