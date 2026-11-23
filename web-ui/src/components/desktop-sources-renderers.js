@@ -1,4 +1,5 @@
 import { escHtml as E } from '../utils.js';
+import { formatModelDisplayName } from '../model-display.js';
 import { I } from './desktop-sources-icons.js';
 
 const origins = new Map(
@@ -169,6 +170,20 @@ export function createDesktopSourcesRenderers({
       at = clock(stamp(r.attachedAt || r.createdAt));
     return `<button type="button" class="r${mini ? '' : ' two'}" ${attr(i)} title="${E(name)}">${I(r.kind === 'image' ? 'image' : glyph)}${mini ? `<span class="lbl trunc">${E(name)}</span><span class="val">${at}</span>` : `<span class="copy"><span class="trunc">${E(name)}</span><span class="sub trunc">${E([verb, sourcePanelResourceMeta(r), at].filter(Boolean).join(' · '))}</span></span>${I('chev', 'go')}`}</button>`;
   }
+  const isLiveProcess = i => ['starting', 'running', 'exiting'].includes(i.status) && !i.run.completedAt;
+  function processList(d) {
+    if (!d.processes.length) return '';
+    const live = [], done = [];
+    for (const p of d.processes) (isLiveProcess(p) ? live : done).push(p);
+    const processRow = p => {
+      const r = p.run;
+      const status = r.timedOut || r.noOutputTimedOut ? 'Timed out' : r.terminationReason === 'manual_cancel' ? 'Cancelled' :
+        p.status === 'exited' ? (r.exitCode === 0 ? 'Complete' : r.exitCode != null || r.failureSummary ? 'Failed' : 'Exited') : runState(p.status);
+      return row('term', r.title || p.title, status, `openSourcePanelProcess(${J(r.runId || r.id)})`);
+    };
+    return sec('Background processes', (live.map(processRow).join('') || empty('No active processes.')) +
+      (done.length ? `<details class="completed-processes"><summary class="r"><span class="lbl">Completed</span><span class="val">${done.length}</span>${I('down','chev')}</summary>${done.map(processRow).join('')}</details>` : ''), live.length);
+  }
   function env(d) {
     if (d.sub) return '';
     const env = d.environment,
@@ -179,7 +194,7 @@ export function createDesktopSourcesRenderers({
       summary = ready
         ? [repo.ahead ? `${repo.ahead} ahead` : '', `${changed} changed`].filter(Boolean).join(' · ')
         : env[2]?.value || 'Not linked';
-    const service = d.processes.find((i) => /^(?:npm|pnpm|yarn) (?:run )?(?:dev|start|serve)(?:\s|$)/i.test(i.title));
+    const service = d.processes.find((i) => isLiveProcess(i) && /^(?:npm|pnpm|yarn) (?:run )?(?:dev|start|serve)(?:\s|$)/i.test(i.title));
     const rows = [
       ['diff', 'Changes vs HEAD', env[0]?.value || 'Unavailable'],
       ['folder', 'Working copy', ready ? `${changed} changed` : env[1]?.value || 'Unavailable'],
@@ -192,6 +207,11 @@ export function createDesktopSourcesRenderers({
       `<details class="dock-env"><summary class="r" data-envtoggle>${I('branch')}<span class="lbl trunc">${E(branch)}</span><span class="val">${E(summary)}</span>${I('down', 'chev')}</summary><div class="envfold">${rows.map(([g, l, v]) => row(g, l, v, tab('git'))).join('')}${row('term', service ? 'Server · ' + service.title : 'Server', service?.status || 'None reported')}</div></details>`,
     );
   }
+  function runLines(i) {
+    const meta = [i.model && formatModelDisplayName(i.model, i.provider), i.effort && `${i.effort} reasoning`].filter(Boolean).join(' · ');
+    const assignment = i.assignment || 'Assignment not recorded';
+    return `<span class="run-lines"><strong class="trunc">${E(i.title)}</strong>${meta ? `<span class="run-model">${E(meta)}</span>` : ''}<span class="run-assignment" title="${E(assignment)}">${E(assignment)}</span></span>`;
+  }
   function lineage(d) {
     if (d.sub) return '';
     const n = d.runs.filter((i) => i.status === 'running').length;
@@ -202,7 +222,7 @@ export function createDesktopSourcesRenderers({
           .slice(0, 3)
           .map(
             (i) =>
-              `<button type="button" class="r lineage-row" onclick="openSourceRunInTimeline(${J(i.workId)})" title="${E(i.title)}">${providerMark(i.provider)}<span class="lbl trunc">${E(i.title)}</span><span class="val run-${i.status === 'failed' ? 'failed' : 'normal'}">${E(runState(i.status))}</span></button>`,
+              `<button type="button" class="r lineage-row" onclick="openSourceRunInTimeline(${J(i.workId)})" title="${E(i.title)}">${providerMark(i.provider)}${runLines(i)}<span class="val run-${i.status === 'failed' ? 'failed' : 'normal'}">${E(runState(i.status))}</span></button>`,
           )
           .join('') || empty(({ready:'No child runs.', unavailable:'Run history unavailable. Refresh to retry.'})[runListState(d.sid)] || 'Loading child runs…'),
         d.runs.length,
@@ -239,7 +259,7 @@ export function createDesktopSourcesRenderers({
   }
   const jump = (d, k, label) => `<button type="button" onclick="${tab(k)}"><b>${d.counts[k] ?? I('expand')}</b>${label}</button>`;
   function renderSourcesPeek(d) {
-    return `<div class="sources-minimized-card"><div class="ph2"><strong>Sources</strong><button class="ibtn" type="button" aria-label="Open Sources" onclick="openFullSourcePanel()">${I('expand')}</button><button class="ibtn" type="button" aria-label="Close minimized sources" onclick="hideSourcesMinimizedPanel()">${I('x')}</button></div><div class="scope-line">${I('folder')}<b>This thread</b><span class="trunc">· ${E(d.name)}</span></div><div class="scroll">${env(d)}${lineage(d)}${changes(d, true)}${resources(d, true)}</div><nav class="jump" aria-label="Open Sources tab">${(d.sub ? ['Overview'] : ['Overview', 'Timeline', 'Files', 'Git']).map((l) => jump(d, l.toLowerCase(), l)).join('')}</nav></div>`;
+    return `<div class="sources-minimized-card"><div class="ph2"><strong>Sources</strong><button class="ibtn" type="button" aria-label="Open Sources" onclick="openFullSourcePanel()">${I('expand')}</button><button class="ibtn" type="button" aria-label="Close minimized sources" onclick="hideSourcesMinimizedPanel()">${I('x')}</button></div><div class="scope-line">${I('folder')}<b>This thread</b><span class="trunc">· ${E(d.name)}</span></div><div class="scroll">${env(d)}${lineage(d)}${changes(d, true)}${resources(d, true)}${processList(d)}</div><nav class="jump" aria-label="Open Sources tab">${(d.sub ? ['Overview'] : ['Overview', 'Timeline', 'Files', 'Git']).map((l) => jump(d, l.toLowerCase(), l)).join('')}</nav></div>`;
   }
   function renderSourcePanelOverview(d) {
     if (d.sub) return resources(d, false);
@@ -256,6 +276,7 @@ export function createDesktopSourcesRenderers({
       lineage(d) +
       changes(d, false) +
       resources(d, false) +
+      processList(d) +
       (browser.length
         ? sec(
             'Browser',
@@ -290,11 +311,11 @@ export function createDesktopSourcesRenderers({
       isRun = e.group === 'Agents',
       isRes = i.type === 'resource',
       detail = isRun || isRes;
-    const body = `<span class="t">${clock(e.at)}</span><span class="rail2"><span class="pip"></span></span><span class="body"><span class="verb">${isRun ? providerMark(i.provider) : ''}<span class="trunc">${E(e.verb)}</span>${isRun ? `<em>${E(runState(i.status))}</em>` : ''}</span><span class="ttl trunc">${E(e.title)}</span><span class="loc trunc">${E(e.loc)}</span></span>`;
+    const body = `<span class="t">${clock(e.at)}</span><span class="rail2"><span class="pip"></span></span><span class="body"><span class="verb">${isRun ? providerMark(i.provider) : ''}<span class="trunc">${E(e.verb)}</span>${isRun ? `<em>${E(runState(i.status))}</em>` : ''}</span>${isRun ? runLines(i) : `<span class="ttl trunc">${E(e.title)}</span><span class="loc trunc">${E(e.loc)}</span>`}</span>`;
     const cl = `ev ${colors[e.group] || 'c-base'}`;
     if (!detail)
       return `<button type="button" class="${cl}" ${i.type === 'work' ? `onclick="openSourcePanelWork(${J(i.workType)},${J(i.workId)})"` : attr(i)}>${body}</button>`;
-    return `<details class="dock-agent" data-run="${E(isRun ? i.workId : i.key)}"><summary class="${cl}">${body}</summary><div class="x">${isRun ? `<p class="run-meta">${E(e.loc)}</p><p class="summary">${E(i.preview || '')}</p><button class="btn" type="button" onclick="openSourcePanelWork('background',${J(i.workId)})">Open child run</button>` : `<p class="summary">${E(e.loc)}</p><p class="hint">Attached, not confirmed read.</p><button class="btn" type="button" ${attr(i)}>Open</button>`}</div></details>`;
+    return `<details class="dock-agent" data-run="${E(isRun ? i.workId : i.key)}"><summary class="${cl}">${body}</summary><div class="x">${isRun ? `<p class="summary"><b>Assignment${i.taskTitle ? ` · ${E(i.taskTitle)}` : ''}</b><br>${E(i.assignment || 'Not recorded')}</p>${i.preview ? `<p class="summary"><b>Outcome</b><br>${E(i.preview)}</p>` : ''}<button class="btn" type="button" onclick="openSourcePanelWork('background',${J(i.workId)})">Open child run</button>` : `<p class="summary">${E(e.loc)}</p><p class="hint">Attached, not confirmed read.</p><button class="btn" type="button" ${attr(i)}>Open</button>`}</div></details>`;
   }
   function renderSourcePanelTimeline(d) {
     let f = state.timelineFilter || 'All';

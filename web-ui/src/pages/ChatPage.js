@@ -19130,7 +19130,7 @@ function toggleBackgroundSpawnLane(id) {
 
 function backgroundSpawnDetailRecord(id, sessionId = window.activeChatSessionId) {
   const source = backgroundSpawnLaneForDetail(id, sessionId);
-  if (!source) return sourceRunSnapshot.sid === sessionId ? sourceRunSnapshot.records.find(r => r.id === id) || null : null;
+  if (!source) return sourceRunSnapshot.sid === sessionId ? sourceRecordsForThread(sessionId).get(id) || null : null;
   if (source.events || source.task !== undefined) return backgroundSpawnWorkRecord(source);
   return source;
 }
@@ -20249,8 +20249,7 @@ function sourcePanelProcessItems(sessionId = sourcePanelState.activeSessionId ||
     .filter((run) => {
       const runSessionId = String(run?.sessionId || run?.codingSessionId || '').trim();
       if (sid && runSessionId !== sid) return false;
-      const state = String(run?.state || '').toLowerCase();
-      return String(run?.mode || '').toLowerCase() === 'background' || !['exited', 'completed'].includes(state);
+      return String(run?.mode || '').toLowerCase() === 'background';
     })
     .map((run) => ({
       key: `process:${String(run?.runId || run?.id || run?.command || '')}`,
@@ -20478,8 +20477,8 @@ async function loadSourceRuns(sid, force = false) {
     if (!Array.isArray(data?.statuses)) throw Error('Missing run list');
     request.records = data.statuses.filter(r => r?.id && r.spawnerSessionId === sid).map(r => ({
       id: r.id, sessionId: sid, status: r.state, startedAt: r.startedAt, completedAt: r.completedAt,
-      updatedAt: r.completedAt || r.startedAt, providerId: r.providerId, model: r.model, reasoningEffort: r.reasoningEffort,
-      agentName: r.agentName || r.tags?.find(t => typeof t === 'string' && !t.includes(':')) || r.promptPreview || 'Background agent',
+      updatedAt: r.completedAt || r.startedAt, providerId: r.providerId, model: r.model, reasoningEffort: r.reasoningEffort || r.executor_reasoning_effort,
+      agentName: r.agentName, taskTitle: r.taskTitle || r.tags?.find(t => typeof t === 'string' && !t.includes(':')),
       task: r.promptPreview, result: r.result, error: r.error, fileChanges: r.fileChanges,
     }));
     request.state = 'ready';
@@ -20490,7 +20489,11 @@ function sourceRecordsForThread(sid) {
   const records = new Map(backgroundAgentWorkForSession(sid).map(r => [r.id, r]));
   for (const r of sourceRunSnapshot.sid === sid ? sourceRunSnapshot.records : []) {
     const local = records.get(r.id);
-    records.set(r.id, { ...local, ...r, fileChanges: r.fileChanges || local?.fileChanges });
+    records.set(r.id, { ...local, ...r,
+      agentName: resolveBackgroundAgentIdentity(r.id, { existingName: r.agentName || local?.agentName }).name,
+      taskTitle: r.taskTitle || local?.taskTitle, task: local?.task || r.task,
+      model: r.model || local?.model, providerId: r.providerId || local?.providerId,
+      reasoningEffort: r.reasoningEffort || local?.reasoningEffort, fileChanges: r.fileChanges || local?.fileChanges });
   }
   return records;
 }
@@ -20508,8 +20511,8 @@ function sourcePanelWorkItems(sessionId = sourcePanelState.activeSessionId || wi
     workId: record.id, startedAt: record.startedAt,
     provider: record.providerId, model: record.model, effort: record.reasoningEffort,
     agentName: record.agentName,
-    agentColor: record.agentColor,
-    preview: record.result || record.error || record.task || 'Background work',
+    agentColor: record.agentColor, assignment: record.task || record.taskTitle, taskTitle: record.taskTitle,
+    preview: record.result || record.error,
     completedAt: record.completedAt || record.updatedAt,
   }));
   const contextItems = contextWork.map((item) => ({
