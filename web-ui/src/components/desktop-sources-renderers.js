@@ -127,7 +127,7 @@ export function createDesktopSourcesRenderers({
         group: i.workType === 'background' ? 'Agents' : 'Prom',
         verb: i.workType === 'background' ? 'Child run' : 'Linked work',
         title: i.title,
-        loc: [i.model, i.effort && i.effort + ' reasoning'].filter(Boolean).join(' · ') || i.displayPath,
+        loc: [i.model, i.effort].filter(Boolean).join(' · ') || i.displayPath,
       });
     for (const e of events) {
       if (!e.turn && e.at) {
@@ -208,9 +208,10 @@ export function createDesktopSourcesRenderers({
     );
   }
   function runLines(i) {
-    const meta = [i.model && formatModelDisplayName(i.model, i.provider), i.effort && `${i.effort} reasoning`].filter(Boolean).join(' · ');
+    const name = i.model ? formatModelDisplayName(i.model, i.provider) : i.provider;
+    const meta = [name && `<b>${E(name)}</b>`, i.effort && E(i.effort)].filter(Boolean).join(' · ');
     const assignment = i.assignment || 'Assignment not recorded';
-    return `<span class="run-lines"><strong class="trunc">${E(i.title)}</strong>${meta ? `<span class="run-model">${E(meta)}</span>` : ''}<span class="run-assignment" title="${E(assignment)}">${E(assignment)}</span></span>`;
+    return `<span class="run-lines"><strong class="trunc">${E(i.title)}</strong>${meta ? `<span class="run-model">${meta}</span>` : ''}<span class="run-assignment" title="${E(assignment)}">${E(assignment)}</span></span>`;
   }
   function lineage(d) {
     if (d.sub) return '';
