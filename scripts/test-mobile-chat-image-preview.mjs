@@ -1,0 +1,53 @@
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import { chromium } from 'playwright';
+
+const source = name => readFile(new URL('../web-ui/src/' + name, import.meta.url), 'utf8');
+assert.match(await source('mobile/mobile-shell.js'), /installChatImagePreview\(document.body/);
+const viewer = await source('mobile/mobile-chat-image-preview.js');
+const styles = await source('styles/mobile-surfaces.css');
+const names = ['Dawn','High tide','Dusk','Night'];
+const image = i => 'data:image/svg+xml;base64,' + Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 650"><rect width="600" height="650" fill="${['#a9c2ca','#e1bc97','#a98f99','#626980'][i]}"/><circle cx="400" cy="190" r="69" fill="#ffe3ad"/><path d="M0 420L210 245 380 409 515 300 600 380V650H0Z" fill="#526f74"/><path d="M0 420Q210 370 365 452T600 405V650H0Z" fill="#2b555d"/></svg>`).toString('base64');
+const btn = (i, attrs='data-pm-media') => `<button ${attrs} data-kind="image" data-name="${names[i]}" data-src="${image(i)}"><img src="${image(i)}" alt="${names[i]}"></button>`;
+const browser = await chromium.launch({channel:'chromium'});
+try {
+  const page = await browser.newPage({viewport:{width:390,height:844},isMobile:true,hasTouch:true});
+  const errors=[]; page.on('pageerror', e=>errors.push(e.message));
+  await page.setContent(`<meta name="viewport" content="width=device-width,initial-scale=1"><body class="pm-mobile-active"><style>body{background:#212124;color:#eee;font:16px system-ui;padding:18px}.pm-msg{padding:14px;background:#34343a;border-radius:16px;margin:16px 0}.pm-msg img{width:48px}button{cursor:pointer}</style><h2>Chat</h2><main style="height:68vh;overflow:auto"><div style="height:65vh"></div><section class="pm-msg"><p>Three views of the coast.</p>${btn(0)}<span class="markdown-body"><img class="prom-inline-media" role="button" tabindex="0" alt="High tide" src="${image(1)}"></span><div>${btn(2,'data-pm-media data-pm-generated-primary')}${btn(0,'data-pm-generated-thumb')}${btn(2,'data-pm-generated-thumb')}</div><button data-kind="video" data-pm-media>Clip</button></section><section class="pm-msg">${btn(3)}</section></main>${btn(0,'id="outside" data-pm-media')}`);
+  await page.addStyleTag({content:styles});
+  await page.addScriptTag({type:'module',content:viewer+'\nwindow.fallbacks=[]; installChatImagePreview(document.body, item=>fallbacks.push(item.name)); document.body.addEventListener("click",e=>{if(e.target.closest("[data-pm-media]")) fallbacks.push("legacy")}); window.ready=true;'});
+  await page.waitForFunction(()=>window.ready);
+  const middle = page.locator('.prom-inline-media');
+  await middle.scrollIntoViewIfNeeded();
+  const scroll = ()=>page.locator('main').evaluate(el=>el.scrollTop);
+  const before = await scroll();
+  await middle.tap();
+  const dialog=page.getByRole('dialog');
+  assert.equal(await dialog.locator('img').count(),3);
+  assert.equal(await dialog.locator('strong').innerText(),'High tide');
+  assert.deepEqual(await page.evaluate(()=>fallbacks),[]);
+  if(process.env.PREVIEW_SCREENSHOT) await page.screenshot({path:process.env.PREVIEW_SCREENSHOT});
+  const track=await dialog.locator('.pm-chat-image-track').boundingBox();
+  const cdp=await page.context().newCDPSession(page);
+  const touch=(type,x)=>cdp.send('Input.dispatchTouchEvent',{type,touchPoints:x==null?[]:[{x:track.x+track.width*x,y:track.y+track.height/2}]});
+  await touch('touchStart',.85);
+  for (const x of [.7,.55,.4,.25,.1]) {await touch('touchMove',x); await new Promise(r=>setTimeout(r,25));}
+  await touch('touchEnd');
+  await page.waitForFunction(()=>document.querySelector('dialog strong')?.textContent==='Dusk');
+  await dialog.getByLabel('Previous image').tap();
+  assert.equal(await dialog.locator('[aria-live]').innerText(),'2 / 3');
+  await dialog.getByLabel('Close preview').tap();
+  assert.equal(await scroll(),before);
+  await page.locator('[data-pm-generated-thumb]').last().tap();
+  assert.equal(await dialog.locator('[aria-live]').innerText(),'3 / 3');
+  await dialog.getByText('Open in Canvas').tap();
+  await page.locator('.pm-msg').last().getByRole('button').tap();
+  assert.equal(await dialog.locator('img').count(),1);
+  assert.equal(await dialog.getByLabel('Next image').isVisible(),false);
+  await page.keyboard.press('Escape');
+  await page.getByText('Clip',{exact:true}).tap();
+  await page.locator('#outside').tap();
+  assert.deepEqual(await page.evaluate(()=>fallbacks),['Dusk','legacy','legacy']);
+  assert.deepEqual(errors,[]);
+  console.log('PASS: mobile image tap, mixed-row scope, native touch swipe, selection, dismissal/scroll, single image and Canvas fallbacks');
+} finally { await browser.close(); }

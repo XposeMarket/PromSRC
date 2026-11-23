@@ -24,7 +24,7 @@ const STYLE_DEFINITIONS = Object.freeze({
       id: 'pm-mobile-surfaces-style',
       file: 'mobile-surfaces.css',
       layer: 'shell',
-      version: 'pm-v3-2026-11-15-approval-sheet-authority',
+      version: 'pm-v4-chat-image-preview',
       attribute: 'data-prom-mobile-surfaces-style',
     }),
   ]),
