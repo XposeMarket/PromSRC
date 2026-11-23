@@ -3955,7 +3955,7 @@ export function initMobileCanvasSheet() {
     });
   });
 
-  installChatImagePreview(document.body, item => api.open(item));
+  installChatImagePreview(document.body);
   window.__pmCanvasSheet = api;
 }
 

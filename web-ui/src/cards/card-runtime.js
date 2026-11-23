@@ -71,25 +71,46 @@ function tickClocks() {
 }
 
 // ── lightbox ───────────────────────────────────────────────────────────────
-function openLightbox(items, start) {
-  let i = start;
-  const box = document.createElement('div');
+export function openLightbox(items, start = 0) {
+  if (!items?.length || document.querySelector('dialog.pc-lightbox[open]')) return;
+  let i = Math.max(0, Math.min(items.length - 1, start));
+  const box = document.createElement('dialog');
   box.className = 'pc-lightbox';
+  box.setAttribute('aria-label', 'Image gallery');
+  const multi = items.length > 1;
+  const nav = (cls, label, glyph) => multi ? `<button type="button" class="pc-lb-nav ${cls}" aria-label="${label}">${glyph}</button>` : '';
+  box.innerHTML = `<button type="button" class="pc-lb-close" aria-label="Close" autofocus>×</button>${nav('prev','Previous','‹')}<figure><img alt="" referrerpolicy="no-referrer"><figcaption aria-live="polite"></figcaption></figure>${nav('next','Next','›')}`;
+  const image = box.querySelector('img'), caption = box.querySelector('figcaption');
   const paint = () => {
-    const it = items[i] || {};
-    box.innerHTML = `<button type="button" class="pc-lb-close" aria-label="Close">×</button><button type="button" class="pc-lb-nav prev" aria-label="Previous">‹</button><figure><img src="${esc(it.src || it.thumb)}" alt="${esc(it.title)}" referrerpolicy="no-referrer"><figcaption>${esc(it.title)}${it.page ? ` · <a href="${esc(it.page)}" target="_blank" rel="noopener noreferrer">${esc(it.source || 'Source')} ↗</a>` : ''}<span>${i + 1} / ${items.length}</span></figcaption></figure><button type="button" class="pc-lb-nav next" aria-label="Next">›</button>`;
+    const it = items[i];
+    image.src = it.src || it.thumb;
+    image.alt = it.title || '';
+    caption.innerHTML = `${esc(it.title)}${it.page ? ` · <a href="${esc(it.page)}" target="_blank" rel="noopener noreferrer">${esc(it.source || 'Source')} ↗</a>` : ''}${multi ? `<span>${i + 1} / ${items.length}</span>` : ''}`;
   };
-  const close = () => { box.remove(); document.removeEventListener('keydown', onKey); };
-  const step = (d) => { i = (i + d + items.length) % items.length; paint(); };
-  const onKey = (e) => { if (e.key === 'Escape') close(); if (e.key === 'ArrowLeft') step(-1); if (e.key === 'ArrowRight') step(1); };
-  box.addEventListener('click', (e) => {
+  const close = () => box.close();
+  const step = d => { i = (i + d + items.length) % items.length; paint(); };
+  box.addEventListener('click', e => {
     if (e.target === box || e.target.closest('.pc-lb-close')) close();
     else if (e.target.closest('.pc-lb-nav.prev')) step(-1);
     else if (e.target.closest('.pc-lb-nav.next')) step(1);
   });
-  document.addEventListener('keydown', onKey);
-  paint();
-  document.body.appendChild(box);
+  box.addEventListener('keydown', e => {
+    if (!multi || !['ArrowLeft','ArrowRight'].includes(e.key)) return;
+    e.preventDefault(); e.stopPropagation(); step(e.key === 'ArrowRight' ? 1 : -1);
+  });
+  // Swipe on the photo only. Leave pinch-zoom, vertical gestures and source links alone.
+  let origin;
+  image.addEventListener('touchstart', e => { origin = e.touches.length === 1 ? e.touches[0] : null; }, { passive: true });
+  image.addEventListener('touchcancel', () => { origin = null; });
+  image.addEventListener('touchend', e => {
+    if (!origin || !multi) return;
+    const dx = e.changedTouches[0].clientX - origin.clientX, dy = e.changedTouches[0].clientY - origin.clientY;
+    origin = null;
+    if (Math.abs(dx) >= 40 && Math.abs(dx) > Math.abs(dy) * 1.3) step(dx < 0 ? 1 : -1);
+  }, { passive: true });
+  window.addEventListener('hashchange', close);
+  box.addEventListener('close', () => { window.removeEventListener('hashchange', close); box.remove(); }, { once: true });
+  paint(); document.body.append(box); box.showModal();
 }
 
 async function copyText(text) {

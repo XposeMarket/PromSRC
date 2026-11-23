@@ -102,6 +102,7 @@ export const CARD_CSS = `
 .pc-lightbox figcaption{color:#ddd;font-size:13px;display:flex;justify-content:space-between;gap:12px}.pc-lightbox a{color:#fff}
 .pc-lb-close,.pc-lb-nav{position:absolute;background:rgba(255,255,255,.12);color:#fff;border:0;border-radius:50%;width:42px;height:42px;font-size:24px;cursor:pointer}
 .pc-lb-close{top:16px;right:16px}.pc-lb-nav.prev{left:16px}.pc-lb-nav.next{right:16px}
+dialog.pc-lightbox{box-sizing:border-box;margin:0;border:0;width:100%;height:100%;max-width:none;max-height:none;overscroll-behavior:contain}dialog.pc-lightbox:not([open]){display:none}dialog.pc-lightbox::backdrop{background:transparent}.pc-lightbox img{touch-action:pan-y pinch-zoom}.pc-lightbox figcaption{overflow-wrap:anywhere}.pc-lightbox figcaption span{flex:none}.pc-lightbox .pc-lb-close{top:max(16px,env(safe-area-inset-top));right:max(16px,env(safe-area-inset-right))}
 /* news */
 .pc-news-tile{width:250px;border:1px solid var(--pc-line);border-radius:12px;overflow:hidden;text-decoration:none;color:var(--pc-text);background:var(--pc-soft);display:flex;flex-direction:column}
 .pc-news-img{aspect-ratio:16/9;background:var(--pc-line);overflow:hidden}.pc-news-img img{width:100%;height:100%;object-fit:cover;display:block}
