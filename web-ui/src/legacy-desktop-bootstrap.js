@@ -286,7 +286,7 @@ function _isSessionWorking(session) {
 }
 
 function _isPriorityAttentionSession(session) {
-  return _isPrioritySession(session) && (_isSessionWorking(session) || session?.unread === true);
+  return _isPrioritySession(session) && (session?.needsYou === true || _isSessionWorking(session) || session?.unread === true);
 }
 
 function _priorityAttentionSessions() {
@@ -634,13 +634,13 @@ function _renderChannelDrill(channelKey) {
   const sessionCards = sessions.map(s => {
     const isActive = s.id === window.activeChatSessionId;
     const isPinned = _pinnedChats.includes(s.id);
-    const isWorking = _isSessionWorking(s);
-    const unreadDot = s.unread && !isWorking && !_isImportedSession(s)
+    const isWorking = !s.needsYou && _isSessionWorking(s);
+    const unreadDot = s.unread && !s.needsYou && !isWorking && !_isImportedSession(s)
       ? '<span class="session-unread-dot" title="Unread" aria-label="Unread"></span>'
       : '';
     const channelTimestamp = getSessionLastMessageAt(s) || s.createdAt;
     return `
-<div class="job-item chat-session-item channel-chat-item${isActive ? ' active' : ''}${isWorking ? ' is-working' : ''}${s.unread && !isWorking ? ' unread' : ''}${isPinned ? ' pinned-chat' : ''}${_channelsEditMode ? ' is-editing' : ''}${_isImportedSession(s) ? ' imported-session-card' : ''}" data-session-hover-preview data-session-id="${escHtml(s.id)}" data-session-channel="${escHtml(channelKey)}" data-session-title="${escHtml(s.title || 'Untitled')}" draggable="true" ondragstart="beginSidebarSessionDrag(event)" ondragover="allowSidebarSessionDrop(event)" ondragleave="leaveSidebarSessionDrop(event)" ondrop="dropSidebarSession(event)" ondragend="endSidebarSessionDrag()" onpointerenter="queueSessionHoverPreview(this)" onpointerleave="scheduleSessionHoverPreviewClose()" onclick="if (consumeSidebarClick(event)) return; openSession('${s.id}')">
+<div class="job-item chat-session-item channel-chat-item${isActive ? ' active' : ''}${s.needsYou ? ' is-needs-you' : isWorking ? ' is-working' : ''}${s.unread && !s.needsYou && !isWorking ? ' unread' : ''}${isPinned ? ' pinned-chat' : ''}${_channelsEditMode ? ' is-editing' : ''}${_isImportedSession(s) ? ' imported-session-card' : ''}" data-session-hover-preview data-session-id="${escHtml(s.id)}" data-session-channel="${escHtml(channelKey)}" data-session-title="${escHtml(s.title || 'Untitled')}" draggable="true" ondragstart="beginSidebarSessionDrag(event)" ondragover="allowSidebarSessionDrop(event)" ondragleave="leaveSidebarSessionDrop(event)" ondrop="dropSidebarSession(event)" ondragend="endSidebarSessionDrag()" onpointerenter="queueSessionHoverPreview(this)" onpointerleave="scheduleSessionHoverPreviewClose()" onclick="if (consumeSidebarClick(event)) return; openSession('${s.id}')">
    ${renderImportedSourceMeta(s, channelTimestamp)}
    ${_channelsEditMode ? renderSessionEditActions(s.id, isPinned) : `<button class="chat-session-action-btn chat-pin-btn${isPinned ? ' active' : ''}" onclick="toggleChatPin('${s.id}', event)" title="${isPinned ? 'Unpin' : 'Pin'} chat" aria-label="${isPinned ? 'Unpin' : 'Pin'} chat">${SKILL_STAR_ICON(isPinned)}</button>`}
   <div class="job-item-head job-item-head--pinned">
@@ -652,7 +652,7 @@ function _renderChannelDrill(channelKey) {
   </div>
    <div class="job-item-meta">
      ${isPinned ? `<span class="badge badge-queued">Channel: ${escHtml(def.label)}</span>` : ''}
-     ${isWorking ? '<span class="session-working-badge">Working</span>' : ''}
+     ${s.needsYou ? '<span class="session-wait-badge">Needs you</span>' : isWorking ? '<span class="session-working-badge">Working</span>' : ''}
    </div>
 </div>`;
   }).join('');
@@ -660,9 +660,9 @@ function _renderChannelDrill(channelKey) {
   const serverCards = serverOnly.map(s => {
     const isActive = s.id === window.activeChatSessionId;
     const isPinned = _pinnedChats.includes(s.id);
-    const isWorking = _isSessionWorking(s);
+    const isWorking = !s.needsYou && _isSessionWorking(s);
     const serverTimestamp = getSessionLastMessageAt(s) || s.lastActiveAt || s.createdAt;
-    const unreadDot = s.unread && !isWorking && !_isImportedSession(s)
+    const unreadDot = s.unread && !s.needsYou && !isWorking && !_isImportedSession(s)
       ? '<span class="session-unread-dot" title="Unread" aria-label="Unread"></span>'
       : '';
   const title = escHtml(s.title || s.preview || s.id.slice(0, 20));
@@ -670,7 +670,7 @@ function _renderChannelDrill(channelKey) {
       ? s.voiceRoom.participants.map((participant) => participant.label).filter(Boolean).join(' · ')
       : '';
     return `
-<div class="job-item chat-session-item channel-chat-item${isActive ? ' active' : ''}${isWorking ? ' is-working' : ''}${s.unread && !isWorking ? ' unread' : ''}${isPinned ? ' pinned-chat' : ''}${_channelsEditMode ? ' is-editing' : ''}${_isImportedSession(s) ? ' imported-session-card' : ''} session-terminal" data-session-hover-preview data-session-id="${escHtml(s.id)}" data-session-channel="${escHtml(channelKey)}" data-session-title="${title}" draggable="true" ondragstart="beginSidebarSessionDrag(event)" ondragover="allowSidebarSessionDrop(event)" ondragleave="leaveSidebarSessionDrop(event)" ondrop="dropSidebarSession(event)" ondragend="endSidebarSessionDrag()" onpointerenter="queueSessionHoverPreview(this)" onpointerleave="scheduleSessionHoverPreviewClose()" onclick="if (consumeSidebarClick(event)) return; openTerminalSession('${s.id}', '${channelKey}')">
+<div class="job-item chat-session-item channel-chat-item${isActive ? ' active' : ''}${s.needsYou ? ' is-needs-you' : isWorking ? ' is-working' : ''}${s.unread && !s.needsYou && !isWorking ? ' unread' : ''}${isPinned ? ' pinned-chat' : ''}${_channelsEditMode ? ' is-editing' : ''}${_isImportedSession(s) ? ' imported-session-card' : ''} session-terminal" data-session-hover-preview data-session-id="${escHtml(s.id)}" data-session-channel="${escHtml(channelKey)}" data-session-title="${title}" draggable="true" ondragstart="beginSidebarSessionDrag(event)" ondragover="allowSidebarSessionDrop(event)" ondragleave="leaveSidebarSessionDrop(event)" ondrop="dropSidebarSession(event)" ondragend="endSidebarSessionDrag()" onpointerenter="queueSessionHoverPreview(this)" onpointerleave="scheduleSessionHoverPreviewClose()" onclick="if (consumeSidebarClick(event)) return; openTerminalSession('${s.id}', '${channelKey}')">
    ${renderImportedSourceMeta(s, serverTimestamp)}
    ${_channelsEditMode ? renderSessionEditActions(s.id, isPinned) : `<button class="chat-session-action-btn chat-pin-btn${isPinned ? ' active' : ''}" onclick="toggleChatPin('${s.id}', event)" title="${isPinned ? 'Unpin' : 'Pin'} chat" aria-label="${isPinned ? 'Unpin' : 'Pin'} chat">${SKILL_STAR_ICON(isPinned)}</button>`}
   <div class="job-item-head job-item-head--pinned">
@@ -683,7 +683,7 @@ function _renderChannelDrill(channelKey) {
   </div>
    <div class="job-item-meta">
      ${isPinned ? `<span class="badge badge-queued">Channel: ${escHtml(def.label)}</span>` : ''}
-     ${isWorking ? '<span class="session-working-badge">Working</span>' : ''}
+     ${s.needsYou ? '<span class="session-wait-badge">Needs you</span>' : isWorking ? '<span class="session-working-badge">Working</span>' : ''}
    </div>
 </div>`;
   }).join('');
@@ -1874,8 +1874,8 @@ function renderPriorityChatSessionCard(s, options = {}) {
   const model = _prioritySessionModel(s);
   const messageCount = _prioritySessionMessageCount(s);
   const branch = renderSidebarBranchIndicator(s, 'priority');
-  const isWorking = _isSessionWorking(s);
-  const priorityStatus = isWorking
+  const isWorking = !s.needsYou && _isSessionWorking(s);
+  const priorityStatus = s.needsYou ? '<span class="session-wait-badge">Needs you</span>' : isWorking
     ? '<span class="priority-chat-status priority-chat-working">Working</span>'
     : s.unread
       ? '<span class="priority-chat-status priority-chat-unread">Unread</span>'
@@ -1887,7 +1887,7 @@ function renderPriorityChatSessionCard(s, options = {}) {
     : `confirmSessionHoverSettle('${s.id}', '${escHtml(title)}')`;
   const nestedClass = options.projectNested ? ' project-chat-session-card' : '';
   return `
-    <div class="priority-chat-card${nestedClass} ${s.id === window.activeChatSessionId ? 'active' : ''}${isWorking ? ' is-working' : ''}${s.unread && !isWorking ? ' unread' : ''}${isPinned ? ' pinned-chat' : ''}${isSettled ? ' settled-chat' : ''}${_isImportedSession(s) ? ' imported-session-card' : ''}" data-session-hover-preview data-session-id="${escHtml(s.id)}" data-session-channel="${escHtml(String(s.channel || 'web'))}" data-session-title="${escHtml(title)}" onclick="if (consumeSidebarClick(event)) return; ${openHandler}">
+    <div class="priority-chat-card${nestedClass} ${s.id === window.activeChatSessionId ? 'active' : ''}${s.needsYou ? ' is-needs-you' : isWorking ? ' is-working' : ''}${s.unread && !s.needsYou && !isWorking ? ' unread' : ''}${isPinned ? ' pinned-chat' : ''}${isSettled ? ' settled-chat' : ''}${_isImportedSession(s) ? ' imported-session-card' : ''}" data-session-hover-preview data-session-id="${escHtml(s.id)}" data-session-channel="${escHtml(String(s.channel || 'web'))}" data-session-title="${escHtml(title)}" onclick="if (consumeSidebarClick(event)) return; ${openHandler}">
       <div class="priority-chat-topline">
         <div class="priority-chat-title-wrap">
           ${renderImportedSourceLogo(s) || renderContactAgentLogo(s)}
@@ -1932,14 +1932,14 @@ function renderChatSessionCard(s, options = {}) {
       ? `openSettledSession('${s.id}')`
       : `openSession('${s.id}')`;
   const searchPreview = renderSessionSearchPreview(s);
-  const isWorking = _isSessionWorking(s);
+  const isWorking = !s.needsYou && _isSessionWorking(s);
   const sessionTimestamp = getSessionLastMessageAt(s) || s.createdAt;
   const sessionMeta = [
     s.isProposal ? '<span class="session-auto-badge" style="background:var(--brand)">Proposal</span>' : '',
     sourceBadge ? `<span class="badge badge-queued">${escHtml(sourceBadge)}</span>` : '',
-    isWorking ? '<span class="session-working-badge">Working</span>' : '',
+    s.needsYou ? '<span class="session-wait-badge">Needs you</span>' : isWorking ? '<span class="session-working-badge">Working</span>' : '',
   ].filter(Boolean).join('');
-  const unreadDot = s.unread && !isWorking && !_isImportedSession(s)
+  const unreadDot = s.unread && !s.needsYou && !isWorking && !_isImportedSession(s)
     ? '<span class="session-unread-dot" title="Unread" aria-label="Unread"></span>'
     : '';
   const nestedClass = options.projectNested ? ' project-chat-session-card' : '';
@@ -1949,7 +1949,7 @@ function renderChatSessionCard(s, options = {}) {
     ? `<button class="chat-session-action-btn project-chat-delete-btn" onclick="event.stopPropagation();confirmDeleteProjectSession('${escHtml(projectId)}','${escHtml(s.id)}')" title="Delete chat" aria-label="Delete chat"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></svg></button>`
     : '';
   return `
-    <div class="job-item chat-session-item${nestedClass}${chatProjectOwned ? ' chat-in-project' : ''} ${s.id === window.activeChatSessionId ? 'active' : ''}${isWorking ? ' is-working' : ''}${s.unread && !isWorking ? ' unread' : ''}${isPinned ? ' pinned-chat' : ''}${isSettled ? ' settled-chat' : ''}${_isImportedSession(s) ? ' imported-session-card' : ''}" data-session-hover-preview data-session-id="${escHtml(s.id)}" data-session-channel="${escHtml(String(s.channel || 'web'))}" data-session-title="${escHtml(s.title || 'New chat')}" draggable="true" ondragstart="beginSidebarSessionDrag(event)" ondragover="allowSidebarSessionDrop(event)" ondragleave="leaveSidebarSessionDrop(event)" ondrop="dropSidebarSession(event)" ondragend="endSidebarSessionDrag()" onpointerenter="queueSessionHoverPreview(this)" onpointerleave="scheduleSessionHoverPreviewClose()" onclick="if (consumeSidebarClick(event)) return; ${openHandler}">
+    <div class="job-item chat-session-item${nestedClass}${chatProjectOwned ? ' chat-in-project' : ''} ${s.id === window.activeChatSessionId ? 'active' : ''}${s.needsYou ? ' is-needs-you' : isWorking ? ' is-working' : ''}${s.unread && !s.needsYou && !isWorking ? ' unread' : ''}${isPinned ? ' pinned-chat' : ''}${isSettled ? ' settled-chat' : ''}${_isImportedSession(s) ? ' imported-session-card' : ''}" data-session-hover-preview data-session-id="${escHtml(s.id)}" data-session-channel="${escHtml(String(s.channel || 'web'))}" data-session-title="${escHtml(s.title || 'New chat')}" draggable="true" ondragstart="beginSidebarSessionDrag(event)" ondragover="allowSidebarSessionDrop(event)" ondragleave="leaveSidebarSessionDrop(event)" ondrop="dropSidebarSession(event)" ondragend="endSidebarSessionDrag()" onpointerenter="queueSessionHoverPreview(this)" onpointerleave="scheduleSessionHoverPreviewClose()" onclick="if (consumeSidebarClick(event)) return; ${openHandler}">
       ${renderImportedSourceMeta(s, sessionTimestamp)}
       <button class="chat-session-action-btn chat-pin-btn${isPinned ? ' active' : ''}" onclick="toggleChatPin('${s.id}', event)" title="${isPinned ? 'Unpin' : 'Pin'} chat" aria-label="${isPinned ? 'Unpin' : 'Pin'} chat">${SKILL_STAR_ICON(isPinned)}</button>
       ${projectDeleteAction}

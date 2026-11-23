@@ -16,8 +16,8 @@ for (const width of [320,390]) {
  const _activeMobileThread=()=>thread,_mobileMessageCopyText=m=>m.body.text;
  const resizeComposerInput=()=>{},_pmUpdateComposerRichPreview=()=>{},updateComposerSubmitState=()=>{},setChatComposerMode=()=>{};
  const renderThreadNow=()=>document.querySelector('.pm-msg').classList.toggle('editing',__pmChat.editingMessageIndex===0);
- eval(code+';window.startEdit=startMobileEditUserMessage;window.cancelEdit=cancelMobileEditUserMessage;');
- }, ['finishMobileComposerEdit','startMobileEditUserMessage','cancelMobileEditUserMessage'].map(extract).join('\n'));
+ eval(code+';window.startQueueEdit=()=>startMobileComposerEditor(-1,"Queued draft",async text=>{window.saved=text;return true});window.submitQueueEdit=()=>submitMobileEditedUserMessage(-1);window.startEdit=startMobileEditUserMessage;window.cancelEdit=cancelMobileEditUserMessage;');
+ }, ['finishMobileComposerEdit','startMobileEditUserMessage','startMobileComposerEditor','cancelMobileEditUserMessage'].map(extract).join('\n')+'\n'+source.slice(source.indexOf('  async function submitMobileEditedUserMessage('),source.indexOf('\n  }',source.indexOf('  async function submitMobileEditedUserMessage('))+4));
  await page.evaluate(()=>window.startEdit(0));
  assert.equal(await page.locator('textarea').inputValue(),'Original message');
  assert.equal(await page.locator('.editing').count(),1);
@@ -28,9 +28,16 @@ for (const width of [320,390]) {
  await page.getByRole('button',{name:'Cancel message edit'}).click();
  assert.equal(await page.locator('textarea').inputValue(),'Unsent draft');
  assert.equal(await page.locator('.editing').count(),0);
+ await page.evaluate(()=>window.startQueueEdit());
+ assert.equal(await page.locator('textarea').inputValue(),'Queued draft');
+ assert.equal(await page.locator('.pm-composer-edit-status span').innerText(),'Editing queued message');
+ await page.locator('textarea').fill('Revised follow-up');
+ await page.evaluate(()=>window.submitQueueEdit());
+ assert.equal(await page.evaluate(()=>window.saved),'Revised follow-up');
+ assert.equal(await page.locator('textarea').inputValue(),'Unsent draft');
  await page.close();
 }
 await browser.close();
 assert.match(source,/if \(messageComposerEdit\) \{\s*await submitMobileEditedUserMessage/);
-assert.match(source,/if \(!messageComposerEdit\) saveComposerDraft/);
+assert.match(source,/if \(!messageComposerEdit\) \{\s*durableQueue\.invalidateDraft\(\);\s*saveComposerDraft/);
 console.log('PASS: composer edit loads text, dims original, no inline editor, cancel restores draft at 320/390; submit routing and draft guards');

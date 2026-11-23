@@ -7,7 +7,7 @@
  */
 import { summarizeEscalations } from './managed-teams';
 
-export function summarizeTeamForList(team: any): any {
+export function summarizeTeamForList(team: any, liveStartedAt = 0): any {
   if (!team || typeof team !== 'object') return team;
   const { teamChat, runHistory, roomState, ...rest } = team;
   const chat = Array.isArray(teamChat) ? teamChat : [];
@@ -21,6 +21,8 @@ export function summarizeTeamForList(team: any): any {
   const lastRun = runs.reduce((m: number, r: any) => Math.max(m, ts(r?.finishedAt), ts(r?.startedAt)), 0);
   return {
     ...rest,
+    lastRunAt: Math.max(lastRun, ts(rest.lastRunAt), liveStartedAt),
+    running: liveStartedAt > 0,
     teamChatCount: chat.length,
     runHistoryCount: runs.length,
     lastActivityAt: Math.max(ts(rest.lastActivityAt), lastChat, lastRun) || undefined,

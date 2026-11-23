@@ -753,7 +753,7 @@ function renderSubagentsCanvas() {
     const schedBadge = agent.cronSchedule ? `<div style="position:absolute;top:-4px;right:-6px;font-size:10px;background:#f0fdf4;color:#166534;border:1px solid #bbf7d0;border-radius:999px;padding:1px 5px;font-weight:700">⏰</div>` : '';
     const marketplaceBadge = agent.marketplaceProfile?.packId ? `<div style="position:absolute;bottom:-4px;right:-6px;font-size:10px;background:#fff7ed;color:#9a3412;border:1px solid #fed7aa;border-radius:999px;padding:1px 5px;font-weight:800">pack</div>` : '';
     return `
-      <div class="subagent-card" data-agent-id="${agent.id}"
+      <div class="subagent-card${agent.liveStartedAt || agent.lastRun?.inProgress ? ' is-roster-working' : ''}" data-agent-id="${agent.id}"
            onclick="openSubagentDetail('${escHtml(agent.id)}')"
            style="display:inline-flex;flex-direction:column;align-items:center;gap:8px;cursor:pointer;padding:16px 12px;border-radius:16px;transition:all 0.2s;position:relative;${isActive ? 'background:transparent;border:1px solid var(--brand)' : 'background:transparent;border:1px solid var(--line)'}">
         <div style="position:relative">

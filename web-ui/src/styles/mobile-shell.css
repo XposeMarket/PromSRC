@@ -937,7 +937,8 @@ body.pm-model-badge-pressing * {
   top: auto !important;
   bottom: calc(var(--pm-tabbar-h, 68px) + env(safe-area-inset-bottom, 0px) + 16px) !important;
   width: min(296px, calc(100vw - 48px)) !important;
-  max-height: min(58dvh, 320px);
+  box-sizing: border-box;
+  max-height: calc(100dvh - 24px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
   padding: 13px 8px 10px;
   border-radius: 14px;
   transform: translate(-50%, 16px) scale(.98);
@@ -968,7 +969,7 @@ body.pm-model-badge-pressing * {
 .pm-msheet-session-context .pm-msheet-head { margin: 0 4px 7px; }
 .pm-msheet-session-context .pm-msheet-title { font-size: 15px; font-weight: 650; color: var(--pm-text-soft, var(--pm-text)); }
 .pm-msheet-session-context .pm-msheet-close { display: none; }
-.pm-msheet-session-context .pm-msheet-body { overflow: visible; padding: 0; }
+.pm-msheet-session-context .pm-msheet-body { overflow-y: auto; overscroll-behavior: contain; padding: 0; }
 .pm-msheet-session-context .pm-msheet-rows { gap: 0; }
 .pm-msheet-session-context .pm-sess-action-row {
   min-height: 43px;
@@ -1250,3 +1251,14 @@ body.pm-mobile-active.pm-mobile-drawer-open .pm-tabbar-haptic-gesture-surface {
 .pm-ny-entry .pm-approval-title { overflow-wrap:anywhere; }
 .pm-ny-entry .pm-q-actions,
 .pm-ny-entry .pm-approval-actions { flex-wrap:wrap; }
+
+/* Roster search stays a single line, even while the virtual keyboard animates. */
+.pm-roster-search { position:fixed; z-index:10030; left:var(--pm-mobile-chrome-inset,22px); right:var(--pm-mobile-chrome-inset,22px); bottom:calc(var(--pm-tabbar-h) + env(safe-area-inset-bottom) + var(--pm-mobile-composer-gap, 22px)); height:54px; box-sizing:border-box; display:flex; align-items:center; padding:0 18px; background:var(--pm-surface); color:var(--pm-text); border:0; border-radius:999px; box-shadow:0 3px 16px rgba(0,0,0,.1); }
+.pm-roster-search input { width:100%; min-width:0; margin:0; padding:0; border:0; outline:0; background:transparent; color:inherit; font:inherit; font-size:16px; }
+#pm-teams-body, #pm-subagents-body { padding-bottom:calc(var(--pm-tabbar-h) + env(safe-area-inset-bottom) + 108px); }
+:is(#pm-teams-body,#pm-subagents-body) [hidden] { display:none !important; }
+.pm-roster-no-match { color:var(--pm-muted); text-align:center; }
+body.pm-mobile-active :is(.pm-team-tile,.pm-team-preview).is-roster-working { outline:2px solid var(--pm-accent); outline-offset:-2px; box-shadow:0 0 12px color-mix(in srgb,var(--pm-accent) 45%,transparent); }
+@media (prefers-reduced-motion:no-preference) { .is-roster-working { animation:pm-roster-glow 1.8s ease-in-out infinite alternate; } }
+@keyframes pm-roster-glow { to { box-shadow:0 0 18px color-mix(in srgb,var(--pm-accent) 65%,transparent); } }
+body.pm-mobile-active .pm-drawer .pm-session-row.is-needs-you .pm-session-state { display:inline-flex; color:var(--pm-red); font-weight:700; }

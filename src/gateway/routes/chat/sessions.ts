@@ -1,3 +1,5 @@
+import { getApprovalQueue } from '../../verification-flow';
+import { getPrometheusQuestionQueue } from '../../prometheus-questions';
 import type { Router, RequestHandler } from 'express';
 import express from 'express';
 import { slimSessionList } from '.././perf-projections';
@@ -90,6 +92,8 @@ import { isLiveRunningRuntime, boundedPositiveInt, sanitizeHistoryForUiResponse,
 import { estimateStoredThreadFootprint, aggregateSessionModelUsage, buildContextWindowCurrentState } from './context-window';
 
 export function markActiveRunsOnSessionList<T extends any>(input: T): T {
+  // Presentation only: no request details, and no inference from a paused plan.
+  const waiting = new Set([...getPrometheusQuestionQueue().listPending(), ...getApprovalQueue().listPending()].map(r => r.sessionId));
   const activeSessionIds = new Set(
     listLiveRuntimes()
       .filter((runtime: any) => (
@@ -104,7 +108,7 @@ export function markActiveRunsOnSessionList<T extends any>(input: T): T {
     // The live-runtime registry is authoritative. Do not carry a persisted
     // activeRun bit forward after the runtime has finished, or a stale flag
     // can make the sidebar show Working on the wrong chat after a switch.
-    ? { ...session, activeRun: activeSessionIds.has(String(session.id || '')) }
+    ? { ...session, needsYou: waiting.has(session.id), activeRun: activeSessionIds.has(String(session.id || '')) }
     : session;
 
   if (Array.isArray(input)) return input.map(mark) as T;

@@ -65,7 +65,7 @@ assert.doesNotMatch(css, /linear-gradient\(135deg/, 'stack glass must stay neutr
 
 assert.match(
   css,
-  /\.pm-mobile-queued-prompts\s*\{[\s\S]*?left:\s*var\(--pm-composer-stack-inset\);[\s\S]*?right:\s*var\(--pm-composer-stack-inset\);[\s\S]*?width:\s*auto;[\s\S]*?bottom:\s*calc\(var\(--pm-composer-stack-base-bottom\) \+ var\(--pm-goal-live-height, 0px\)\);/,
+  /\.pm-mobile-queued-prompts\s*\{[\s\S]*?left:\s*var\(--pm-composer-stack-inset\);[\s\S]*?right:\s*var\(--pm-composer-stack-inset\);[\s\S]*?width:\s*auto;[\s\S]*?bottom:\s*var\(--pm-composer-stack-base-bottom\);/,
   'queued messages must share the composer horizontal inset and stack directly above it',
 );
 assert.match(
@@ -80,7 +80,7 @@ assert.match(
 );
 assert.match(
   css,
-  /\.pm-page\.pm-chat-status-priority-active \.pm-chat-connection-status\s*\{\s*bottom:\s*var\(--pm-composer-stack-base-bottom\);/,
+  /\.pm-page\.pm-chat-status-priority-active \.pm-chat-connection-status\s*\{\s*bottom:\s*calc\(var\(--pm-composer-stack-base-bottom\) \+ var\(--pm-queued-live-height, 0px\)\);/,
   'priority reconnect/recovery status must ignore stale hidden-stack heights and pin directly above the composer',
 );
 assert.match(css, /\[class\*="recovery"\]\[class\*="toast"\]/, 'dedicated recovery toast variants must be composer anchored');

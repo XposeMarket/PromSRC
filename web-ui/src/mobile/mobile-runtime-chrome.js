@@ -146,7 +146,7 @@ export function runtimeStackBase({ anchorRect, page, goalStrip } = {}) {
   const q = (sel) => page?.querySelector?.(sel);
   return Math.min(
     anchorTop,
-    visibleTop(q('#pm-mobile-queued-prompts')),
+    visibleTop(q('#pm-mobile-queue-stack')),
     visibleTop(q('#pm-tool-progress-dock')),
     rowMode === 'goal' ? visibleTop(q('#pm-mobile-runtime-pills')) : visibleTop(goalStrip),
   );
@@ -201,8 +201,8 @@ export function pinRuntimeChrome({ rect, form, page, goalStrip, planDock, agentD
     const goalLayer = rowMode === 'goal' ? 0 : height(goalStrip);
     const queuedAndTool = css('--pm-queued-live-height') + css('--pm-tool-progress-live-height') + (goalLayer ? goalLayer + 8 : 0);
     if (rowMode === 'goal') {
-      const rowEdge = row ? stackAboveComposerTop([row], kbTop, 8, 0) : kbTop - 8;
-      stackAboveComposerTop([jumpButton], rowEdge + 8 - queuedAndTool, 10);
+      const rowEdge = row ? stackAboveComposerTop([row], kbTop, 8, css('--pm-queued-live-height')) : kbTop - 8;
+      stackAboveComposerTop([jumpButton], rowEdge + 8 - css('--pm-tool-progress-live-height'), 10);
       return { keyboardTop: kbTop };
     }
     const pills = (rowMode === 'plan' ? [row] : [planDock, agentDock]).filter((el) => el && !el.hidden);

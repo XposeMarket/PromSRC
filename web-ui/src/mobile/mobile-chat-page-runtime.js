@@ -3459,8 +3459,8 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
       sendBtn.disabled = messageComposerEdit.submitting || !input.value.trim();
       sendBtn.classList.remove('is-abort', 'is-voice', 'is-stop-locked');
       sendBtn.style.opacity = '';
-      sendBtn.title = 'Save and resend';
-      sendBtn.setAttribute('aria-label', 'Save and resend');
+      sendBtn.title = messageComposerEdit.saveQueueEdit ? 'Save queued message' : 'Save and resend';
+      sendBtn.setAttribute('aria-label', sendBtn.title);
       sendBtn.innerHTML = ICONS.send;
       updateComposerExpandedState();
       return;
@@ -3553,6 +3553,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
     target: () => requestedSession === MOBILE_CHAT_SESSION_ID || voiceRoomTranscript ? null : {
       sessionId: requestedSession, gatewayId: currentChatGateway()?.gatewayId,
     },
+    openEditor: (row, save) => startMobileComposerEditor(-1, row.message, save),
     pinFetch: pinMobileGatewayFetch, report: pmToast, escape: escapeHtml,
     runtimeId: () => _readMobileActiveRun(requestedSession)?.runtimeId,
     upload: (files, fetch) => _uploadMobileChatAttachments(files, { fetch }),
@@ -6263,18 +6264,23 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
     const thread = _activeMobileThread();
     const msg = thread[index];
     if (!msg || msg.role !== 'user') return;
+    startMobileComposerEditor(index, _mobileMessageCopyText(msg));
+  }
+
+  function startMobileComposerEditor(index, text, saveQueueEdit = null) {
     if (messageComposerEdit?.submitting) return;
     const previousDraft = messageComposerEdit?.previousDraft ?? input.value;
     finishMobileComposerEdit();
-    messageComposerEdit = { index, previousDraft, submitting: false };
+    messageComposerEdit = { index, previousDraft, saveQueueEdit, submitting: false };
     __pmChat.editingMessageIndex = index;
     const status = document.createElement('div');
     status.className = 'pm-composer-edit-status';
     status.innerHTML = '<span>Editing message</span><button type="button" aria-label="Cancel message edit">Cancel</button>';
+    if (saveQueueEdit) status.querySelector('span').textContent = 'Editing queued message';
     status.querySelector('button').addEventListener('click', () => cancelMobileEditUserMessage(index));
     form.prepend(status);
     form.classList.add('is-message-editing');
-    input.value = _mobileMessageCopyText(msg);
+    input.value = text;
     setChatComposerMode(true, { animate: true, preserveScroll: true, reason: 'edit' });
     resizeComposerInput();
     _pmUpdateComposerRichPreview(page, input);
@@ -6298,7 +6304,9 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
     input.readOnly = true;
     updateComposerSubmitState();
     try {
-      await rerunMobileEditedUserMessage(index, nextText);
+      if (edit.saveQueueEdit) {
+        if (!await edit.saveQueueEdit(nextText)) throw new Error('The queue changed or the update failed. Your edit is still here.');
+      } else await rerunMobileEditedUserMessage(index, nextText);
       if (messageComposerEdit === edit) finishMobileComposerEdit();
       renderThreadNow();
     } catch (error) {
@@ -7541,14 +7549,16 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     }
     if (!stillInChat()) return;
     const enqueueDurably = async (sid) => {
-      const draftUnchanged = () => stillInChat() && (options.skipUserBubble || options.fromQueue
+      // Card buttons submit their own immutable text, not the current composer draft.
+      const draftUnchanged = () => stillInChat() && (options.fromCard || options.skipUserBubble || options.fromQueue
         || (_pmGetComposerValue(input).trim() === msg && (Array.isArray(options.attachments)
           || (getPendingAttachments().length === composerAttachments.length
             && getPendingAttachments().every((file, index) => file === composerAttachments[index])))));
       try {
         const receipt = await durableQueue.enqueue({ sessionId: sid, gatewayId: sendGatewayId }, msg, files,
           { excludedSkillIds, selectedSkillIds }, draftUnchanged);
-        if (draftUnchanged()) {
+        if (options.fromCard) options.onCardAccepted?.();
+        else if (draftUnchanged()) {
           if (!Array.isArray(options.attachments)) { __pmChat.attachments[sid] = []; renderPendingAttachments(); }
           if (!options.skipUserBubble && !options.fromQueue) resetComposerInput();
           _pmClearActiveSlashCommand(page, input, { focus: false });
@@ -7638,7 +7648,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     const activeThread = __pmChat.threads[actualSessionId] || (__pmChat.threads[actualSessionId] = []);
     __pmChat.thread = activeThread;
     const clientRequestId = _newMobileClientRequestId(actualSessionId);
-    if (!fromQueue && !options.skipUserBubble && String(input?.value || '').trim() === msg) resetComposerInput();
+    if (!options.fromCard && !fromQueue && !options.skipUserBubble && String(input?.value || '').trim() === msg) resetComposerInput();
     const activeTurnStartedAt = Date.now();
     if (!__pmChat.sentClientRequestIds || typeof __pmChat.sentClientRequestIds !== 'object') __pmChat.sentClientRequestIds = {};
     __pmChat.sentClientRequestIds[actualSessionId] = clientRequestId;
@@ -7888,7 +7898,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
 
     let requestAccepted = false;
     const restoreRejectedMessage = () => {
-      if (requestAccepted || fromQueue) return;
+      if (requestAccepted || fromQueue || options.fromCard) return;
       if (!options.attachments && !__pmChat.attachments[actualSessionId]?.length && files.length) {
         __pmChat.attachments[actualSessionId] = files;
         if (page.isConnected && requestedSession === actualSessionId) renderPendingAttachments();
@@ -7919,7 +7929,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       selectedSkillIds: selectedSkillIds.length ? selectedSkillIds : undefined,
       agent: mobileAgentFieldForSend(actualSessionId),
     }, {
-      onAccepted: () => { requestAccepted = true; options.onQueueAccepted?.(); },
+      onAccepted: () => { requestAccepted = true; options.onQueueAccepted?.(); options.onCardAccepted?.(); },
       onEvent: (evt) => {
         hideReconnectingStatus();
         noteMobileLiveStreamActivity(actualSessionId);

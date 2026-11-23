@@ -48,7 +48,7 @@ const pauseText = {
   storage_unavailable: 'The gateway could not update the queue. Keep your draft and reconnect after the gateway is fixed.',
 };
 
-export function createMobileDurableQueue({ panel, target, pinFetch, report, escape, runtimeId, upload }) {
+export function createMobileDurableQueue({ panel, target, pinFetch, report, escape, runtimeId, upload, openEditor }) {
   let key = '';
   let state = null;
   let generation = 0;
@@ -220,9 +220,12 @@ export function createMobileDurableQueue({ panel, target, pinFetch, report, esca
     const row = state?.items?.[Number(button.dataset.index)];
     if (action === 'resume') { void act(action); return; }
     if (!row) return;
-    const message = action === 'edit' ? window.prompt('Edit queued prompt', row.message) : undefined;
-    if (message === null) return;
-    void act(action, row.id, message);
+    if (action === 'edit') {
+      const owner = key;
+      openEditor(row, text => current()?.key === owner && !disposed && act('edit', row.id, text));
+      return;
+    }
+    void act(action, row.id);
   }, {signal:listeners.signal});
   return { enqueue, refresh, act, matchesRetry, invalidateDraft, dispose() { listeners.abort(); disposed = true; ++generation; } };
 }

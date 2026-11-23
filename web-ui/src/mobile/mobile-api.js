@@ -927,7 +927,8 @@ export async function loadMobileTeams({ force = false } = {}) {
     house: i % 2 === 1 ? 'blue' : 'brown',
     leadId: (Array.isArray(t.subagentIds) && t.subagentIds[0]) || t.id,
     crewIds: Array.isArray(t.subagentIds) ? t.subagentIds.slice(1, 6) : [],
-    featured: i === 0,
+    running: t.running === true,
+    lastRunAt: t.lastRunAt || 0,
     emoji: _teamEmoji(t),
   }));
 }
@@ -1172,7 +1173,7 @@ export async function loadMemoryGraph() {
 
 
 function _subagentStatus(agent) {
-  if (agent?.lastRun?.inProgress) return 'running';
+  if (agent?.liveStartedAt || agent?.lastRun?.inProgress) return 'running';
   if (agent?.isTeamMember) return 'team';
   if (agent?.cronSchedule) return 'scheduled';
   if (agent?.lastRun?.finishedAt) return 'idle';
@@ -1207,7 +1208,7 @@ export async function loadMobileSubagents({ force = false } = {}) {
       color,
       pet: a.pet || null,
       status: _subagentStatus(a),
-      lastRunAt: a.lastRun?.finishedAt || a.lastRun?.startedAt || null,
+      lastRunAt: Math.max(a.liveStartedAt || 0, a.lastRun?.finishedAt || 0, a.lastRun?.startedAt || 0) || null,
       isTeamMember: a.isTeamMember === true,
       cronSchedule: a.cronSchedule || null,
       voice: (a.voice && typeof a.voice === 'object') ? a.voice : null,
@@ -1802,6 +1803,7 @@ function _normalizeSessionSummary(s) {
     mobileLastReadAt: Number(s?.mobileLastReadAt || 0) || null,
     mobileUnread: s?.mobileUnread === true,
     activeRun: s?.activeRun === true,
+    needsYou: s?.needsYou === true,
     chatModelRoute: s?.chatModelRoute && typeof s.chatModelRoute === 'object' ? s.chatModelRoute : null,
     // Drawer provider logo source (the model that answered last). Dropping it
     // made logos vanish on every paged drawer refresh after the first paint.

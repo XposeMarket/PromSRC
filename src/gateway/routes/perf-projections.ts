@@ -5,12 +5,12 @@ export function slimSessionList<T extends { sessions: Record<string, any>[] }>(p
   return { ...page, sessions: page.sessions.map((session) => {
     const { id, title, createdAt, lastActiveAt, lastMessageAt, lastAssistantAt,
       pinnedAt, sidebarOrder, settledAt, settled, mobileLastReadAt, mobileUnread,
-      activeRun, channel, preview, messageCount, creativeMode,
+      activeRun, needsYou, channel, preview, messageCount, creativeMode,
       canvasProjectRoot, canvasProjectLabel, canvasProjectLink, chatModelRoute,
       projectId, projectName, project, mainChatGoal, voiceRoom, externalImport, lastModel } = session;
     return { id, title, createdAt, lastActiveAt, lastMessageAt, lastAssistantAt,
       pinnedAt, sidebarOrder, settledAt, settled, mobileLastReadAt, mobileUnread,
-      activeRun, channel, preview: String(preview || '').slice(0, 160), messageCount,
+      activeRun, needsYou, channel, preview: String(preview || '').slice(0, 160), messageCount,
       creativeMode, canvasProjectRoot, canvasProjectLabel, canvasProjectLink,
       chatModelRoute: chatModelRoute ? { model: chatModelRoute.model, providerId: chatModelRoute.providerId,
         effective: chatModelRoute.effective ? { providerId: chatModelRoute.effective.providerId } : undefined } : undefined,

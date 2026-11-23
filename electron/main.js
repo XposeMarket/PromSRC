@@ -3575,7 +3575,7 @@ async function ensureNativeHiddenSurfacePaint(view) {
   throw new Error(`surface_not_rendered: hidden browser input deferred until first paint (${lastError?.message || lastError}); surface=${JSON.stringify(surface)}`);
 }
 
-async function clickNativeBrowserSurface(payload = {}) {
+async function clickNativeBrowserSurface(payload = {}, expectedWC = null, active = () => true) {
   const sessionId = payload.sessionId || '';
   await snapshotNativeBrowserSurface(sessionId).catch(() => null);
   const { view, wc } = requireNativeViewForSession(sessionId);
@@ -3583,6 +3583,9 @@ async function clickNativeBrowserSurface(payload = {}) {
   if (!located?.ok) throw new Error(located?.error || 'Target element not found.');
   leaseNativeBrowserActivity(view);
   await ensureNativeHiddenSurfacePaint(view);
+  if (expectedWC && (!active() || wc !== expectedWC || requireNativeViewForSession(sessionId).wc !== wc)) {
+    throw new Error('Download tab changed before the click.');
+  }
   // Real trusted click at the element's center — matches how Playwright clicks
   // Chrome (coordinate-based, isTrusted=true) so sites like X accept it.
   await sendNativeMouseClick(wc, located.x, located.y, payload.button === 'right' ? 'right' : 'left', nativeViewMeta(view).visible);
@@ -4064,6 +4067,11 @@ async function startNativeBrowserRpcServer() {
         else if (pathName === '/navigate') result = await navigateNativeBrowserSurface(payload);
         else if (pathName === '/snapshot') result = await snapshotNativeBrowserSurface(payload.sessionId);
         else if (pathName === '/click') result = await clickNativeBrowserSurface(payload);
+        else if (pathName === '/click-download') {
+          const { wc } = requireNativeViewForSession(payload.sessionId);
+          result = await require('./browser-download.cjs').captureClickedDownload(wc, payload,
+            active => clickNativeBrowserSurface(payload, wc, active));
+        }
         else if (pathName === '/fill') result = await fillNativeBrowserSurface(payload);
         else if (pathName === '/upload-file') {
           const { wc } = requireNativeViewForSession(payload.sessionId || '');
