@@ -6,7 +6,7 @@
  * - State persists per card id in localStorage, so chat re-renders, reloads
  *   and history replays keep quiz/flashcard/poll progress.
  */
-import { decodeCardData, sendCardFollowUp, esc } from './card-utils.js';
+import { decodeCardData, sendCardFollowUp } from './card-utils.js';
 import { renderInteractiveCard, reduceInteractiveCard } from './cards-interactive.js';
 import { CARD_CSS } from './cards-styles.js';
 import { FOCUSED_CSS, FOCUSED_TRACKS, hydrateFocusedCarousels } from './focused-carousel.js';
@@ -71,48 +71,6 @@ function tickClocks() {
 }
 
 // ── lightbox ───────────────────────────────────────────────────────────────
-export function openLightbox(items, start = 0) {
-  if (!items?.length || document.querySelector('dialog.pc-lightbox[open]')) return;
-  let i = Math.max(0, Math.min(items.length - 1, start));
-  const box = document.createElement('dialog');
-  box.className = 'pc-lightbox';
-  box.setAttribute('aria-label', 'Image gallery');
-  const multi = items.length > 1;
-  const nav = (cls, label, glyph) => multi ? `<button type="button" class="pc-lb-nav ${cls}" aria-label="${label}">${glyph}</button>` : '';
-  box.innerHTML = `<button type="button" class="pc-lb-close" aria-label="Close" autofocus>×</button>${nav('prev','Previous','‹')}<figure><img alt="" referrerpolicy="no-referrer"><figcaption aria-live="polite"></figcaption></figure>${nav('next','Next','›')}`;
-  const image = box.querySelector('img'), caption = box.querySelector('figcaption');
-  const paint = () => {
-    const it = items[i];
-    image.src = it.src || it.thumb;
-    image.alt = it.title || '';
-    caption.innerHTML = `${esc(it.title)}${it.page ? ` · <a href="${esc(it.page)}" target="_blank" rel="noopener noreferrer">${esc(it.source || 'Source')} ↗</a>` : ''}${multi ? `<span>${i + 1} / ${items.length}</span>` : ''}`;
-  };
-  const close = () => box.close();
-  const step = d => { i = (i + d + items.length) % items.length; paint(); };
-  box.addEventListener('click', e => {
-    if (e.target === box || e.target.closest('.pc-lb-close')) close();
-    else if (e.target.closest('.pc-lb-nav.prev')) step(-1);
-    else if (e.target.closest('.pc-lb-nav.next')) step(1);
-  });
-  box.addEventListener('keydown', e => {
-    if (!multi || !['ArrowLeft','ArrowRight'].includes(e.key)) return;
-    e.preventDefault(); e.stopPropagation(); step(e.key === 'ArrowRight' ? 1 : -1);
-  });
-  // Swipe on the photo only. Leave pinch-zoom, vertical gestures and source links alone.
-  let origin;
-  image.addEventListener('touchstart', e => { origin = e.touches.length === 1 ? e.touches[0] : null; }, { passive: true });
-  image.addEventListener('touchcancel', () => { origin = null; });
-  image.addEventListener('touchend', e => {
-    if (!origin || !multi) return;
-    const dx = e.changedTouches[0].clientX - origin.clientX, dy = e.changedTouches[0].clientY - origin.clientY;
-    origin = null;
-    if (Math.abs(dx) >= 40 && Math.abs(dx) > Math.abs(dy) * 1.3) step(dx < 0 ? 1 : -1);
-  }, { passive: true });
-  window.addEventListener('hashchange', close);
-  box.addEventListener('close', () => { window.removeEventListener('hashchange', close); box.remove(); }, { once: true });
-  paint(); document.body.append(box); box.showModal();
-}
-
 async function copyText(text) {
   try { await navigator.clipboard.writeText(text); return true; } catch {}
   const ta = document.createElement('textarea'); ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
@@ -120,7 +78,7 @@ async function copyText(text) {
   try { document.execCommand('copy'); return true; } catch { return false; } finally { ta.remove(); }
 }
 
-function onClick(event) {
+async function onClick(event) {
   // Two module copies (bundle + /src) both install a listener; a doubled
   // toggle (flip, next) cancels itself out. Handle each click exactly once.
   if (event.__pcHandled) return;
@@ -160,7 +118,7 @@ function onClick(event) {
     if (from && to) { const v = from.value; from.value = to.value; to.value = v; updateConvert(card); }
     return;
   }
-  if (act === 'lightbox' && card) { const items = decodeCardData(card) || []; if (items.length) openLightbox(items, Number(btn.getAttribute('data-i')) || 0); return; }
+  if (act === 'lightbox' && card) { const items = decodeCardData(card) || []; if (items.length) (await import('./gallery-lightbox.js')).openLightbox(items, Number(btn.getAttribute('data-i')) || 0); return; }
   if (act === 'fx-swap' && card) {
     const from = card.querySelector('[data-pc-fx="from"]'); const to = card.querySelector('[data-pc-fx="to"]');
     if (from && to) { const v = from.value; from.value = to.value; to.value = v; updateCurrency(card); }

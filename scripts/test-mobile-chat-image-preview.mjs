@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { chromium } from 'playwright';
 
 const source = name => readFile(new URL('../web-ui/src/' + name, import.meta.url), 'utf8');
-assert.match(await source('mobile/mobile-shell.js'), /installChatImagePreview\(document.body\)/);
+assert.match(await source('mobile/mobile-router.js'), /installChatImagePreview\(document.body\)/);
 const names = ['Dawn', 'High tide', 'Dusk', 'Night'];
 const svg = i => `<svg xmlns="http://www.w3.org/2000/svg" width="700" height="510" viewBox="0 0 700 510"><rect width="700" height="510" fill="${['#b4d0d0','#a9c7d4','#caada3','#676c87'][i]}"/><circle cx="477" cy="150" r="61" fill="#ffe3ad"/><path d="M0 330L210 196 380 325 515 244 700 340V510H0Z" fill="#628589"/><path d="M0 335Q210 270 365 360T700 330V510H0Z" fill="#325f68"/></svg>`;
 const btn = (i, attr='data-pm-media') => `<button ${attr} data-kind="image" data-name="${names[i]}" data-src="/img/${i}"><img src="/img/${i}" alt="${names[i]}"></button>`;

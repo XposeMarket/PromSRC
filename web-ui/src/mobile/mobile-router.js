@@ -2,6 +2,7 @@
 // Activates ONLY when location.hash starts with "#mobile" or pathname starts with "/mobile".
 // Otherwise stays out of the way so the desktop UI is untouched.
 
+import { installChatImagePreview } from './mobile-chat-image-preview.js';
 import { markClientPerformance } from '../performance.js';
 
 import { createMobileShell, invalidateMobileDrawerSessions } from './mobile-shell.js';
@@ -54,6 +55,8 @@ const MOBILE_ROUTE_OWNER_LOADERS = Object.freeze({
   creative: () => import('./mobile-creative-pages.js'),
   subagents: () => import('./mobile-subagent-pages.js'),
 });
+
+if (typeof document !== 'undefined' && document.body) installChatImagePreview(document.body);
 
 export function loadMobileRouteOwner(route) {
   const owner = Object.hasOwn(MOBILE_ROUTE_OWNER_LOADERS, route) ? route : 'chat';

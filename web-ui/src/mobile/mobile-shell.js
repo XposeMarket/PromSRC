@@ -2,7 +2,6 @@
 import { mobileNavTabs, mobileDrawerItems } from './mobile-data.js';
 import { ensureMobileShellStyles } from './mobile-style-owners.js';
 import { initMobileStatusBarTheme } from './mobile-status-bar-theme.js';
-import { installChatImagePreview } from './mobile-chat-image-preview.js';
 import { renderMd, timeAgo } from '../utils.js';
 let shareFileCache, shareOrDownloadFile;
 let shareModulePromise;
@@ -3955,7 +3954,6 @@ export function initMobileCanvasSheet() {
     });
   });
 
-  installChatImagePreview(document.body);
   window.__pmCanvasSheet = api;
 }
 
