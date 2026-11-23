@@ -4,9 +4,6 @@
   "name": "self-repair-protocol",
   "description": "Diagnose and recover Prometheus internal operational problems involving tasks, agents, teams, schedules, providers, connections, configuration, workspace state, startup, or runtime health. Use only when the user explicitly asks Prometheus to diagnose or repair itself; do not invoke for an ordinary isolated tool error.",
   "visibility": "public",
-  "publicExcludeResources": [
-    "references/dev-escalation.md"
-  ],
   "version": "3.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [
@@ -29,13 +26,7 @@
     "workspaceWrite": false,
     "externalSideEffects": false
   },
-  "resources": [
-    {
-      "path": "references/dev-escalation.md",
-      "type": "doc",
-      "description": "Development-only escalation after diagnosis proves a Prometheus source defect."
-    }
-  ],
+  "resources": [],
   "implicitInvocation": false,
   "lifecycle": "active",
   "triggerPolicy": {

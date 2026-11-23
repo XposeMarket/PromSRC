@@ -176,3 +176,10 @@ workspace/skills/.cache/
 
 # local eval output (published results live in evals/RESULTS.md)
 evals/results/
+
+# Local creative runs, site captures and per-install skill records.
+/captures/
+/creative-projects/
+/workspace/skills/_state.json
+/workspace/skills/.manifests/*.import-audit.json
+/workspace/skills/.manifests/*.source.json

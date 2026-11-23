@@ -15,7 +15,7 @@ const requiredExplicit = new Set([
   'mermaid-diagrams', 'operations-manager', 'polymarket-research', 'product-discovery',
   'revenue-manager', 'social-intel', 'svg-diagrams',
   'tailwind', 'three', 'threejs-mobile-webgl', 'twitter-thread', 'typegpu', 'waapi',
-  'animejs', 'chatgpt-desktop-restart', 'contribute-catalog', 'dev-debugging',
+  'animejs', 'chatgpt-desktop-restart', 'contribute-catalog',
   'gsap', 'hyperframes-catalog-assets', 'hyperframes-cli', 'hyperframes-registry',
   'local-media-utilities', 'lottie', 'prometheus-ash-archive-style',
   'self-repair-protocol', 'windows-shell-playbook',

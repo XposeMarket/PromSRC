@@ -1,3 +1,0 @@
-file 'start.jpg'
-file 'mid.jpg'
-file 'end.jpg'

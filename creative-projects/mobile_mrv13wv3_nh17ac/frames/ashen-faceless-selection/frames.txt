@@ -1,8 +1,0 @@
-file 'frame_0000s.jpg'
-file 'frame_0120s.jpg'
-file 'frame_0220s.jpg'
-file 'frame_0330s.jpg'
-file 'frame_0400s.jpg'
-file 'frame_0480s.jpg'
-file 'frame_0570s.jpg'
-file 'frame_0630s.jpg'

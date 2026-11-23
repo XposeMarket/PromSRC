@@ -34,7 +34,7 @@ for (const call of [
 ]) await fetch(`http://127.0.0.1:${port}/tool`, { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify(call) });
 server.close();
 assert.deepEqual(received.map(x => x.tool), ['desktop_focus_window','desktop_press_key','desktop_type','desktop_press_key','delivery_send_screenshot']);
-assert.match(read('dev-debugging'), /visibly submitted/i);
+assert(!fs.existsSync(path.join(root, 'workspace', 'skills', 'dev-debugging')));
 
 // Development Self Repair escalation: sanitized packet -> auto-loaded private reference -> pending source proposal.
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'prom-phase4c-self-repair-'));
@@ -51,7 +51,7 @@ const packet = createDiagnosticPacket(workspace, {
 const { SkillsManager } = await import('../dist/gateway/skills-runtime/skills-manager.js');
 const manager = new SkillsManager(path.join(root, 'workspace', 'skills'));
 const devRefs = manager.readAutoLoadedResources('self-repair-protocol');
-assert.equal(devRefs.length, 1); assert.match(devRefs[0].content, /write_proposal/); assert.match(devRefs[0].content, /sole source mutation workflow/);
+assert.deepEqual(devRefs, [], 'public source must not auto-load a maintainer resource');
 const { getConfig } = await import('../dist/config/config.js');
 const config = getConfig(); const originalGetWorkspacePath = config.getWorkspacePath.bind(config); config.getWorkspacePath = () => workspace;
 const { createProposal, loadProposal } = await import('../dist/gateway/proposals/proposal-store.js');

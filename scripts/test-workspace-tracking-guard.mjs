@@ -28,7 +28,7 @@ const write = (rel, text) => {
   fs.mkdirSync(path.dirname(path.join(repo, rel)), { recursive: true });
   fs.writeFileSync(path.join(repo, rel), text);
 };
-const audit = () => spawnSync(process.execPath, [path.join(repo, 'scripts', 'audit-repo-privacy.mjs')], { cwd: repo, encoding: 'utf8' });
+const audit = () => spawnSync(process.execPath, [path.join(repo, 'scripts', 'audit-repo-privacy.mjs'), '--strict-current'], { cwd: repo, encoding: 'utf8' });
 
 try {
   for (const name of ['audit-repo-privacy.mjs', 'check-workspace-tracking.mjs']) {
@@ -41,6 +41,12 @@ try {
 
   const pass = audit();
   assert.equal(pass.status, 0, `allow-listed paths must pass:\n${pass.stdout}\n${pass.stderr}`);
+
+  for (const file of ['captures/local/shot.png', 'creative-projects/run/frame.jpg', 'workspace/skills/_state.json', 'workspace/skills/.manifests/demo.source.json']) {
+    write(file, 'synthetic'); git('add', '-f', file);
+    const result = audit(); assert.equal(result.status, 1); assert.match(result.stdout, /local-runtime-artifact/);
+    git('rm', '-q', '--cached', file);
+  }
 
   write('workspace/MEMORY.md', '- synthetic note\n');
   git('add', '-f', 'workspace/MEMORY.md');
