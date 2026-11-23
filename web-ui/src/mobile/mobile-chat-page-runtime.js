@@ -7549,14 +7549,16 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     }
     if (!stillInChat()) return;
     const enqueueDurably = async (sid) => {
-      const draftUnchanged = () => stillInChat() && (options.skipUserBubble || options.fromQueue
+      // Card buttons submit their own immutable text, not the current composer draft.
+      const draftUnchanged = () => stillInChat() && (options.fromCard || options.skipUserBubble || options.fromQueue
         || (_pmGetComposerValue(input).trim() === msg && (Array.isArray(options.attachments)
           || (getPendingAttachments().length === composerAttachments.length
             && getPendingAttachments().every((file, index) => file === composerAttachments[index])))));
       try {
         const receipt = await durableQueue.enqueue({ sessionId: sid, gatewayId: sendGatewayId }, msg, files,
           { excludedSkillIds, selectedSkillIds }, draftUnchanged);
-        if (draftUnchanged()) {
+        if (options.fromCard) options.onCardAccepted?.();
+        else if (draftUnchanged()) {
           if (!Array.isArray(options.attachments)) { __pmChat.attachments[sid] = []; renderPendingAttachments(); }
           if (!options.skipUserBubble && !options.fromQueue) resetComposerInput();
           _pmClearActiveSlashCommand(page, input, { focus: false });
@@ -7646,7 +7648,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     const activeThread = __pmChat.threads[actualSessionId] || (__pmChat.threads[actualSessionId] = []);
     __pmChat.thread = activeThread;
     const clientRequestId = _newMobileClientRequestId(actualSessionId);
-    if (!fromQueue && !options.skipUserBubble && String(input?.value || '').trim() === msg) resetComposerInput();
+    if (!options.fromCard && !fromQueue && !options.skipUserBubble && String(input?.value || '').trim() === msg) resetComposerInput();
     const activeTurnStartedAt = Date.now();
     if (!__pmChat.sentClientRequestIds || typeof __pmChat.sentClientRequestIds !== 'object') __pmChat.sentClientRequestIds = {};
     __pmChat.sentClientRequestIds[actualSessionId] = clientRequestId;
@@ -7896,7 +7898,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
 
     let requestAccepted = false;
     const restoreRejectedMessage = () => {
-      if (requestAccepted || fromQueue) return;
+      if (requestAccepted || fromQueue || options.fromCard) return;
       if (!options.attachments && !__pmChat.attachments[actualSessionId]?.length && files.length) {
         __pmChat.attachments[actualSessionId] = files;
         if (page.isConnected && requestedSession === actualSessionId) renderPendingAttachments();
@@ -7927,7 +7929,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       selectedSkillIds: selectedSkillIds.length ? selectedSkillIds : undefined,
       agent: mobileAgentFieldForSend(actualSessionId),
     }, {
-      onAccepted: () => { requestAccepted = true; options.onQueueAccepted?.(); },
+      onAccepted: () => { requestAccepted = true; options.onQueueAccepted?.(); options.onCardAccepted?.(); },
       onEvent: (evt) => {
         hideReconnectingStatus();
         noteMobileLiveStreamActivity(actualSessionId);
