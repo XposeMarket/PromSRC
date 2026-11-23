@@ -51,6 +51,7 @@ export function createDesktopSourcesRenderers({
   chatResourceUrl,
   sourcePanelResourceMeta,
   sourcePanelSnapshot,
+  runListState,
   encodeInlineJsString: J,
   sourcePanelRemoteReviewMarkup,
 }) {
@@ -113,14 +114,15 @@ export function createDesktopSourcesRenderers({
           at: e.at,
           turn: e.turn,
           group: 'Changes',
-          verb: i.status === 'added' ? 'Created by Prom' : 'Edited by Prom',
+          runId: e.runId, anchor: e.startedAt,
+          verb: `${(e.status || i.status) === 'added' ? 'Created' : 'Edited'} by ${e.runId ? e.label || 'child agent' : 'Prom'}`,
           loc: i.displayPath,
           title: i.title,
         });
     for (const i of work)
       events.push({
         i,
-        at: i.updatedAt,
+        at: i.updatedAt, anchor: i.startedAt,
         group: i.workType === 'background' ? 'Agents' : 'Prom',
         verb: i.workType === 'background' ? 'Child run' : 'Linked work',
         title: i.title,
@@ -128,7 +130,7 @@ export function createDesktopSourcesRenderers({
       });
     for (const e of events) {
       if (!e.turn && e.at) {
-        const t = turns.findLast((t) => t.at && t.at <= e.at);
+        const t = turns.findLast((t) => t.at && t.at <= (e.anchor || e.at));
         e.turn = t?.n || 0;
       }
     }
@@ -202,7 +204,7 @@ export function createDesktopSourcesRenderers({
             (i) =>
               `<button type="button" class="r lineage-row" onclick="openSourceRunInTimeline(${J(i.workId)})" title="${E(i.title)}">${providerMark(i.provider)}<span class="lbl trunc">${E(i.title)}</span><span class="val run-${i.status === 'failed' ? 'failed' : 'normal'}">${E(runState(i.status))}</span></button>`,
           )
-          .join('') || empty('No child runs.'),
+          .join('') || empty(({ready:'No child runs.', unavailable:'Run history unavailable. Refresh to retry.'})[runListState(d.sid)] || 'Loading child runs…'),
         d.runs.length,
       ) + (d.runs.length > 3 ? more(`+${d.runs.length - 3} more in Timeline`, 'timeline') : '')
     );
@@ -297,17 +299,18 @@ export function createDesktopSourcesRenderers({
   function renderSourcePanelTimeline(d) {
     let f = state.timelineFilter || 'All';
     const filters = ['All', 'You', 'Prom', 'Agents', 'Changes', 'Browser', 'Other'];
-    if (!d.events.some((e) => e.group === f)) f = 'All';
+    const matches = (e, k) => k === 'All' || e.group === k || (k === 'Agents' && !!e.runId);
+    if (!d.events.some((e) => matches(e, f))) f = 'All';
     const chips = filters
       .map((k) => {
-        const n = k === 'All' ? d.events.length : d.events.filter((e) => e.group === k).length;
+        const n = k === 'All' ? d.events.length : d.events.filter((e) => matches(e, k)).length;
         return n
           ? `<button type="button" class="fchip ${colors[k] || ''}" aria-pressed="${k === f}" onclick="setDockTimelineFilter('${k}')">${k === 'All' ? '' : '<i></i>'}${k} <b>${n}</b></button>`
           : '';
       })
       .join('');
     const groups = new Map();
-    for (const e of d.events.filter((e) => f === 'All' || e.group === f)) {
+    for (const e of d.events.filter((e) => matches(e, f))) {
       const k = e.turn || 0;
       if (!groups.has(k)) groups.set(k, []);
       groups.get(k).push(e);

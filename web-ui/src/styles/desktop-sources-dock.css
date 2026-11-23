@@ -7,7 +7,7 @@ body:not(.pm-mobile-active) .workspace > #right-panel.open:not(.canvas-open) {
   min-width:0 !important; max-width:calc(100% - 32px) !important;
   height:fit-content !important; max-height:min(520px,68dvh,calc(100% - 70px)) !important;
   border:1px solid color-mix(in srgb,var(--text) 14%,transparent) !important;
-  border-radius:18px; overflow:hidden; background:var(--panel);
+  border-radius:18px; overflow:hidden; background:var(--sources-surface,var(--panel));
   box-shadow:0 10px 34px rgb(0 0 0 / 30%),0 2px 6px rgb(0 0 0 / 16%);
 }
 body:not(.pm-mobile-active) #right-panel.open:not(.canvas-open) > .rp-resize-handle {display:none}
@@ -71,14 +71,12 @@ body:not(.pm-mobile-active) .topbar :is(#theme-toggle,#drawerToggle) {
 
 /* Scoped design atoms from the approved Sources reference. Canvas and the chat keep their own styles. */
 body:not(.pm-mobile-active) :is(#sources-minimized-panel, #right-panel:not(.canvas-open)) {
-  --bg: #141414; --chat: #1a1a1a; --panel: #202020; --panel-2: #262626; --editor: #171717; --gutter: #1c1c1c;
-  --hover: rgba(255,255,255,.045); --press: rgba(255,255,255,.075); --sel: rgba(242,106,27,.10);
-  --text: #e8e6e1; --text-2: #c9c6bf; --muted: #9a9890; --faint: #6f6d67;
-  --border: rgba(255,255,255,.09); --border-2: rgba(255,255,255,.14);
-  --brand: #f26a1b; --ok: #4ade80; --err: #f87171; --warn: #fbbf24; --link: #8fb8ff;
-  --you: #f0a27a; --agent: #8fb8ff; --browser: #8fd3bd; --made: #d3a8ee; --chg: #e6dd8a; --base: #a9a69e;
-  --add-bg: rgba(74,222,128,.075); --add-gut: rgba(74,222,128,.13); --add-ink: #7fdc9f;
-  --del-bg: rgba(248,113,113,.075); --del-gut: rgba(248,113,113,.13); --del-ink: #f08f8f;
+  --sources-surface: var(--pm-pinned-chat-bg, var(--composer-bg, var(--panel-2)));
+  --hover: color-mix(in srgb,var(--text) 5%,transparent); --press: color-mix(in srgb,var(--text) 9%,transparent); --sel: var(--t-accent-soft);
+  --text-2: var(--t-text-2); --faint: var(--muted); --border: var(--line); --border-2: var(--t-border-strong);
+  --brand: var(--t-accent); --ok: var(--t-ok); --err: var(--t-err); --link: var(--t-info);
+  --you: var(--brand); --agent: var(--t-info); --browser: var(--ok); --made: var(--brand); --chg: var(--text-2); --base: var(--muted);
+  --add-ink: var(--ok); --del-ink: var(--err);
   --mono: ui-monospace, "Cascadia Mono", "Cascadia Code", Consolas, monospace;
   font: 13px/1.4 "Segoe UI", system-ui, -apple-system, sans-serif; color:var(--text); -webkit-font-smoothing:antialiased;
   button,summary { font:inherit; color:inherit; background:none; border:0; padding:0; cursor:pointer; text-align:left; }
@@ -172,7 +170,7 @@ body.shot .pulse::before { animation: none; }
 .fchip b { font-weight: 500; color: var(--faint); font-variant-numeric: tabular-nums; }
 .fchip:hover { color: var(--text); border-color: var(--border-2); }
 .fchip[aria-pressed="true"] { color: var(--text); background: rgba(255,255,255,.06); border-color: var(--border-2); }
-.turn { display: flex; align-items: baseline; gap: 8px; padding: 12px 14px 4px; font-size: 11px; color: var(--faint); position: sticky; top: 0; background: var(--panel); z-index: 1; min-width: 0; }
+.turn { display: flex; align-items: baseline; gap: 8px; padding: 12px 14px 4px; font-size: 11px; color: var(--faint); position: sticky; top: 0; background: var(--sources-surface,var(--panel)); z-index: 1; min-width: 0; }
 .turn b { font-weight: 600; letter-spacing: .04em; text-transform: uppercase; flex: none; }
 .turn q { quotes: "“" "”"; color: var(--muted); font-size: 11.5px; }
 .trail { padding: 0 6px; }
@@ -184,7 +182,7 @@ body.shot .pulse::before { animation: none; }
 .ev .rail2::before { content: ""; position: absolute; top: -7px; bottom: -8px; width: 1px; background: var(--border); }
 .trail .ev:first-child .rail2::before { top: 6px; }
 .trail .ev:last-child .rail2::before { bottom: auto; height: 12px; }
-.ev .pip { position: relative; margin-top: 4px; width: 9px; height: 9px; border-radius: 50%; background: var(--panel); border: 2px solid var(--c, var(--faint)); }
+.ev .pip { position: relative; margin-top: 4px; width: 9px; height: 9px; border-radius: 50%; background: var(--sources-surface,var(--panel)); border: 2px solid var(--c, var(--faint)); }
 .ev.base .pip { border-radius: 2px; }
 .ev.running .pip { background: var(--ok); border-color: var(--ok); box-shadow: 0 0 0 3px rgba(74,222,128,.18); }
 .ev.failed .pip { border-color: var(--err); }
@@ -213,7 +211,7 @@ body.shot .pulse::before { animation: none; }
   .dock-env[open] .chev{transform:rotate(180deg)} .val,.scope-line{overflow:hidden;text-overflow:ellipsis;white-space:nowrap} .hint,.legend{margin:0}
   .dock-provider {width:15px;height:15px;flex:none;background:currentColor;mask:var(--mark) center/contain no-repeat} .dock-provider.claude{color:#d97757}
   .dock-agent>summary {list-style:none} .dock-agent>.x {margin:0 14px 6px 54px} .body {min-width:0} .r .lbl,.r .val,.sh h3{letter-spacing:normal}
-  .source-panel-shell {background:var(--panel)} #source-panel-body {padding:0; overflow:auto hidden;overflow-y:auto;overflow-x:hidden;scrollbar-width:thin;scrollbar-color:#404040 transparent}
+  .source-panel-shell {background:var(--sources-surface,var(--panel))} #source-panel-body {padding:0; overflow:auto hidden;overflow-y:auto;overflow-x:hidden;scrollbar-width:thin;scrollbar-color:#404040 transparent}
   #source-panel-tabs {display:flex;justify-content:flex-start;gap:2px;padding:0 8px;margin:0;border:0;border-bottom:1px solid var(--border);border-radius:0;background:none}
   #source-panel-tabs button{position:relative;flex:0 1 auto;min-width:0;padding:7px 8px 9px;display:flex;gap:5px;align-items:baseline;font-size:12.5px;font-weight:400;color:var(--muted);box-shadow:none;border:0;border-radius:0;background:none}
   #source-panel-tabs button span{font-size:11px;color:var(--faint)} #source-panel-tabs button.is-active{color:var(--text)} #source-panel-tabs button.is-active::after{content:'';position:absolute;inset:auto 8px 0;height:2px;background:var(--brand);border-radius:2px}
@@ -221,12 +219,12 @@ body.shot .pulse::before { animation: none; }
   .source-panel-actions :is(button.source-panel-icon-btn,button.source-panel-close-btn){display:grid;place-items:center;width:26px;height:26px;min-width:0;min-height:0;background:none;border:0;box-shadow:none;color:var(--muted);border-radius:7px;padding:0}
   .source-panel-actions #canvas-toggle-btn{display:none}.scope-line{flex:none}
 }
-body:not(.pm-mobile-active) #right-panel.open:not(.canvas-open){background:var(--panel);border-radius:16px}
-body:not(.pm-mobile-active) #sources-minimized-panel .sources-minimized-card{background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:14px;display:flex;flex-direction:column;padding:0;gap:0;max-height:min(620px,calc(100dvh - 80px));overflow:hidden;box-shadow:0 14px 36px rgba(0,0,0,.45)}
+body:not(.pm-mobile-active) #right-panel.open:not(.canvas-open){background:var(--sources-surface,var(--panel));border-radius:16px}
+body:not(.pm-mobile-active) #sources-minimized-panel .sources-minimized-card{background:var(--sources-surface,var(--panel));color:var(--text);border:1px solid var(--border);border-radius:14px;display:flex;flex-direction:column;padding:0;gap:0;max-height:min(620px,calc(100dvh - 80px));overflow:hidden;box-shadow:0 14px 36px rgba(0,0,0,.45)}
 #right-panel.canvas-open #source-panel-minimize {display:none}
 
 /* The outer shell theme otherwise overrides the reference surface with !important. */
-body:not(.pm-mobile-active) #right-panel.open:not(.canvas-open),body:not(.pm-mobile-active) #right-panel:not(.canvas-open) :is(#source-panel-shell,#source-panel-tabs,#source-panel-body,#right-panel-topbar),body:not(.pm-mobile-active) #sources-minimized-panel .sources-minimized-card{background:var(--panel) !important}
+body:not(.pm-mobile-active) #right-panel.open:not(.canvas-open),body:not(.pm-mobile-active) #right-panel:not(.canvas-open) :is(#source-panel-shell,#source-panel-tabs,#source-panel-body,#right-panel-topbar),body:not(.pm-mobile-active) #sources-minimized-panel .sources-minimized-card{background:var(--sources-surface,var(--panel)) !important}
 body:not(.pm-mobile-active) #right-panel #source-panel-tabs .source-panel-tab.is-active {color:var(--text) !important}
 body:not(.pm-mobile-active) #right-panel #source-panel-tabs .source-panel-tab.is-active::after {display:block!important;content:'';position:absolute;inset:auto 8px 0;height:2px;width:auto;background:var(--brand)!important;opacity:1}
 body:not(.pm-mobile-active) :is(#right-panel:not(.canvas-open),#sources-minimized-panel) .sh h3 {font:500 11.5px/1.4 'Segoe UI',system-ui,sans-serif!important}

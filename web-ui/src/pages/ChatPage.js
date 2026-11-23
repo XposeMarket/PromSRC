@@ -19130,7 +19130,7 @@ function toggleBackgroundSpawnLane(id) {
 
 function backgroundSpawnDetailRecord(id, sessionId = window.activeChatSessionId) {
   const source = backgroundSpawnLaneForDetail(id, sessionId);
-  if (!source) return null;
+  if (!source) return sourceRunSnapshot.sid === sessionId ? sourceRunSnapshot.records.find(r => r.id === id) || null : null;
   if (source.events || source.task !== undefined) return backgroundSpawnWorkRecord(source);
   return source;
 }
@@ -19989,9 +19989,17 @@ function sourcePanelResourceItem(resource) {
 function sourcePanelEditItems(sessionId = window.activeChatSessionId) {
   const session = getChatSessionById(String(sessionId || '').trim());
   const aggregate = new Map();
-  const addPayload = (payload, atValue, turn = 0) => {
-    const groupData = normalizeFileChangeGroups(payload);
-    const payloads = groupData.length ? groupData.map((group) => group.data) : [normalizeFileChangesPayload(payload)];
+  const records = sessionId ? sourceRecordsForThread(sessionId) : new Map();
+  const agentFiles = new Set();
+  const addPayload = (payload, atValue, turn = 0, runId = '', label = '', startedAt = 0) => {
+    if (Array.isArray(payload?.groups) && payload.groups.length) {
+      for (const g of payload.groups) {
+        const id = String(g.source || '').startsWith('background:') ? g.source.slice(11) : '';
+        addPayload(g.fileChanges || g, atValue, turn, id, records.get(id)?.agentName || g.label, records.get(id)?.startedAt);
+      }
+      return;
+    }
+    const payloads = [normalizeFileChangesPayload(payload)];
     const generatedAt = sourcePanelTimestamp(payload?.generatedAt);
     const at = sourcePanelTimestamp(atValue) || generatedAt;
     payloads.filter(Boolean).forEach((data) => {
@@ -20000,6 +20008,11 @@ function sourcePanelEditItems(sessionId = window.activeChatSessionId) {
         if (!displayPath) return;
         const pathValue = String(file.path || displayPath).trim();
         const key = pathValue.replace(/\\/g, '/').toLowerCase();
+        if (runId) {
+          const fingerprint = JSON.stringify([runId, key, generatedAt]);
+          if (agentFiles.has(fingerprint)) return;
+          agentFiles.add(fingerprint);
+        }
         const previous = aggregate.get(key);
         const next = previous || {
           key: `edit:${key}`,
@@ -20020,7 +20033,7 @@ function sourcePanelEditItems(sessionId = window.activeChatSessionId) {
         next.binary = next.binary || file.binary === true;
         next.updatedAt = Math.max(next.updatedAt, at);
         next.editCount += 1;
-        (next.events ||= []).push({ at, turn });
+        (next.events ||= []).push({ at, turn, runId, label, startedAt, status: file.status });
         aggregate.set(key, next);
       });
     });
@@ -20032,9 +20045,7 @@ function sourcePanelEditItems(sessionId = window.activeChatSessionId) {
     if (!isAssistantLikeMessage(message) || !message?.fileChanges) return;
     addPayload(message.fileChanges, message.timestamp, turn);
   });
-  try {
-    collectBackgroundFileChangeGroups(sessionId).forEach((group) => addPayload(group.fileChanges, group.fileChanges?.generatedAt));
-  } catch {}
+  for (const r of records.values()) if (r.fileChanges) addPayload(r.fileChanges, r.fileChanges.generatedAt || r.completedAt, 0, r.id, r.agentName, r.startedAt);
   return Array.from(aggregate.values()).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0) || a.title.localeCompare(b.title));
 }
 
@@ -20451,13 +20462,42 @@ function sourcePanelCountMarkup(label, value, glyph) {
 const { renderSourcesPeek, renderSourcePanelOverview, renderSourcePanelTimeline, renderSourcePanelFiles, panelModel, renderReferenceGit } = createDesktopSourcesRenderers({
   sourcePanelState, SOURCE_PANEL_SURFACE, sourcePanelActiveSessionId, sourcePanelWorkItems, sourcePanelMatchesItem,
   sourcePanelTimestamp, getChatSessionById, sourcePanelWorkspaceRoot, chatResourceTitle, chatResourceUrl,
-  sourcePanelResourceMeta, sourcePanelSnapshot, encodeInlineJsString, sourcePanelRemoteReviewMarkup
+  sourcePanelResourceMeta, sourcePanelSnapshot, encodeInlineJsString, sourcePanelRemoteReviewMarkup,
+  runListState: sid => sourceRunSnapshot.sid === sid ? sourceRunSnapshot.state : 'idle'
 });
 
+// Read-only, scoped snapshot. Never persist another client's run data into this browser's chat history.
+let sourceRunSnapshot = { sid: '', records: [], state: 'idle' };
+async function loadSourceRuns(sid, force = false) {
+  if (!sid || sid !== sourcePanelState.activeSessionId || sourcePanelState.surface === SOURCE_PANEL_SURFACE.SUBAGENT_CHAT) return;
+  const prev = sourceRunSnapshot;
+  if (prev.sid === sid && (prev.state === 'loading' || (!force && Date.now() - prev.fetchedAt < 15000))) return;
+  const request = sourceRunSnapshot = { sid, records: prev.sid === sid ? prev.records : [], state: 'loading', fetchedAt: Date.now() };
+  try {
+    const data = await api(`/api/background?sessionId=${encodeURIComponent(sid)}`);
+    if (!Array.isArray(data?.statuses)) throw Error('Missing run list');
+    request.records = data.statuses.filter(r => r?.id && r.spawnerSessionId === sid).map(r => ({
+      id: r.id, sessionId: sid, status: r.state, startedAt: r.startedAt, completedAt: r.completedAt,
+      updatedAt: r.completedAt || r.startedAt, providerId: r.providerId, model: r.model, reasoningEffort: r.reasoningEffort,
+      agentName: r.agentName || r.tags?.find(t => typeof t === 'string' && !t.includes(':')) || r.promptPreview || 'Background agent',
+      task: r.promptPreview, result: r.result, error: r.error, fileChanges: r.fileChanges,
+    }));
+    request.state = 'ready';
+  } catch { request.state = 'unavailable'; }
+  if (sourceRunSnapshot === request && sourcePanelState.activeSessionId === sid) renderSourcePanel();
+}
+function sourceRecordsForThread(sid) {
+  const records = new Map(backgroundAgentWorkForSession(sid).map(r => [r.id, r]));
+  for (const r of sourceRunSnapshot.sid === sid ? sourceRunSnapshot.records : []) {
+    const local = records.get(r.id);
+    records.set(r.id, { ...local, ...r, fileChanges: r.fileChanges || local?.fileChanges });
+  }
+  return records;
+}
 function sourcePanelWorkItems(sessionId = sourcePanelState.activeSessionId || window.activeChatSessionId) {
   const contextWork = Array.isArray(sourcePanelState.codingContext?.work) ? sourcePanelState.codingContext.work : [];
   if (!sessionId) return [];
-  const items = backgroundAgentWorkForSession(sessionId).map((record) => ({
+  const items = [...sourceRecordsForThread(sessionId).values()].map((record) => ({
     key: `work:background:${record.id}`,
     type: 'work',
     title: record.agentName || 'Background agent',
@@ -20465,7 +20505,7 @@ function sourcePanelWorkItems(sessionId = sourcePanelState.activeSessionId || wi
     status: record.status || 'completed',
     updatedAt: Number(record.completedAt || record.updatedAt || 0),
     workType: 'background',
-    workId: record.id,
+    workId: record.id, startedAt: record.startedAt,
     provider: record.providerId, model: record.model, effort: record.reasoningEffort,
     agentName: record.agentName,
     agentColor: record.agentColor,
@@ -20898,6 +20938,7 @@ const SOURCE_PANEL_SIDE_LOAD_DELAY_MS = 450;
 function runSourcePanelSideLoads(sid) {
   if (!sid || sid !== sourcePanelState.activeSessionId) return;
   if (sourcePanelState.surface === SOURCE_PANEL_SURFACE.SUBAGENT_CHAT) return;
+  void loadSourceRuns(sid);
   if (!sourcePanelState.projectLoaded || sourcePanelState.projectSessionId !== sid) loadSourcePanelProject(sid).catch(() => {});
   else {
     const scopeKey = sourcePanelGitScopeKey(sid);
@@ -20951,6 +20992,7 @@ function scheduleSourcePanelWorkRefresh() {
   if (sourcePanelState.workRefreshTimer) clearTimeout(sourcePanelState.workRefreshTimer);
   sourcePanelState.workRefreshTimer = setTimeout(() => {
     sourcePanelState.workRefreshTimer = null;
+    void loadSourceRuns(sourcePanelState.activeSessionId, true);
     loadSourcePanelGit(sourcePanelState.activeSessionId).catch(() => {});
   }, 650);
 }
@@ -21436,6 +21478,7 @@ function showSourcesMinimizedPanel() {
   const panel = document.getElementById('sources-minimized-panel');
   const rightPanel = document.getElementById('right-panel');
   if (!panel || rightPanel?.classList.contains('open') || !sourcePanelContextIsActive()) return;
+  void loadSourceRuns(sourcePanelActiveSessionId());
   if (!sourcePanelMiniItems('all').length) sourcePanelState.miniFilter = 'all';
   if (sourcePanelState.miniHideTimer) clearTimeout(sourcePanelState.miniHideTimer);
   renderSourcesMinimizedPanel();
@@ -21461,6 +21504,7 @@ function hideSourcesMinimizedPanel(options = {}) {
 
 function openFullSourcePanel() {
   if (!sourcePanelContextIsActive()) return;
+  void loadSourceRuns(sourcePanelActiveSessionId());
   hideSourcesMinimizedPanel({ resetFilter: false });
   const panel = document.getElementById('right-panel');
   if (panel && !panel.classList.contains('open')) toggleRightPanel();
@@ -21474,6 +21518,7 @@ function refreshSourcePanel() {
   }
   const sid = sourcePanelActiveSessionId();
   if (sid) {
+    void loadSourceRuns(sid, true);
     loadChatResources({ sessionId: sid, background: true }).catch(() => {});
     loadSourcePanelProject(sid).catch(() => {});
     loadSourcePanelGit(sid).catch(() => {});
