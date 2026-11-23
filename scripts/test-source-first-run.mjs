@@ -5,7 +5,8 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import policy from './public-skill-policy.js';
 import { resolveSkillBundle } from '../electron/bundled-skills-path.js';
-import { ensurePublicWorkspaceScaffold, seedBundledSkills } from '../src/config/public-workspace.ts';
+import { createRequire } from 'node:module';
+const { ensurePublicWorkspaceScaffold, seedBundledSkills } = createRequire(import.meta.url)('../src/config/public-workspace.ts');
 
 const repo = path.resolve(import.meta.dirname, '..');
 const bundle = resolveSkillBundle(false, repo, undefined);
