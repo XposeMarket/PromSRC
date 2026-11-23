@@ -3,6 +3,9 @@
 > **Last verified:** 2026-10-07 against PromSRC `a48712ccc` · **Owner area:** `src/gateway/skills-runtime/`, `src/config/soul-loader.ts`, skill tools
 > **Read this when:** Changing skill discovery/loading, catalog routing, skill authoring or `skill_ops`, or daily Brain skill curation.
 
+## First-run skill source (verified against the e5f55e9 baseline)
+`electron/main.js` → `buildGatewayEnvironment` selects the filtered `generated/bundled-skills` in a source checkout and `resources/bundled-skills` in a package. The editable catalog is never a first-run seed. Existing workspace files and custom skills stay in place.
+
 ## TL;DR
 - Skills are reusable procedural packages on disk; the runtime owns cataloging, eligibility, validation, safety, CRUD/resource management, and refresh.
 - The principal implementation is `src/gateway/skills-runtime/`: `skills-manager.ts`, `skill-package.ts`, `skill-eligibility.ts`, safety/auditor modules and `skill-curator.ts`.

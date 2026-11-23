@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 
 const repo = path.resolve(import.meta.dirname, '..');
 const { SkillsManager } = await import('../dist/gateway/skills-runtime/skills-manager.js');
@@ -10,14 +11,25 @@ const executeSkillRead = async (args, skillsManager) => {
   const r = await skillsCapabilityExecutor.execute({ name: 'skill_read', args, workspacePath: '', deps: { skillsManager }, sessionId: 'self_repair_boundary_test' });
   return { success: !r.error, stdout: String(r.result || '') };
 };
-const manager = new SkillsManager(path.join(repo, 'workspace', 'skills'));
+// Exercise private opt-in using synthetic data, not a maintainer's real file.
+const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'dev-skill-fixture-'));
+try {
+const skill = path.join(fixture, 'self-repair-protocol');
+fs.cpSync(path.join(repo, 'workspace', 'skills', 'self-repair-protocol'), skill, { recursive: true });
+fs.mkdirSync(path.join(skill, 'references'), { recursive: true });
+fs.writeFileSync(path.join(skill, 'references', 'dev-escalation.md'), 'Synthetic development escalation fixture.');
+const manifestFile = path.join(skill, 'skill.json');
+const fixtureManifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
+fixtureManifest.resources.push({path:'references/dev-escalation.md', type:'doc', description:'Synthetic fixture'});
+fs.writeFileSync(manifestFile, JSON.stringify(fixtureManifest));
+const manager = new SkillsManager(fixture);
 manager.scanSkills();
 
 delete process.env.PROMETHEUS_PUBLIC_BUILD;
 const dev = manager.readAutoLoadedResources('self-repair-protocol');
 assert.equal(dev.length, 1);
 assert.equal(dev[0].path, 'references/dev-escalation.md');
-assert.match(dev[0].content, /src-edit-proposal-rigor/);
+assert.match(dev[0].content, /Synthetic development escalation fixture/);
 const devRead = await executeSkillRead({ id: 'self-repair-protocol' }, manager);
 assert.equal(devRead.success, true);
 assert.match(devRead.stdout || '', /Auto-loaded development resource/);
@@ -25,6 +37,8 @@ assert.match(devRead.stdout || '', /Auto-loaded development resource/);
 process.env.PROMETHEUS_PUBLIC_BUILD = '1';
 assert.deepEqual(manager.readAutoLoadedResources('self-repair-protocol'), []);
 delete process.env.PROMETHEUS_PUBLIC_BUILD;
+
+} finally { fs.rmSync(fixture, {recursive:true, force:true}); }
 
 const publicSkill = path.join(repo, 'generated', 'bundled-skills', 'self-repair-protocol');
 if (fs.existsSync(publicSkill)) {

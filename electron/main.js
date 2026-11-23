@@ -1784,9 +1784,7 @@ function resolveGatewayLauncherCommand() {
 }
 
 function buildGatewayEnvironment() {
-  const bundledSkillsDir = IS_PACKAGED_RUNTIME
-    ? path.join(process.resourcesPath, 'bundled-skills')
-    : path.join(APP_ROOT, 'workspace', 'skills');
+  const bundledSkillsDir = require('./bundled-skills-path').resolveSkillBundle(IS_PACKAGED_RUNTIME, APP_ROOT, process.resourcesPath);
   const env = {
     ...process.env,
     FORCE_COLOR:                   '0',

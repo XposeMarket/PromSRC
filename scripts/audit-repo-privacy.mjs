@@ -110,6 +110,9 @@ function scanText(text, file, scope, findings) {
 }
 
 function addPathWarnings(file, scope, findings) {
+  if (/^(?:captures|creative-projects)\//i.test(normalized(file)) || /^workspace\/skills\/(?:_state\.json$|\.manifests\/.*\.(?:source|import-audit)\.json$)/i.test(normalized(file))) {
+    findings.push({ scope, severity: 'block', kind: 'local-runtime-artifact', file });
+  }
   if (isEnvFile(file)) findings.push({ scope, severity: 'block', kind: 'tracked-env-file', file });
   if (!outsideWorkspace(file)) return;
   const ext = path.posix.extname(normalized(file)).toLowerCase();

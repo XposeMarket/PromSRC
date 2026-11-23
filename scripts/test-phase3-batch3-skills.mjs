@@ -21,8 +21,7 @@ for (const unsafe of [
   /git reset --hard/i,
   /\/workspace\/skills\/_state\.json/i,
 ]) assert.doesNotMatch(repair, unsafe);
-const devEscalation = fs.readFileSync(path.join(root, 'self-repair-protocol', 'references', 'dev-escalation.md'), 'utf8');
-assert.match(devEscalation, /src-edit-proposal-rigor/);
+assert(!fs.existsSync(path.join(root, 'self-repair-protocol', 'references', 'dev-escalation.md')));
 
 const pptx = read('pptx-writer');
 assert.match(pptx, /fail-?closed/i);
