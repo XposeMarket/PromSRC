@@ -4630,22 +4630,31 @@ body:not(.pm-mobile-active) :is(#model-switcher-popover, [data-model-switcher-po
   object-fit: contain;
 }
 .live-turn-vision-break .live-turn-vision-preview {
-  width: min(560px, 100%);
-  max-height: none;
-  margin: 10px 0;
+  display: grid;
+  place-items: center;
+  width: min(34%, 168px);
+  min-width: min(96px, 100%);
+  max-height: 140px;
+  aspect-ratio: var(--vision-aspect, 16 / 9);
+  contain: layout paint;
+  margin: 6px 0;
 }
 .live-turn-vision-break .live-turn-vision-preview img {
-  max-height: 60vh;
+  height: 100%;
+  min-height: 0;
+  max-height: none;
+  object-fit: cover;
+  object-position: top center;
 }
 .live-turn-vision-carousel {
   display: flex;
   gap: 12px;
-  max-width: 560px;
+  max-width: 100%;
   overflow-x: auto;
   scroll-snap-type: x mandatory;
 }
 .live-turn-vision-carousel .live-turn-vision-preview {
-  flex: 0 0 calc(100% - 24px);
+  flex: 0 0 min(40%, 180px);
   scroll-snap-align: start;
 }
 .live-turn-think {

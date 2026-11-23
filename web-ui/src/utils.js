@@ -945,7 +945,9 @@ function visualKeyForNode(node) {
   const frame = node.matches?.('iframe[data-prom-visual="true"]')
     ? node
     : node.querySelector?.('iframe[data-prom-visual="true"]');
-  return visualIframeReuseKey(frame);
+  if (frame) return visualIframeReuseKey(frame);
+  const img = node.matches?.('img[src]') ? node : node.querySelector?.('img[src]');
+  return img ? `img:${img.getAttribute('src')}` : '';
 }
 
 function canMorphDomNodes(current, next) {
@@ -1078,8 +1080,11 @@ export function setInnerHTMLPreservingVisuals(root, html) {
   }
   const template = document.createElement('template');
   template.innerHTML = markup;
-  const currentHasVisual = !!root.querySelector?.('iframe[data-prom-visual="true"]');
-  const nextHasVisual = !!template.content.querySelector?.('iframe[data-prom-visual="true"]');
+  // Mounted images must survive row patches too: remounting a lazy image
+  // can collapse its row until the next decode.
+  const selector = 'iframe[data-prom-visual="true"], img[src]';
+  const currentHasVisual = !!root.querySelector?.(selector);
+  const nextHasVisual = !!template.content.querySelector?.(selector);
   if (!currentHasVisual && !nextHasVisual) {
     root.innerHTML = markup;
     return 0;
