@@ -77,7 +77,7 @@ const sessions = require('../dist/gateway/session.js');
 const chatSource = readChatRouterSource();
 const recoverySource = fs.readFileSync(path.join(root, 'src/gateway/runtime-recovery.ts'), 'utf8');
 assert.match(chatSource, /export function retriggerInterruptedMainChat\(/);
-assert.match(chatSource, /syntheticRestartRecovery: true, preAcquiredTurnLease: admissionLease/);
+assert.match(chatSource, /syntheticRestartRecovery: true, predecessorRuntimeId: runtime\.id, preAcquiredTurnLease: admissionLease/);
 assert.match(
   chatSource,
   /isGoalContinuationTurn \|\| isSyntheticSubagentCompletionTurn \|\| isSyntheticThreadSupervisionReview \|\| isSyntheticInternalWatch \|\| isSyntheticRestartRecovery/,
