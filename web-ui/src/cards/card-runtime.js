@@ -6,7 +6,7 @@
  * - State persists per card id in localStorage, so chat re-renders, reloads
  *   and history replays keep quiz/flashcard/poll progress.
  */
-import { decodeCardData, sendCardFollowUp, esc } from './card-utils.js';
+import { decodeCardData, sendCardFollowUp } from './card-utils.js';
 import { renderInteractiveCard, reduceInteractiveCard } from './cards-interactive.js';
 import { CARD_CSS } from './cards-styles.js';
 import { FOCUSED_CSS, FOCUSED_TRACKS, hydrateFocusedCarousels } from './focused-carousel.js';
@@ -71,27 +71,6 @@ function tickClocks() {
 }
 
 // ── lightbox ───────────────────────────────────────────────────────────────
-function openLightbox(items, start) {
-  let i = start;
-  const box = document.createElement('div');
-  box.className = 'pc-lightbox';
-  const paint = () => {
-    const it = items[i] || {};
-    box.innerHTML = `<button type="button" class="pc-lb-close" aria-label="Close">×</button><button type="button" class="pc-lb-nav prev" aria-label="Previous">‹</button><figure><img src="${esc(it.src || it.thumb)}" alt="${esc(it.title)}" referrerpolicy="no-referrer"><figcaption>${esc(it.title)}${it.page ? ` · <a href="${esc(it.page)}" target="_blank" rel="noopener noreferrer">${esc(it.source || 'Source')} ↗</a>` : ''}<span>${i + 1} / ${items.length}</span></figcaption></figure><button type="button" class="pc-lb-nav next" aria-label="Next">›</button>`;
-  };
-  const close = () => { box.remove(); document.removeEventListener('keydown', onKey); };
-  const step = (d) => { i = (i + d + items.length) % items.length; paint(); };
-  const onKey = (e) => { if (e.key === 'Escape') close(); if (e.key === 'ArrowLeft') step(-1); if (e.key === 'ArrowRight') step(1); };
-  box.addEventListener('click', (e) => {
-    if (e.target === box || e.target.closest('.pc-lb-close')) close();
-    else if (e.target.closest('.pc-lb-nav.prev')) step(-1);
-    else if (e.target.closest('.pc-lb-nav.next')) step(1);
-  });
-  document.addEventListener('keydown', onKey);
-  paint();
-  document.body.appendChild(box);
-}
-
 async function copyText(text) {
   try { await navigator.clipboard.writeText(text); return true; } catch {}
   const ta = document.createElement('textarea'); ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
@@ -99,7 +78,7 @@ async function copyText(text) {
   try { document.execCommand('copy'); return true; } catch { return false; } finally { ta.remove(); }
 }
 
-function onClick(event) {
+async function onClick(event) {
   // Two module copies (bundle + /src) both install a listener; a doubled
   // toggle (flip, next) cancels itself out. Handle each click exactly once.
   if (event.__pcHandled) return;
@@ -139,7 +118,7 @@ function onClick(event) {
     if (from && to) { const v = from.value; from.value = to.value; to.value = v; updateConvert(card); }
     return;
   }
-  if (act === 'lightbox' && card) { const items = decodeCardData(card) || []; if (items.length) openLightbox(items, Number(btn.getAttribute('data-i')) || 0); return; }
+  if (act === 'lightbox' && card) { const items = decodeCardData(card) || []; if (items.length) (await import('./gallery-lightbox.js')).openLightbox(items, Number(btn.getAttribute('data-i')) || 0); return; }
   if (act === 'fx-swap' && card) {
     const from = card.querySelector('[data-pc-fx="from"]'); const to = card.querySelector('[data-pc-fx="to"]');
     if (from && to) { const v = from.value; from.value = to.value; to.value = v; updateCurrency(card); }
