@@ -265,6 +265,20 @@ export function createQuestionController(options = {}) {
     return results[0] || { accepted: false, changed: false, record: null, sessionId: '' };
   }
 
+  async function reconcileStale(error, id, sid, phase) {
+    const message = clean(error?.message);
+    const stale = phase === 'cancel' ? message === 'API 404: Pending question not found'
+      : /^(API 404: Question not found|API 409: Question already (answered|expired|cancelled))$/.test(message);
+    if (!stale || !sid || typeof transport.lookupQuestion !== 'function') return null;
+    let record;
+    try { record = await transport.lookupQuestion(id); } catch { return null; }
+    if (record && (questionId(record) !== id || sessionIdFromRecord(record) !== sid || !isQuestionTerminal(record.status))) return null;
+    // A removed record implies no decision. Preserve any terminal event received in flight.
+    const current = runtimeQuestion(sid, id);
+    const outcome = upsert(record || (isQuestionTerminal(current?.status) ? current : { id, sessionId: sid, status: 'resolved' }), { sessionId: sid, forceProject: true });
+    return outcome.accepted ? outcome.record : null;
+  }
+
   async function submit(id, inputOptions = {}) {
     const targetId = questionId(id);
     if (!targetId) return { ok: false, reason: 'missing_id' };
@@ -361,7 +375,9 @@ export function createQuestionController(options = {}) {
       if (typeof transport.submit !== 'function') throw new Error('Question submit transport is not configured.');
       result = await transport.submit(targetId, payload);
     } catch (error) {
-      upsert({ ...submittingQuestion, sessionId: sid, status: 'pending' }, {
+      const settled = await reconcileStale(error, targetId, sid, 'submit');
+      if (settled) return { ok: false, reason: 'already_closed', question: settled, sessionId: sid };
+      if (!isQuestionTerminal(runtimeQuestion(sid, targetId)?.status)) upsert({ ...submittingQuestion, sessionId: sid, status: 'pending' }, {
         ...inputOptions,
         sessionId: sid,
         allowStatusRegression: true,
@@ -422,6 +438,8 @@ export function createQuestionController(options = {}) {
       try { await onCancelSuccess({ result, question: resolved[0]?.record || cancelled, sessionId: sid }); } catch {}
       return { ok: true, result, question: resolved[0]?.record || cancelled, sessionId: sid };
     } catch (error) {
+      const settled = await reconcileStale(error, targetId, sid, 'cancel');
+      if (settled) return { ok: false, reason: 'already_closed', question: settled, sessionId: sid };
       try { onError(error, { phase: 'cancel', question, sessionId: sid }); } catch {}
       return { ok: false, reason: 'cancel_failed', error, question, sessionId: sid };
     }

@@ -478,6 +478,8 @@ export class PrometheusQuestionQueue {
   }
 
   cancel(id: string, resolvedBy = 'user'): PrometheusQuestionRecord | null {
+    // A draining gateway may have created or settled this card since boot.
+    this.syncFromDisk(true);
     const record = this.records.get(id);
     if (!record || record.status !== 'pending') return null;
     record.status = 'cancelled';
