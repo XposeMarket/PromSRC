@@ -14,7 +14,7 @@ const executeSkillRead = async (args, skillsManager) => {
 // Exercise private opt-in using synthetic data, not a maintainer's real file.
 const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'dev-skill-fixture-'));
 try {
-const skill = path.join(fixture, 'self-repair-protocol');
+const skill = path.join(fixture, 'skills', 'self-repair-protocol');
 fs.cpSync(path.join(repo, 'workspace', 'skills', 'self-repair-protocol'), skill, { recursive: true });
 fs.mkdirSync(path.join(skill, 'references'), { recursive: true });
 fs.writeFileSync(path.join(skill, 'references', 'dev-escalation.md'), 'Synthetic development escalation fixture.');
