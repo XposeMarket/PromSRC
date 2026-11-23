@@ -3068,7 +3068,12 @@ function hideNativeBrowserSurface(reason = '') {
   return broadcastNativeBrowserState({ reason, attached: false, visible: false });
 }
 
-async function openNativeBrowserSurface({ sessionId = '', url = '', profile = '', tabId = '' } = {}) {
+async function openNativeBrowserSurface({ sessionId = '', url = '', profile = '', tabId = '', useDesktopProfile = false } = {}) {
+  if (!profile && useDesktopProfile === true && !nativeBrowserSessionPartitions.has(sessionId)) {
+    profile = await require('./selected-browser-profile.cjs').readSelectedBrowserProfile(
+      mainWindow, GATEWAY_URL, (id) => getImportedChromeProfile(USER_DATA_DIR, id),
+    );
+  }
   const { view, wc, partition, tabId: resolvedTabId } = requireNativeViewForSession(sessionId, profile, tabId);
   presentNativeView(partition, resolvedTabId, sessionId);
   nativeBrowserState.attached = true;

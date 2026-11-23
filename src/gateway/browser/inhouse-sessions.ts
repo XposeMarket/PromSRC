@@ -156,6 +156,15 @@ export function resolveInHouseProfileId(sessionId: string): string {
   return `${metadata.ownerType}-${ownerId}`;
 }
 
+// Only a personal main chat with no explicit profile may inherit desktop Settings.
+export function inHouseOpenProfileOptions(sessionId: string): { profile: string } | { useDesktopProfile: true } {
+  const sid = resolveSessionId(sessionId);
+  if (!inHouseProfilePreferences.has(sid) && getBrowserSessionMetadata(sid).ownerType === 'main') {
+    return { useDesktopProfile: true };
+  }
+  return { profile: resolveInHouseProfileId(sid) };
+}
+
 export function shouldUseInHouseBrowser(sessionId: string): boolean {
   const resolved = resolveSessionId(sessionId);
   const metadata = getBrowserSessionMetadata(resolved);
