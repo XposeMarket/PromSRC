@@ -1,7 +1,7 @@
 # 18 — Mobile app
 
 ### Composer plugin references and permissions
-Desktop and mobile chat recognize `/connector-id` (and `/mcp-serverid` for tools exposed through MCP). The authenticated catalog lists only groups with callable tools. The reference makes matching tool names available to the current turn via the existing tool bridge, without executing an action or changing approval policy. The shield immediately right of Attachments opens the permissions popover. The selector edits the installation-wide Security setting, not a per-chat override. Advanced opens Security directly.
+Desktop and mobile chat recognize `/connector-id` (and `/mcp-serverid` for tools exposed through MCP). The authenticated catalog lists only groups with callable tools. The reference makes matching tool names available to the current turn via the existing tool bridge, without executing an action or changing approval policy. The shield immediately right of Attachments opens the permissions popover and matches the saved mode: gray outline for Default, solid Send-accent shield for Lite. Both menu rows use the same icons. The selector edits the installation-wide Security setting, not a per-chat override. Advanced opens Security directly.
 
 ### Pending Tasks readable details (fix/tasks-readable-details, Nov8)
 Mobile Tasks shares `features/tasks/task-detail-render.js` with desktop: minimal tool-name disclosures and sanitized Markdown evidence/run notes. `renderTasksPage` awaits the existing Markdown-vendor hook on cold direct navigation. Native tool-open state survives polling; existing request-card preservation and glass shell remain unchanged. Not merged/live.

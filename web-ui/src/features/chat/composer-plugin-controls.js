@@ -1,5 +1,12 @@
 import {getConnectorLogoUrl} from '../connectors/connector-logo-runtime.js';
 
+const shieldPath = 'm12 3 8 3v6c0 4-4 7.5-8 9-4-1.5-8-5-8-9V6z';
+function shield(mode) {
+  const lite = mode === 'lite';
+  return `<svg class="shield ${lite ? 'lite' : 'outline'}" aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" stroke-linejoin="round"><path d="${shieldPath}" fill="${lite ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="${lite ? 2.5 : 1.7}"/></svg>`;
+}
+
+
 export function pluginLabel(item, esc) {
   const src = getConnectorLogoUrl(item.pluginId);
   return `<span class="composer-plugin-label" style="display:inline-flex;align-items:center;gap:.3em">${src ? `<span aria-hidden="true" style="width:1em;height:1em;background:currentColor;mask:url('${src}') center/contain no-repeat"></span>` : '<span aria-hidden="true">◇</span>'}${esc(item.label)}</span>`;
@@ -24,18 +31,19 @@ export function installComposerControls(tag, commands, request, advanced, refres
       root.innerHTML=`<style>
         :host{display:inline-flex;align-items:center;flex:none}button{font:inherit;color:inherit;cursor:pointer}
         #trigger{width:32px;height:32px;display:grid;place-items:center;border:0;border-radius:8px;background:transparent;color:inherit;padding:0}
+        .shield{flex:none;color:#919497}.shield.lite{color:var(--t-accent,var(--brand,Highlight))}#panel button[data-mode]{display:flex;align-items:center;gap:9px}#panel button[data-mode]::after{margin-inline-start:auto}
         @media(pointer:coarse){#trigger{width:40px;height:40px}}
         button:hover,button:focus-visible,#trigger[aria-expanded=true],button[aria-pressed=true]{background:color-mix(in srgb,currentColor 12%,transparent)}
         #panel{position:fixed;inset:auto;margin:0;box-sizing:border-box;width:min(248px,calc(100vw - 16px));max-height:80dvh;overflow:auto;color:var(--pm-text,var(--text,CanvasText));background:var(--pm-surface,var(--surface,Canvas));border:1px solid color-mix(in srgb,currentColor 22%,transparent);border-radius:12px;padding:10px;box-shadow:0 8px 30px #0004;font:14px system-ui}
         p{font-size:12px;margin:4px 0 8px}#panel button{display:block;width:100%;padding:9px;border:0;border-radius:6px;text-align:left;background-color:transparent}#panel button[aria-pressed=true]::after{content:'✓';float:right}#panel button:hover{background-color:color-mix(in srgb,currentColor 9%,transparent)}button:disabled{opacity:.6}
-      </style><button id="trigger" type="button" aria-label="Permissions" title="Permissions" aria-haspopup="dialog" aria-expanded="false" popovertarget="panel"><svg aria-hidden="true" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 8 3v6c0 4-4 7.5-8 9-4-1.5-8-5-8-9V6z"/><path d="m9 12 2 2 4-4"/></svg></button>
-      <section id="panel" popover="auto" role="dialog" aria-label="Composer permissions"><strong>Permissions</strong><p>Applies to all chats on this installation.</p><button data-mode="default">Default Permissions</button><button data-mode="lite">Lite Permissions</button><button id="advanced">Advanced → Security settings</button><small role="status"></small></section>`;
+      </style><button id="trigger" type="button" aria-label="Permissions" title="Permissions" aria-haspopup="dialog" aria-expanded="false" popovertarget="panel">${shield()}</button>
+      <section id="panel" popover="auto" role="dialog" aria-label="Composer permissions"><strong>Permissions</strong><p>Applies to all chats on this installation.</p><button data-mode="default">${shield('default')}Default Permissions</button><button data-mode="lite">${shield('lite')}Lite Permissions</button><button id="advanced">Advanced → Security settings</button><small role="status"></small></section>`;
       this.button=root.querySelector('#trigger');
       const panel=root.querySelector('#panel'), modes=[...root.querySelectorAll('[data-mode]')], status=root.querySelector('[role=status]');
       const label=text=>{this.button.title=text;this.button.setAttribute('aria-label',text);};
-      const show=mode=>{label(`Permissions: ${mode==='lite'?'Lite':'Default'}`);modes.forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.mode===mode)));};
+      const show=mode=>{this.button.innerHTML=shield(mode);label(mode ? `Permissions: ${mode==='lite'?'Lite':'Default'}` : 'Permissions');modes.forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.mode===mode)));};
       let revision=0;
-      const read=async()=>{const token=++revision;modes.forEach(b=>b.disabled=true);try{const data=await request('/api/settings/security');if(token!==revision)return;if(!['default','lite'].includes(data.toolPermissionMode))throw Error();show(data.toolPermissionMode);status.textContent='';modes.forEach(b=>b.disabled=false);}catch{if(token===revision){status.textContent='Could not load permissions. Reopen to retry.';label('Permissions');}}};
+      const read=async()=>{const token=++revision;modes.forEach(b=>b.disabled=true);try{const data=await request('/api/settings/security');if(token!==revision)return;if(!['default','lite'].includes(data.toolPermissionMode))throw Error();show(data.toolPermissionMode);status.textContent='';modes.forEach(b=>b.disabled=false);}catch{if(token===revision){status.textContent='Could not load permissions. Reopen to retry.';show(null);}}};
       const place=()=>{const r=this.button.getBoundingClientRect();panel.style.left=Math.max(8,Math.min(r.left,innerWidth-panel.offsetWidth-8))+'px';panel.style.top=Math.max(8,r.top-panel.offsetHeight-6)+'px';};
       panel.addEventListener('toggle',()=>{const open=panel.matches(':popover-open');this.button.setAttribute('aria-expanded',String(open));this.positionWatch?.disconnect();if(open){place();this.positionWatch=new ResizeObserver(place);this.positionWatch.observe(panel);read();}});
       modes.forEach(b=>b.onclick=async()=>{++revision;modes.forEach(x=>x.disabled=true);try{const data=await request('/api/settings/security',{method:'POST',body:JSON.stringify({toolPermissionMode:b.dataset.mode})});if(!data.success||data.toolPermissionMode!==b.dataset.mode)throw Error();show(data.toolPermissionMode);panel.hidePopover();}catch{await read();status.textContent='Change not confirmed. Check the current setting.';}});
