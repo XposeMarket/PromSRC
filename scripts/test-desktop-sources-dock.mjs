@@ -31,6 +31,13 @@ try {
  };await checkFloating();
  await shot('overview',panel);
  await page.evaluate(()=>{const f=window.fixture,sid=window.activeChatSessionId,t=Date.now();localStorage.setItem('prometheus_background_agent_work_v1',JSON.stringify([{id:'audit',sessionId:sid,agentName:'Review layout',status:'running',providerId:'anthropic',model:'Claude',reasoningEffort:'medium',updatedAt:t},{id:'other',sessionId:'another-thread',agentName:'Unrelated run',status:'running',updatedAt:t}]));f.chatResourcesState.sessionId=sid;f.chatResourcesState.resources=Array.from({length:36},(_,i)=>({id:'r'+i,title:['Layout notes','Before.png','Editor reference'][i%3],threadId:sid,kind:'file',origin:i%2?'user_upload':'web_fetch',status:'available',locator:{path:'notes/'+i},createdAt:new Date(t-i*60000).toISOString()}));const file={id:'size',path:'/demo/layout.js',displayPath:'layout.js',status:'modified',baselineKind:'git-head',insertions:1,deletions:1};f.sourcePanelState.codingContext={root:'/demo',files:[file],roots:[]};f.renderSourcePanel();});
+ assert.deepEqual(await panel.locator('.sec h3').allTextContents(), ['Environment','Lineage · 1 running','Changed by this thread','Recent sources']);
+ assert.equal(await panel.locator('.dock-provider.claude').count(),1);
+ assert.equal(await panel.locator('.sec h3').first().evaluate(el=>getComputedStyle(el).fontSize),'11.5px');
+ assert.equal(await panel.locator('.lineage-row').evaluate(el=>el.getBoundingClientRect().height),30);
+ assert.equal(await panel.locator('.sec').filter({hasText:'Recent sources'}).locator('[data-source-item^="workspace-file:"]').count(),0);
+ await panel.locator('.lineage-row').click();assert(await panel.locator('details[data-run="audit"]').evaluate(el=>el.open));
+ await page.locator('[data-source-tab="overview"]').click();await page.evaluate(()=>window.setDockTimelineFilter('All'));
  await shot('overview-populated',panel);await shot('desktop-overview');
  await page.locator('[data-source-tab="timeline"]').click();const busy=await panel.boundingBox();assert(busy.height<=521 && busy.height>quiet.height);assert(await page.locator('#source-panel-body').evaluate(e=>e.scrollHeight>e.clientHeight));assert(!((await panel.innerText()).includes('Unrelated run')));
  await shot('timeline',panel);await page.locator('.dock-filters button',{hasText:'Agents'}).click();await panel.locator('.dock-agent summary').click();assert.match(await panel.innerText(),/medium reasoning/);
