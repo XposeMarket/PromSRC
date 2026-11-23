@@ -21,17 +21,28 @@ export function installComposerControls(tag, commands, request, advanced, refres
     connectedCallback() {
       if (this.button) return;
       const root=this.attachShadow({mode:'open'});
-      root.innerHTML=`<style>:host{display:inline-flex;align-items:center}button{font:inherit;color:inherit;cursor:pointer}#trigger{border:0;background:transparent;font-size:12px;color:inherit;white-space:nowrap;padding:5px}dialog{color:var(--text,CanvasText);background:var(--surface,Canvas);border:1px solid color-mix(in srgb,currentColor 22%,transparent);border-radius:12px;padding:14px;width:min(280px,80vw);box-shadow:0 8px 35px #0005}dialog::backdrop{background:#0004}p{font-size:12px;margin:6px 0 12px}dialog button{display:block;width:100%;padding:9px 10px;border:0;border-radius:6px;text-align:left;background:transparent}dialog button[aria-pressed=true],dialog button:hover{background:color-mix(in srgb,currentColor 10%,transparent)}button:disabled{opacity:.6}</style><button id="trigger" type="button" aria-haspopup="dialog">♢ Permissions</button><dialog aria-label="Composer permissions"><strong>Permissions</strong><p>Applies to all chats on this installation.</p><button data-mode="default">Default Permissions</button><button data-mode="lite">Lite Permissions</button><p>Lite skips routine approval prompts. Explicit approvals still apply.</p><button id="advanced">Advanced → Security settings</button><button id="close">Close</button><small role="status"></small></dialog>`;
-      const dialog=root.querySelector('dialog'), modes=[...root.querySelectorAll('[data-mode]')], status=root.querySelector('[role=status]');
-      const show=mode=>{ this.button.textContent=mode==='lite'?'♢ Lite Permissions':'♢ Default Permissions'; modes.forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.mode===mode))); };
+      root.innerHTML=`<style>
+        :host{display:inline-flex;align-items:center;flex:none}button{font:inherit;color:inherit;cursor:pointer}
+        #trigger{width:32px;height:32px;display:grid;place-items:center;border:0;border-radius:8px;background:transparent;color:inherit;padding:0}
+        @media(pointer:coarse){#trigger{width:40px;height:40px}}
+        button:hover,button:focus-visible,#trigger[aria-expanded=true],button[aria-pressed=true]{background:color-mix(in srgb,currentColor 12%,transparent)}
+        #panel{position:fixed;inset:auto;margin:0;box-sizing:border-box;width:min(248px,calc(100vw - 16px));max-height:80dvh;overflow:auto;color:var(--pm-text,var(--text,CanvasText));background:var(--pm-surface,var(--surface,Canvas));border:1px solid color-mix(in srgb,currentColor 22%,transparent);border-radius:12px;padding:10px;box-shadow:0 8px 30px #0004;font:14px system-ui}
+        p{font-size:12px;margin:4px 0 8px}#panel button{display:block;width:100%;padding:9px;border:0;border-radius:6px;text-align:left;background-color:transparent}#panel button[aria-pressed=true]::after{content:'✓';float:right}#panel button:hover{background-color:color-mix(in srgb,currentColor 9%,transparent)}button:disabled{opacity:.6}
+      </style><button id="trigger" type="button" aria-label="Permissions" title="Permissions" aria-haspopup="dialog" aria-expanded="false" popovertarget="panel"><svg aria-hidden="true" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 8 3v6c0 4-4 7.5-8 9-4-1.5-8-5-8-9V6z"/><path d="m9 12 2 2 4-4"/></svg></button>
+      <section id="panel" popover="auto" role="dialog" aria-label="Composer permissions"><strong>Permissions</strong><p>Applies to all chats on this installation.</p><button data-mode="default">Default Permissions</button><button data-mode="lite">Lite Permissions</button><button id="advanced">Advanced → Security settings</button><small role="status"></small></section>`;
+      this.button=root.querySelector('#trigger');
+      const panel=root.querySelector('#panel'), modes=[...root.querySelectorAll('[data-mode]')], status=root.querySelector('[role=status]');
+      const label=text=>{this.button.title=text;this.button.setAttribute('aria-label',text);};
+      const show=mode=>{label(`Permissions: ${mode==='lite'?'Lite':'Default'}`);modes.forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.mode===mode)));};
       let revision=0;
-      const read=async()=>{const token=++revision; modes.forEach(b=>b.disabled=true); try{const data=await request('/api/settings/security'); if(token!==revision)return; if(!['default','lite'].includes(data.toolPermissionMode)) throw Error(); show(data.toolPermissionMode);status.textContent='';modes.forEach(b=>b.disabled=false);}catch{if(token===revision){status.textContent='Could not load permissions. Reopen to retry.';this.button.textContent='♢ Permissions';}}};
-      this.button=root.querySelector('#trigger'); this.button.onclick=()=>{dialog.showModal();read();};
-      modes.forEach(b=>b.onclick=async()=>{++revision;modes.forEach(x=>x.disabled=true); try{const data=await request('/api/settings/security',{method:'POST',body:JSON.stringify({toolPermissionMode:b.dataset.mode})});if(!data.success||data.toolPermissionMode!==b.dataset.mode)throw Error();show(data.toolPermissionMode);dialog.close();}catch{await read();status.textContent='Change not confirmed. Check the current setting.';}});
-      root.querySelector('#close').onclick=()=>dialog.close();root.querySelector('#advanced').onclick=()=>{dialog.close();advanced();};
-      this.onFocus=()=>{catalog();if(!dialog.open)read();}; catalog();read();window.addEventListener('focus',this.onFocus);
+      const read=async()=>{const token=++revision;modes.forEach(b=>b.disabled=true);try{const data=await request('/api/settings/security');if(token!==revision)return;if(!['default','lite'].includes(data.toolPermissionMode))throw Error();show(data.toolPermissionMode);status.textContent='';modes.forEach(b=>b.disabled=false);}catch{if(token===revision){status.textContent='Could not load permissions. Reopen to retry.';label('Permissions');}}};
+      const place=()=>{const r=this.button.getBoundingClientRect();panel.style.left=Math.max(8,Math.min(r.left,innerWidth-panel.offsetWidth-8))+'px';panel.style.top=Math.max(8,r.top-panel.offsetHeight-6)+'px';};
+      panel.addEventListener('toggle',()=>{const open=panel.matches(':popover-open');this.button.setAttribute('aria-expanded',String(open));this.positionWatch?.disconnect();if(open){place();this.positionWatch=new ResizeObserver(place);this.positionWatch.observe(panel);read();}});
+      modes.forEach(b=>b.onclick=async()=>{++revision;modes.forEach(x=>x.disabled=true);try{const data=await request('/api/settings/security',{method:'POST',body:JSON.stringify({toolPermissionMode:b.dataset.mode})});if(!data.success||data.toolPermissionMode!==b.dataset.mode)throw Error();show(data.toolPermissionMode);panel.hidePopover();}catch{await read();status.textContent='Change not confirmed. Check the current setting.';}});
+      root.querySelector('#advanced').onclick=()=>{panel.hidePopover();advanced();};
+      this.onFocus=()=>{catalog();if(!panel.matches(':popover-open'))read();};catalog();read();window.addEventListener('focus',this.onFocus);
     }
-    disconnectedCallback(){window.removeEventListener('focus',this.onFocus);}
+    disconnectedCallback(){this.positionWatch?.disconnect();window.removeEventListener('focus',this.onFocus);}
   });
 }
 

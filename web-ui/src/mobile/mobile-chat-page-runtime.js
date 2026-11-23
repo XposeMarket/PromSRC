@@ -786,11 +786,11 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
         <span class="pm-command-chip-token"></span>
         <span class="pm-command-chip-clear" aria-hidden="true">&times;</span>
       </button>
-      <pm-chat-access></pm-chat-access>
       <div class="pm-composer-row">
         <button type="button" class="pm-icon-btn pm-attach-native-btn" id="pm-attach-btn" aria-label="Attach files">
           ${ICONS.paperclip}
         </button>
+        <pm-chat-access></pm-chat-access>
         <input id="pm-file-input" class="pm-native-file-input" type="file" multiple accept="image/*,video/*,.mp4,.mov,.m4v,.webm,.avi,.mkv,.txt,.md,.json,.csv,.tsv,.log,.xml,.html,.css,.js,.ts,.tsx,.jsx,.py,.yaml,.yml,application/pdf" />
         <input id="pm-photo-input" class="pm-native-file-input" type="file" multiple accept="image/*" />
         <div class="pm-composer-input-wrap" id="pm-composer-input-wrap">
