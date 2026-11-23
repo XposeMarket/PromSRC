@@ -129,7 +129,7 @@ function onClick(event) {
   event.__pcHandled = true;
   const card = btn.closest('[data-pc-id]');
   const act = btn.getAttribute('data-pc-act');
-  if (act === 'send') { event.preventDefault(); sendCardFollowUp(btn.getAttribute('data-prompt')); btn.classList.add('sent'); return; }
+  if (act === 'send') { event.preventDefault(); sendCardFollowUp(btn.getAttribute('data-prompt'), () => btn.classList.add('sent')); return; }
   if (act === 'open') { const url = btn.getAttribute('data-url'); if (url) window.open(url, '_blank', 'noopener'); return; }
   if (act === 'scroll') {
     const track = btn.parentElement?.querySelector('.pc-scroller');

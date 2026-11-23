@@ -34,6 +34,7 @@ import {
   type BrowserSiteKnowledge,
 } from './browser-site-knowledge.js';
 import { getConfig } from '../config/config.js';
+import { assertCanonicalPathInsideSync } from '../tools/workspace-boundary.js';
 import { getActiveWorkspace } from '../tools/workspace-context.js';
 import { broadcastWS } from './comms/broadcaster';
 import { normalizeScreenshotBuffer } from './screenshot-normalize.js';
@@ -57,7 +58,7 @@ import { browserSetProfileTarget } from './browser/tabs.js';
 import { getMainBrowserTarget } from './browser/target.js';
 import { takeSnapshot, clickBySelector, resolveViewportPointFromTarget, clickByRef, fillBySelector, fillByRef, INTERACTIVE_SELECTOR } from './browser/snapshot.js';
 import { clearBrowserSessionEphemeralState, setBrowserLiveSelectionTracker } from './browser/selection.js';
-import { toUploadPaths, persistBrowserDownload } from './browser/downloads.js';
+import { ensureBrowserOutputDir, toUploadPaths, persistBrowserDownload } from './browser/downloads.js';
 import { buildBrowserRunJsEnvelopeSource, formatBrowserRunJsEnvelope } from './browser/diagnostics.js';
 export type { BrowserProfileKind, BrowserSessionMetadata, BrowserPerformanceObserver, BrowserInteractionMode, BrowserUserAction, BrowserSessionInfo, BrowserSessionListEntry, BrowserTeachPhase, BrowserTeachStepSnapshot, BrowserTeachVerificationResult, BrowserTeachSessionSnapshot, BrowserPageType, BrowserFeedItem, BrowserAdvisorPacket, BrowserObserveMode } from './browser/types.js';
 export { resolveBrowserObserveMode } from './browser/observation.js';
@@ -1031,7 +1032,29 @@ export async function browserClickAndDownload(
 ): Promise<string> {
   const resolved = resolveSessionId(sessionId);
   if (getInHouseSession(resolved) && shouldUseInHouseBrowser(resolved)) {
-    return 'ERROR: Saving a clicked download to the workspace is not supported in the in-app browser. Use Prometheus Chrome (target=prometheus) for this task; it has a separate sign-in profile.';
+    let spool = '';
+    try {
+      const { workspaceRoot, absDir } = ensureBrowserOutputDir(options?.output_dir);
+      assertCanonicalPathInsideSync(workspaceRoot, absDir, 'Download directory');
+      const timeoutMs = Math.min(120000, Math.max(1000, Number(options?.timeout_ms) || 15000));
+      spool = fs.mkdtempSync(path.join(os.tmpdir(), 'prom-download-'));
+      const result = await callInHouseBrowser<{filename: string}>('click-download', {
+        sessionId: resolved, ref, spool: path.basename(spool), timeoutMs,
+      }, timeoutMs + 5000);
+      const saved = await persistBrowserDownload(sessionId, {
+        suggestedFilename: () => result.filename,
+        saveAs: async (dest: string) => {
+          assertCanonicalPathInsideSync(workspaceRoot, dest, 'Download file');
+          if (path.resolve(path.dirname(dest)) !== absDir) throw new Error('Invalid download filename.');
+          await fs.promises.copyFile(path.join(spool, 'payload'), dest, fs.constants.COPYFILE_EXCL);
+        },
+      }, options);
+      return `Saved in-app download to ${saved.relPath} (${saved.sizeBytes} bytes).`;
+    } catch (err: any) {
+      return `ERROR: In-app download failed: ${err.message}`;
+    } finally {
+      if (spool) await fs.promises.rm(spool, { recursive: true, force: true, maxRetries: 3 }).catch(() => {});
+    }
   }
   const session = sessions.get(resolved);
   if (!session) return 'ERROR: No browser session. Use browser_open first.';

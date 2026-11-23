@@ -22,13 +22,13 @@ export function isInHouseBrowserAvailable(): boolean {
   return !!getInHouseBrowserRpcConfig();
 }
 
-export async function callInHouseBrowser<T = any>(route: string, payload: Record<string, any> = {}): Promise<T> {
+export async function callInHouseBrowser<T = any>(route: string, payload: Record<string, any> = {}, timeoutMs = 12_000): Promise<T> {
   const cfg = getInHouseBrowserRpcConfig();
   if (!cfg) {
     throw new Error('Prometheus in-house browser is only available in the Electron desktop app.');
   }
   const controller = typeof AbortController === 'function' ? new AbortController() : null;
-  const timeout = controller ? setTimeout(() => controller.abort(), 12_000) : null;
+  const timeout = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
   let resp: any;
   try {
     resp = await fetch(`${cfg.url}/${String(route || '').replace(/^\/+/, '')}`, {
