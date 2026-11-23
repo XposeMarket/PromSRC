@@ -1,4 +1,4 @@
-import {getConnectorLogoUrl} from '../connectors/connector-logo-runtime.js';
+import {colorLogoStyle, getConnectorLogoUrl} from '../connectors/connector-logo-runtime.js';
 
 const shieldPath = 'm12 3 8 3v6c0 4-4 7.5-8 9-4-1.5-8-5-8-9V6z';
 function shield(mode) {
@@ -9,7 +9,7 @@ function shield(mode) {
 
 export function pluginLabel(item, esc) {
   const src = getConnectorLogoUrl(item.pluginId);
-  return `<span class="composer-plugin-label" style="display:inline-flex;align-items:center;gap:.3em">${src ? `<span aria-hidden="true" style="width:1em;height:1em;background:currentColor;mask:url('${src}') center/contain no-repeat"></span>` : '<span aria-hidden="true">◇</span>'}${esc(item.label)}</span>`;
+  return `<span class="composer-plugin-label" style="display:inline-flex;align-items:center;gap:.3em">${src ? `<span aria-hidden="true" style="width:1em;height:1em;background:currentColor;mask:url('${src}') center/contain no-repeat${colorLogoStyle(item.pluginId)}"></span>` : '<span aria-hidden="true">◇</span>'}${esc(item.label)}</span>`;
 }
 
 export function installComposerControls(tag, commands, request, advanced, refresh) {
@@ -26,13 +26,28 @@ export function installComposerControls(tag, commands, request, advanced, refres
   }
   customElements.define(tag,class extends HTMLElement {
     connectedCallback() {
+      // Follow the adjacent paperclip, including mobile focus, haptic wrapping and theme sizing.
+      const attach=this.parentElement?.querySelector('.chat-attach-btn,#pm-attach-btn');
+      const glyph=attach?.querySelector('svg');
+      if (attach && glyph) {
+        this.sizeWatch=new ResizeObserver(()=>{
+          for (const [el,prefix] of [[attach,'button'],[glyph,'icon']]) {
+            const css=getComputedStyle(el);
+            if (parseFloat(css.width)>0 && parseFloat(css.height)>0) {
+              this.style.setProperty(`--clip-${prefix}-w`,css.width);
+              this.style.setProperty(`--clip-${prefix}-h`,css.height);
+            }
+          }
+        });
+        this.sizeWatch.observe(attach,{box:'border-box'});this.sizeWatch.observe(glyph);
+      }
       if (this.button) return;
       const root=this.attachShadow({mode:'open'});
       root.innerHTML=`<style>
         :host{display:inline-flex;align-items:center;flex:none}button{font:inherit;color:inherit;cursor:pointer}
-        #trigger{width:32px;height:32px;display:grid;place-items:center;border:0;border-radius:8px;background:transparent;color:inherit;padding:0}
+        #trigger{box-sizing:border-box;width:var(--clip-button-w,32px);height:var(--clip-button-h,32px);display:grid;place-items:center;border:0;border-radius:8px;background:transparent;color:inherit;padding:0}
         .shield{flex:none;color:#919497}.shield.lite{color:var(--t-accent,var(--brand,Highlight))}#panel button[data-mode]{display:flex;align-items:center;gap:9px}#panel button[data-mode]::after{margin-inline-start:auto}
-        @media(pointer:coarse){#trigger{width:40px;height:40px}}
+        #trigger .shield{width:var(--clip-icon-w,15px);height:var(--clip-icon-h,15px)}
         button:hover,button:focus-visible,#trigger[aria-expanded=true],button[aria-pressed=true]{background:color-mix(in srgb,currentColor 12%,transparent)}
         #panel{position:fixed;inset:auto;margin:0;box-sizing:border-box;width:min(248px,calc(100vw - 16px));max-height:80dvh;overflow:auto;color:var(--pm-text,var(--text,CanvasText));background:var(--pm-surface,var(--surface,Canvas));border:1px solid color-mix(in srgb,currentColor 22%,transparent);border-radius:12px;padding:10px;box-shadow:0 8px 30px #0004;font:14px system-ui}
         p{font-size:12px;margin:4px 0 8px}#panel button{display:block;width:100%;padding:9px;border:0;border-radius:6px;text-align:left;background-color:transparent}#panel button[aria-pressed=true]::after{content:'✓';float:right}#panel button:hover{background-color:color-mix(in srgb,currentColor 9%,transparent)}button:disabled{opacity:.6}
@@ -50,7 +65,7 @@ export function installComposerControls(tag, commands, request, advanced, refres
       root.querySelector('#advanced').onclick=()=>{panel.hidePopover();advanced();};
       this.onFocus=()=>{catalog();if(!panel.matches(':popover-open'))read();};catalog();read();window.addEventListener('focus',this.onFocus);
     }
-    disconnectedCallback(){this.positionWatch?.disconnect();window.removeEventListener('focus',this.onFocus);}
+    disconnectedCallback(){this.sizeWatch?.disconnect();this.positionWatch?.disconnect();window.removeEventListener('focus',this.onFocus);}
   });
 }
 
