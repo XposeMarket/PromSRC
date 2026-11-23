@@ -26,6 +26,9 @@ The Tasks-only interaction host lives in features/tasks/mobile-interactions.js a
 - The liquid-glass hamburger treatment is settled/accepted product styling; `mobile-hamburger-liquid-glass.js` and its CSS are live source, not dead CSS.
 - Test narrow touch/keyboard/browser behavior and the generated public mirror; don't assume a desktop pass covers iOS/PWA behavior.
 
+### Zoom in the mobile chat gallery
+Spread two fingers on the photo to zoom (up to 5×), drag to pan, and pinch back to fit to resume swiping. Navigation or reopening resets the photo. Captions and controls stay put; the page itself does not zoom. `web-ui/src/cards/gallery-touch.js` handles gestures on the photo viewport.
+
 ## Map
 | Concern | Where (file → symbol) | Notes |
 |---|---|---|
@@ -255,6 +258,3 @@ Task categories show no numeric totals. A nonempty In Progress category shows a 
 The drawer long-press menu uses the drawer folder icon for project actions and scrolls on short screens. New Chat running text follows the actual provider stack. The queue sits immediately above the composer; `mobile-runtime-chrome.js` measures the combined queue wrapper, not the legacy client queue alone. Tap a pending message to edit its text in the composer. Save updates the same gateway queue item and preserves attachment references and skills; Cancel restores the prior draft. Opening the editor does not pause gateway dispatch. Steer/Delete remain in the overflow menu.
 
 Subagents and Teams show a preview only for the most recently run entry, not the first configured one. The fixed, borderless single-line search filters tiles above the tab bar or on the keyboard edge. Active runs have a glowing outline. Both chat sidebars prioritize pending questions and approvals over Working/Unread; a pause alone does not imply Needs you.
-
-### Zoom in the mobile chat gallery
-In the open gallery, spread two fingers on the photo to zoom (up to 5×), drag to pan, and pinch back to fit to resume horizontal swiping. Navigation or reopening resets the photo to fit. The caption, arrows and close button stay outside the zoomed area; the mobile page itself does not zoom. `web-ui/src/cards/gallery-touch.js` owns touch gestures on the photo viewport.
