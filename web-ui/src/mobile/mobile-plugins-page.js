@@ -18,7 +18,7 @@ import {
 import { mobileGatewayFetch } from './mobile-api.js';
 import { postJson as postJsonConsent } from '../features/secure-access/secure-access-core.js';
 import { ensureMobileStyleOwner } from './mobile-style-owners.js';
-import { getConnectorLogoUrl, resolveConnectorLogoId } from '../features/connectors/connector-logo-runtime.js';
+import { colorLogoStyle, getConnectorLogoUrl } from '../features/connectors/connector-logo-runtime.js';
 
 const collator = new Intl.Collator(undefined, { sensitivity: 'base', numeric: true });
 const INSTALLED_ICON_LIMIT = 6;
@@ -180,11 +180,10 @@ export function groupPluginRows(rows = []) {
 }
 
 function logoMarkup(row, size = 44) {
-  const logoId = row.kind === 'connector' ? resolveConnectorLogoId(row.id) : resolveConnectorLogoId(row.id);
-  const url = logoId ? getConnectorLogoUrl(logoId) : '';
+  const url = getConnectorLogoUrl(row.id);
   const color = safeColor(row.color);
   const inner = url
-    ? `<span class="pm-plugin-logo-mark" style="--pm-plugin-logo-url:url('${escapeHtml(url)}');--pm-plugin-logo-color:${color}"></span>`
+    ? `<span class="pm-plugin-logo-mark" style="--pm-plugin-logo-url:url('${escapeHtml(url)}');--pm-plugin-logo-color:${color}${colorLogoStyle(row.id)}"></span>`
     : `<span class="pm-plugin-logo-text" style="color:${color}">${escapeHtml(monogram(row.name))}</span>`;
   return `<span class="pm-plugin-logo" style="width:${size}px;height:${size}px">${inner}</span>`;
 }

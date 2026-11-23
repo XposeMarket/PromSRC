@@ -3,6 +3,13 @@
 // connector capabilities and names remain owned by the connection catalog.
 
 const CONNECTOR_LOGO_SLUGS = Object.freeze({
+  mcp_protocol: 'modelcontextprotocol',
+  asana: 'asana', atlassian: 'atlassian', brave: 'brave', canva: 'canva.png',
+  cloudflare: 'cloudflare', godot: 'godotengine', higgsfield: 'higgsfield.png',
+  huggingface: 'huggingface', intercom: 'intercom', linear: 'linear', mac_messages: 'apple',
+  neon: 'neon', paypal: 'paypal', postgres: 'postgresql', robinhood: 'robinhood',
+  sentry: 'sentry', shopmonkey: 'shopmonkey.png', sqlite: 'sqlite', square: 'square',
+  supabase: 'supabase', webflow: 'webflow', websembli_mail: 'websembli.png', windows: 'windows',
   ga4: 'googleanalytics',
   github: 'github',
   gmail: 'gmail',
@@ -58,13 +65,15 @@ function connectorIdFromCandidate(value) {
   if (!normalized) return '';
   const candidates = [
     normalized,
-    normalized.replace(/^(?:connector|plugin|integration|mcp)_/, ''),
+    normalized.replace(/^(?:(?:connector|plugin|integration|mcp|hosted)_)+/, ''),
   ];
   for (const candidate of candidates) {
     const match = CONNECTOR_IDS.find((id) => candidate === id || candidate.startsWith(`${id}_`));
     if (match) return match;
   }
-  return '';
+  // Reference MCP servers have no separate product brand. Don't apply this
+  // mark to unrelated core memory/file tool calls such as memory_search.
+  return /^(?:mcp_|hosted_)/.test(normalized) || ['filesystem', 'memory'].includes(normalized) ? 'mcp_protocol' : '';
 }
 
 export function resolveConnectorLogoId(value) {
@@ -111,7 +120,13 @@ export function getConnectorLogoUrl(value) {
   if (!slug) return '';
   // The raw module tree and the hashed production chunks have different
   // relative locations. The public static asset root is shared by both.
-  return `/static/assets/connectors/${slug}.svg`;
+  return `/static/assets/connectors/${slug}${slug.endsWith('.png') ? '' : '.svg'}`;
+}
+
+// Color artwork must be painted as an image, not as an opaque silhouette.
+export function colorLogoStyle(value) {
+  const url = getConnectorLogoUrl(value);
+  return url.endsWith('.png') ? `;mask:none;-webkit-mask:none;background:transparent url('${url}') center/contain no-repeat` : '';
 }
 
 export function renderConnectorLogo(value, escapeHtml = (input) => String(input ?? '')) {
@@ -119,5 +134,5 @@ export function renderConnectorLogo(value, escapeHtml = (input) => String(input 
   const url = getConnectorLogoUrl(value);
   if (!id || !url) return '';
   const color = CONNECTOR_LOGO_COLORS[id] || '#f0f0f0';
-  return `<span class="tool-activity-connector-logo" data-connector-logo="${escapeHtml(id)}" role="img" aria-label="${escapeHtml(id)} logo" style="--connector-logo-url:url('${escapeHtml(url)}');--connector-logo-color:${color}"></span>`;
+  return `<span class="tool-activity-connector-logo" data-connector-logo="${escapeHtml(id)}" role="img" aria-label="${escapeHtml(id)} logo" style="--connector-logo-url:url('${escapeHtml(url)}');--connector-logo-color:${color}${colorLogoStyle(id)}"></span>`;
 }
