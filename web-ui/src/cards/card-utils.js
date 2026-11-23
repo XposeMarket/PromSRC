@@ -71,12 +71,12 @@ export function stars(rating) {
  * Send a follow-up as the user from inside a card. Desktop exposes
  * window.sendChat, mobile exposes window.__pmMobileSendMessage.
  */
-export function sendCardFollowUp(prompt) {
+export function sendCardFollowUp(prompt, onAccepted) {
   const text = String(prompt || '').trim();
   if (!text || typeof window === 'undefined') return false;
   try {
-    if (typeof window.__pmMobileSendMessage === 'function') { window.__pmMobileSendMessage(text); return true; }
-    if (typeof window.sendChat === 'function') { window.sendChat(text); return true; }
+    if (typeof window.__pmMobileSendMessage === 'function') { window.__pmMobileSendMessage(text, { fromCard: true, attachments: [], onCardAccepted: onAccepted }); return true; }
+    if (typeof window.sendChat === 'function') { window.sendChat(text); onAccepted?.(); return true; }
   } catch (error) {
     console.warn('[prom-cards] follow-up send failed', error);
   }
