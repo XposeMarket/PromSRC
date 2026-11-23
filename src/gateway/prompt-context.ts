@@ -1413,7 +1413,9 @@ function buildToolCategoryMatchContext(messageText: string, activatedCategories:
       'Do not activate it if core tools are enough. Use scope=session only for explicit ongoing workflows.',
     );
   }
-  return lines.length ? `[TOOL_CATEGORY_MATCH]\n${lines.join('\n')}` : '';
+  const categories = lines.length ? `[TOOL_CATEGORY_MATCH]\n${lines.join('\n')}` : '';
+  const { pluginReferenceHint } = require('./chat/plugin-references') as typeof import('./chat/plugin-references');
+  return [categories, pluginReferenceHint(messageText)].filter(Boolean).join('\n\n');
 }
 
 function getVisibleCategoryPolicy(policy: string): string {

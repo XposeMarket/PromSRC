@@ -786,6 +786,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
         <span class="pm-command-chip-token"></span>
         <span class="pm-command-chip-clear" aria-hidden="true">&times;</span>
       </button>
+      <pm-chat-access></pm-chat-access>
       <div class="pm-composer-row">
         <button type="button" class="pm-icon-btn pm-attach-native-btn" id="pm-attach-btn" aria-label="Attach files">
           ${ICONS.paperclip}

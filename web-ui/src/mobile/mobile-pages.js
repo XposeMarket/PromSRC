@@ -1,3 +1,4 @@
+import { installComposerControls, pluginLabel, decoratePluginMarkdown } from '../features/chat/composer-plugin-controls.js';
 import { renderContentReview } from '../components/ContentReview.js';
 import { stripOnboardingControlBlock } from '../onboarding/onboarding-block.js';
 
@@ -3885,12 +3886,12 @@ function _renderMobileSkillReferencedMarkdown(text, refs = []) {
   }
   for (const item of _pmSortedSlashCommandTokens()) {
     const command = String(item.command || '').trim();
-    if (!command) continue;
+    if (!command || item.pluginId) continue;
     const escapedCommand = escapeHtml(command);
     const replacement = `<span class="pm-inline-command-token"><span class="pm-inline-skill-token-icon" aria-hidden="true"></span>${escapedCommand}</span>`;
     html = html.split(escapedCommand).join(replacement);
   }
-  return html;
+  return decoratePluginMarkdown(html,PM_CHAT_SLASH_COMMANDS,escapeHtml);
 }
 
 function _pmSkillExcerpt(value, max = 760) {
@@ -9783,6 +9784,7 @@ function _scrollChat(bodyEl) {
 }
 
 const PM_CHAT_SLASH_COMMANDS = getChatSlashCommands('mobile');
+installComposerControls('pm-chat-access', PM_CHAT_SLASH_COMMANDS, mobileGatewayFetch, ()=>{ location.hash='#mobile/settings/security'; }, ()=>{const input=document.querySelector('#pm-composer-input'); if(input) input.dispatchEvent(new Event('input',{bubbles:true}));});
 
 let pmActiveSlashCommand = null;
 let pmSlashCommandSelectionIndex = 0;
@@ -9927,7 +9929,7 @@ function _pmComposerRichTextHtml(value, refs = pmSelectedComposerSkills) {
     const commandMatch = text.charAt(cursor) === '/' ? _pmSlashCommandTokenAt(text, cursor) : null;
     if (commandMatch) {
       const label = text.slice(cursor, commandMatch.end);
-      html += `<span class="pm-composer-command-token">${escapeHtml(label)}</span>`;
+      html += `<span class="pm-composer-command-token">${commandMatch.item.pluginId ? pluginLabel(commandMatch.item,escapeHtml) : escapeHtml(label)}</span>`;
       cursor = commandMatch.end;
       continue;
     }
@@ -10299,7 +10301,7 @@ function _pmSelectSlashCommand(page, input, command) {
   const item = PM_CHAT_SLASH_COMMANDS.find((candidate) => candidate.command === command);
   if (!item) return;
   const slashState = _pmSlashCommandState(input);
-  if (slashState && slashState.start > 0 && input) {
+  if (slashState && (slashState.start > 0 || item.pluginId) && input) {
     const replacement = `${item.command} `;
     input.value = `${slashState.value.slice(0, slashState.start)}${replacement}${slashState.value.slice(slashState.end)}`;
     const nextCursor = slashState.start + replacement.length;
@@ -10368,7 +10370,7 @@ function _pmRenderSlashPopover(page, input) {
   popover.innerHTML = suggestions.map((item, idx) => `
     <button class="pm-chat-slash-item ${idx === pmSlashCommandSelectionIndex ? 'active' : ''}" type="button" data-command="${escapeHtml(item.command)}">
       <span class="pm-chat-slash-token">${escapeHtml(item.command)}</span>
-      <span class="pm-chat-slash-label">${escapeHtml(item.label)}</span>
+      <span class="pm-chat-slash-label">${item.pluginId ? pluginLabel(item,escapeHtml) : escapeHtml(item.label)}</span>
       <span class="pm-chat-slash-hint">${idx === 0 ? 'Enter' : 'Tap'}</span>
     </button>
   `).join('');

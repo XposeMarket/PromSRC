@@ -1743,6 +1743,11 @@ router.delete('/api/command-permissions/:id', requireGatewayAuth, (req, res) => 
   res.json({ success: true });
 });
 
+router.get('/api/chat/plugin-references', requireGatewayAuth, (_req, res) => {
+  const { pluginGroups } = require('../chat/plugin-references') as typeof import('../chat/plugin-references');
+  res.json({ plugins: [...pluginGroups().values()].map(({id,title}) => ({id,title})) });
+});
+
 router.get('/api/settings/security', requireGatewayAuth, (_req, res) => {
   const cfg = getConfig().getConfig() as any;
   const shell = cfg?.tools?.permissions?.shell || {};
