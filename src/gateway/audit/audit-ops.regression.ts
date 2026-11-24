@@ -99,6 +99,23 @@ async function main(): Promise<void> {
   assert.equal(dispatched.error, false);
   assert.ok(Array.isArray(audit.executePrometheusAuditOps('owner', { action: 'skill_routing_evidence', days: 1 }).evidence));
   assert.ok(audit.executePrometheusAuditOps('owner', { action: 'skill_routing_stats' }).stats);
+  // skill_routing_stats honors limit and skill_id; counts still cover the whole window.
+  const learning = await import('../learning/turn-recorder');
+  const { getConfig } = await import('../../config/config');
+  for (let i = 0; i < 5; i++) {
+    const request = `routing stats sample ${i}`;
+    learning.recordLearningTurn({ workspacePath: getConfig().getWorkspacePath(), sessionId: 'stats', executionMode: 'interactive', request, finalResponse: '', toolResults: [],
+      routing: { version: 2, mode: 'active', messageHash: learning.sha(request),
+        candidates: [{ id: `skill_${i}`, reason: 'strong_trigger_match', score: 80, confidence: 'high', instructionChars: 0, estimatedTokens: 0, matchedTriggers: [`term_${i}`, 'shared'] }],
+        excluded: [], discoveryRecommended: false, discoveryReason: '', autoInjectedInstructions: false, instructionsRequireSkillRead: true } } as any);
+  }
+  const allStats = audit.executePrometheusAuditOps('owner', { action: 'skill_routing_stats', limit: 100 });
+  assert.equal(allStats.stats.skills.length, 5); assert.equal(allStats.totals.skills, 5); assert.equal(allStats.totals.terms, 10); assert.equal(allStats.truncated, false);
+  const bounded = audit.executePrometheusAuditOps('owner', { action: 'skill_routing_stats', limit: 2 });
+  assert.equal(bounded.stats.skills.length, 2, 'limit bounds the skills table'); assert.equal(bounded.stats.terms.length, 2, 'limit bounds the terms table');
+  assert.equal(bounded.totals.skills, 5, 'totals still report the full window'); assert.equal(bounded.truncated, true); assert.equal(bounded.stats.turns, allStats.stats.turns);
+  const oneSkill = audit.executePrometheusAuditOps('owner', { action: 'skill_routing_stats', skill_id: 'SKILL_3' });
+  assert.deepEqual(oneSkill.stats.skills.map((row: any) => row.skillId), ['skill_3']); assert.equal(oneSkill.totals.terms, 2); assert.ok(oneSkill.stats.terms.every((row: any) => row.skillId === 'skill_3'));
   assert.ok(Array.isArray(audit.executePrometheusAuditOps('owner', { action: 'context_receipts', limit: 1 }).records));
   assert.equal(audit.executePrometheusAuditOps('owner', { action: 'context_receipt_settings' }).settings.enabled, true);
   assert.ok(auditDef.function.parameters.properties.action.enum.includes('context_receipts'));

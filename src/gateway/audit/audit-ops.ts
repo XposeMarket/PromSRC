@@ -140,7 +140,19 @@ export function executePrometheusAuditOps(_ownerSessionId: string, args: any): R
     return { evidence, scan: evidence.scan, provenance: { source: 'workspace_learning_evidence', relevanceRequiresReview: true } };
   }
   if (action === 'skill_routing_stats') {
-    return { stats: computeSkillRoutingStats(getConfig().getWorkspacePath(), Number(args.days) || 30), provenance: { source: 'workspace_learning_evidence', readRateIsNotRelevance: true } };
+    // Counts cover the whole window; only the rows returned are bounded. The
+    // unbounded tables (every skill plus up to 200 terms) ran to tens of
+    // thousands of tokens and ignored both limit and skill_id.
+    const stats = computeSkillRoutingStats(getConfig().getWorkspacePath(), Number(args.days) || 30);
+    const skillId = String(args.skill_id || '').trim().toLowerCase();
+    const skills = skillId ? stats.skills.filter((row) => row.skillId.toLowerCase() === skillId) : stats.skills;
+    const terms = skillId ? stats.terms.filter((row) => row.skillId.toLowerCase() === skillId) : stats.terms;
+    return {
+      stats: { ...stats, skills: skills.slice(0, max), terms: terms.slice(0, max) },
+      totals: { skills: skills.length, terms: terms.length },
+      truncated: skills.length > max || terms.length > max,
+      provenance: { source: 'workspace_learning_evidence', readRateIsNotRelevance: true },
+    };
   }
   if (action === 'recent_sessions') {
     const budget: Budget = { deadline: Date.now() + SCAN_DEADLINE_MS, remainingBytes: SCAN_BYTE_BUDGET, exhausted: false }; const sessions = recentSessionIds().slice(0, max).map((id) => candidate(id, budget)).sort((a, b) => Number(b.freshness || 0) - Number(a.freshness || 0));
