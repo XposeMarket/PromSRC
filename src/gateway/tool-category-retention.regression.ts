@@ -136,6 +136,23 @@ async function main(): Promise<void> {
     assert.deepEqual(capped, [...many.slice(1), 'skills'], 'a new category appends after the kept ones');
     assert.equal(capped.length, retention.WARM_CATEGORY_LIMIT);
 
+    // Review finding: a failed ninth activation must not cost a working category.
+    const full = [...api.getActivatedToolCategories(cap)];
+    const failed = api.captureToolCategoryActivationState(cap, 'model_management');
+    api.activateToolCategory(cap, 'model_management', { scope: 'turn' });
+    assert.equal(api.getActivatedToolCategories(cap).has(full[0]), false, 'the ninth activation evicts the least recently used');
+    api.restoreToolCategoryActivationState(cap, failed);
+    assert.deepEqual([...api.getActivatedToolCategories(cap)], full, 'rollback restores the evicted category and the order');
+
+    // Review finding: an expired scope is not "loaded", so a late tool call cannot bring a category back.
+    const late = 'warm_retention_late_call';
+    userTurn(late, true);
+    api.activateToolCategory(late, 'browser_automation', { scope: 'turn' });
+    userTurn(late, true); // never called: the warm entry is pruned, the expired scope entry is still stored
+    api.noteToolCategoryUse(late, 'browser_automation');
+    assert.equal(has(late, 'browser_automation'), false, 'a tool call after unload does not resurrect the category');
+    assert.equal((api.getSession(late).warmToolCategories || []).length, 0);
+
     // Sessions saved by the previous build (Anthropic-only string list) keep their tools.
     const legacyId = 'warm_retention_legacy';
     await api.flushPendingSessionWrites();

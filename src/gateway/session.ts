@@ -358,6 +358,8 @@ export interface ToolCategoryActivationSnapshot {
   category: string;
   persistent: boolean;
   scoped: ScopedToolCategoryActivation[];
+  /** The whole warm list before the attempt: activating can evict another category at the cap. */
+  warm?: WarmToolCategory[];
 }
 
 export interface CanvasProjectLink {
@@ -4412,8 +4414,11 @@ export function noteToolCategoryUse(id: string, category: string | null | undefi
   const before = warm;
   for (const candidate of candidates) {
     if (!canKeepToolCategoryWarm(candidate)) continue;
+    // An expired scope is not "loaded": it is only waiting to be pruned, and
+    // counting it would let a late tool call bring back a category that was
+    // already unloaded.
     const loaded = warm.some((entry) => entry.category === candidate)
-      || (session.scopedToolCategoryActivations || []).some((entry) => entry.category === candidate);
+      || (session.scopedToolCategoryActivations || []).some((entry) => entry.category === candidate && entry.expiresAfterTurn >= turn);
     if (loaded) warm = touchWarmToolCategory(warm, candidate, turn, true);
   }
   if (warm === before) return;
@@ -4438,6 +4443,7 @@ export function captureToolCategoryActivationState(
       : [])
       .filter((entry) => entry.category === cleanCategory)
       .map((entry) => ({ ...entry })),
+    warm: (session.warmToolCategories || []).map((entry) => ({ ...entry })),
   };
 }
 
@@ -4470,7 +4476,21 @@ export function restoreToolCategoryActivationState(
 
   session.activatedToolCategories = nextCategories;
   // A category whose provider surface could not be built must not stay advertised.
-  session.warmToolCategories = (session.warmToolCategories || []).filter((entry) => entry.category !== cleanCategory);
+  const currentWarm = (session.warmToolCategories || []).filter((entry) => entry.category !== cleanCategory);
+  if (Array.isArray(snapshot.warm)) {
+    // The failed activation may have evicted another category at the cap.
+    // Put back what was warm before, keeping any newer state for entries that survived.
+    const current = new Map(currentWarm.map((entry) => [entry.category, entry]));
+    const restored = snapshot.warm
+      .filter((entry) => entry.category !== cleanCategory)
+      .map((entry) => current.get(entry.category) || { ...entry });
+    for (const entry of currentWarm) {
+      if (!restored.some((kept) => kept.category === entry.category)) restored.push(entry);
+    }
+    session.warmToolCategories = restored;
+  } else {
+    session.warmToolCategories = currentWarm;
+  }
   session.scopedToolCategoryActivations = nextScoped;
   saveSession(id);
 }
