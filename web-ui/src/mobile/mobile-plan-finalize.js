@@ -5,7 +5,7 @@ export function finalizeMobileMainPlan(chat, sid, loadReplay, apply, render) {
   const user = latestUser();
   const requestId = String(chat.activeRuns?.[key]?.clientRequestId || user?._clientRequestId || '');
   const items = Array.isArray(chat.mainPlanProgress?.[key]?.items) ? chat.mainPlanProgress[key].items : [];
-  if (items.length) {
+  if (items.length && !chat.mainPlanProgress[key].usageLimitPaused) {
     const finalized = items.map((item) => {
       const status = String(item?.status || '').trim().toLowerCase();
       if (/^(done|complete|completed|skipped|failed)$/.test(status)) return item;

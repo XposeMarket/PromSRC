@@ -2786,7 +2786,8 @@ async function runAdmittedMainChatTurn({
           { clientRequestId },
 			    );
 		    if (!abortSignal.aborted) {
-		      markProviderStatus(true);
+		      if (result.usageLimitPaused) plannedRunFailed = true;
+          else markProviderStatus(true);
           notifyChatCompletion({
             sessionId: resolvedSessionId,
             source: turnOrigin.channel === 'mobile' ? 'mobile' : 'desktop',

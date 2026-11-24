@@ -679,6 +679,11 @@ export class OpenAICodexAdapter implements LLMProvider {
           providerError.name = 'CodexProviderHttpError';
           providerError.code = 'CODEX_HTTP_ERROR';
           providerError.status = response.status;
+          if (response.status === 429) {
+            let reset: unknown;
+            try { reset = JSON.parse(text)?.error?.resets_at; } catch { /* optional field */ }
+            Object.assign(providerError, { resets_at: reset, rateLimitHeaders: { 'retry-after': response.headers.get('retry-after') } });
+          }
           throw providerError;
         }
 

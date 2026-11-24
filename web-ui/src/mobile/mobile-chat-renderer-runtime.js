@@ -3347,6 +3347,7 @@ function _mobileMainPlanState(sessionId = __pmChat.activeSessionId) {
 
 function _applyMobileMainPlanProgress(evt = {}, sessionId = __pmChat.activeSessionId) {
   const state = _mobileMainPlanState(sessionId);
+  state.usageLimitPaused = evt.reason === 'usage_limit_paused';
   const source = String(evt.source || '').trim().toLowerCase();
   const incoming = Array.isArray(evt.items) ? evt.items : [];
   // Only an explicit declare_plan owns this UI. Internal preflight and inferred

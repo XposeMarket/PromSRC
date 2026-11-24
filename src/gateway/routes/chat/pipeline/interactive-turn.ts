@@ -827,7 +827,7 @@ export async function runInteractiveTurn(
     : 0;
   const packetStatus = abortSignal?.aborted
     ? 'aborted'
-    : /^\s*error:/i.test(String(result.text || ''))
+    : result.usageLimitPaused || /^\s*error:/i.test(String(result.text || ''))
       ? 'failed'
       : 'completed';
   // An abort is not always the user. A gateway restart/drain (planned by this

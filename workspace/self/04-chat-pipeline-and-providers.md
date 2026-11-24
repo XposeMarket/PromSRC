@@ -230,3 +230,6 @@ Until Nov 18 2026 the adapters dropped the model's own reasoning between tool ro
 
 ## Usage card read path
 `GET /api/usage/limits` (`settings.router.ts` -> `provider-usage-limits.ts`) is polled by every open desktop tab and phone (model badge, context window, Settings, Hub). It must never load usage rows: `readModelUsageTotalsSince(usageMonthStartMs())` in `model-usage.ts` sums the month window while scanning the ledger backwards, shares one scan between overlapping callers and reuses the result for 15 seconds; lifetime totals come from the byte index. The earlier version loaded 35 days of full rows per poll (133 MB each on a 190 MB ledger) and was in flight on most gateway memory high-water lines. The Hub usage pages still call `readModelUsageEvents()` and load the whole ledger per request.
+
+### Continuing after a provider usage cutoff
+A confirmed usage limit gets a short deterministic notice instead of a tool digest. Reset times come from the rejecting response; a retry hint is labeled separately, and missing timing is not guessed. The declared checklist and tool evidence stay internal. In the same chat, `continue` restores and protects the first unfinished step just like restart recovery; it does not automatically retry when usage resets or reopen historical completed/cancelled plans.
