@@ -82,7 +82,7 @@ function signInGone(error: unknown): boolean {
 }
 
 async function authHeaders(json: boolean, force = false): Promise<Record<string, string>> {
-  const extra = json ? { 'content-type': 'application/json' } : {};
+  const extra: Record<string, string> = json ? { 'content-type': 'application/json' } : {};
   if (authForTests) return { ...buildChatGPTWebHeaders(await authForTests({ force })), ...extra };
   const dir = getConfig().getConfigDir();
   const accountId = String(loadTokens(dir, undefined)?.account_id || '').trim();
