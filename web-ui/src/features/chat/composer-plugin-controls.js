@@ -60,7 +60,37 @@ export function installComposerControls(tag, commands, request, advanced, refres
       let revision=0;
       const read=async()=>{const token=++revision;modes.forEach(b=>b.disabled=true);try{const data=await request('/api/settings/security');if(token!==revision)return;if(!['default','lite'].includes(data.toolPermissionMode))throw Error();show(data.toolPermissionMode);status.textContent='';modes.forEach(b=>b.disabled=false);}catch{if(token===revision){status.textContent='Could not load permissions. Reopen to retry.';show(null);}}};
       const place=()=>{const r=this.button.getBoundingClientRect();panel.style.left=Math.max(8,Math.min(r.left,innerWidth-panel.offsetWidth-8))+'px';panel.style.top=Math.max(8,r.top-panel.offsetHeight-6)+'px';};
-      panel.addEventListener('toggle',()=>{const open=panel.matches(':popover-open');this.button.setAttribute('aria-expanded',String(open));this.positionWatch?.disconnect();if(open){place();this.positionWatch=new ResizeObserver(place);this.positionWatch.observe(panel);read();}});
+      const mobile = tag === 'pm-chat-access';
+      if (mobile) {
+        // Leave focus (and the software keyboard) with the editor on a tap.
+        // Tab/Enter activation still uses the native popover focus behavior.
+        const keepEditor = event => {
+          if (document.activeElement?.id === 'pm-composer-input' && event.target.closest('button')) event.preventDefault();
+        };
+        root.addEventListener('pointerdown', keepEditor);
+        root.addEventListener('mousedown', keepEditor);
+      }
+      const followAnchor = () => {
+        if (!this.isConnected || !panel.matches(':popover-open')) return;
+        const r = this.button.getBoundingClientRect(), vv = window.visualViewport;
+        if (!r.width || !r.height) { panel.hidePopover(); return; }
+        const left = vv?.offsetLeft || 0, top = vv?.offsetTop || 0;
+        const width = vv?.width || innerWidth;
+        const room = Math.max(0, r.top - top - 14);
+        const set = (key, n) => { const v = `${Math.round(n)}px`; if (panel.style[key] !== v) panel.style[key] = v; };
+        set('maxHeight', room);
+        set('left', Math.max(left + 8, Math.min(r.left, left + width - panel.offsetWidth - 8)));
+        set('top', Math.max(top + 8, r.top - panel.offsetHeight - 6));
+        this.anchorFrame = requestAnimationFrame(followAnchor);
+      };
+      panel.addEventListener('toggle',()=>{
+        const open=panel.matches(':popover-open'); this.button.setAttribute('aria-expanded',String(open));
+        this.positionWatch?.disconnect(); cancelAnimationFrame(this.anchorFrame);
+        if (!open) return;
+        if (mobile) followAnchor();
+        else { place(); this.positionWatch=new ResizeObserver(place); this.positionWatch.observe(panel); }
+        read();
+      });
       modes.forEach(b=>b.onclick=async()=>{++revision;modes.forEach(x=>x.disabled=true);try{const data=await request('/api/settings/security',{method:'POST',body:JSON.stringify({toolPermissionMode:b.dataset.mode})});if(!data.success||data.toolPermissionMode!==b.dataset.mode)throw Error();show(data.toolPermissionMode);panel.hidePopover();}catch{await read();status.textContent='Change not confirmed. Check the current setting.';}});
       root.querySelector('#advanced').onclick=()=>{panel.hidePopover();advanced();};
       this.onFocus=()=>{catalog();if(!panel.matches(':popover-open'))read();};catalog();read();window.addEventListener('focus',this.onFocus);
