@@ -63,6 +63,12 @@ const READ_ONLY_TOOLS = new Set([
   // browser_new_tab, browser_scroll_collect* and inspect_console are
   // argument-aware in resolveToolCapabilityMetadata.
   'browser_select_tab', 'browser_list_tabs', 'browser_scroll', 'browser_wait', 'browser_doctor',
+  // Shows the user an approval card and waits. The action it is asking about
+  // is still gated on its own name and needs the approval id it returns.
+  'request_final_action_approval',
+  // Reads that were falling through to the unknown tier (2026-11 tool audit).
+  'get_composite', 'run_accessibility_check', 'get_creative_mode', 'creative_model_status',
+  'creative_list_motion_templates', 'creative_list_html_motion_templates', 'creative_measure_text',
 ]);
 
 const LOCAL_WRITE_TOOLS = new Set([
@@ -88,12 +94,21 @@ const LOCAL_WRITE_TOOLS = new Set([
   'append_file', 'git_commit', 'timer', 'business_context_mode', 'update_heartbeat',
   'set_current_model', 'background_spawn', 'background_follow_up', 'background_steer', 'spawn_subagent',
   'save_site_shortcut', 'browser_close', 'browser_close_tab',
+  // Local Prometheus state that was falling through to the unknown tier
+  // (2026-11 tool audit). Still approval-gated on Default permissions.
+  'dispatch_team_agent', 'message_main_agent', 'browser_set_profile_target',
+  'memory_accept_claim', 'memory_reject_claim', 'memory_supersede_record', 'memory_consolidate',
+  'write_entity', 'append_entity_event', 'set_agent_model', 'save_agent_model_template',
+  'update_agent_model_template', 'apply_agent_model_template', 'select_agent_model_template',
+  'edit_proposal', 'run_task_now', 'create_composite', 'edit_composite', 'skill_candidate_submit',
+  'schedule_job_stuck_control',
 ]);
 
 const DESTRUCTIVE_TOOLS = new Set([
   'delete', 'delete_file', 'delete_lines', 'restore_snapshot', 'revert_last_tool_change',
   'revert_own_patch', 'process_kill', 'stop_process', 'self_update',
   'skill_resource_delete', 'deploy_analysis_team', 'schedule_job', 'gateway_restart',
+  'delete_agent_model_template', 'delete_composite',
 ]);
 
 const COMMAND_TOOLS = new Set([
@@ -147,6 +162,78 @@ const UNKNOWN_FAIL_CLOSED: ToolCapabilityMetadata = Object.freeze({
   readOnly: false, localWrite: false, externalWrite: true,
   destructive: true, credentialUse: true, known: false,
 });
+
+interface ActionToolCapabilities {
+  /** Argument names that carry the action, first non-empty wins. Default: action. */
+  keys?: readonly string[];
+  /** Action used when none is given, only where the tool documents one. */
+  defaultAction?: string;
+  read?: readonly string[];
+  write?: readonly string[];
+  destructive?: readonly string[];
+}
+
+/**
+ * Multi-action Prometheus control tools, classified per action.
+ *
+ * These were unclassified, so listing tasks or reading another chat sat in the
+ * same fail-closed tier as deleting one (3% of real calls in the 2026-11 tool
+ * audit, 90% of them reads). Only the listed read actions are read-only.
+ * Listed write actions keep an approval on Default permissions, with an honest
+ * label. A missing or unlisted action still fails closed, so a new action is
+ * gated until someone classifies it here. task_control resolve_approval is
+ * left out on purpose: resolving an approval is never a quiet action.
+ */
+const ACTION_TOOL_CAPABILITIES: Readonly<Record<string, ActionToolCapabilities>> = Object.freeze({
+  prometheus_thread_ops: {
+    read: ['list', 'find', 'search', 'read', 'status', 'supervisions', 'list_projects', 'supervision_wait'],
+    write: ['create', 'create_and_ping', 'create_and_forget', 'create_and_supervise', 'create_many', 'send', 'steer',
+      'interrupt', 'rename', 'pin', 'unpin', 'reopen', 'open', 'unsettle', 'follow', 'unfollow', 'review_decision',
+      'revise_supervision', 'pause_supervision', 'resume_supervision', 'create_project', 'move_to_project', 'remove_from_project'],
+  },
+  task_control: {
+    read: ['list', 'latest', 'get', 'list_approvals'],
+    write: ['steer', 'message', 'resume', 'rerun', 'continue', 'pause'],
+    destructive: ['cancel', 'delete'],
+  },
+  agent_run_ops: {
+    read: ['list', 'get'],
+    write: ['steer', 'recover', 'resume', 'rerun', 'pause', 'benchmark_disposable'],
+    destructive: ['cancel'],
+  },
+  internal_watch: { read: ['list'], write: ['create', 'cancel'] },
+  schedule_job_patch: { defaultAction: 'preview', read: ['preview'], destructive: ['apply'] },
+  prometheus_request_ops: { read: ['list', 'find', 'read', 'status', 'recovery_candidates'], write: ['recover'] },
+  prometheus_audit_ops: {
+    read: ['recent_sessions', 'search', 'session_timeline', 'recovery_candidates', 'recovery_brief', 'read_artifact',
+      'skill_routing_evidence', 'skill_routing_stats', 'context_receipts', 'context_receipt_settings'],
+    write: ['context_receipt_review', 'context_receipt_configure'],
+  },
+  team_manage: { keys: ['action', 'team_action'], read: ['list'] },
+  team_escalation: { keys: ['action', 'escalation_action'], read: ['list'], write: ['dismiss', 'escalate_to_user', 'answered'] },
+  browser_intercept_network: { keys: ['action', 'network_action'], read: ['read'], write: ['start', 'stop', 'clear'] },
+  connection_ops: { read: ['discover', 'status', 'list', 'list_connections'], destructive: ['disconnect'] },
+  mcp_server_manage: { read: ['list', 'status', 'list_tools', 'oauth_status'] },
+  secure_access: { read: ['status', 'list'] },
+  webhook_manage: { read: ['get'] },
+  integration_quick_setup: { read: ['list_presets'] },
+});
+
+function resolveActionToolCapabilities(name: string, args?: Record<string, any>): ToolCapabilityMetadata | undefined {
+  if (!Object.prototype.hasOwnProperty.call(ACTION_TOOL_CAPABILITIES, name)) return undefined;
+  const spec = ACTION_TOOL_CAPABILITIES[name];
+  let action = '';
+  for (const key of spec.keys || ['action']) {
+    const value = args?.[key];
+    if (typeof value === 'string' && value.trim()) { action = value.trim().toLowerCase(); break; }
+  }
+  if (!action) action = spec.defaultAction || '';
+  if (!action) return undefined;
+  if (spec.read?.includes(action)) return READ_ONLY;
+  if (spec.destructive?.includes(action)) return DESTRUCTIVE;
+  if (spec.write?.includes(action)) return LOCAL_WRITE;
+  return undefined;
+}
 
 const CONNECTOR_READ_OPERATION_TOKENS = new Set([
   'list', 'get', 'read', 'search', 'query', 'status', 'check', 'fetch', 'retrieve',
@@ -310,6 +397,8 @@ export function resolveToolCapabilityMetadata(
     const action = String(args?.action || 'get').trim().toLowerCase();
     return action === 'get' || action === 'check' || action === 'list' ? READ_ONLY : LOCAL_WRITE;
   }
+  const actionCapabilities = resolveActionToolCapabilities(name, args);
+  if (actionCapabilities) return actionCapabilities;
   if (READ_ONLY_TOOLS.has(name)) return READ_ONLY;
   if (LOCAL_WRITE_TOOLS.has(name)) return LOCAL_WRITE;
   if (DESTRUCTIVE_TOOLS.has(name)) return DESTRUCTIVE;
