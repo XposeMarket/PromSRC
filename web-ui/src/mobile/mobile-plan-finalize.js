@@ -28,3 +28,26 @@ export function finalizeMobileMainPlan(chat, sid, loadReplay, apply, render) {
     }
   }).catch(() => {});
 }
+
+// Keep declared-plan updates beside finalization, outside the legacy renderer.
+export function applyMobileMainPlanProgress(state, evt, normalizeStatus) {
+  state.usageLimitPaused = evt.reason === 'usage_limit_paused';
+  const source = String(evt.source || '').trim().toLowerCase();
+  const incoming = Array.isArray(evt.items) ? evt.items : [];
+  // Only an explicit declare_plan owns this UI. Internal preflight and inferred
+  // tool-sequence progress must never create or update the visible plan pill.
+  if (source !== 'declared' || !incoming.length || Number(evt.total || incoming.length) <= 0) {
+    state.items = [];
+    state.activeIndex = -1;
+    state.total = 0;
+    state.open = false;
+    return state;
+  }
+  state.items = incoming.map((item, index) => ({
+    text: String(item?.text || item?.label || `Step ${index + 1}`).trim(),
+    status: normalizeStatus(item?.status),
+  }));
+  state.total = Math.max(state.items.length, Number(evt.total || 0) || 0);
+  state.activeIndex = Number.isFinite(Number(evt.activeIndex)) ? Number(evt.activeIndex) : state.items.findIndex((item) => item.status === 'in_progress');
+  return state;
+}
