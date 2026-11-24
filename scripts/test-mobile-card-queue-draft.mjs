@@ -6,7 +6,7 @@ import { chromium } from 'playwright';
 // browser. Replace the gateway and chat shell only; no real chat receives a send.
 const read = path => readFileSync(new URL('../web-ui/src/' + path, import.meta.url), 'utf8');
 const src = read('mobile/mobile-chat-page-runtime.js');
-const start = src.indexOf('    const enqueueDurably = async (sid) =>');
+const start = src.indexOf('    const enqueueDurably = async (sid,');
 const end = src.indexOf('    const retryingQueueReceipt', start);
 assert.ok(start > 0 && end > start);
 const browser = await chromium.launch();
@@ -23,18 +23,20 @@ try {
     const { createMobileDurableQueue } = await import('/mobile/mobile-durable-queue.js');
     const { renderInteractiveCard } = await import('/cards/cards-interactive.js');
     const input = document.querySelector('textarea');
-    const posts = window.posts = [];
+    const posts = window.posts = []; window.steers = [];
     const sid = 'chat'; const sendGatewayId = 'test'; let active = true;
     const filesOnDraft = [{ name: 'draft-only.txt' }];
-    const durableQueue = createMobileDurableQueue({target: () => ({sessionId:sid, gatewayId:sendGatewayId}), pinFetch: () => async (_path, opts) => {
+    const durableQueue = createMobileDurableQueue({runtimeId: () => 'test-run', report: msg => { throw new Error(msg); }, target: () => ({sessionId:sid, gatewayId:sendGatewayId}), pinFetch: () => async (_path, opts) => {
       if (window.leave) active = false;
       if (!opts) return {items: []};
-      const item = JSON.parse(opts.body); posts.push(item); return {items: [], id: item.id};
+      const item = JSON.parse(opts.body); if (item.action) { window.steers.push(item.id); return {items: []}; }
+      posts.push(item); return {items: [], id: item.id};
     }});
     const __pmChat = {}; const selectedSkillIds = [], excludedSkillIds = [];
     const stillInChat = () => active; const _pmGetComposerValue = () => input.value;
     const getPendingAttachments = () => filesOnDraft; const composerAttachments = [...filesOnDraft];
-    const mobileBusyComposerModeLoaded = true, shouldAutoSteerBusyTurn = () => false, getCachedBusyComposerMode = () => '', locallyBusy = true;
+    const { shouldAutoSteerBusyTurn } = await import('/features/chat/runtime/busy-composer-mode.js');
+    const locallyBusy = true, pinMobileGatewayFetch = () => async () => ({ session: { busyComposerMode: window.testMode } });
     const pmToast = msg => {document.querySelector('output').textContent = msg};
     window.__pmMobileSendMessage = async (msg, options = {}) => {
       const files = options.attachments || filesOnDraft;
@@ -45,8 +47,11 @@ try {
   }, src.slice(start,end));
   await page.getByText('First prompt',{exact:true}).tap();
   await page.waitForSelector('button.sent');
+  await page.evaluate(() => { window.testMode = 'steer' });
   await page.getByText('Second prompt',{exact:true}).tap();
   await page.waitForFunction(() => document.querySelectorAll('button.sent').length === 2);
+  await page.waitForFunction(() => window.steers.length === 1);
+  assert.deepEqual(await page.evaluate(() => steers), [await page.evaluate(() => posts[1].id)]);
   assert.deepEqual(await page.evaluate(() => posts.map(p => [p.message,p.attachments])), [['First prompt',[]],['Second prompt',[]]]);
   assert.equal(await page.locator('textarea').inputValue(),'My unrelated draft');
   if (process.env.CARD_QUEUE_SCREENSHOT) await page.screenshot({path:process.env.CARD_QUEUE_SCREENSHOT});

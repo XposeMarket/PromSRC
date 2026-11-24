@@ -527,6 +527,7 @@ export interface PrometheusConfig {
     /** Number of recent tool results to include in the compactor handoff. */
     rollingCompactionToolTurns?: number;
     /** Maximum words accepted from the compactor summary. */
+    busyComposerMode?: 'queue' | 'steer';
     rollingCompactionSummaryMaxWords?: number;
     /** Legacy context-window override retained for persisted-config compatibility. */
     rollingCompactionNumCtx?: number;

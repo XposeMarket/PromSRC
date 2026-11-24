@@ -427,6 +427,7 @@ export const PrometheusConfigSchema = z.object({
     rollingCompactionEnabled: z.boolean().optional(),
     rollingCompactionMessageCount: z.number().int().min(10).max(120).optional(),
     rollingCompactionToolTurns: z.number().int().min(1).max(12).optional(),
+    busyComposerMode: z.enum(['queue', 'steer']).optional(),
     rollingCompactionSummaryMaxWords: z.number().int().min(80).max(1500).optional(),
     rollingCompactionModel: z.string().optional(),
     autoSettleAfterDays: z.number().int().min(0).max(3650).optional(),

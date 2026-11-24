@@ -2513,6 +2513,7 @@ router.post('/api/settings/bulk', async (req, res) => {
         rollingCompactionToolTurns: toBoundedInt(s.rollingCompactionToolTurns ?? existing.rollingCompactionToolTurns, 1, 12, d.rollingCompactionToolTurns),
         rollingCompactionSummaryMaxWords: toBoundedInt(s.rollingCompactionSummaryMaxWords ?? existing.rollingCompactionSummaryMaxWords, 80, 1500, d.rollingCompactionSummaryMaxWords),
         rollingCompactionModel: String(s.rollingCompactionModel ?? existing.rollingCompactionModel ?? '').trim(),
+        ...(s.busyComposerMode === undefined ? {} : { busyComposerMode: s.busyComposerMode === 'steer' ? 'steer' : 'queue' }),
         mainChatGoals: mergeMainChatGoalRouting(s.mainChatGoals, existing.mainChatGoals),
       };
       const autoSettleInput = s.autoSettle && typeof s.autoSettle === 'object' ? s.autoSettle : s;

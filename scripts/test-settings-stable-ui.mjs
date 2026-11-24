@@ -58,5 +58,23 @@ try {
   assert.equal(await button.isVisible(), false);
   const choices = await page.locator('#settings-panel-system > section:first-child #settings-busy-composer-mode option').evaluateAll(options => options.map(o=>o.value));
   assert.deepEqual(choices,['queue','steer']);
+  let savedMode = 'queue'; const saves = [];
+  await page.route('**/api/settings/session', route => route.fulfill({json:{session:{busyComposerMode:savedMode,autoSettle:{afterDays:14}}}}));
+  await page.route('**/api/settings/bulk', route => {
+    const body = route.request().postDataJSON(); saves.push(body); savedMode = body.session.busyComposerMode;
+    return route.fulfill({json:{success:true}});
+  });
+  await page.evaluate(() => { window.settingsTab='system'; window.addProcessEntry=()=>{}; window.updateQuickModeUI=()=>{}; });
+  const choice = page.locator('#settings-busy-composer-mode');
+  for (const mode of ['steer','queue']) {
+    await page.evaluate(() => window.loadAutoSettleSettings());
+    await choice.selectOption(mode, {force:true});
+    await page.evaluate(() => window.saveSettings());
+    assert.equal(saves.at(-1)?.session.busyComposerMode, mode);
+    assert.equal(saves.at(-1)?.session.autoSettle.afterDays, 14);
+    await choice.evaluate(el=>el.value='');
+    await page.evaluate(() => window.loadAutoSettleSettings());
+    assert.equal(await choice.inputValue(), mode);
+  }
   console.log('PASS: stable cards across concurrent reads; actual disconnect button failure/retry/success; General queue and steer choices');
 } finally { await browser.close(); }
