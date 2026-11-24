@@ -1,3 +1,4 @@
+import { isCompactCommand, manualCompactions, COMPACT_BUSY } from '../../chat/manual-compact-state';
 import type { Router, RequestHandler } from 'express';
 import { createVoiceNarrator, classifyVoiceInterruption, buildVoiceInterruptionContextBlock, buildChatSteerContextBlock, appendVoiceInterruptionLog } from './voice/narrator';
 import { getSession, addMessage, getHistory, getHistoryForApiCall, getActiveHistoryForApiCall, getActiveHistoryForPersistence, getRecentToolObservationsForContext, getWorkingContextForContext, recordWorkingContextPacket, persistToolLog, getWorkspace, setWorkspace, cleanupSessions, listSessionSummaries, searchSessionSummaries, recordSessionCompaction, deleteSession, renameSession, setSessionPinned, reorderSessionSidebar, autoNameSession, replaceHistory, touchSession, flushSession, markSessionReadForMobile, markSessionUnreadForMobile, getCreativeMode, getCreativeReferences, formatCreativeReferencesForPrompt, getActivatedToolCategories, activateToolCategory, captureToolCategoryActivationState, restoreToolCategoryActivationState, getActivatedSkillIds, getActivatedSkillResources, activateSkillForSession, activateSkillResourceForSession, getSessionDisplayTitle, isBusinessContextEnabled, getSessionPersistenceStatus, type TurnOrigin, type VoiceRoomMetadata, type VoiceRoomParticipant } from '../../session';
@@ -56,6 +57,7 @@ import type { MainChatStreamState } from '../../chat/main-chat-stream-store';
 export function applyChatSteer(body: Record<string, any>, getMainChatStream: (sessionId: string) => MainChatStreamState | null) {
   try {
     const sessionId = assertSafeStorageId(String(body.sessionId || 'default').trim() || 'default', 'session id');
+    if (isCompactCommand(body.message || body.text) || manualCompactions.has(sessionId)) return { status: 409, body: { ok: false, success: false, error: COMPACT_BUSY } };
     const steerAttachments = normalizeRuntimeVisionAttachmentsInput(body.attachments);
     const steerAttachmentPreviews = normalizeRuntimeAttachmentPreviewsInput(body.attachmentPreviews);
     const message = String(body.message || body.text || '').trim()

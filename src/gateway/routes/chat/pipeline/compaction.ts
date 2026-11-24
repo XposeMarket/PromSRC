@@ -1,4 +1,5 @@
 import path from 'path';
+import { compactLabels } from '../../../chat/manual-compact-state';
 import { getConfig } from '../../../../config/config';
 import { getOllamaClient } from '../../../../agents/ollama-client';
 import { getUsageCalibration } from '../../../../providers/model-usage';
@@ -102,7 +103,8 @@ export function formatCompactionArtifactPaths(sessionId: string): string {
 
 export interface ContextCompactorRunInput {
   sessionId: string;
-  strategy: 'rolling_window' | 'mid_workflow_token_budget';
+  strategy: 'rolling_window' | 'mid_workflow_token_budget' | 'manual';
+  manualBoundary?: { count: number; row: import('../../../session').ChatMessage };
   targetLengthText: string;
   maxWords: number;
   previousSummary: string;
@@ -120,7 +122,7 @@ export interface ContextCompactorRunInput {
 }
 
 export function buildContextCompactionPrompt(input: ContextCompactorRunInput & { recentMessagesBlock: string }): string {
-  const modeDescription = input.strategy === 'mid_workflow_token_budget'
+  const modeDescription = input.strategy === 'manual' ? 'The user requested a manual checkpoint. Save context for a later message.' : input.strategy === 'mid_workflow_token_budget'
     ? 'This compaction is happening mid-workflow between tool rounds because the active model context budget is near its limit.'
     : 'This compaction is happening at a rolling conversation checkpoint after enough new messages accumulated.';
   const promptLines: string[] = [
@@ -230,12 +232,20 @@ export async function runContextCompactor(input: ContextCompactorRunInput): Prom
         const rawSummary = String(compactResult?.message?.content || '');
         return String(stripExplicitThinkTags(rawSummary)?.cleaned || '').trim();
       },
-      commit: (summary, passCount) => recordSessionCompaction(input.sessionId, 'rolling', summary, baseMessageCount, {
+      commit: (summary, passCount) => {
+        if (input.manualBoundary) {
+          const history = getSession(input.sessionId).history;
+          if (history.length !== input.manualBoundary.count || history[history.length - 1] !== input.manualBoundary.row) throw new Error('Transcript changed during compaction.');
+          input.manualBoundary.row.compactStatus = 'success';
+          input.manualBoundary.row.content = compactLabels.success;
+        }
+        recordSessionCompaction(input.sessionId, 'rolling', summary, baseMessageCount, {
         ...input.recordMeta,
         strategy: input.strategy,
         mode: 'llm',
         pass_count: passCount,
-      }),
+        });
+      },
     }), input.abortSignal?.signal, deadlineMs);
     if (!result.compacted) {
       if (result.reason !== 'aborted') console.warn(`[v2] Context compaction skipped (${input.strategy}): ${result.reason}.`);

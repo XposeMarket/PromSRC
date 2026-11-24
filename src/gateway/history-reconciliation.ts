@@ -158,15 +158,16 @@ function pruneCrossTurnTraceCopies(history: any[]): any[] {
 export function mergeHistoryWithExistingMessageMetadata(existing: any[], incoming: any[],
   options: { preserveAllExisting?: boolean; preferIncomingContent?: boolean; preferIncomingTrace?: boolean } = {}): any[] {
   const spine = Array.isArray(existing) ? existing : [];
-  if (!spine.some(isInternalBackgroundResult) && !(Array.isArray(incoming) && incoming.some(isInternalBackgroundResult))) {
+  const serverOwned = (row: any) => isInternalBackgroundResult(row) || row?.messageKind === 'manual_compact_command' || row?.messageKind === 'manual_compact_status' || String(row?.messageId || '').startsWith('manual_compact:');
+  if (!spine.some(serverOwned) && !(Array.isArray(incoming) && incoming.some(serverOwned))) {
     return mergeVisibleHistoryWithExistingMessageMetadata(existing, incoming, options);
   }
-  const merged = mergeVisibleHistoryWithExistingMessageMetadata(spine.filter((row) => !isInternalBackgroundResult(row)),
-    (Array.isArray(incoming) ? incoming : []).filter((row) => !isInternalBackgroundResult(row)), options);
-  // Clients never receive internal rows, so an ordinary transcript sync cannot
+  const merged = mergeVisibleHistoryWithExistingMessageMetadata(spine.filter((row) => !serverOwned(row)),
+    (Array.isArray(incoming) ? incoming : []).filter((row) => !serverOwned(row)), options);
+  // Clients may omit internal rows or have older compaction status. Sync cannot
   // delete or replace server-owned worker evidence, even outside mobile mode.
   for (let i = 0; i < spine.length; i++) {
-    if (!isInternalBackgroundResult(spine[i])) continue;
+    if (!serverOwned(spine[i])) continue;
     let insertAt = 0;
     for (let previous = i - 1; previous >= 0; previous--) {
       const key = historyMessageMergeKey(spine[previous]);

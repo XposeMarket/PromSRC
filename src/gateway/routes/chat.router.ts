@@ -23,6 +23,8 @@ import { registerMobileRoutes } from './chat/mobile';
 import { registerEmailComposerRoutes } from './chat/email-composer';
 import { splitComposerEmailList, findStoredEmailComposerArtifact, buildSentEmailComposerArtifact } from './chat/email-composer';
 import { applyChatSteer, registerSteerRoutes } from './chat/steer';
+import { isCompactCommand, manualCompactions, COMPACT_BUSY } from '../chat/manual-compact-state';
+import { manualCompactHttp } from './chat/manual-compact';
 import { registerMobileMainChatQueue, mobileQueueBlocksNewTurn, pauseMobileMainChatQueue } from './chat/mobile-queue';
 import { isMobileQueueRequestId } from '../chat/mobile-main-chat-queue';
 import { registerPushRoutes } from './chat/push';
@@ -904,6 +906,7 @@ export const {
  */
 export function reconcileMainChatTurn(sessionId: string): MainChatTurnReconciliation {
   const sid = String(sessionId || '').trim();
+  if (manualCompactions.has(sid)) return { active: true, runtime: null, stream: null, recovered: false };
   const runtimeCandidates = listLiveRuntimes()
     .filter((item) =>
       (item.kind === 'main_chat' || item.kind === 'main_chat_goal')
@@ -2152,7 +2155,10 @@ export const startMobileMainChatQueue = registerMobileMainChatQueue(router, {
 
 registerPushRoutes(router);
 
+router.post('/api/chat/manual-compact', manualCompactHttp);
 router.post('/api/chat', async (req, res) => {
+  if (isCompactCommand(req.body?.message)) return manualCompactHttp(req, res);
+  if (manualCompactions.has(String(req.body?.sessionId || 'default'))) { res.status(409).json({ error: COMPACT_BUSY }); return; }
   const { message, sessionId = 'default', attachments, attachmentPreviews } = req.body;
   if (!message || typeof message !== 'string') { res.status(400).json({ error: 'Message required' }); return; }
   let resolvedSessionId: string;
