@@ -384,7 +384,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
       receipts,
       setReceipts,
       reconcileMobileChatTurn,
-      renderMobileContextChip,
+      renderMobileContextChip, wireMobileContextWindow,
       renderMobileHeader,
       renderVoicePage,
       requestMobileUpdate,
@@ -403,7 +403,6 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
       targetNamespacedId,
       updateMobileChatSessionHistory,
       wireHeaderActions,
-      wireMobileContextWindow,
       wsEventBus,
     } = resolveContext() || {};
   // A remount (iOS refresh/bfcache) can leave an old history request in flight.
@@ -790,6 +789,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
         <button type="button" class="pm-icon-btn pm-attach-native-btn" id="pm-attach-btn" aria-label="Attach files">
           ${ICONS.paperclip}
         </button>
+        <pm-chat-access></pm-chat-access>
         <input id="pm-file-input" class="pm-native-file-input" type="file" multiple accept="image/*,video/*,.mp4,.mov,.m4v,.webm,.avi,.mkv,.txt,.md,.json,.csv,.tsv,.log,.xml,.html,.css,.js,.ts,.tsx,.jsx,.py,.yaml,.yml,application/pdf" />
         <input id="pm-photo-input" class="pm-native-file-input" type="file" multiple accept="image/*" />
         <div class="pm-composer-input-wrap" id="pm-composer-input-wrap">

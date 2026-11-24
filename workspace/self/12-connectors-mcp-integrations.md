@@ -14,6 +14,8 @@
 - The four actual connector runtimes lacking the escape hatch are Instagram, LinkedIn, Obsidian, and TikTok. Treat these as true coverage gaps pending their API/auth design, not as inventory aliases.
 - MCP tools are dynamic (`mcp__serverId__toolName`); inspect a trusted server's advertised tools before use. Provider/MCP manifests are not a list of native connector tools.
 
+Catalog branding uses locally bundled assets in `web-ui/src/assets/connectors` and the shared `connector-logo-runtime.js` resolver, including hosted server IDs and chat references. Full-color marks are rendered as images rather than CSS masks. Run `node scripts/test-plugin-logo-coverage.mjs` when adding a catalog entry. This is display metadata, not a connection or authorization signal.
+
 ## Map
 | Concern | Where (file → symbol) | Notes |
 |---|---|---|

@@ -1,5 +1,8 @@
 # 18 — Mobile app
 
+### Composer plugin references and permissions
+Desktop and mobile chat recognize `/connector-id` (and `/mcp-serverid` for tools exposed through MCP). The authenticated catalog lists only groups with callable tools. The reference makes matching tool names available to the current turn via the existing tool bridge, without executing an action or changing approval policy. The shield immediately right of Attachments opens the permissions popover and matches the saved mode: gray outline for Default, solid Send-accent shield for Lite. The shield button and glyph follow the adjacent paperclip’s dimensions, including when the mobile composer expands. Both menu rows use the same icons. The selector edits the installation-wide Security setting, not a per-chat override. Advanced opens Security directly.
+
 ### Pending Tasks readable details (fix/tasks-readable-details, Nov8)
 Mobile Tasks shares `features/tasks/task-detail-render.js` with desktop: minimal tool-name disclosures and sanitized Markdown evidence/run notes. `renderTasksPage` awaits the existing Markdown-vendor hook on cold direct navigation. Native tool-open state survives polling; existing request-card preservation and glass shell remain unchanged. Not merged/live.
 
@@ -262,3 +265,5 @@ Subagents and Teams show a preview only for the most recently run entry, not the
 Desktop live tool screenshots match the compact mobile trace thumbnails; completed reply figures keep their separate sizing. The shared chat DOM updater anchors mounted images during row patches instead of restarting lazy loads.
 
 Live desktop frames reconcile stable question/approval IDs and images together. A different card ID must not inherit a draft from the previous one.
+
+Mobile plugin controls load with the composer. The chat and subagent page renderers import the context chip directly; the shared mobile route no longer eagerly imports its detail runtime.

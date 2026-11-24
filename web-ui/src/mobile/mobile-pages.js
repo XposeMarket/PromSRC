@@ -23,7 +23,6 @@ import {
   resetMobileDraftModelRoute,
   setMobileSubagentReasoningContext,
 } from './mobile-model-badge.js';
-import { renderMobileContextChip, wireMobileContextWindow } from './mobile-context-window.js';
 import { formatModelWithReasoning } from '../model-display.js';
 import {
   SOURCE_PANEL_SURFACE,
@@ -3885,12 +3884,12 @@ function _renderMobileSkillReferencedMarkdown(text, refs = []) {
   }
   for (const item of _pmSortedSlashCommandTokens()) {
     const command = String(item.command || '').trim();
-    if (!command) continue;
+    if (!command || item.pluginId) continue;
     const escapedCommand = escapeHtml(command);
     const replacement = `<span class="pm-inline-command-token"><span class="pm-inline-skill-token-icon" aria-hidden="true"></span>${escapedCommand}</span>`;
     html = html.split(escapedCommand).join(replacement);
   }
-  return html;
+  return mobilePluginControls?.decoratePluginMarkdown(html,PM_CHAT_SLASH_COMMANDS,escapeHtml) ?? html;
 }
 
 function _pmSkillExcerpt(value, max = 760) {
@@ -9788,6 +9787,13 @@ function _scrollChat(bodyEl) {
 }
 
 const PM_CHAT_SLASH_COMMANDS = getChatSlashCommands('mobile');
+let mobilePluginControls;
+let mobilePluginLoad;
+function loadMobilePluginControls() {
+  return mobilePluginLoad ||= import('./mobile-composer-plugins.js')
+    .then(m => { mobilePluginControls = m.mount(PM_CHAT_SLASH_COMMANDS, mobileGatewayFetch); })
+    .catch(() => { mobilePluginLoad = null; });
+}
 
 let pmActiveSlashCommand = null;
 let pmSlashCommandSelectionIndex = 0;
@@ -9932,7 +9938,7 @@ function _pmComposerRichTextHtml(value, refs = pmSelectedComposerSkills) {
     const commandMatch = text.charAt(cursor) === '/' ? _pmSlashCommandTokenAt(text, cursor) : null;
     if (commandMatch) {
       const label = text.slice(cursor, commandMatch.end);
-      html += `<span class="pm-composer-command-token">${escapeHtml(label)}</span>`;
+      html += `<span class="pm-composer-command-token">${commandMatch.item.pluginId ? mobilePluginControls.pluginLabel(commandMatch.item,escapeHtml) : escapeHtml(label)}</span>`;
       cursor = commandMatch.end;
       continue;
     }
@@ -10304,7 +10310,7 @@ function _pmSelectSlashCommand(page, input, command) {
   const item = PM_CHAT_SLASH_COMMANDS.find((candidate) => candidate.command === command);
   if (!item) return;
   const slashState = _pmSlashCommandState(input);
-  if (slashState && slashState.start > 0 && input) {
+  if (slashState && (slashState.start > 0 || item.pluginId) && input) {
     const replacement = `${item.command} `;
     input.value = `${slashState.value.slice(0, slashState.start)}${replacement}${slashState.value.slice(slashState.end)}`;
     const nextCursor = slashState.start + replacement.length;
@@ -10373,7 +10379,7 @@ function _pmRenderSlashPopover(page, input) {
   popover.innerHTML = suggestions.map((item, idx) => `
     <button class="pm-chat-slash-item ${idx === pmSlashCommandSelectionIndex ? 'active' : ''}" type="button" data-command="${escapeHtml(item.command)}">
       <span class="pm-chat-slash-token">${escapeHtml(item.command)}</span>
-      <span class="pm-chat-slash-label">${escapeHtml(item.label)}</span>
+      <span class="pm-chat-slash-label">${item.pluginId ? mobilePluginControls.pluginLabel(item,escapeHtml) : escapeHtml(item.label)}</span>
       <span class="pm-chat-slash-hint">${idx === 0 ? 'Enter' : 'Tap'}</span>
     </button>
   `).join('');
@@ -10861,8 +10867,9 @@ function _saveMobileLastChatContext(context = {}) {
 let mobileChatPageRendererPromise = null;
 function loadMobileChatPageRenderer() {
   if (!mobileChatPageRendererPromise) {
-    mobileChatPageRendererPromise = import('./mobile-chat-page-runtime.js')
-      .then(({ createMobileChatPageRenderer }) => createMobileChatPageRenderer(() => ({
+    mobileChatPageRendererPromise = Promise.all([import('./mobile-chat-page-runtime.js'), import('./mobile-context-window.js')])
+      .then(([{ createMobileChatPageRenderer }, { renderMobileContextChip, wireMobileContextWindow }]) => createMobileChatPageRenderer(() => ({
+  renderMobileContextChip, wireMobileContextWindow,
   ICONS,
   isMobileChatPinned,
   MOBILE_CHAT_SESSION_ID,
@@ -11160,7 +11167,6 @@ function loadMobileChatPageRenderer() {
   receipts,
   setReceipts: (value) => { receipts = value; },
   reconcileMobileChatTurn,
-  renderMobileContextChip,
   renderMobileHeader,
   refreshMobileDrawerSessions,
   toggleMobileChatPin,
@@ -11181,13 +11187,13 @@ function loadMobileChatPageRenderer() {
   targetNamespacedId,
   updateMobileChatSessionHistory,
   wireHeaderActions,
-  wireMobileContextWindow,
   wsEventBus,
       })));
   }
   return mobileChatPageRendererPromise;
 }
 export async function renderChatPage(page, { navigate, sessionId = null, voiceRoomTranscript = false }) {
+  void loadMobilePluginControls();
   const renderer = await loadMobileChatPageRenderer();
   return renderer(page, { navigate, sessionId, voiceRoomTranscript });
 }
@@ -12616,7 +12622,6 @@ export {
   pmToast,
   registerAgentModelPickerOnSaved,
   registerAgentVoicePickerOnSaved,
-  renderMobileContextChip,
   renderMobileHeader,
   resumeTeam,
   runBgTaskAction,
@@ -12637,7 +12642,6 @@ export {
   updateMobileSchedule,
   uploadMobileBinaryFile,
   wireHeaderActions,
-  wireMobileContextWindow,
   wsEventBus,
 };
 

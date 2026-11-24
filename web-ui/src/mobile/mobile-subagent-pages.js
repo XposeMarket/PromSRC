@@ -1,3 +1,4 @@
+import { renderMobileContextChip, wireMobileContextWindow } from './mobile-context-window.js';
 // Subagents route owner. Loaded only when its route or a shared dependent feature is requested.
 import { latestRosterRun, wireRosterSearch } from './mobile-roster.js';
 import { renderAgentPetPickerHtml, wireAgentPetPicker } from '../components/agent-pets.js';
@@ -53,7 +54,6 @@ import {
   pmToast,
   registerAgentModelPickerOnSaved,
   registerAgentVoicePickerOnSaved,
-  renderMobileContextChip,
   renderMobileHeader,
   sendSubagentRunRecovery,
   setMobileSubagentReasoningContext,
@@ -62,7 +62,6 @@ import {
   subagentChatSessionId,
   tickSubagentHeartbeat,
   wireHeaderActions,
-  wireMobileContextWindow,
   wsEventBus,
 } from './mobile-pages.js';
 

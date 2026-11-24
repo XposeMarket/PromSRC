@@ -9,7 +9,7 @@ import { postJson as connectionOwnerPost } from '../features/secure-access/secur
  */
 
 import { api, ENDPOINTS } from '../api.js';
-import { getConnectorLogoUrl as getSharedConnectorLogoUrl } from '../features/connectors/connector-logo-runtime.js';
+import { colorLogoStyle, getConnectorLogoUrl as getSharedConnectorLogoUrl } from '../features/connectors/connector-logo-runtime.js';
 import { escHtml, showToast } from '../utils.js';
 import { postJson } from '../features/secure-access/secure-access-core.js';
 import { openProtectedPluginCard, protectedRequestFromAction, protectedErrorText } from '../features/secure-access/protected-plugin-card.js';
@@ -133,7 +133,7 @@ function buildConnectorLogoMarkup(connector, size = 24, radius = 8) {
   const logoUrl = getConnectorLogoUrl(connector);
   return `
     <div style="width:${size}px;height:${size}px;display:flex;align-items:center;justify-content:center;border-radius:${radius}px;background:${color}18;color:${color};font-size:${fontSize}px;font-weight:700;letter-spacing:.04em;overflow:hidden">
-      ${logoUrl ? `<span class="connector-logo-image" role="img" aria-label="${escHtml(connector.name)} logo" style="--connector-logo-url:url('${escHtml(logoUrl)}');--connector-logo-color:${color};width:${size - 8}px;height:${size - 8}px"></span>` : ''}
+      ${logoUrl ? `<span class="connector-logo-image" role="img" aria-label="${escHtml(connector.name)} logo" style="--connector-logo-url:url('${escHtml(logoUrl)}');--connector-logo-color:${color};width:${size - 8}px;height:${size - 8}px${colorLogoStyle(connector.id)}"></span>` : ''}
       <span${logoUrl ? ' hidden' : ''}>${escHtml(buildConnectorMonogram(connector.name))}</span>
     </div>
   `;
@@ -1790,7 +1790,7 @@ function renderMcpServers() {
   list.innerHTML = mcpServers.map((s) => {
     const { color, label } = mcpStatusMeta(s);
     return `<div onclick="openMcpServerView('${escHtml(s.id)}')" style="display:flex;align-items:center;gap:9px;padding:9px 10px;border:1px solid var(--line);border-radius:9px;margin-bottom:6px;background:var(--panel-2);cursor:pointer;transition:border-color .12s" onmouseover="this.style.borderColor='var(--brand)'" onmouseout="this.style.borderColor='var(--line)'">
-      <div style="width:9px;height:9px;border-radius:50%;background:${color};flex-shrink:0"></div>
+      ${buildConnectorLogoMarkup({id:s.id, name:s.name || s.id, color:'#8a8f98'}, 30)}
       <div style="flex:1;min-width:0">
         <div style="font-weight:600;font-size:12px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(s.name || s.id)}</div>
         <div style="font-size:10.5px;color:${color};margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${label}</div>
@@ -1810,10 +1810,8 @@ function openMcpServerView(id) {
   connectorViewMode = window.currentMode === 'plugins' ? 'plugins' : 'chat';
   const { color, label, needsAuth } = mcpStatusMeta(s);
   const connected = s.status === 'connected';
-  const initials = String(s.name || s.id).replace(/[^A-Za-z0-9]/g, '').slice(0, 2).toUpperCase() || 'MC';
-
   const logo = document.getElementById('cv-logo');
-  if (logo) logo.innerHTML = `<div style="width:36px;height:36px;border-radius:9px;background:#6d4aff22;color:#8b6dff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px">${escHtml(initials)}</div>`;
+  if (logo) logo.innerHTML = buildConnectorLogoMarkup({id:s.id, name:s.name || s.id, color:'#8a8f98'}, 36, 9);
   document.getElementById('cv-name').textContent = s.name || s.id;
   document.getElementById('cv-category').textContent = 'MCP Server';
   document.getElementById('cv-desc').innerHTML =

@@ -5488,3 +5488,9 @@ body:not(.pm-mobile-active) :is(
 :root[data-skin-kind="palette"][data-tone="light"] .chat-input-area .chat-voice-btn:not(.recording):not(.voice-mode-active) {
   color: var(--t-muted);
 }
+
+/* Share the original attach grid area rather than auto-placing a new row. */
+body:not(.pm-mobile-active) #chat-view > .chat-input-area:has(.chat-attachment-controls) {
+  grid-template-columns: max-content minmax(0, 1fr) auto 32px 32px;
+}
+.chat-attachment-controls { grid-area: attach; display: inline-flex; align-items: center; gap: 2px; }

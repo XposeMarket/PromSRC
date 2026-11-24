@@ -9,6 +9,7 @@ import { liveTraceSummaryKey, desktopTraceProgressSummary as formatDesktopTraceP
 import { formatContextDurationLabel, formatContextToolDurationSuffix, formatContextTokenCount } from '../chat-context-formatters.js';
 import { OPENAI_PUBLIC_REALTIME_VOICE_IDS, CODEX_AVAS_REALTIME_VOICE_IDS, getSpeechRecognitionCtor, getStoredVoiceProvider, storeVoiceProvider, getStoredVoiceSetting, storeVoiceSetting, DESKTOP_VOICE_SETTINGS_KEY, normalizeDesktopVoiceMode, loadDesktopVoiceSettings, desktopVoiceParticipantKey, desktopVoiceParticipantLabel, normalizeDesktopVoiceParticipant, normalizeDesktopVoiceRoomState } from '../voice/desktop-voice-state.js';
 import { api } from '../api.js';
+import { installComposerControls, pluginLabel } from '../features/chat/composer-plugin-controls.js';
 import { renderAgentPet } from '../components/agent-pets.js';
 import { backgroundSpawnLaneSummary, backgroundSpawnStatusLabel, mergeBackgroundReasoningSummary } from '../background-stream-summary.js';
 import { dispatchDesktopChatLifecycle } from '../features/chat/lifecycle.js';
@@ -12840,6 +12841,7 @@ function renderDesktopSlashCommandTokens(text) {
     const match = getDesktopSlashCommandTokenAt(value, index);
     if (match) {
       const command = escHtml(value.slice(index, match.end));
+      if (match.item.pluginId) { html += `<span class="inline-command-token">${pluginLabel(match.item,escHtml)}</span>`; index=match.end; continue; }
       html += `<span class="inline-command-token"><span class="inline-command-token-icon" aria-hidden="true"></span>${command}</span>`;
       index = match.end;
       continue;
@@ -17458,6 +17460,7 @@ function isFailedTurnReply(text) {
 }
 
 const CHAT_SLASH_COMMANDS = getChatSlashCommands('desktop');
+installComposerControls('prom-chat-access', CHAT_SLASH_COMMANDS, api, ()=>window.openSettings('security'), ()=>{ updateDesktopComposerRichPreview(); if (getSlashCommandState()) renderSlashCommandPopover(); });
 let activeSlashCommand = null;
 let slashCommandSelectionIndex = 0;
 let skillTriggerPillExpanded = false;
@@ -17803,7 +17806,7 @@ function renderDesktopComposerRichTextHtml(value, refs = selectedComposerSkillRe
     }
     const match = getDesktopSlashCommandTokenAt(text, index);
     if (match) {
-      html += `<span class="chat-composer-command-token">${escHtml(text.slice(index, match.end))}</span>`;
+      html += `<span class="chat-composer-command-token">${match.item.pluginId ? pluginLabel(match.item,escHtml) : escHtml(text.slice(index, match.end))}</span>`;
       index = match.end;
       continue;
     }
@@ -17987,7 +17990,7 @@ function renderSlashCommandPopover(inputValue = '') {
   targetPopover.innerHTML = suggestions.map((item, idx) => `
     <button class="chat-slash-command-item ${idx === slashCommandSelectionIndex ? 'active' : ''}" type="button" data-command="${escHtml(item.command)}">
       <span class="chat-slash-token">${escHtml(item.command)}</span>
-      <span class="chat-slash-label">${escHtml(item.label)}</span>
+      <span class="chat-slash-label">${item.pluginId ? pluginLabel(item,escHtml) : escHtml(item.label)}</span>
       <span class="chat-slash-hint">${idx === 0 ? 'Enter' : 'Click'}</span>
     </button>
   `).join('');
