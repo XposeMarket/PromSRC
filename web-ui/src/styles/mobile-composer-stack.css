@@ -1223,3 +1223,8 @@ body.pm-mobile-active .pm-mobile-side-sheet .pm-mobile-side-handle::after {
     transition-duration: .01s;
   }
 }
+
+/* In expanded mode keep both controls in the first toolbar track. */
+#pm-composer:is(.is-focused, .has-attachments) .pm-composer-row > pm-chat-access {
+  grid-area: 2 / 1; justify-self: start; margin-inline-start: 44px;
+}

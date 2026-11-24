@@ -1,4 +1,3 @@
-import { installComposerControls, pluginLabel, decoratePluginMarkdown } from '../features/chat/composer-plugin-controls.js';
 import { renderContentReview } from '../components/ContentReview.js';
 import { stripOnboardingControlBlock } from '../onboarding/onboarding-block.js';
 
@@ -3891,7 +3890,7 @@ function _renderMobileSkillReferencedMarkdown(text, refs = []) {
     const replacement = `<span class="pm-inline-command-token"><span class="pm-inline-skill-token-icon" aria-hidden="true"></span>${escapedCommand}</span>`;
     html = html.split(escapedCommand).join(replacement);
   }
-  return decoratePluginMarkdown(html,PM_CHAT_SLASH_COMMANDS,escapeHtml);
+  return mobilePluginControls?.decoratePluginMarkdown(html,PM_CHAT_SLASH_COMMANDS,escapeHtml) ?? html;
 }
 
 function _pmSkillExcerpt(value, max = 760) {
@@ -9784,7 +9783,13 @@ function _scrollChat(bodyEl) {
 }
 
 const PM_CHAT_SLASH_COMMANDS = getChatSlashCommands('mobile');
-installComposerControls('pm-chat-access', PM_CHAT_SLASH_COMMANDS, mobileGatewayFetch, ()=>{ location.hash='#mobile/settings/security'; }, ()=>{const input=document.querySelector('#pm-composer-input'); if(input) input.dispatchEvent(new Event('input',{bubbles:true}));});
+let mobilePluginControls;
+let mobilePluginLoad;
+function loadMobilePluginControls() {
+  return mobilePluginLoad ||= import('./mobile-composer-plugins.js')
+    .then(m => { mobilePluginControls = m.mount(PM_CHAT_SLASH_COMMANDS, mobileGatewayFetch); })
+    .catch(() => { mobilePluginLoad = null; });
+}
 
 let pmActiveSlashCommand = null;
 let pmSlashCommandSelectionIndex = 0;
@@ -9929,7 +9934,7 @@ function _pmComposerRichTextHtml(value, refs = pmSelectedComposerSkills) {
     const commandMatch = text.charAt(cursor) === '/' ? _pmSlashCommandTokenAt(text, cursor) : null;
     if (commandMatch) {
       const label = text.slice(cursor, commandMatch.end);
-      html += `<span class="pm-composer-command-token">${commandMatch.item.pluginId ? pluginLabel(commandMatch.item,escapeHtml) : escapeHtml(label)}</span>`;
+      html += `<span class="pm-composer-command-token">${commandMatch.item.pluginId ? mobilePluginControls.pluginLabel(commandMatch.item,escapeHtml) : escapeHtml(label)}</span>`;
       cursor = commandMatch.end;
       continue;
     }
@@ -10370,7 +10375,7 @@ function _pmRenderSlashPopover(page, input) {
   popover.innerHTML = suggestions.map((item, idx) => `
     <button class="pm-chat-slash-item ${idx === pmSlashCommandSelectionIndex ? 'active' : ''}" type="button" data-command="${escapeHtml(item.command)}">
       <span class="pm-chat-slash-token">${escapeHtml(item.command)}</span>
-      <span class="pm-chat-slash-label">${item.pluginId ? pluginLabel(item,escapeHtml) : escapeHtml(item.label)}</span>
+      <span class="pm-chat-slash-label">${item.pluginId ? mobilePluginControls.pluginLabel(item,escapeHtml) : escapeHtml(item.label)}</span>
       <span class="pm-chat-slash-hint">${idx === 0 ? 'Enter' : 'Tap'}</span>
     </button>
   `).join('');
@@ -11185,6 +11190,7 @@ function loadMobileChatPageRenderer() {
   return mobileChatPageRendererPromise;
 }
 export async function renderChatPage(page, { navigate, sessionId = null, voiceRoomTranscript = false }) {
+  void loadMobilePluginControls();
   const renderer = await loadMobileChatPageRenderer();
   return renderer(page, { navigate, sessionId, voiceRoomTranscript });
 }

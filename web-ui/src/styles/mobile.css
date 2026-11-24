@@ -19173,8 +19173,3 @@ pm-pending-status[hidden] { display: none; }
 .pm-q-login .pm-q-login-open{min-height:49px;border-radius:28px;background:var(--pm-text,#f4f4f4);color:var(--pm-surface,#222);font-weight:600}
 .pm-q-login-note{line-height:1.6}
 .pm-question-card:has(.pm-q-login) .pm-q-actions button{border-radius:28px;min-height:44px}
-
-/* In expanded mode keep both controls in the first toolbar track. */
-#pm-composer:is(.is-focused, .has-attachments) .pm-composer-row > pm-chat-access {
-  grid-area: 2 / 1; justify-self: start; margin-inline-start: 44px;
-}
