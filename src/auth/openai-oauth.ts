@@ -282,6 +282,7 @@ export async function refreshTokens(configDir: string, accountId?: string): Prom
 
     if (!res.ok) {
       const txt = await res.text().catch(() => '');
+      if (refreshInFlight.get(key) !== refreshPromise) throw new Error('Account disconnected during refresh.');
       const latest = loadTokens(configDir, accountId);
       if (
         latest?.refresh_token
