@@ -586,7 +586,8 @@ assert.match(pages, /function scheduleMobileRunRecovery\([\s\S]{0,260}if \(!isMo
 assert.match(pages, /const startingWasBusy = startingRun\.busy === true \|\| !!remembered/, 'recovery must detect a new run that started while an older recovery request was awaiting');
 assert.match(pages, /function _adoptMobileActiveRunState/, 'a tab observing another tab must adopt the server run identity before replay');
 assert.match(pages, /const rememberedBusyRun = _readMobileActiveRun\(busySessionId\)/, 'composer admission must honor an active run remembered by another tab');
-assert.match(pages, /clearRejectedAdmission\(recoveringExistingServerTurn\)[\s\S]{0,420}await enqueueDurably\(actualSessionId\)/, 'a duplicate-tab admission race must only queue after durable acknowledgement');
+assert.match(pages, /const enqueueDurably = async \(sid, sessionBusy = locallyBusy\)/, 'durable enqueue must default to local busy state while accepting server-discovered busy state');
+assert.match(pages, /clearRejectedAdmission\(recoveringExistingServerTurn\)[\s\S]{0,420}await enqueueDurably\(actualSessionId, recoveringExistingServerTurn\)/, 'a duplicate-tab admission race must durably queue with the server-discovered busy state');
 assert.match(pages, /if \(!queued\) restoreRejectedMessage\(\)/, 'an unsuccessful admission-race queue attempt must keep the draft');
 assert.match(pages, /const canonicalStreamAdopted = aiTurn && aiTurn\._pmAdmissionPending !== true/, 'a late canonical stream must protect its adopted assistant trace from 409 cleanup');
 assert.doesNotMatch(pages, /title: 'Restoring active request'/, 'duplicate-tab admission must not render a second restoring assistant bubble');
