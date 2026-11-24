@@ -22,6 +22,15 @@ import { attachNativePicker } from './mobile-native-picker.js';
 import { mountSecureAccessDock, createSecureAccessContinuation } from '../features/secure-access/secure-access-core.js';
 import { installComposerSecretGuard } from '../features/secure-access/protected-plugin-entry.js';
 import { getCachedBusyComposerMode, loadBusyComposerModeFromServer, shouldAutoSteerBusyTurn } from '../features/chat/runtime/busy-composer-mode.js';
+import { api as gatewayApi } from '../api.js';
+import { cachedSessionBinding, isDotSessionId } from '../chat/external-agent-ui.js';
+import {
+  MANUAL_COMPACT_LABELS,
+  classifyManualCompactInput,
+  createManualCompactController,
+  isManualCompactExternalSession,
+  isManualCompactRow,
+} from '../features/chat/core/manual-compact.js';
 
 let mobileBusyComposerModeLoaded = false;
 
@@ -953,6 +962,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
   let messageComposerEdit = null;
   const input    = page.querySelector('#pm-composer-input');
   const draftKeyFor = (session = requestedSession) => composerDraftKey('mobile', session, gatewayTarget?.gatewayId || '');
+  let mobileManualCompactInstance = null;
   let durableQueue = null;
   if (input) input.value = readComposerDraft(draftKeyFor());
   // Protected access cards: same shared renderer as desktop. The dock stops
@@ -3563,6 +3573,8 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
 
   function renderThreadNow() {
     _flushThreadRender(threadEl, body, requestedSession);
+    // A reload during /compact joins the same gateway operation by request id.
+    if (requestedSession && requestedSession !== MOBILE_CHAT_SESSION_ID) mobileManualCompact().resumeFromTranscript(requestedSession);
   }
 
   // Recovery replay can apply hundreds of frames (tool calls/results, model
@@ -7133,6 +7145,69 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     ];
   }
 
+  // Manual /compact: a maintenance request, never a model turn (see manual-compact.js).
+  function mobileManualCompact() {
+    if (!mobileManualCompactInstance) {
+      mobileManualCompactInstance = createManualCompactController({
+        request: (path, opts) => gatewayApi(path, opts),
+        getThread: (sessionId) => (__pmChat.threads[sessionId] ||= []),
+        makeRow: (fields) => ({
+          ...fields,
+          role: fields.role === 'user' ? 'user' : 'ai',
+          time: _nowTime(),
+          body: { sender: fields.role === 'user' ? '' : 'Prometheus', text: fields.content },
+        }),
+        commit: (sessionId) => {
+          _saveMobileThreadCache(sessionId, __pmChat.threads[sessionId] || []);
+          if (sessionId === requestedSession && page.isConnected) {
+            _flushThreadRender(threadEl, body, requestedSession);
+            updateComposerSubmitState();
+          }
+        },
+        toast: (message, tone) => pmToast(message, tone),
+        restoreDraft: (sessionId, text) => {
+          if (sessionId !== requestedSession || !input || input.value.trim()) return;
+          input.value = text;
+          saveComposerDraft(draftKeyFor(), text);
+          resizeComposerInput();
+          updateComposerSubmitState();
+        },
+      });
+    }
+    return mobileManualCompactInstance;
+  }
+
+  function mobileManualCompactBusyReason(sessionId) {
+    if (__pmChat.activeRuns?.[sessionId]?.busy || _readMobileActiveRun(sessionId)) return 'Prometheus is still working. Send /compact again when this chat is idle.';
+    if (_getPendingQuestionForSession(sessionId)) return 'Answer the pending question before compacting.';
+    return '';
+  }
+
+  function handleMobileManualCompactSubmit(text, sessionId) {
+    const sid = String(sessionId || '').trim();
+    const options = {
+      attachmentCount: getPendingAttachments().length,
+      external: isManualCompactExternalSession({ sessionId: sid, binding: cachedSessionBinding(sid), isDot: isDotSessionId(sid) }),
+      busyReason: mobileManualCompactBusyReason(sid),
+    };
+    const verdict = classifyManualCompactInput(text, options);
+    if (verdict.kind === 'none') return false;
+    if (verdict.kind === 'compact' && !options.busyReason && sid === MOBILE_CHAT_SESSION_ID) {
+      resetComposerInput();
+      _pmClearActiveSlashCommand(page, input, { focus: false });
+      pmToast(MANUAL_COMPACT_LABELS.skipped, 'info');
+      updateComposerSubmitState();
+      return true;
+    }
+    const result = mobileManualCompact().handleComposerSend(sid, text, options);
+    if (result.handled && !result.keepDraft) {
+      resetComposerInput();
+      _pmClearActiveSlashCommand(page, input, { focus: false });
+    }
+    updateComposerSubmitState();
+    return result.handled;
+  }
+
   async function handleImmediateSlashCommand(text) {
     const command = normalizeBareSlashCommand(text);
     if (!command) return false;
@@ -7457,6 +7532,10 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     const stillInChat = () => page.isConnected && busySessionId === requestedSession
       && currentChatGateway()?.gatewayId === sendGatewayId && window.__pmMobileActiveGatewayId === sendGatewayId;
     if (options.queueSessionId && (options.queueSessionId !== busySessionId || options.queueGatewayId !== sendGatewayId || !stillInChat())) return;
+    if (!options.fromQueue && mobileManualCompact().sendBlockReason(busySessionId)) {
+      pmToast(mobileManualCompact().sendBlockReason(busySessionId), 'info');
+      return;
+    }
     const msg = String(text || '').trim();
     const stagedVoiceImages = (
       !Array.isArray(options.attachments)
@@ -8758,6 +8837,15 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       resetComposerInput();
       _pmClearActiveSlashCommand(page, input, { focus: false });
       handleBrowseCommand(path);
+      return;
+    }
+    if (handleMobileManualCompactSubmit(text, activeSid)) return;
+    // While /compact owns the chat lane nothing is sent, queued or steered;
+    // the draft and attachments stay in the composer.
+    const compactBlockReason = mobileManualCompact().sendBlockReason(activeSid);
+    if (compactBlockReason && (text.trim() || getPendingAttachments().length)) {
+      pmToast(compactBlockReason, 'info');
+      updateComposerSubmitState();
       return;
     }
     if (normalizeBareSlashCommand(text)) {
