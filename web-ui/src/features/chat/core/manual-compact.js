@@ -259,7 +259,15 @@ export function createManualCompactController(adapter = {}) {
     const promise = (async () => {
       if (optimistic) placeRows(sid, id);
       commit(sid);
-      const result = await requestManualCompact({ request: adapter.request, sessionId: sid, clientMessageId: id });
+      const request = () => requestManualCompact({ request: adapter.request, sessionId: sid, clientMessageId: id });
+      let result = await request();
+      if (result.outcome === 'error' && adapter.readStatus) {
+        // A lost HTTP response is not a failed checkpoint. Only rejoin if a GET confirms this exact receipt exists.
+        const saved = await Promise.resolve().then(() => adapter.readStatus(sid, manualCompactRowIds(id).status)).catch(() => null);
+        if (saved?.compactStatus === 'running') result = await request();
+        else if (TERMINAL.has(saved?.compactStatus)) result = { outcome: saved.compactStatus, message: saved.content };
+        if (result.outcome === 'error') result.message = 'Could not confirm compaction status. Reopen this chat to check.';
+      }
       if (TERMINAL.has(result.outcome)) {
         if (!optimistic && !threadFor(sid).some((row) => row?.messageId === manualCompactRowIds(id).status)) placeRows(sid, id);
         settleRows(sid, id, result.outcome, result.message);

@@ -237,6 +237,34 @@ for (const status of ['skipped', 'failed']) {
   assert.deepEqual(trail.filter((item) => item.startsWith('send:')), ['send:next explicit message']);
 }
 
+// --- Mobile renderer: status row is only the existing compaction break ---------------
+{
+  const { createMobileChatMessageRenderer } = await mod('web-ui/src/mobile/mobile-chat-message-renderer.js');
+  const grouped = [];
+  const render = createMobileChatMessageRenderer(() => ({
+    __pmChat: { editingMessageIndex: -1 },
+    escapeHtml: (v) => String(v ?? ''),
+    chatTimelineRowSignature: () => 'sig',
+    _mobileWorkflowTransitionLabel: () => '',
+    _isMobileVoiceAgentWorkerHandoff: () => false,
+    _renderChatAttachmentPreviews: () => '',
+    _renderMobileSkillReferencedMarkdown: (text) => `<p>${text}</p>`,
+    _renderMobileMessageActions: () => '<div class="pm-msg-actions"></div>',
+    _renderMobileGroupedTrace: (entries, opts) => { grouped.push({ entries, opts }); return `<div class="pm-trace-timeline"><details class="pm-trace-compaction" data-status="${entries[0].status}">${entries[0].text}</details></div>`; },
+  }));
+  const row = { role: 'ai', messageKind: 'manual_compact_status', messageId: 'manual_compact:m1:status', compactStatus: 'success',
+    content: mc.MANUAL_COMPACT_LABELS.success, body: { sender: 'Prometheus', text: mc.MANUAL_COMPACT_LABELS.success } };
+  const html = render(row, 4, 'k4', 'sig');
+  assert.match(html, /class="pm-msg from-ai manual-compact-status"/);
+  assert.match(html, /<details class="pm-trace-compaction" data-status="compacted">/);
+  assert.doesNotMatch(html, /pm-final-answer|pm-msg-actions|pm-bubble/, 'no answer bubble or actions');
+  assert.equal(grouped[0].entries[0].type, 'compaction');
+  const command = render({ role: 'user', messageKind: 'manual_compact_command', messageId: 'manual_compact:m1:command', content: '/compact', body: { text: '/compact' } }, 3, 'k3', 'sig');
+  assert.match(command, /from-user/);
+  assert.match(command, /\/compact/);
+  assert.doesNotMatch(command, /pm-msg-actions/, 'no edit/rerun on the receipt');
+}
+
 // --- Source contracts: wiring on both surfaces -------------------------------------
 const desktopPage = read('web-ui/src/pages/ChatPage.js');
 const desktopSend = read('web-ui/src/features/chat/runtime/desktop-send-chat-runtime.js');
@@ -244,11 +272,51 @@ const mobileRuntime = read('web-ui/src/mobile/mobile-chat-page-runtime.js');
 const mobilePages = read('web-ui/src/mobile/mobile-pages.js');
 const mobileRenderer = read('web-ui/src/mobile/mobile-chat-message-renderer.js');
 
-assert.match(desktopPage, /if \(isManualCompactStatusRow\(msg\)\) return renderDesktopManualCompactStatusRow/);
-assert.match(desktopPage, /renderLiveTraceCompactionBreak\(manualCompactTraceEntry\(msg\)\)/, 'desktop reuses the compaction visual');
+assert.match(desktopPage, /if \(isManualCompactStatusRow\(msg\)\) return desktopManualCompact\.renderStatusRow\(/);
 assert.match(desktopPage, /\.filter\(isManualCompactRowPersistable\)/);
-assert.match(desktopPage, /desktopManualCompact\(\)\.resumeFromTranscript\(id\)/);
-assert.match(desktopPage, /if \(handleDesktopManualCompactCommand\(raw, input\)\) return true;/);
+assert.match(desktopPage, /desktopManualCompact\.resumeFromTranscript\(id\)/);
+assert.match(desktopPage, /if \(desktopManualCompact\.handleCommand\(raw, input\)\) return true;/);
+assert.match(desktopPage, /if \(source === 'server' && isManualCompactRow\(msg\)\)/, 'gateway copy wins on merge');
+
+// --- Desktop wiring module: renders only the compaction break; skip/busy keep state --
+{
+  const { createDesktopManualCompact } = await mod('web-ui/src/features/chat/runtime/desktop-manual-compact.js');
+  const sessions = { s1: { id: 's1', history: [{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'hello' }] } };
+  const seen = { toasts: [], cleared: 0, requests: 0, breaks: [] };
+  let thinking = true;
+  const desktop = createDesktopManualCompact(() => ({
+    api: async () => { seen.requests += 1; return { status: 'success', message: 'ok' }; },
+    getChatSessionById: (id) => sessions[id],
+    persistSession: () => {}, renderChatMessages: () => {},
+    showToast: (title, message) => seen.toasts.push(message),
+    restoreDesktopComposerAfterFailedSend: () => {},
+    loadSessionFromServer: async () => ({ ok: true }),
+    isSessionThinking: () => thinking, isActiveMainGoalRunning: () => false,
+    getSessionQueuedPrompts: () => [], hasPendingPrometheusQuestion: () => false,
+    pendingChatFiles: [], clearChatComposerAfterSend: () => { seen.cleared += 1; },
+    escHtml: (v) => String(v), desktopTimelineRowSignature: () => 'sig',
+    renderLiveTraceCompactionBreak: (entry) => { seen.breaks.push(entry); return `<details class="live-turn-compaction" data-status="${entry.status}">${entry.text}</details>`; },
+  }));
+  globalThis.window.activeChatSessionId = 's1';
+  assert.equal(desktop.handleCommand('/compact', null), true);
+  assert.equal(seen.requests, 0, 'busy: refused locally, draft kept');
+  assert.equal(seen.cleared, 0);
+  assert.equal(desktop.handleCommand('/compact', null) && desktop.handleCommand('/compact extra', null), true);
+  assert.equal(seen.requests, 0, 'syntax feedback never posts');
+  thinking = false;
+  assert.equal(desktop.handleCommand('/compact', null), true);
+  assert.equal(seen.requests, 1, 'idle: one request');
+  assert.equal(seen.cleared, 1, 'started command clears the composer');
+  assert.equal(sessions.s1.history.at(-1).compactStatus, 'running', 'status row shows immediately');
+  assert.ok(desktop.sendBlockReason('s1'), 'next send waits while compacting');
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(desktop.handleCommand('tell me about /compact', null), false, 'ordinary text falls through');
+  const html = desktop.renderStatusRow(statusRow('r9', 'running'), 3, 'k', '');
+  assert.match(html, /class="msg-shell assistant manual-compact-status"/);
+  assert.match(html, /<details class="live-turn-compaction" data-status="compacting">Compacting context…<\/details>/);
+  assert.doesNotMatch(html, /msg-actions|assistant-work-timer|markdown/i, 'no answer bubble, timer or actions');
+  assert.notEqual(desktop.renderStatusRow(statusRow('r9', 'success'), 3, 'k', ''), html, 'row signature changes with status');
+}
 assert.ok(desktopSend.indexOf('manualCompactSendBlockReason(') < desktopSend.indexOf('if (isSessionThinking(thisSessionId))'),
   'desktop gate runs before queue/steer');
 assert.ok(mobileRuntime.indexOf('if (handleMobileManualCompactSubmit(text, activeSid)) return;') < mobileRuntime.indexOf('sendMessage(text, { selectedSkillIds, selectedSkillRefs })'));

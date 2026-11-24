@@ -39,19 +39,15 @@ import { createDesktopChatRuntimeAdapter } from '../features/chat/runtime/deskto
 import { createSessionPersistenceScheduler, attachSessionPersistenceLifecycle } from '../features/chat/core/session-persistence-scheduler.js';
 import { createDesktopSendChatRuntime } from '../features/chat/runtime/desktop-send-chat-runtime.js';
 import { composerDraftKey, readComposerDraft, saveComposerDraft } from '../features/chat/composer-drafts.js';
-import {
-  MANUAL_COMPACT_LABELS,
-  classifyManualCompactInput,
-  createManualCompactController,
-  isManualCompactExternalSession,
-  isManualCompactRow,
-  isManualCompactRowPersistable,
-  isManualCompactStatusRow,
-  manualCompactMergeKey,
-  manualCompactRowStatus,
-  manualCompactTraceEntry,
-} from '../features/chat/core/manual-compact.js';
-import { cachedSessionBinding, isDotSessionId } from '../chat/external-agent-ui.js';
+import { isManualCompactRow, isManualCompactRowPersistable, isManualCompactStatusRow, manualCompactMergeKey } from '../features/chat/core/manual-compact.js';
+import { createDesktopManualCompact } from '../features/chat/runtime/desktop-manual-compact.js';
+// Manual /compact: a maintenance request, never a model turn. Context is resolved lazily.
+const desktopManualCompact = createDesktopManualCompact(() => ({
+  api, getChatSessionById, persistSession, renderChatMessages, showToast, restoreDesktopComposerAfterFailedSend,
+  loadSessionFromServer: _loadSessionFromServer, scheduleChatContextWindowRefresh, isSessionThinking, isActiveMainGoalRunning,
+  getSessionQueuedPrompts, hasPendingPrometheusQuestion, pendingChatFiles, clearChatComposerAfterSend, escHtml,
+  desktopTimelineRowSignature, renderLiveTraceCompactionBreak,
+}));
 import { createChatPerformanceRuntime } from '../features/chat/runtime/chat-performance-runtime.js';
 import {
   normalizeQuestionRecord,
@@ -8158,7 +8154,7 @@ async function _loadSessionFromServer(id, options = {}) {
     delete sess._needsServerLoad;
     setDesktopSessionLoadState(id, 'ready');
     // A reload during /compact joins the same gateway operation by request id.
-    desktopManualCompact().resumeFromTranscript(id);
+    desktopManualCompact.resumeFromTranscript(id);
     syncDesktopChatRuntime(sess, { source: 'desktop-initial-page', pageInfo: sess.historyPage });
     saveChatSessions();
     if (window.activeChatSessionId === id) {
@@ -14529,7 +14525,7 @@ function renderVisibleChatHistoryHtml(history = [], options = {}) {
 
   return visibleHistory.map(({ msg, originalIndex, key, signature }) => {
     // The status row is not an answer: only the existing compaction break.
-    if (isManualCompactStatusRow(msg)) return renderDesktopManualCompactStatusRow(msg, originalIndex, key, signature);
+    if (isManualCompactStatusRow(msg)) return desktopManualCompact.renderStatusRow(msg, originalIndex, key, signature);
     const isSyntheticTimerTrigger =
       String(msg?.channelLabel || '').toLowerCase() === 'timer'
       && msg.role === 'user'
@@ -18143,75 +18139,15 @@ async function handleDesktopUpdateCommand() {
   }
 }
 
-// Manual /compact: a maintenance request, never a model turn (see manual-compact.js).
-// Lazy so session loading during module start-up never reaches a TDZ binding.
-let desktopManualCompactInstance = null;
-function desktopManualCompact() {
-  if (!desktopManualCompactInstance) desktopManualCompactInstance = createDesktopManualCompactController();
-  return desktopManualCompactInstance;
-}
-
-function createDesktopManualCompactController() {
-  return createManualCompactController({
-  request: (path, opts) => api(path, opts),
-  getThread: (sessionId) => getChatSessionById(sessionId)?.history || null,
-  makeRow: (fields) => ({ ...fields }),
-  commit: (sessionId) => {
-    persistSession(sessionId);
-    if (window.activeChatSessionId === sessionId) renderChatMessages();
-  },
-  toast: (message, tone) => showToast('/compact', message, tone === 'warn' ? 'info' : tone),
-  restoreDraft: (sessionId, text) => restoreDesktopComposerAfterFailedSend(sessionId, text),
-  refresh: async (sessionId) => {
-    await _loadSessionFromServer(sessionId, { force: true });
-    if (window.activeChatSessionId === sessionId) {
-      renderChatMessages();
-      scheduleChatContextWindowRefresh(250);
-    }
-  },
-  });
-}
-
-function desktopManualCompactBusyReason(sessionId) {
-  const sess = getChatSessionById(sessionId);
-  if (isSessionThinking(sessionId)) return 'Prometheus is still working. Send /compact again when this chat is idle.';
-  if (isActiveMainGoalRunning(sessionId) || String(sess?.mainChatGoal?.status || '') === 'active') return 'An active goal would resume afterwards. Pause or finish the goal before compacting.';
-  if (getSessionQueuedPrompts(sessionId).length) return 'Queued messages would run afterwards. Send /compact when the queue is empty.';
-  if (hasPendingPrometheusQuestion(sessionId)) return 'Answer the pending question before compacting.';
-  return '';
-}
-
 function manualCompactSendBlockReason(sessionId = window.activeChatSessionId) {
-  return desktopManualCompact().sendBlockReason(sessionId);
-}
-
-function handleDesktopManualCompactCommand(raw, input) {
-  const sessionId = String(window.activeChatSessionId || '').trim();
-  const sess = getChatSessionById(sessionId);
-  const options = {
-    attachmentCount: pendingChatFiles.length,
-    external: isManualCompactExternalSession({ sessionId, session: sess, binding: cachedSessionBinding(sessionId), isDot: isDotSessionId(sessionId) }),
-    busyReason: desktopManualCompactBusyReason(sessionId),
-  };
-  const verdict = classifyManualCompactInput(raw, options);
-  if (verdict.kind === 'none') return false;
-  const result = desktopManualCompact().handleComposerSend(sessionId, raw, options);
-  if (result.handled && !result.keepDraft) clearChatComposerAfterSend(input, sessionId);
-  return result.handled;
-}
-
-function renderDesktopManualCompactStatusRow(msg, originalIndex, key, signature) {
-  const status = manualCompactRowStatus(msg);
-  return `<div class="msg-shell assistant manual-compact-status" data-manual-compact-status="${escHtml(status)}" data-chat-message-index="${originalIndex}" data-chat-row-key="${escHtml(String(key || `message:${originalIndex}`))}" data-chat-row-signature="${escHtml(`${String(signature || desktopTimelineRowSignature(msg))}:compact:${status}:${String(msg?.content || '')}`)}">
-      <div class="msg assistant"><div class="msg-bubble-stack"><div class="msg-body">${renderLiveTraceCompactionBreak(manualCompactTraceEntry(msg))}</div></div></div>
-    </div>`;
+  return desktopManualCompact.sendBlockReason(sessionId);
 }
 
 function handleImmediateChatSlashCommand(message) {
   const raw = String(message || '').trim();
   const command = raw.toLowerCase();
   const input = document.getElementById('chat-input');
-  if (handleDesktopManualCompactCommand(raw, input)) return true;
+  if (desktopManualCompact.handleCommand(raw, input)) return true;
   if (command === '/new') {
     clearChatComposerAfterSend(input);
     newChatSession();

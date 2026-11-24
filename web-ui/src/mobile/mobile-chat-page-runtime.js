@@ -7150,6 +7150,10 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     if (!mobileManualCompactInstance) {
       mobileManualCompactInstance = createManualCompactController({
         request: (path, opts) => gatewayApi(path, opts),
+        readStatus: async (sessionId, id) => {
+          const session = await loadMobileChatSession(sessionId, { force: true, historyLimit: 20, fullProcess: false });
+          return session?.history?.find((row) => row.messageId === id);
+        },
         getThread: (sessionId) => (__pmChat.threads[sessionId] ||= []),
         makeRow: (fields) => ({
           ...fields,
