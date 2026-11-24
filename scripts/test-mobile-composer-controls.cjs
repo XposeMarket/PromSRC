@@ -45,6 +45,17 @@ const out = process.env.COMPOSER_PROOF;
     assert.ok(await isEditing(),'shield opener must preserve editor focus');
     await page.setViewportSize({width:390,height:415}); await page.waitForTimeout(100);
     const r=await shield.boundingBox(), p=await panel.boundingBox(); assert.ok(Math.abs(r.y-p.y-p.height-6)<2,'shield tracks resized viewport');
+    // A keyboard pan can move the fixed top layer relative to the editor. Model
+    // that displacement in the browser without faking either measured DOMRect.
+    const trigger=shield.locator('#trigger');
+    await panel.evaluate(el=>el.style.translate='17px 78px');
+    const anchored=async()=>{
+      await page.evaluate(()=>new Promise(ok=>requestAnimationFrame(()=>requestAnimationFrame(ok))));
+      const [t,p]=await Promise.all([trigger.boundingBox(),panel.boundingBox()]);
+      assert.ok(Math.abs(t.y-p.y-p.height-6)<2 && Math.abs(t.x-p.x)<2, `shield at ${t.x},${t.y}; panel at ${p.x},${p.y+p.height}`);
+    };
+    await anchored();
+    await panel.evaluate(el=>el.style.translate='none'); await anchored();
     await capture('permissions'); await page.keyboard.press('Escape');
     await page.evaluate(source=>{const input=document.querySelector('textarea'), attachBtn=document.querySelector('#pm-attach-btn');window.clipClicks=0;attachBtn.onclick=()=>window.clipClicks++;eval(source);}, between('  let attachTouchStart;',"  preserveComposerFocusOnPointer(attachBtn"));
     await input.focus(); await clip.tap(); assert.ok(await isEditing()); assert.equal(await page.evaluate(()=>window.clipClicks),1,'tap activates once');
