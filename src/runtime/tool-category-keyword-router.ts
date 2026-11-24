@@ -98,12 +98,39 @@ export function isExplicitToolSuppression(input: string): boolean {
   return /\b(?:do not|don't|dont|never|without)\s+(?:call|calling|use|using|run|running|activate|activating|load|loading|invoke|invoking|execute|executing)\s+(?:any|the|a)?\s*tools?\b/i.test(text);
 }
 
+const IMAGE_UPLOAD = /\.(?:png|jpe?g|gif|webp|heic|heif|bmp|svg|avif)$/i;
+const AV_UPLOAD = /\.(?:mp4|mov|m4v|webm|mkv|avi|mp3|m4a|wav|aac|ogg|flac)$/i;
+
+/**
+ * Gateway text appended to a user message is not the user's intent. The upload
+ * notice alone says "images", "workspace paths" and "read, edit ... files",
+ * which used to suggest image generation and file tools on every screenshot.
+ * Images go to the model directly; other uploads still need a tool to open them.
+ */
+export function stripInjectedMessageBlocks(input: unknown): { text: string; uploads: string[] } {
+  let text = String(input || '');
+  const uploads: string[] = [];
+  text = text.replace(/\[UPLOADED FILES\][\s\S]*?(?:Use the exact workspace paths above[^\n]*|$)/g, (block) => {
+    for (const match of block.matchAll(/-\s*"([^"\n]+)"\s*->/g)) uploads.push(match[1]);
+    return ' ';
+  });
+  text = text
+    .replace(/\[BACKGROUND AGENT RESULT\][\s\S]*?(?:\[\/BACKGROUND AGENT RESULT\]|$)/g, ' ')
+    .replace(/\[PER-TURN RUNTIME CONTEXT[\s\S]*$/, ' ');
+  return { text, uploads };
+}
+
 /**
  * Detect actionable tool-category intent on normal chat messages.
  */
 export function detectKeywordToolCategories(input: string): RoutingSet {
-  const text = normalize(input);
+  const stripped = stripInjectedMessageBlocks(input);
+  const text = normalize(stripped.text);
   const categories: RoutingSet = new Set();
+  for (const name of stripped.uploads) {
+    if (IMAGE_UPLOAD.test(name)) continue;
+    add(categories, AV_UPLOAD.test(name) ? 'media_assets' : 'workspace_write');
+  }
   if (!text) return categories;
 
   if (isExplicitToolSuppression(text)) return categories;

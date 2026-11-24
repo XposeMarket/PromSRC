@@ -1409,8 +1409,8 @@ function buildToolCategoryMatchContext(messageText: string, activatedCategories:
       : TOOL_CATEGORY_MATCH_HINTS[category];
     lines.push(
       `The user message may need category: ${category}.`,
-      `Use request_tool_category({"category":"${category}","scope":"turn"}) if you need tools to ${hint}`,
-      'Do not activate it if core tools are enough. Use scope=session only for explicit ongoing workflows.',
+      `Use request_tool_category({"category":"${category}"}) if you need tools to ${hint}`,
+      'Do not activate it if core tools are enough.',
     );
   }
   const categories = lines.length ? `[TOOL_CATEGORY_MATCH]\n${lines.join('\n')}` : '';
@@ -1482,7 +1482,7 @@ function buildToolsContextUncached(activatedCategories: Set<string>, options?: {
   const legacyMenu = `[TOOLS] Core tools loaded (web_search/web_fetch, memory + write_note, skill_list/skill_read for skill discovery, background_ops/declare_plan/timer, question/approval/login cards, show_ui_card/delivery_send, tool_search/tool_call for connected apps, switch_model/set_current_model/update_heartbeat). File read/search/edit, terminal and git are NOT core: they live in workspace_write. Activate additional categories as needed:
   ${categoryMenu}
   Preferred category IDs are the names in the menu above; legacy IDs like browser, file_ops, team_ops, connectors, and mcp still work as aliases.
-  Use: request_tool_category({"category":"browser_automation","scope":"turn"}) for the current user turn. Use scope=session only for explicit ongoing workflows; scope=next_turn keeps it through one follow-up turn; scope=ttl with turns keeps it for a bounded multi-turn workflow.
+  Use: request_tool_category({"category":"browser_automation"}). A loaded category stays available while you keep using its tools and unloads by itself after a few unused turns, so never re-request an active one and do not use scope=session just to keep it. scope=ttl with turns guarantees a minimum lifetime; scope=session is only for an explicit ongoing workflow.
 
   ${fileEditRouting}
 ${arePrometheusDevToolsVisible()

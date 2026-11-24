@@ -56,7 +56,7 @@ export function getCisSystemTools(): any[] {
   ]);
   const categoryEnum = getRuntimeAllowedCategories(TOOL_CATEGORY_IDS);
   const requestToolCategoryDescription =
-    'Load one on-demand tool category (IDs in the enum; the system prompt tool menu describes each). Default scope=turn; next_turn or ttl+turns for a bounded follow-up; session only for an explicit ongoing workflow. Fallback when automatic routing is uncertain.';
+    'Load one on-demand tool category (IDs in the enum; the system prompt tool menu describes each). It stays loaded while you keep using its tools and unloads by itself after a few unused turns, so never re-request an active category. scope is optional: ttl+turns guarantees a minimum lifetime, session is only for an explicit ongoing workflow.';
   // Category labels already appear in the system-prompt tool menu; repeating
   // them here cost ~290 tokens on every model call.
   void categoryDocs;
@@ -1220,7 +1220,7 @@ export function getCisSystemTools(): any[] {
             scope: {
               type: 'string',
               enum: ['turn', 'next_turn', 'ttl', 'session'],
-              description: 'Activation lifetime. Defaults to turn. Use session only for explicit ongoing workflows.',
+              description: 'Optional minimum lifetime (default turn). The category stays loaded past it while in use. Use session only for explicit ongoing workflows.',
             },
             turns: {
               type: 'integer',

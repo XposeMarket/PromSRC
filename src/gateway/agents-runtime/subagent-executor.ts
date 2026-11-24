@@ -135,7 +135,8 @@ import '../site-shortcuts';
 import '../../tools/deploy-analysis-team.js';
 import '../../tools/social-scraper.js';
 import { type ToolResult, type TaskControlResponse } from '../tool-builder';
-import { addCreativeReferences, getCanvasProjectRoot, getCreativeReferences } from '../session';
+import { addCreativeReferences, getCanvasProjectRoot, getCreativeReferences, noteToolCategoryUse } from '../session';
+import { classifyToolFromManifest } from '../../runtime/tool-category-manifest';
 import { sendCreativeCommand } from '../creative/command-bus';
 import type { HyperframesPatchOp } from '../creative/hyperframes-bridge';
 import '../creative/html-motion-templates';
@@ -1992,6 +1993,8 @@ async function executeToolUntraced(name: string, args: any, workspacePath: strin
     for (const item of prepared) finalizeDevEditMutation(item, err);
     throw err;
   }
+  // A category whose tools are being called stays loaded for the next turns.
+  try { noteToolCategoryUse(sessionId, classifyToolFromManifest(name)); } catch { /* retention is best-effort */ }
   if (hooksActive && pluginHooks) {
     const post = await pluginHooks.dispatchPluginHooks({
       event: result.error ? 'PostToolUseFailure' : 'PostToolUse',
