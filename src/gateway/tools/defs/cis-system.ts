@@ -26,7 +26,7 @@ export function getCisSystemTools(): any[] {
     prometheus_source_read: 'Prometheus source read',
     prometheus_source_write: 'Prometheus source edit',
     workspace_write: 'workspace files/commands/git',
-    advanced_memory: 'memory graph/search/index',
+    advanced_memory: 'memory records/claims',
     media_assets: 'download/analyze media',
     media_generation: 'generate image/video',
     automations: 'all automation packs',

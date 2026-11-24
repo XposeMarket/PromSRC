@@ -307,17 +307,7 @@ const COMMAND_RUNNER_TOOL_NAMES = new Set([
 ]);
 
 const MEMORY_TOOL_NAMES = new Set([
-  'memory_browse',
   'memory_read_record',
-  'memory_search_project',
-  'memory_search_timeline',
-  'memory_get_related',
-  'memory_graph_snapshot',
-  'memory_index_refresh',
-  'memory_provider_status',
-  'memory_embedding_status',
-  'memory_embedding_backfill',
-  'memory_debug_search',
   'memory_consolidate',
   'memory_review_claims',
   'memory_accept_claim',

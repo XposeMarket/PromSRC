@@ -3672,16 +3672,10 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
       case 'desktop_send_to_telegram':
       case 'desktop_task':
         return await handleBrowserDesktopTool({ name, args, workspacePath, deps, sessionId, broadcastBrowserStatus, maybeBroadcastBrowserStatus });
-      case 'memory_browse':
-        case 'memory_write':
+      case 'memory_write':
         case 'memory_read':
         case 'memory_search':
         case 'memory_read_record':
-        case 'memory_search_project':
-        case 'memory_search_timeline':
-        case 'memory_get_related':
-        case 'memory_graph_snapshot':
-        case 'memory_index_refresh':
         case 'write_note':
         return await handleMemoryTool({ ...workspaceHelpers, name, args, workspacePath, deps, sessionId, __dirname });
 

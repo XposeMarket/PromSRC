@@ -6,7 +6,7 @@
  * Intended for subagents and scheduled jobs to log observations, run summaries,
  * errors, and progress notes WITHOUT touching persona files (SOUL.md / USER.md).
  *
- * This is the correct tool for subagents to use instead of memory_read/memory_browse/persona_update.
+ * This is the correct tool for subagents to use instead of memory_read/persona_update.
  */
 
 import fs from 'fs';
@@ -86,7 +86,7 @@ export const writeNoteTool = {
     'Ask yourself: would a colleague need to know this to pick up where we left off? If no — skip it. ' +
     'Notes are scoped to today. Brain Dream may prefill the file with temporary carry-forward context from yesterday; append live changes normally. ' +
     'When a carried item changes, completes, becomes blocked, or is superseded, write that change so the next Thought/Dream can update or remove it. ' +
-    'This is the correct tool for subagents to record notes — do NOT use memory_read, memory_browse, persona_read, or persona_update for this purpose.',
+    'This is the correct tool for subagents to record notes — do NOT use memory_read, persona_read, or persona_update for this purpose.',
   execute: executeWriteNote,
   schema: {
     content: 'string (required) — the note text to append',

@@ -853,7 +853,7 @@ export async function handleChatUntraced(
     'read_file', 'read_files_batch', 'create_file', 'replace_lines', 'insert_after', 'delete_lines', 'find_replace', 'apply_patchset',
     'list_files', 'list_directory', 'mkdir', 'file_stats', 'validate_file', 'grep_file', 'grep_files', 'search_files',
     'write_note',
-    'memory', 'memory_search', 'memory_read_record', 'memory_search_project', 'memory_search_timeline', 'memory_get_related', 'memory_graph_snapshot',
+    'memory', 'memory_search', 'memory_read_record',
     'task_control',
     'declare_plan', 'complete_plan_step', 'step_complete',
     'request_tool_category',
@@ -1572,7 +1572,7 @@ export async function handleChatUntraced(
   const READ_ONLY_PROGRESS_TOOLS = new Set([
     'list_files', 'list_directory', 'read_file', 'read_files_batch', 'read_dev_sources', 'web_search', 'web_fetch',
     'browser_snapshot', 'browser_get_page_text', 'browser_get_focused_item',
-    'memory', 'memory_browse', 'memory_read', 'memory_search', 'memory_read_record', 'memory_search_project', 'memory_search_timeline', 'memory_get_related', 'memory_graph_snapshot',
+    'memory', 'memory_read', 'memory_search', 'memory_read_record',
     'skill_list', 'skill_read',
   ]);
 
