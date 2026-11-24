@@ -29,6 +29,9 @@ The Tasks-only interaction host lives in features/tasks/mobile-interactions.js a
 - The liquid-glass hamburger treatment is settled/accepted product styling; `mobile-hamburger-liquid-glass.js` and its CSS are live source, not dead CSS.
 - Test narrow touch/keyboard/browser behavior and the generated public mirror; don't assume a desktop pass covers iOS/PWA behavior.
 
+### Zoom in the mobile chat gallery
+Spread two fingers on the photo to zoom (up to 5×), drag to pan, and pinch back to fit to resume swiping. Navigation or reopening resets the photo. Captions and controls stay put; the page itself does not zoom. `web-ui/src/cards/gallery-touch.js` handles gestures on the photo viewport.
+
 ## Map
 | Concern | Where (file → symbol) | Notes |
 |---|---|---|
