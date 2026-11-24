@@ -803,6 +803,33 @@ function makeOperationalChunks(record: OperationalRecord): Array<{ id: string; i
     .map((text, index) => ({ id: `${record.id}:chunk:${index}`, index, text }));
 }
 
+/**
+ * Remove the evidence record indexed from one source file (its chunks, FTS rows
+ * and vector) and nothing else. The memory tool uses this to drop the stale copy
+ * of a memory file it just edited; the next ordinary refresh re-adds the file
+ * from disk. Never creates a database. Returns true when a record was removed.
+ */
+export function removeSqliteEvidenceSource(workspacePath: string, sourcePath: string): boolean {
+  if (!fs.existsSync(sqlitePath(workspacePath))) return false;
+  const db = openDb(workspacePath);
+  if (!db) return false;
+  try {
+    return db.transaction(() => {
+      const ids = db.prepare("SELECT id FROM memory_records WHERE layer = 'evidence' AND source_path = ?").all(sourcePath).map((row: any) => String(row.id));
+      for (const recordId of ids) {
+        db.prepare('DELETE FROM memory_chunk_fts WHERE record_id = ?').run(recordId);
+        db.prepare('DELETE FROM memory_fts WHERE record_id = ?').run(recordId);
+        db.prepare('DELETE FROM memory_embeddings WHERE record_id = ?').run(recordId);
+        db.prepare('DELETE FROM memory_chunks WHERE record_id = ?').run(recordId);
+        db.prepare('DELETE FROM memory_records WHERE id = ?').run(recordId);
+      }
+      return ids.length > 0;
+    })();
+  } finally {
+    try { db.close(); } catch { /* best effort */ }
+  }
+}
+
 export function syncSqliteMemoryIndex(workspacePath: string, store: EvidenceStore): {
   ok: boolean;
   path: string;

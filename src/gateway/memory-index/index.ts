@@ -21,6 +21,7 @@ import {
   getSqliteMemoryDisabledState,
   getSqliteMemoryGraphSnapshot,
   readSqliteMemoryRecord,
+  removeSqliteEvidenceSource,
   searchSqliteMemoryIndexAsync,
   searchSqliteMemoryIndex,
   syncSqliteMemoryIndex,
@@ -355,6 +356,11 @@ export async function runAutomaticMemoryEmbeddingBackfill(workspacePath: string)
 
 export function scheduleMemoryIndexRefresh(workspacePath: string, options?: MemoryRefreshOptions): void {
   scheduleMemoryIndexRefreshInWorker(workspacePath, options);
+}
+
+/** Drop the SQLite evidence record of one workspace file (see removeSqliteEvidenceSource). */
+export function forgetIndexedWorkspaceFile(workspacePath: string, absPath: string): boolean {
+  return removeSqliteEvidenceSource(workspacePath, WORKSPACE_FILE_PREFIX + rel(absPath, workspacePath));
 }
 function ensureDir(d: string): void { fs.mkdirSync(d, { recursive: true }); }
 function readJson<T>(p: string, fallback: T): T { try { return fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, 'utf-8')) as T : fallback; } catch { return fallback; } }
