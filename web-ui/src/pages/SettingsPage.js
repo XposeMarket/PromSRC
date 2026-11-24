@@ -2253,9 +2253,6 @@ async function loadSessionCompactionSettings() {
     if (toolsEl) toolsEl.value = String(Number(s.rollingCompactionToolTurns) || 5);
     if (wordsEl) wordsEl.value = String(Number(s.rollingCompactionSummaryMaxWords) || 900);
     if (modelEl) modelEl.value = String(s.rollingCompactionModel || '');
-    const busyModeEl = document.getElementById('settings-busy-composer-mode');
-    if (busyModeEl) busyModeEl.value = s.busyComposerMode === 'steer' ? 'steer' : 'queue';
-    setCachedBusyComposerMode(s.busyComposerMode);
     await applyGoalRoutingToForm('compactor', s?.mainChatGoals?.compactionModel || '', s?.mainChatGoals?.compactionReasoning || '');
     const contextWrap = document.getElementById('settings-context-budget-summary');
     if (contextWrap) {
@@ -5061,8 +5058,6 @@ function buildSessionSettingsPayload() {
     rollingCompactionToolTurns: Number(getSettingsValue('settings-rolling-compaction-tools', '5') || 5),
     rollingCompactionSummaryMaxWords: Number(getSettingsValue('settings-rolling-compaction-words', '900') || 900),
     rollingCompactionModel: getSettingsValue('settings-rolling-compaction-model').trim(),
-    // Saving applies immediately on this surface: refresh the cached mode with the value being saved.
-    busyComposerMode: setCachedBusyComposerMode(getSettingsValue('settings-busy-composer-mode', 'queue')),
     mainChatGoals: {
       compactionModel: goalRoute('compactor'),
       compactionReasoning: getSettingsValue('goal-compactor-reasoning').trim(),
@@ -5073,7 +5068,9 @@ function buildSessionSettingsPayload() {
 function buildSettingsBulkPayloadForTab(tab) {
   const activeTab = String(tab || '').trim();
   if (activeTab === 'system') {
-    return { session: { autoSettle: buildAutoSettlePayloadFromUI() } };
+    const mode = document.getElementById('settings-busy-composer-mode');
+    if (!mode || mode.disabled) throw new Error('General settings have not loaded. Reopen General and try again.');
+    return { session: { busyComposerMode: mode.value, autoSettle: buildAutoSettlePayloadFromUI() } };
   }
   if (activeTab === 'search') {
     if (!window._settingsSearchLoadedToUI || !window._settingsCredentialsLoadedToUI) throw new Error('Search settings are still loading.');
@@ -5775,10 +5772,18 @@ function renderAutoSettleLastRun(lastRun) {
   status.textContent = `Last check: ${when} · ${action} · ${Number(lastRun.scanned || 0)} scanned${lastRun.truncated ? ' · more remain for the next bounded batch' : ''}.`;
 }
 
+let generalLoadId = 0;
 async function loadAutoSettleSettings() {
+  const loadId = ++generalLoadId;
+  const mode = document.getElementById('settings-busy-composer-mode');
+  if (mode) mode.disabled = true;
   try {
     const data = await api('/api/settings/session');
-    const settings = data?.session?.autoSettle || {};
+    if (loadId !== generalLoadId) return;
+    if (!data?.session) throw new Error('Missing session settings');
+    const currentMode = setCachedBusyComposerMode(data.session.busyComposerMode);
+    if (mode) { mode.value = currentMode; mode.disabled = false; }
+    const settings = data.session.autoSettle || {};
     const select = document.getElementById('settings-auto-settle-after');
     const date = document.getElementById('settings-auto-settle-custom-date');
     if (select) {

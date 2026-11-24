@@ -21,9 +21,8 @@ import { harnessFolderPickerOptions, pickHarnessFolderOption, onHarnessSidebarCh
 import { attachNativePicker } from './mobile-native-picker.js';
 import { mountSecureAccessDock, createSecureAccessContinuation } from '../features/secure-access/secure-access-core.js';
 import { installComposerSecretGuard } from '../features/secure-access/protected-plugin-entry.js';
-import { getCachedBusyComposerMode, loadBusyComposerModeFromServer, shouldAutoSteerBusyTurn } from '../features/chat/runtime/busy-composer-mode.js';
+import { shouldAutoSteerBusyTurn } from '../features/chat/runtime/busy-composer-mode.js';
 
-let mobileBusyComposerModeLoaded = false;
 
 
 export { mobileReplayFrameAfterSteer };
@@ -7550,7 +7549,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       }
     }
     if (!stillInChat()) return;
-    const enqueueDurably = async (sid) => {
+    const enqueueDurably = async (sid, sessionBusy = locallyBusy) => {
       // Card buttons submit their own immutable text, not the current composer draft.
       const draftUnchanged = () => stillInChat() && (options.fromCard || options.skipUserBubble || options.fromQueue
         || (_pmGetComposerValue(input).trim() === msg && (Array.isArray(options.attachments)
@@ -7566,13 +7565,13 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
           _pmClearActiveSlashCommand(page, input, { focus: false });
         }
         __pmChat.lastMobileSendAttempt = null;
-        pmToast('Queued on the gateway. You can close the app.', 'success');
-        if (!mobileBusyComposerModeLoaded) {
-          mobileBusyComposerModeLoaded = true;
-          await Promise.resolve().then(() => loadBusyComposerModeFromServer(pinMobileGatewayFetch(sendGatewayId))).catch(() => {});
-        }
-        if (stillInChat() && shouldAutoSteerBusyTurn({ mode: getCachedBusyComposerMode(), isQueuedReplay: false, sessionBusy: locallyBusy })) {
-          await durableQueue.act('steer', receipt.id);
+        // Settings can be changed from another surface. Read the sending gateway, never a different gateway's cached choice.
+        const prefs = sessionBusy && stillInChat() ? await Promise.resolve().then(() => pinMobileGatewayFetch(sendGatewayId)('/api/settings/session')).catch(() => null) : null;
+        if (!stillInChat()) return true; // already acknowledged in the original chat
+        if (shouldAutoSteerBusyTurn({ mode: prefs?.session?.busyComposerMode, sessionBusy })) {
+          if (await durableQueue.act('steer', receipt.id)) pmToast('Sent into the current turn.', 'success');
+        } else {
+          pmToast('Queued on the gateway. You can close the app.', 'success');
         }
         return true;
       } catch (error) {
@@ -7983,7 +7982,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
               restoreRejectedMessage();
               void (async () => {
                 if (!stillInChat()) return;
-                const queued = await enqueueDurably(actualSessionId);
+                const queued = await enqueueDurably(actualSessionId, recoveringExistingServerTurn);
                 if (!queued) restoreRejectedMessage();
               })();
             }
