@@ -79,8 +79,15 @@ export function installComposerControls(tag, commands, request, advanced, refres
         const room = Math.max(0, r.top - top - 14);
         const set = (key, n) => { const v = `${Math.round(n)}px`; if (panel.style[key] !== v) panel.style[key] = v; };
         set('maxHeight', room);
-        set('left', Math.max(left + 8, Math.min(r.left, left + width - panel.offsetWidth - 8)));
-        set('top', Math.max(top + 8, r.top - panel.offsetHeight - 6));
+        // Fixed top-layer coordinates can have a different origin from the
+        // editor during a keyboard pan. Correct from the rendered popup rect.
+        if (!panel.style.left) panel.style.left = '0px';
+        if (!panel.style.top) panel.style.top = '0px';
+        const box = panel.getBoundingClientRect();
+        const x = Math.max(left + 8, Math.min(r.left, left + width - box.width - 8));
+        const y = Math.max(top + 8, r.top - box.height - 6);
+        set('left', parseFloat(panel.style.left) + x - box.left);
+        set('top', parseFloat(panel.style.top) + y - box.top);
         this.anchorFrame = requestAnimationFrame(followAnchor);
       };
       panel.addEventListener('toggle',()=>{
