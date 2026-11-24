@@ -1379,7 +1379,7 @@ export function getAgentTeamScheduleTools(): any[] {
             reason: { type: 'string', description: 'Reason for interrupting/pausing a target.' },
             status: { type: 'string', enum: ['active', 'paused', 'complete', 'blocked', 'failed', 'cancelled'], description: 'Filter supervision status.' },
             channel: { type: 'string', enum: ['terminal', 'telegram', 'web', 'mobile', 'discord', 'whatsapp', 'system'], description: 'Optional session list/search channel filter.' },
-            limit: { type: 'number', description: 'Maximum results.' },
+            limit: { type: 'number', description: 'Maximum results. For list_projects: chats listed per project, default 20, max 200.' },
             offset: { type: 'number', description: 'Session list offset.' },
             threads: {
               type: 'array',

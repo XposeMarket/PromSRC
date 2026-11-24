@@ -2388,6 +2388,29 @@ export async function getBrowserAdvisorPacket(
   }
 }
 
+/**
+ * Shared final step for browser_get_page_text on both browser backends: optional
+ * query filter, then max_lines (default 200, max 1000) and max_chars (default
+ * 6000, 200-50000). Exported for regression tests.
+ */
+export function boundBrowserPageText(
+  text: string,
+  page: { title: string; url: string },
+  options?: { query?: string; maxChars?: number; maxLines?: number },
+): string {
+  let result = String(text || '').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n');
+  const query = String(options?.query || '').trim().toLowerCase();
+  if (query) {
+    const lines = result.split('\n');
+    const matched = lines.filter((line, index) => line.toLowerCase().includes(query) || lines[Math.max(0, index - 1)]?.toLowerCase().includes(query));
+    result = [`Page: ${page.title}`, `URL: ${page.url}`, '', ...matched].join('\n');
+  }
+  const maxLines = Math.max(1, Math.min(1000, Math.floor(Number(options?.maxLines || 200))));
+  const maxChars = Math.max(200, Math.min(50000, Math.floor(Number(options?.maxChars || 6000))));
+  const bounded = result.split('\n').slice(0, maxLines).join('\n').slice(0, maxChars);
+  return bounded.length > 20 ? bounded : 'No readable text found on this page.';
+}
+
 export async function browserGetPageText(
   sessionId: string,
   options?: { element?: string; query?: string; maxChars?: number; maxLines?: number },
@@ -2403,7 +2426,8 @@ export async function browserGetPageText(
         : `(() => (document.body && (document.body.innerText || document.body.textContent)) || '')()`;
       const text = await callInHouseBrowser<string>('run-js', { sessionId: resolved, code });
       const inHouse = getInHouseSession(resolved);
-      return `Page: ${inHouse?.title || inHouse?.url || ''}\nURL: ${inHouse?.url || ''}\n\n${String(text || '').slice(0, 12000)}`;
+      const page = { title: String(inHouse?.title || inHouse?.url || ''), url: String(inHouse?.url || '') };
+      return boundBrowserPageText(`Page: ${page.title}\nURL: ${page.url}\n\n${String(text || '')}`, page, options);
     } catch (err: any) {
       return `ERROR: In-house browser get-page-text failed: ${err.message}`;
     }
@@ -2544,17 +2568,7 @@ export async function browserGetPageText(
       parts.push('TIP: Use browser_open({url: "<iframe src above>"}) to navigate directly into the embedded menu/widget.');
     }
 
-    let result = parts.join('\n').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n');
-    const query = String(options?.query || '').trim().toLowerCase();
-    if (query) {
-      const lines = result.split('\n');
-      const matched = lines.filter((line, index) => line.toLowerCase().includes(query) || lines[Math.max(0, index - 1)]?.toLowerCase().includes(query));
-      result = [`Page: ${title}`, `URL: ${url}`, '', ...matched].join('\n');
-    }
-    const maxLines = Math.max(1, Math.min(1000, Math.floor(Number(options?.maxLines || 200))));
-    const maxChars = Math.max(200, Math.min(50000, Math.floor(Number(options?.maxChars || 6000))));
-    const bounded = result.split('\n').slice(0, maxLines).join('\n').slice(0, maxChars);
-    return bounded.length > 20 ? bounded : 'No readable text found on this page.';
+    return boundBrowserPageText(parts.join('\n'), { title, url }, options);
   } catch (err: any) {
     return `ERROR: browser_get_page_text failed: ${err.message}`;
   }

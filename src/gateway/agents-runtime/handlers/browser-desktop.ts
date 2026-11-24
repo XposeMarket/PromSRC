@@ -775,6 +775,8 @@ export async function handleBrowserDesktopTool(ctx: BrowserDesktopHandlerContext
           process_name: args.process_name == null ? undefined : String(args.process_name),
           title: args.title == null ? undefined : String(args.title),
           filter: args.filter == null ? undefined : String(args.filter),
+          limit: args.limit == null ? undefined : Number(args.limit),
+          cursor: args.cursor == null ? undefined : Number(args.cursor),
         });
         return { name, args, result, error: result.startsWith('ERROR') };
       }

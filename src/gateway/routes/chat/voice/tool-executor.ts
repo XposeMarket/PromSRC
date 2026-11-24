@@ -1030,6 +1030,7 @@ export async function executeVoiceAgentTool(sessionId: string, name: string, arg
         process_name: args.process_name == null && args.processName == null ? undefined : String(args.process_name ?? args.processName),
         title: args.title == null ? undefined : String(args.title),
         filter: args.filter == null ? undefined : String(args.filter),
+        limit: args.limit == null ? undefined : Number(args.limit),
       });
       const ok = !/^ERROR:/i.test(String(result || ''));
       return voiceToolResult(ok, ok ? 'Desktop windows listed.' : result, {

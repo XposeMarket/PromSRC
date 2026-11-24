@@ -188,6 +188,7 @@
     "test:provider-accounts-vault": "tsx src/gateway/agents-runtime/handlers/provider-accounts-vault.regression.ts",
     "test:hidden-required-args": "tsx src/gateway/tools/defs/hidden-required-args.regression.ts",
     "test:connector-wrapper-shared-args": "tsx src/extensions/connector-wrapper-shared-args.regression.ts",
+    "test:tool-limits": "tsx src/gateway/tool-limits.regression.ts",
     "test:background-follow-up-thread": "tsx src/gateway/tasks/background-follow-up-scope.regression.ts && tsx src/gateway/tasks/background-follow-up.regression.ts && node scripts/test-background-follow-up-thread.mjs && node scripts/test-mobile-background-agent-reducer.mjs",
     "test:background-wait-early-return": "tsx src/gateway/tasks/background-wait-early-return.regression.ts",
     "test:goal-final-reply-placement": "tsx src/gateway/goal-final-reply-placement.regression.ts",
