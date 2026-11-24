@@ -5,9 +5,7 @@ import { ensurePrometheusExtensionRuntimeLoaded } from '../../../extensions/exte
 import { getExtensionRuntimeRegistry, resolveConnectorWrapperCall } from '../../../extensions/runtime-registry';
 import type { CapabilityExecutionContext, CapabilityExecutor } from './types';
 import type { ToolResult } from '../../tool-builder';
-import { resolveHookConfig } from '../../comms/webhook-handler';
 import { getConfig } from '../../../config/config';
-import { listMcpPresets, buildMcpServerConfigFromPreset } from '../../../extensions/mcp-preset-service';
 import * as secureAccessRuntime from '../../../security/secure-access-runtime';
 import { waitForSecureAccess } from '../../../security/secure-access-waits';
 
@@ -17,8 +15,6 @@ const PLATFORM_TOOL_NAMES = new Set([
   'connection_ops',
   'secure_access',
   'connector_list',
-  'webhook_manage',
-  'integration_quick_setup',
   'create_composite',
   'get_composite',
   'edit_composite',
@@ -420,120 +416,6 @@ export const platformCapabilityExecutor: CapabilityExecutor = {
         return { name, args, result: `Unknown connection_ops action: ${action}`, error: true };
       } catch (error: any) { return { name, args, result: `connection_ops failed: ${error?.message || error}`, error: true }; }
       })());
-    }
-
-    if (name === 'webhook_manage') {
-      const action = String(args.action || 'get').trim().toLowerCase();
-      if (action === 'get' || action === 'test') {
-        const cfg = resolveHookConfig();
-        const providers = Object.entries(cfg.providers || {}).map(([provider, providerCfg]) => ({
-          provider,
-          enabled: providerCfg?.enabled === true,
-          secretConfigured: Boolean(providerCfg?.secret),
-          eventCount: Object.keys(providerCfg?.events || {}).length,
-          deliver: providerCfg?.deliver === true,
-          ready: cfg.enabled && providerCfg?.enabled === true && Boolean(providerCfg?.secret) && Object.keys(providerCfg?.events || {}).length > 0,
-        }));
-        const requestedProvider = String(args.provider || '').trim().toLowerCase();
-        const selectedProvider = requestedProvider
-          ? providers.find((provider) => provider.provider === requestedProvider)
-          : undefined;
-        const ready = selectedProvider
-          ? selectedProvider.ready
-          : cfg.enabled && (Boolean(cfg.token) || providers.some((provider) => provider.ready));
-        const result = { enabled: cfg.enabled, path: cfg.path, tokenConfigured: Boolean(cfg.token), providers, ready };
-        return { name, args, result: JSON.stringify(result, null, 2), error: action === 'test' && !result.ready };
-      }
-      if (action === 'set') {
-        const current = (getConfig().getConfig() as any).hooks || {};
-        const next = {
-          enabled: args.enabled == null ? current.enabled === true : args.enabled === true,
-          token: args.token == null || args.token === '••••••••' ? String(current.token || '') : String(args.token).trim(),
-          path: args.path == null ? String(current.path || '/hooks') : String(args.path).trim(),
-          providers: current.providers || {},
-        };
-        getConfig().updateConfig({ hooks: next } as any);
-        return {
-          name,
-          args: { ...args, token: args.token == null ? undefined : '••••••••' },
-          result: JSON.stringify({ enabled: next.enabled, path: next.path, tokenConfigured: Boolean(next.token), restartRequired: true }, null, 2),
-          error: false,
-        };
-      }
-      if (action === 'set_provider') {
-        const safeArgs = { ...args, secret: args.secret == null ? undefined : '••••••••' };
-        const provider = String(args.provider || '').trim().toLowerCase();
-        if (!['github', 'stripe', 'slack'].includes(provider)) {
-          return { name, args: safeArgs, result: 'set_provider requires provider: github | stripe | slack', error: true };
-        }
-        const currentHooks = (getConfig().getConfig() as any).hooks || {};
-        const currentProvider = currentHooks.providers?.[provider] || {};
-        const events = Object.create(null) as Record<string, 'audit' | 'wake' | 'agent' | 'ignore'>;
-        const rawEvents = args.events == null ? currentProvider.events || {} : args.events;
-        if (!rawEvents || typeof rawEvents !== 'object' || Array.isArray(rawEvents)) {
-          return { name, args: safeArgs, result: 'set_provider events must be an object mapping event names to audit | wake | agent | ignore', error: true };
-        }
-        for (const [eventType, rawAction] of Object.entries(rawEvents)) {
-          const normalizedEvent = String(eventType || '').trim();
-          const normalizedAction = String(rawAction || '').trim().toLowerCase();
-          if (!normalizedEvent
-            || normalizedEvent.length > 120
-            || normalizedEvent === '__proto__'
-            || Object.prototype.hasOwnProperty.call(Object.prototype, normalizedEvent)
-            || !['audit', 'wake', 'agent', 'ignore'].includes(normalizedAction)) {
-            return { name, args: safeArgs, result: `Invalid provider event mapping: ${eventType}`, error: true };
-          }
-          events[normalizedEvent] = normalizedAction as 'audit' | 'wake' | 'agent' | 'ignore';
-        }
-        const secret = args.secret == null || args.secret === '••••••••'
-          ? String(currentProvider.secret || '')
-          : String(args.secret).trim();
-        const nextProvider = {
-          enabled: args.enabled == null ? currentProvider.enabled === true : args.enabled === true,
-          secret,
-          events,
-          deliver: args.deliver == null ? currentProvider.deliver === true : args.deliver === true,
-        };
-        const nextHooks = {
-          ...currentHooks,
-          providers: { ...(currentHooks.providers || {}), [provider]: nextProvider },
-        };
-        getConfig().updateConfig({ hooks: nextHooks } as any);
-        return {
-          name,
-          args: safeArgs,
-          result: JSON.stringify({
-            provider,
-            enabled: nextProvider.enabled,
-            secretConfigured: Boolean(nextProvider.secret),
-            eventCount: Object.keys(nextProvider.events).length,
-            deliver: nextProvider.deliver,
-            ready: nextHooks.enabled === true && nextProvider.enabled && Boolean(nextProvider.secret) && Object.keys(nextProvider.events).length > 0,
-            restartRequired: true,
-          }, null, 2),
-          error: false,
-        };
-      }
-      return { name, args, result: `Unknown webhook_manage action: ${action}`, error: true };
-    }
-
-    if (name === 'integration_quick_setup') {
-      ensurePrometheusExtensionRuntimeLoaded();
-      const action = String(args.action || 'list_presets').trim().toLowerCase();
-      if (action === 'list_presets') return { name, args, result: JSON.stringify({ presets: listMcpPresets() }, null, 2), error: false };
-      if (action !== 'setup') return { name, args, result: `Unknown integration_quick_setup action: ${action}`, error: true };
-      const preset = String(args.preset || '').trim();
-      if (!preset) return { name, args, result: 'setup requires preset', error: true };
-      const credentials: Record<string, string> = {};
-      for (const [key, value] of Object.entries(args || {})) if (typeof value === 'string') credentials[key] = value;
-      if (args.github_token) credentials.GITHUB_PERSONAL_ACCESS_TOKEN = String(args.github_token);
-      if (args.brave_api_key) credentials.BRAVE_API_KEY = String(args.brave_api_key);
-      const built = buildMcpServerConfigFromPreset(preset, credentials);
-      const cfg = { ...built, id: String(args.id || built.id), name: String(args.name || preset), enabled: args.enabled !== false } as any;
-      getMCPManager().upsertConfig(cfg);
-      if (args.connect === false) return { name, args, result: `Saved MCP preset "${preset}" as "${cfg.id}".`, error: false };
-      const connected = await getMCPManager().connect(cfg.id);
-      return { name, args, result: connected.success ? `Saved and connected "${cfg.id}" (${(connected.tools || []).length} tools).` : `Saved "${cfg.id}", but connection failed: ${connected.error}`, error: !connected.success };
     }
 
     if (name === 'connector_list') {

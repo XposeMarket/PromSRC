@@ -15,9 +15,7 @@ import { capCommandOutput, resolveCommandOutputLimit } from './../command-output
 import { normalizeDevSourcePatchsetArgs, splitLinesEolSafe } from './../../dev-source-patchset';
 import { executeAgentBuilderTool } from './../agent-builder-integration';
 import { parseSchedulePattern } from './../../scheduling/schedule-pattern';
-import { saveSiteShortcut } from './../../site-shortcuts';
 import { deployAnalysisTeamTool } from './../../../tools/deploy-analysis-team.js';
-import { socialIntelTool } from './../../../tools/social-scraper.js';
 import { type ToolResult } from './../../tool-builder';
 import { getCreativeMode, normalizeCreativeMode, setCreativeMode } from './../../session';
 import { type CodeEvidenceFile } from './../../code-evidence';
@@ -1168,12 +1166,6 @@ export async function handleMiscTool(ctx: handleMiscToolContext): Promise<Awaite
         }
       }
 
-      case 'social_intel': {
-        const tr = await socialIntelTool.execute(args) as any;
-        const resultStr = tr?.stdout ?? tr?.error ?? JSON.stringify(tr);
-        return { name, args, result: resultStr, error: tr?.success === false };
-      }
-
 	      case 'clone_repo': {
 	        const { executeCloneRepo } = await import('./../../../tools/repo-tools.js');
 	        const toolResult = await executeCloneRepo({
@@ -1777,31 +1769,6 @@ export async function handleMiscTool(ctx: handleMiscToolContext): Promise<Awaite
           };
         } catch (err: any) {
           return { name, args, result: `parse_schedule_pattern error: ${err.message}`, error: true };
-        }
-      }
-
-      case 'save_site_shortcut': {
-        const shortcutHostname = String(args.hostname || '').trim();
-        const shortcutKey = String(args.key || '').trim();
-        const shortcutAction = String(args.action || '').trim();
-        if (!shortcutHostname || !shortcutKey || !shortcutAction) {
-          return { name, args, result: 'save_site_shortcut: hostname, key, and action are required', error: true };
-        }
-        try {
-          saveSiteShortcut(
-            shortcutHostname,
-            {
-              key: shortcutKey,
-              action: shortcutAction,
-              context: args.context ? String(args.context) : undefined,
-              preferred_for_compose: args.preferred_for_compose === true,
-            },
-            undefined,
-            args.notes ? String(args.notes) : undefined,
-          );
-          return { name, args, result: `Shortcut saved: ${shortcutHostname} - "${shortcutKey}" -> ${shortcutAction}`, error: false };
-        } catch (err: any) {
-          return { name, args, result: `save_site_shortcut failed: ${err.message}`, error: true };
         }
       }
 

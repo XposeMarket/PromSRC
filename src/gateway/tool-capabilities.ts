@@ -47,7 +47,7 @@ const READ_ONLY_TOOLS = new Set([
   'show_run_result', 'show_prediction_market', 'show_map',
   // Reading progress/results of work that was already approved to start.
   'background_wait', 'background_progress', 'background_status', 'get_agent_result',
-  'get_agent_models', 'list_agent_model_templates', 'schedule_job_history',
+  'get_agent_models', 'schedule_job_history',
   'schedule_job_detail', 'schedule_job_log_search',
   'list_entities', 'read_entity', 'list_composites', 'brain_activity_read',
   'brain_context_search', 'memory_review_claims',
@@ -91,14 +91,13 @@ const LOCAL_WRITE_TOOLS = new Set([
   // unknown-tool fallback.
   'append_file', 'git_commit', 'timer', 'business_context_mode', 'update_heartbeat',
   'set_current_model', 'background_spawn', 'background_follow_up', 'background_steer', 'spawn_subagent',
-  'save_site_shortcut', 'browser_close', 'browser_close_tab',
+  'browser_close', 'browser_close_tab',
   // Local Prometheus state that was falling through to the unknown tier
   // (2026-11 tool audit). Still approval-gated on Default permissions.
   'dispatch_team_agent', 'message_main_agent', 'browser_set_profile_target',
   'memory_accept_claim', 'memory_reject_claim', 'memory_supersede_record', 'memory_consolidate',
-  'write_entity', 'append_entity_event', 'set_agent_model', 'save_agent_model_template',
-  'update_agent_model_template', 'apply_agent_model_template', 'select_agent_model_template',
-  'edit_proposal', 'run_task_now', 'create_composite', 'edit_composite', 'skill_candidate_submit',
+  'write_entity', 'append_entity_event', 'set_agent_model',
+  'edit_proposal', 'create_composite', 'edit_composite', 'skill_candidate_submit',
   'schedule_job_stuck_control',
 ]);
 
@@ -126,7 +125,7 @@ const EXTERNAL_WRITE_TOOLS = new Set([
   'desktop_replay_macro', 'desktop_click_text', 'desktop_window_click',
   'desktop_window_type', 'desktop_window_press_key', 'desktop_window_scroll',
   'desktop_window_drag', 'desktop_screen', 'desktop_apps', 'desktop_window',
-  'desktop_input', 'desktop_macro', 'desktop_background',
+  'desktop_input', 'desktop_background',
   // Can reach Telegram/Discord/other channels or act inside logged-in pages.
   'delivery_send', 'browser_run_js', 'browser_type', 'browser_drag',
   'browser_vision_click', 'browser_vision_type',

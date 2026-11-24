@@ -58,7 +58,7 @@ export const TOOL_CATEGORY_PROMPT_SIGNALS: Readonly<Record<PromptSignalToolCateg
     phrases: [
       'background task', 'background run', 'running tasks', 'tasks are currently running',
       'queued tasks', 'task status', 'task output', 'task outputs', 'run this task now',
-      'automation dashboard', 'task_control', 'run_task_now', 'internal_watch',
+      'automation dashboard', 'task_control', 'internal_watch',
       'webhook', 'webhooks', 'web hook', 'trigger_ops', 'trigger rule', 'event trigger',
       'when a pr is opened', 'when a pull request', 'on pull request', 'github webhook',
     ],
@@ -132,7 +132,7 @@ export const TOOL_CATEGORY_PROMPT_SIGNALS: Readonly<Record<PromptSignalToolCateg
       'integration setup', 'integration admin', 'connect a service', 'connect an app',
       'connect a connector', 'configure a connector', 'install a connector',
       'install a plugin', 'configure a webhook', 'webhook setup', 'oauth setup',
-      'connection_ops', 'mcp_server_manage', 'webhook_manage', 'integration_quick_setup', 'plugin_ops',
+      'connection_ops', 'mcp_server_manage', 'plugin_ops',
       'import plugin', 'import plugins', 'import my plugins', 'claude plugin', 'codex plugin', 'hermes plugin', 'openclaw plugin', 'plugin marketplace',
     ],
     allOf: [
@@ -213,18 +213,16 @@ export const TOOL_CATEGORY_PROMPT_SIGNALS: Readonly<Record<PromptSignalToolCateg
 
   model_management: {
     phrases: [
-      'agent model', 'agent models', 'model template', 'model templates',
-      'agent routing', 'executor route', 'set agent model', 'save model template',
+      'agent model', 'agent models',
+      'agent routing', 'executor route', 'set agent model',
       'provider account', 'provider accounts', 'remove account', 'rename account', 'provider_accounts',
-      'get_agent_models', 'set_agent_model', 'list_agent_model_templates',
-      'save_agent_model_template', 'update_agent_model_template',
-      'apply_agent_model_template', 'select_agent_model_template', 'delete_agent_model_template',
+      'get_agent_models', 'set_agent_model',
     ],
     allOf: [
-      ['agent', 'model'], ['model', 'template'], ['agent', 'routing'],
+      ['agent', 'model'], ['agent', 'routing'],
       ['executor', 'route'],
     ],
-    anyOf: ['agent', 'model', 'template', 'routing'],
+    anyOf: ['agent', 'model', 'routing'],
     noneOf: ['what is a model', 'model in general'],
     minScore: 4,
   },

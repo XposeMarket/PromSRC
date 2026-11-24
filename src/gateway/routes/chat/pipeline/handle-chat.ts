@@ -6079,18 +6079,6 @@ Do not produce prose. Use the canonical thread tool now.` });
           source: 'agent_model_defaults.main_chat',
         });
       }
-      if ((toolName === 'apply_agent_model_template' || toolName === 'select_agent_model_template') && !toolResult.error) {
-        const modelRef = String((getConfig().getConfig() as any)?.agent_model_defaults?.main_chat || '').trim();
-        if (modelRef) {
-          const slashIdx = modelRef.indexOf('/');
-          sendSSE('main_model_changed', {
-            providerId: slashIdx > 0 ? modelRef.slice(0, slashIdx) : '',
-            model: slashIdx > 0 ? modelRef.slice(slashIdx + 1) : modelRef,
-            modelRef,
-            source: 'agent_model_default_template',
-          });
-        }
-      }
 
       // Only on success, only for file-mutation tools, not during background tasks.
       if (!toolResult.error && executionMode !== 'background_task' && executionMode !== 'proposal_execution' && executionMode !== 'background_agent' && executionMode !== 'cron' && executionMode !== 'team_manager' && executionMode !== 'team_subagent') {

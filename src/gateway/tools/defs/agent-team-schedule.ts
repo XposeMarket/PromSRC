@@ -1799,43 +1799,6 @@ export function getAgentTeamScheduleTools(): any[] {
         },
       },
     },
-    // ── run_task_now: one-off background task with silent verification ─────────
-    {
-      type: 'function',
-      function: {
-        name: 'run_task_now',
-        legacy_description:
-          'Run a task immediately in the background — silently, with no logs or tool calls shown. ' +
-          'Continue executing the task here in this same conversation while progress mirrors into the Tasks panel. ' +
-          'Tool calls, plan steps, errors, and final output stay visible live in chat and are also persisted on the task card. ' +
-          'Use this when the user wants the work tracked as a task/run while still seeing the live chat stream. ' +
-          'This does not launch a silent detached background runner; for short ephemeral parallel work, use background_spawn instead.',
-        description:
-          'Start a persisted task card for the current live chat turn. Continue executing the task here in this same conversation; tool calls, plan steps, errors, and final output are mirrored into the Tasks panel. This does not launch a silent detached background runner.',
-        parameters: {
-          type: 'object',
-          required: ['title', 'prompt'],
-          properties: {
-            title: {
-              type: 'string',
-              description: 'Short display name shown in the Tasks panel (e.g. "Research competitor pricing")',
-            },
-            prompt: {
-              type: 'string',
-              description: 'Fully self-contained instructions for the task agent. Include all context, file paths, and specific steps — the agent has no session history.',
-            },
-            subagent_id: {
-              type: 'string',
-              description: 'Optional: ID of a configured subagent to inherit system instructions from. If provided, the subagent\'s AGENT.md is injected as context for the task.',
-            },
-            timeout_ms: {
-              type: 'number',
-              description: 'Optional max milliseconds for the task phase (default 300000 = 5 min). Verification runs separately after task completes.',
-            },
-          },
-        },
-      },
-    },
   ];
 }
 

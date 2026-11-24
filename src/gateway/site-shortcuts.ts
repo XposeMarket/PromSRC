@@ -7,8 +7,8 @@
  * a URL, the matching shortcuts are injected into the tool result so the AI
  * knows how to interact efficiently without scrolling or hunting for DOM refs.
  *
- * The AI can also learn new shortcuts via save_site_shortcut() and they are
- * persisted for all future sessions.
+ * Users add or remove shortcuts through the Site Shortcuts API
+ * (/api/shortcuts); they are persisted for all future sessions.
  */
 
 import fs from 'fs';

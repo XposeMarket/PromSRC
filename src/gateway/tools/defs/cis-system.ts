@@ -37,7 +37,6 @@ export function getCisSystemTools(): any[] {
     runtime_admin: 'runtime diagnostics/restart',
     external_apps: 'connected app use',
     integration_admin: 'integration setup',
-    social_intelligence: 'social analysis',
     proposal_admin: 'pending proposals',
     mcp_server_tools: 'connected MCP tools',
     composite_tools: 'saved composite tools',
@@ -288,23 +287,6 @@ export function getCisSystemTools(): any[] {
         },
       },
     },
-    // ── social_intel: social media intelligence tool (CIS Phase 3) ─────────────
-    {
-      type: 'function',
-      function: {
-        name: 'social_intel',
-        description: 'Analyze a social media profile for a given platform and handle. Returns structured metrics, engagement analysis, growth trajectory, and content recommendations. Results are persisted to entities/social/[platform].md.',
-        parameters: {
-          type: 'object',
-          required: ['platform', 'handle'],
-          properties: {
-            platform: { type: 'string', enum: ['instagram', 'tiktok', 'x', 'twitter', 'linkedin', 'facebook'], description: 'The social media platform to analyze' },
-            handle: { type: 'string', description: 'The username or handle to analyze (with or without @)' },
-            mode: { type: 'string', enum: ['full', 'quick'], description: 'Analysis depth: full (default) or quick summary' },
-          },
-        },
-      },
-    },
     // ── MCP / Integration Tools ───────────────────────────────────────────────
     {
       type: 'function',
@@ -324,27 +306,6 @@ export function getCisSystemTools(): any[] {
             kind: { type: 'string', enum: ['connector', 'mcp_preset', 'provider', 'integration'], description: 'For start: pin the catalog kind when IDs collide.' },
             metadata: { type: 'object' }, input: { type: 'object' },
           }, additionalProperties: false,
-        },
-      },
-    },
-    {
-      type: 'function',
-      function: {
-        name: 'webhook_manage',
-        description: 'Manage core and provider webhook settings without exposing stored secrets. Actions: get, set, set_provider, test.',
-        parameters: {
-          type: 'object',
-          required: ['action'],
-          properties: {
-            action: { type: 'string', description: 'Action: get | set | set_provider | test' },
-            enabled: { type: 'boolean', description: 'Enable/disable webhook endpoint (set action)' },
-            token: { type: 'string', description: 'Webhook auth token (set action)' },
-            path: { type: 'string', description: 'Webhook base path, e.g. /hooks (set action)' },
-            provider: { type: 'string', enum: ['github', 'stripe', 'slack'], description: 'Provider for set_provider or provider-specific test.' },
-            secret: { type: 'string', description: 'Provider signing secret for set_provider. Stored in the vault and never returned.' },
-            events: { type: 'object', description: 'Provider event-to-action map. Values: audit | wake | agent | ignore.' },
-            deliver: { type: 'boolean', description: 'Allow configured provider agent results to be delivered to Telegram. Default false.' },
-          },
         },
       },
     },
@@ -380,38 +341,6 @@ export function getCisSystemTools(): any[] {
     },
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     require('../../../extensions/plugin-import/plugin-ops').PLUGIN_OPS_TOOL_DEF,
-    {
-      type: 'function',
-      function: {
-        name: 'integration_quick_setup',
-        description: 'Quick integration presets for common MCP services. Actions: list_presets, setup.',
-        parameters: {
-          type: 'object',
-          required: ['action'],
-          properties: {
-            action: { type: 'string', description: 'Action: list_presets | setup' },
-            preset: { type: 'string', description: 'Preset id: supabase, github, windows, brave, postgres, sqlite, filesystem, memory' },
-            id: { type: 'string', description: 'Optional MCP server id override (defaults to preset)' },
-            name: { type: 'string', description: 'Optional MCP server name override' },
-            enabled: { type: 'boolean', description: 'Enable server config (default true)' },
-            connect: { type: 'boolean', description: 'Connect immediately after saving (default true)' },
-            project_ref: { type: 'string', description: 'Supabase project ref' },
-            read_only: { type: 'boolean', description: 'Supabase read-only mode (default true)' },
-            features: { type: 'array', items: { type: 'string' }, description: 'Supabase features list (e.g. database,docs)' },
-            mode: { type: 'string', description: 'Supabase mode: safe (read-only) or write' },
-            token: { type: 'string', description: 'Generic token field for presets that need one (e.g., GitHub token)' },
-            github_token: { type: 'string', description: 'GitHub personal access token or vault ref' },
-            brave_api_key: { type: 'string', description: 'Brave API key or vault ref' },
-            connection_string: { type: 'string', description: 'Postgres connection string' },
-            db_path: { type: 'string', description: 'SQLite database path' },
-            root_path: { type: 'string', description: 'Filesystem root path' },
-            windows_command: { type: 'string', description: 'Windows MCP command (default: uvx)' },
-            windows_package: { type: 'string', description: 'Windows MCP package/module for windows_command (default: windows-mcp)' },
-            windows_args: { type: 'array', items: { type: 'string' }, description: 'Extra args for windows MCP process' },
-          },
-        },
-      },
-    },
     // ── edit_proposal tool ────────────────────────────────────────
     {
       type: 'function',
@@ -608,141 +537,6 @@ export function getCisSystemTools(): any[] {
             agent_id: {
               type: 'string',
               description: 'Specific configured agent ID to update instead of a type-level default.',
-            },
-          },
-        },
-      },
-    },
-    {
-      type: 'function',
-      function: {
-        name: 'list_agent_model_templates',
-        description:
-          'List saved named agent model default templates, the active template id, and current agent_model_defaults. ' +
-          'Use this before applying, modifying, or removing a saved model routing template.',
-        parameters: {
-          type: 'object',
-          required: [],
-          properties: {},
-        },
-      },
-    },
-    {
-      type: 'function',
-      function: {
-        name: 'save_agent_model_template',
-        description:
-          'Create or update a named template snapshot for agent model and reasoning defaults. ' +
-          'If defaults is omitted, the current live defaults are saved. Use id or an existing name to modify a saved template. ' +
-          'This only saves the template; use select_agent_model_template/apply_agent_model_template to make it live.',
-        parameters: {
-          type: 'object',
-          required: ['name'],
-          properties: {
-            id: {
-              type: 'string',
-              description: 'Optional template id to update.',
-            },
-            name: {
-              type: 'string',
-              description: 'Custom template name, e.g. "Default 1" or "Research-heavy".',
-            },
-            defaults: {
-              type: 'object',
-              description: 'Optional full agent_model_defaults map to save. Values use "provider/model"; omit to snapshot current defaults.',
-              additionalProperties: { type: 'string' },
-            },
-            reasoning: {
-              type: 'object',
-              description: 'Optional per-slot reasoning effort map keyed like defaults.',
-              additionalProperties: { type: 'string' },
-            },
-          },
-        },
-      },
-    },
-    {
-      type: 'function',
-      function: {
-        name: 'update_agent_model_template',
-        description:
-          'Modify an existing agent model default template by id or exact name without applying it. ' +
-          'Use this to rename a template or replace its saved model/reasoning defaults without applying it.',
-        parameters: {
-          type: 'object',
-          required: ['id'],
-          properties: {
-            id: {
-              type: 'string',
-              description: 'Template id or exact template name to modify.',
-            },
-            name: {
-              type: 'string',
-              description: 'Optional new template display name.',
-            },
-            defaults: {
-              type: 'object',
-              description: 'Optional replacement agent_model_defaults map. Values use "provider/model"; omit to rename only.',
-              additionalProperties: { type: 'string' },
-            },
-            reasoning: {
-              type: 'object',
-              description: 'Optional replacement per-slot reasoning effort map.',
-              additionalProperties: { type: 'string' },
-            },
-          },
-        },
-      },
-    },
-    {
-      type: 'function',
-      function: {
-        name: 'apply_agent_model_template',
-        description:
-          'Apply a saved agent model default template by id or exact name. This replaces current agent_model_defaults and persists through gateway restarts.',
-        parameters: {
-          type: 'object',
-          required: ['id'],
-          properties: {
-            id: {
-              type: 'string',
-              description: 'Template id or exact template name.',
-            },
-          },
-        },
-      },
-    },
-    {
-      type: 'function',
-      function: {
-        name: 'select_agent_model_template',
-        description:
-          'Select and apply a saved agent model default template by id or exact name. Alias for apply_agent_model_template, named for on-the-fly template switching.',
-        parameters: {
-          type: 'object',
-          required: ['id'],
-          properties: {
-            id: {
-              type: 'string',
-              description: 'Template id or exact template name.',
-            },
-          },
-        },
-      },
-    },
-    {
-      type: 'function',
-      function: {
-        name: 'delete_agent_model_template',
-        description:
-          'Remove a saved agent model default template by id or exact name. This does not change the currently applied agent_model_defaults.',
-        parameters: {
-          type: 'object',
-          required: ['id'],
-          properties: {
-            id: {
-              type: 'string',
-              description: 'Template id or exact template name.',
             },
           },
         },

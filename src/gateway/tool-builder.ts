@@ -130,7 +130,6 @@ const TOOL_CATEGORY_ALIASES: Record<string, ToolCategory> = {
   external_apps: 'external_apps',
   integrations: 'integration_admin',
   integration_admin: 'integration_admin',
-  social_intelligence: 'social_intelligence',
   proposal_admin: 'proposal_admin',
   mcp: 'mcp_server_tools',
   mcp_server_tools: 'mcp_server_tools',
@@ -376,7 +375,6 @@ const AUTOMATION_TOOL_NAMES = new Set([
   'prometheus_audit_ops',
   // Advanced automation management/diagnostics and managed Prometheus sessions.
   'task_control',
-  'run_task_now',
   'internal_watch',
   'trigger_ops',
 ]);
@@ -406,18 +404,13 @@ const RUNTIME_ADMIN_TOOL_NAMES = new Set([
   'gateway_restart',
 ]);
 
-// Agent fleet / model template administration — switch_model and
-// set_current_model remain core for everyday model switching.
+// Agent fleet model defaults and saved provider accounts — switch_model and
+// set_current_model remain core for everyday model switching. Agent model
+// templates are managed in Settings (/api/settings/agent-model-default-templates).
 const MODEL_MANAGEMENT_TOOL_NAMES = new Set([
   'get_agent_models',
   'set_agent_model',
   'provider_accounts',
-  'list_agent_model_templates',
-  'save_agent_model_template',
-  'update_agent_model_template',
-  'apply_agent_model_template',
-  'select_agent_model_template',
-  'delete_agent_model_template',
 ]);
 
 // Business entity lifecycle administration and the BUSINESS.md context switch.
@@ -961,10 +954,8 @@ const SCHEMA_HIDDEN_COMPAT_TOOL_NAMES = new Set([
 ]);
 
 const INTEGRATION_ADMIN_TOOL_NAMES = new Set([
-  'secure_access', 'connection_ops', 'mcp_server_manage', 'webhook_manage', 'integration_quick_setup', 'plugin_ops',
+  'secure_access', 'connection_ops', 'mcp_server_manage', 'plugin_ops',
 ]);
-
-const SOCIAL_INTELLIGENCE_TOOL_NAMES = new Set(['social_intel']);
 
 const PROPOSAL_ADMIN_TOOL_NAMES = new Set(['edit_proposal', 'write_proposal']);
 
@@ -998,7 +989,6 @@ export function getLegacyToolCategory(name: string): InternalToolCategory | null
   if (name === 'delivery_send' || name === 'delivery_send_screenshot') return null;
   if (name === 'generate_image' || name === 'generate_video') return null;
   if (CORE_CREATIVE_CONTROL_TOOL_NAMES.has(name)) return getCreativeToolCategory(name);
-  if (name === 'save_site_shortcut') return 'browser_automation';
   if (name === 'inspect_console' || name === 'run_accessibility_check' || name === 'browser_smoke_test') return 'browser_automation';
   if (name.startsWith('browser_')) return 'browser_automation';
   if (name.startsWith('desktop_')) return 'desktop_automation';
@@ -1030,7 +1020,6 @@ export function getLegacyToolCategory(name: string): InternalToolCategory | null
   if (name.startsWith('creative_')) return getCreativeToolCategory(name);
   if (name === 'video_compose') return 'creative_video';
   if (INTEGRATION_ADMIN_TOOL_NAMES.has(name)) return 'integration_admin';
-  if (SOCIAL_INTELLIGENCE_TOOL_NAMES.has(name)) return 'social_intelligence';
   if (PROPOSAL_ADMIN_TOOL_NAMES.has(name)) return 'proposal_admin';
   if (COMPOSITE_MANAGEMENT_TOOL_NAMES.has(name) || isSavedCompositeToolName(name)) return 'composite_tools';
   return null; // null = core tool, always included

@@ -9,16 +9,13 @@ import { executeCloneRepo } from '../../../tools/repo-tools';
 import { executeAnalyzeImage, executeAnalyzeVideo } from '../../../tools/media-analysis';
 import { executeGenerateImage } from '../../../tools/generate-image';
 import { executeGenerateVideo } from '../../../tools/generate-video';
-import { socialIntelTool } from '../../../tools/social-scraper.js';
 import { addCreativeReferences, getCreativeReferences } from '../../session';
-import { saveSiteShortcut } from '../../site-shortcuts';
 import { buildGeneratedImageVisionEvent } from '../../generated-image-preview';
 import type { CapabilityExecutionContext, CapabilityExecutor } from './types';
 import type { ToolResult } from '../../tool-builder';
 
 const WEB_MEDIA_TOOL_NAMES = new Set([
   'chatgpt_sandbox',
-  'social_intel',
   'web_search',
   'web_search_single',
   'web_search_multi',
@@ -35,7 +32,6 @@ const WEB_MEDIA_TOOL_NAMES = new Set([
   'analyze_image',
   'analyze_video',
   'video_analyze_imported_video',
-  'save_site_shortcut',
 ]);
 
 export function normalizeWebFetchBatchUrls(raw: unknown): string[] {
@@ -141,12 +137,6 @@ export const webMediaCapabilityExecutor: CapabilityExecutor = {
         const out = await executeChatGPTSandbox(args, { abortSignal: (deps as any)?.abortSignal });
         return { name, args, result: out.result, error: out.error };
       }
-      case 'social_intel': {
-        const tr = await socialIntelTool.execute(args) as any;
-        const resultStr = tr?.stdout ?? tr?.error ?? JSON.stringify(tr);
-        return { name, args, result: resultStr, error: tr?.success === false };
-      }
-
       case 'web_search': {
         const result = await webSearch(args.query || (Array.isArray(args.queries) ? String(args.queries[0] || '') : ''), {
           queries: Array.isArray(args.queries) ? args.queries.map((q: unknown) => String(q || '')) : undefined,
@@ -531,31 +521,6 @@ export const webMediaCapabilityExecutor: CapabilityExecutor = {
           error: toolResult.success !== true,
           data: toolResult.success === true ? toolResult.data : undefined,
         };
-      }
-
-      case 'save_site_shortcut': {
-        const shortcutHostname = String(args.hostname || '').trim();
-        const shortcutKey = String(args.key || '').trim();
-        const shortcutAction = String(args.action || '').trim();
-        if (!shortcutHostname || !shortcutKey || !shortcutAction) {
-          return { name, args, result: 'save_site_shortcut: hostname, key, and action are required', error: true };
-        }
-        try {
-          saveSiteShortcut(
-            shortcutHostname,
-            {
-              key: shortcutKey,
-              action: shortcutAction,
-              context: args.context ? String(args.context) : undefined,
-              preferred_for_compose: args.preferred_for_compose === true,
-            },
-            undefined,
-            args.notes ? String(args.notes) : undefined,
-          );
-          return { name, args, result: `Shortcut saved: ${shortcutHostname} - "${shortcutKey}" -> ${shortcutAction}`, error: false };
-        } catch (err: any) {
-          return { name, args, result: `save_site_shortcut failed: ${err.message}`, error: true };
-        }
       }
 
       default:

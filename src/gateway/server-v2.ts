@@ -246,7 +246,6 @@ import {
 
 // ─── CIS: Tool dependency injection (A2 + A5) ────────────────────────────────
 import { injectAnalysisTeamDeps } from '../tools/deploy-analysis-team';
-import { injectSocialScraperDeps } from '../tools/social-scraper';
 import { setNotifyBroadcastFn } from './teams/notify-bridge';
 
 // ─── Config ────────────────────────────────────────────────────────────────────
@@ -844,7 +843,6 @@ startupMark('recovery-aware timers constructed');
 
 // ─── A2 + A5: CIS tool dependency injection ────────────────────────────────
 injectAnalysisTeamDeps({ workspacePath: getConfig().getWorkspacePath(), broadcast: broadcastWS });
-injectSocialScraperDeps({ workspacePath: getConfig().getWorkspacePath(), broadcast: broadcastWS });
 startupMark('tool deps injected');
 
 // ─── Jarvis Fix #1: Wire live push so team events arrive without user prompting ─

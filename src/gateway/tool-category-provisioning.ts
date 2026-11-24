@@ -28,7 +28,6 @@ export const TOOL_CATEGORY_REPRESENTATIVE_TOOLS: Readonly<Partial<Record<ToolCat
   runtime_admin: ['diagnostic_packet'],
   external_apps: ['x_search_ops'],
   integration_admin: ['connection_ops'],
-  social_intelligence: ['social_intel'],
   proposal_admin: ['write_proposal'],
   composite_tools: ['list_composites'],
   // switch_creative_mode is an action on the creative_project wrapper now; the

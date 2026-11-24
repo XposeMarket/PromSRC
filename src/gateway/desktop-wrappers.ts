@@ -2,7 +2,7 @@
  * Canonical model-facing desktop wrapper contract.
  *
  * Prometheus keeps granular desktop_* handlers for compatibility, macros, and
- * internal dispatch, but models should see only the six wrappers defined here.
+ * internal dispatch, but models should see only the five wrappers defined here.
  * Keep schemas, wrapper normalization, and public-name discovery in this file
  * so the main gateway, Reactor, voice adapters, and tests cannot drift.
  */
@@ -12,7 +12,6 @@ export const DESKTOP_WRAPPER_TOOL_NAMES = [
   'desktop_apps',
   'desktop_window',
   'desktop_input',
-  'desktop_macro',
   'desktop_background',
 ] as const;
 
@@ -87,12 +86,6 @@ export const DESKTOP_WRAPPER_ACTION_MAP: Record<DesktopWrapperToolName, Record<s
     get_clipboard: 'desktop_get_clipboard',
     clipboard_set: 'desktop_set_clipboard',
     set_clipboard: 'desktop_set_clipboard',
-  },
-  desktop_macro: {
-    record: 'desktop_record_macro',
-    stop: 'desktop_stop_macro',
-    replay: 'desktop_replay_macro',
-    list: 'desktop_list_macros',
   },
   desktop_background: {
     status: 'desktop_background_status',
@@ -211,7 +204,7 @@ const windowSelectorProperties = {
   title: { type: 'string', description: 'Partial window title/process name; least precise selector.' },
 };
 
-/** The only six desktop schemas that should be presented to general models. */
+/** The only five desktop schemas that should be presented to general models. */
 export function getDesktopWrapperToolDefinitions(): any[] {
   return [
     {
@@ -388,23 +381,6 @@ export function getDesktopWrapperToolDefinitions(): any[] {
             tail: { type: 'integer', description: 'Clipboard get only: select the last N characters before max_chars.' },
             metadata_only: { type: 'boolean', description: 'Clipboard get only: return presence and length without content.' },
             include_length: { type: 'boolean', description: 'Clipboard get only: include total character count. Defaults true.' },
-          },
-          additionalProperties: false,
-        },
-      },
-    },
-    {
-      type: 'function',
-      function: {
-        name: 'desktop_macro',
-        description: 'Unified desktop macro wrapper for recording, stopping, replaying, and listing saved host-desktop macros.',
-        parameters: {
-          type: 'object',
-          required: ['action'],
-          properties: {
-            action: { type: 'string', enum: ['record', 'stop', 'replay', 'list'] },
-            name: { type: 'string' },
-            speed_multiplier: { type: 'number' },
           },
           additionalProperties: false,
         },

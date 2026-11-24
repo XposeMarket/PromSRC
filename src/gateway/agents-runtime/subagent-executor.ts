@@ -133,7 +133,6 @@ import '../tasks/spawn-tool-categories-arg';
 import './background-work-dir';
 import '../site-shortcuts';
 import '../../tools/deploy-analysis-team.js';
-import '../../tools/social-scraper.js';
 import { type ToolResult, type TaskControlResponse } from '../tool-builder';
 import { addCreativeReferences, getCanvasProjectRoot, getCreativeReferences, noteToolCategoryUse } from '../session';
 import { classifyToolFromManifest } from '../../runtime/tool-category-manifest';
@@ -3476,7 +3475,6 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
         case 'read_entity':
         case 'write_entity':
         case 'append_entity_event':
-        case 'social_intel':
         return await handleMiscTool({ ...workspaceHelpers, name, args, workspacePath, deps, sessionId, __dirname });
 
       case 'web_search':
@@ -3678,9 +3676,6 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
         case 'memory_read_record':
         case 'write_note':
         return await handleMemoryTool({ ...workspaceHelpers, name, args, workspacePath, deps, sessionId, __dirname });
-
-      case 'save_site_shortcut':
-        return await handleMiscTool({ ...workspaceHelpers, name, args, workspacePath, deps, sessionId, __dirname });
 
       case 'architect_workflow':
       case 'verify_workflow_credentials':

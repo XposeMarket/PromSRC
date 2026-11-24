@@ -22,8 +22,7 @@ import { buildConnectorStatus } from '../../tool-builder';
 import { readRawToolResultRange } from '../../tool-result-envelope';
 import { ensurePrometheusExtensionRuntimeLoaded } from '../../../extensions/extension-bootstrap';
 import { getExtensionRuntimeRegistry } from '../../../extensions/runtime-registry';
-import { appendJournal, createTask, listTaskSummaries, saveTask, setTaskStepRunning, updateTaskStatus } from '../../tasks/task-store';
-import { bindTaskRunToSession } from '../../tasks/task-run-mirror';
+import { appendJournal, listTaskSummaries, saveTask, updateTaskStatus } from '../../tasks/task-store';
 import { getApprovalQueue, serializeApprovalForClient } from '../../verification-flow.js';
 import { createPrometheusQuestionPayload, getPrometheusQuestionQueue, serializePrometheusQuestionForClient, type PrometheusQuestionAnswer } from '../../prometheus-questions.js';
 import { createDevSourceEditApprovalScope, shouldAutoApproveScopedDevSourceEdit, type DevSourceEditScope, getDevSourceEditContinuation, isCompletedDevSourceEditApply, grantDevSourceEditApproval, getLatestPendingDevSourceEditContinuation, getDevSourceEditGrant, markDevSourceEditContinuationComplete, upsertDevSourceEditContinuation } from '../../dev-source-approvals.js';
@@ -81,7 +80,6 @@ export async function handleDefaultTool(ctx: DefaultToolContext): Promise<Awaite
           }
         }
 
-        // ── run_task_now ──────────────────────────────────────
         if (name === 'message_subagent') {
           const agentId = String(args.agent_id || '').trim();
           const assignment = String(args.assignment || args.message || '').trim();
@@ -160,79 +158,6 @@ export async function handleDefaultTool(ctx: DefaultToolContext): Promise<Awaite
             };
           } catch (err: any) {
             return { name, args, result: `message_subagent error: ${err.message}`, error: true };
-          }
-        }
-
-        if (name === 'run_task_now') {
-          const title = String(args.title || '').trim();
-          const prompt = String(args.prompt || '').trim();
-          if (!title) return { name, args, result: 'run_task_now requires title', error: true };
-          if (!prompt) return { name, args, result: 'run_task_now requires prompt', error: true };
-
-          const subagentId = args.subagent_id ? String(args.subagent_id).trim() : undefined;
-
-          try {
-            const existingBinding = resolveTaskForSession(sessionId);
-            if (existingBinding?.status === 'running' || existingBinding?.status === 'queued') {
-              return {
-                name,
-                args,
-                result: JSON.stringify({
-                  task_id: existingBinding.id,
-                  status: existingBinding.status,
-                  message: `This chat turn is already tracking task "${existingBinding.title}" (${existingBinding.id}). Continue executing the current tracked work here.`,
-                }),
-                error: false,
-              };
-            }
-
-            const task = createTask({
-              title,
-              prompt,
-              sessionId,
-              channel: String(sessionId || '').startsWith('telegram_') ? 'telegram' : 'web',
-              taskKind: 'run_once',
-              originatingSessionId: sessionId,
-              subagentProfile: subagentId,
-              plan: [{
-                index: 0,
-                description: prompt.slice(0, 160) || title,
-                status: 'pending',
-              }],
-            });
-            updateTaskStatus(task.id, 'running');
-            setTaskStepRunning(task.id, 0);
-            appendJournal(task.id, {
-              type: 'status_push',
-              content: `Live tracked task started from chat: ${title}`,
-            });
-            bindTaskRunToSession(sessionId, {
-              taskId: task.id,
-              source: 'run_task_now',
-              agentId: subagentId,
-            });
-            try {
-              deps.broadcastWS({ type: 'task_running', taskId: task.id, title, source: 'run_task_now', sessionId });
-              deps.broadcastWS({ type: 'task_panel_update', taskId: task.id });
-            } catch {}
-            try {
-              deps.sendSSE?.('info', { message: `Task card "${title}" started. Continuing this work live in chat.` });
-            } catch {}
-            return {
-              name,
-              args,
-              result: JSON.stringify({
-                task_id: task.id,
-                status: 'running',
-                message:
-                  `Task card "${title}" started (${task.id}) and is now tracking this live chat turn. ` +
-                  `Do not wait for a background runner. Continue executing the prompt now in this same conversation, using tools as needed. ` +
-                  `Task prompt: ${prompt}`,
-              }),
-              error: false,
-            };
-          } catch (err: any) {
-            return { name, args, result: `run_task_now error: ${err?.message || err}`, error: true };
           }
         }
 
@@ -1168,82 +1093,6 @@ export async function handleDefaultTool(ctx: DefaultToolContext): Promise<Awaite
             return { name, args, result: JSON.stringify(result, null, 2), error: false };
           } catch (err: any) {
             return { name, args, result: `get_agent_models error: ${err.message}`, error: true };
-          }
-        }
-
-        // ── gateway_restart: quick graceful restart ─────────────────────────
-        if (
-          name === 'list_agent_model_templates' ||
-          name === 'save_agent_model_template' ||
-          name === 'update_agent_model_template' ||
-          name === 'apply_agent_model_template' ||
-          name === 'select_agent_model_template' ||
-          name === 'delete_agent_model_template'
-        ) {
-          const { getConfig: _gc3 } = require('../../../config/config');
-          const _cfg3 = _gc3().getConfig() as any;
-          const gatewayPort = Number(_cfg3?.gateway?.port) || 18789;
-          const configuredHost = String(_cfg3?.gateway?.host || '127.0.0.1');
-          const gatewayHost = (configuredHost === '0.0.0.0' || configuredHost === '::') ? '127.0.0.1' : configuredHost;
-          const baseUrl = `http://${gatewayHost}:${gatewayPort}/api/settings/agent-model-default-templates`;
-
-          try {
-            if (name === 'list_agent_model_templates') {
-              const resp = await fetch(baseUrl);
-              const data = await resp.json() as any;
-              if (!data?.success) return { name, args, result: `ERROR: ${data?.error || 'Failed to list templates'}`, error: true };
-              return { name, args, result: JSON.stringify(data, null, 2), error: false };
-            }
-
-            if (name === 'save_agent_model_template') {
-              const templateName = String(args?.name || '').trim();
-              if (!templateName) return { name, args, result: 'ERROR: name is required.', error: true };
-              const body: any = { name: templateName };
-              if (args?.id) body.id = String(args.id).trim();
-              if (args?.defaults && typeof args.defaults === 'object') body.defaults = args.defaults;
-              if (args?.reasoning && typeof args.reasoning === 'object') body.reasoning = args.reasoning;
-              const resp = await fetch(baseUrl, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(body),
-              });
-              const data = await resp.json() as any;
-              if (!data?.success) return { name, args, result: `ERROR: ${data?.error || 'Failed to save template'}`, error: true };
-              return { name, args, result: `Saved agent model template "${data.template?.name || templateName}" (${data.template?.id || 'new'}).`, error: false };
-            }
-
-            const id = String(args?.id || args?.name || '').trim();
-            if (!id) return { name, args, result: 'ERROR: id or name is required.', error: true };
-
-            if (name === 'update_agent_model_template') {
-              const body: any = {};
-              if (typeof args?.name === 'string' && args.name.trim()) body.name = args.name.trim();
-              if (args?.defaults && typeof args.defaults === 'object') body.defaults = args.defaults;
-              if (args?.reasoning && typeof args.reasoning === 'object') body.reasoning = args.reasoning;
-              if (!Object.keys(body).length) return { name, args, result: 'ERROR: provide name, defaults, and/or reasoning to update.', error: true };
-              const resp = await fetch(`${baseUrl}/${encodeURIComponent(id)}`, {
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(body),
-              });
-              const data = await resp.json() as any;
-              if (!data?.success) return { name, args, result: `ERROR: ${data?.error || 'Failed to update template'}`, error: true };
-              return { name, args, result: `Updated agent model template "${data.template?.name || id}" (${data.template?.id || id}).`, error: false };
-            }
-
-            if (name === 'apply_agent_model_template' || name === 'select_agent_model_template') {
-              const resp = await fetch(`${baseUrl}/${encodeURIComponent(id)}/apply`, { method: 'POST' });
-              const data = await resp.json() as any;
-              if (!data?.success) return { name, args, result: `ERROR: ${data?.error || 'Failed to apply template'}`, error: true };
-              return { name, args, result: `Selected and applied agent model template "${data.template?.name || id}". Current defaults: ${JSON.stringify(data.defaults || {}, null, 2)}`, error: false };
-            }
-
-            const resp = await fetch(`${baseUrl}/${encodeURIComponent(id)}`, { method: 'DELETE' });
-            const data = await resp.json() as any;
-            if (!data?.success) return { name, args, result: `ERROR: ${data?.error || 'Failed to delete template'}`, error: true };
-            return { name, args, result: `Deleted agent model template "${data.removed?.name || id}".`, error: false };
-          } catch (err: any) {
-            return { name, args, result: `${name} error: ${err.message}`, error: true };
           }
         }
 

@@ -2370,24 +2370,6 @@ export function getFileWebMemoryTools(): any[] {
         },
       },
     },
-    {
-      type: 'function',
-      function: {
-        name: 'save_site_shortcut',
-        description: 'Save a keyboard shortcut for a website so Prometheus remembers it for all future sessions. Call this when you discover that a keyboard shortcut works on a site. Example: after pressing "n" successfully opens the X.com composer, save it.',
-        parameters: {
-          type: 'object', required: ['hostname', 'key', 'action'],
-          properties: {
-            hostname: { type: 'string', description: 'Domain name only, e.g. "x.com", "github.com"' },
-            key: { type: 'string', description: 'The key or combination, e.g. "n", "Control+p", "g i"' },
-            action: { type: 'string', description: 'What the shortcut does, e.g. "Open tweet composer modal"' },
-            context: { type: 'string', description: 'Optional: which page this applies on, e.g. "any page", "feed only"' },
-            preferred_for_compose: { type: 'boolean', description: 'True if this shortcut is the best way to start composing/creating content' },
-            notes: { type: 'string', description: 'Optional notes about how to use this shortcut' },
-          },
-        },
-      },
-    },
   ];
   return filterPublicBuildToolDefs(tools);
 }
