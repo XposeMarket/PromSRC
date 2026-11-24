@@ -64,7 +64,7 @@ export const MAX_PAGE = 32;
 type DotsAuth = (options: { force: boolean }) => Promise<{ accessToken: string; accountId: string }>;
 let authForTests: DotsAuth | null = null;
 /** Tests only: replace the OpenAI sign-in with a fixture token. */
-export function setDotsAuthForTests(fn: DotsAuth | null): void { authForTests = fn; lastForcedRefreshAt = 0; forcedRefresh = null; }
+export function setDotsAuthForTests(fn: DotsAuth | null): void { authForTests = fn; lastForcedRefreshAt = 0; forcedRefresh = null; lastRefreshError = null; }
 
 /** Cheap: is there an OpenAI (Codex) sign-in with a ChatGPT account? Never returns the token. */
 export function hasOpenAISignIn(): boolean {
@@ -77,6 +77,8 @@ const FORCED_REFRESH_GAP_MS = 60_000;
 let lastForcedRefreshAt = 0;
 /** The forced refresh in progress. Every request rejected meanwhile waits for it instead of giving up. */
 let forcedRefresh: Promise<void> | null = null;
+/** How the last forced refresh ended: null = it worked (or none yet). */
+let lastRefreshError: DotsApiError | null = null;
 
 /** Refresh failures that mean the sign-in is gone, not that the network blinked. */
 function signInGone(error: unknown): boolean {
@@ -107,15 +109,25 @@ async function authHeaders(json: boolean): Promise<Record<string, string>> {
  */
 function refreshAfterRejection(): Promise<void> {
   if (forcedRefresh) return forcedRefresh;
-  if (Date.now() - lastForcedRefreshAt < FORCED_REFRESH_GAP_MS) return Promise.resolve();
+  const sinceLast = Date.now() - lastForcedRefreshAt;
+  if (sinceLast < FORCED_REFRESH_GAP_MS) {
+    // The last refresh succeeded: retry with the token it saved. It failed: report the same outcome
+    // instead of judging the sign-in with a token nobody could validate (a temporary failure stays temporary).
+    if (!lastRefreshError) return Promise.resolve();
+    const { message, status, auth } = lastRefreshError;
+    return Promise.reject(new DotsApiError(message, status, auth ? 0 : FORCED_REFRESH_GAP_MS - sinceLast, auth));
+  }
   lastForcedRefreshAt = Date.now();
   forcedRefresh = (async () => {
-    if (authForTests) { await authForTests({ force: true }); return; }
     try {
-      await refreshTokens(getConfig().getConfigDir(), undefined);
+      if (authForTests) await authForTests({ force: true });
+      else await refreshTokens(getConfig().getConfigDir(), undefined);
+      lastRefreshError = null;
     } catch (error: any) {
-      if (signInGone(error)) throw new DotsApiError('The OpenAI sign-in has expired. Sign in again in Settings > Models.', 401, 0, true);
-      throw new DotsApiError(`Couldn't refresh the OpenAI sign-in: ${String(error?.message || error).slice(0, 120)}`);
+      lastRefreshError = signInGone(error)
+        ? new DotsApiError('The OpenAI sign-in has expired. Sign in again in Settings > Models.', 401, 0, true)
+        : new DotsApiError(`Couldn't refresh the OpenAI sign-in: ${String(error?.message || error).slice(0, 120)}`);
+      throw lastRefreshError;
     }
   })().finally(() => { forcedRefresh = null; });
   return forcedRefresh;

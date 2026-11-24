@@ -22,6 +22,8 @@ const sends: any[] = [];
 /** Fault switches for the fake backend. */
 const flags = { dropPostAnswer: false, getStatus: 0, postStatus: 0, rejectOnce: 0, edgeBlock: false, htmlRejectStatus: 0, htmlRejectCount: 0 };
 let forcedRefreshes = 0;
+/** The forced refresh fails like a dropped connection would. */
+let refreshFails = false;
 /** Fake message times sit in the recent past of the real clock, as real ones do. */
 const T0 = Date.now() - 6 * 60 * 60_000;
 function msg(author: string, text: string, extra: any = {}) {
@@ -90,7 +92,10 @@ room.push(msg('user-raul', 'thanks'));
   assert.equal((await adapter.verify()).status, 'signed_out');
   assert.deepEqual(await sync.syncAllDots(true), { dots: 0, added: 0, sessions: [] });
 
-  const fixtureAuth = async ({ force }: { force: boolean }) => { if (force) forcedRefreshes += 1; return { accessToken: 'fixture-token', accountId: 'acct-fixture' }; };
+  const fixtureAuth = async ({ force }: { force: boolean }) => {
+    if (force) { forcedRefreshes += 1; if (refreshFails) throw new Error('fetch failed'); }
+    return { accessToken: 'fixture-token', accountId: 'acct-fixture' };
+  };
   api.setDotsAuthForTests(fixtureAuth);
   registry.setExternalAgentAdapterForTests(adapter, 'openai-dots');
   const snap = await registry.enableExternalAgent('openai-dots');
@@ -325,6 +330,18 @@ room.push(msg('user-raul', 'thanks'));
     await assert.rejects(api.listRoomMessages(ROOM, 5), (error: any) => api.isDotsAuthError(error), `a repeated HTML ${status} is a rejected sign-in`);
     flags.htmlRejectCount = 0;
   }
+  // The refresh itself fails for a moment: that request and the next one inside the cooldown are
+  // temporary failures, never a rejected sign-in, and the refresh is not hammered.
+  api.setDotsAuthForTests(fixtureAuth);
+  refreshFails = true;
+  const refreshesBeforeFail = forcedRefreshes;
+  for (let i = 0; i < 2; i += 1) {
+    flags.rejectOnce = 1;
+    await assert.rejects(api.listRoomMessages(ROOM, 5), (error: any) => error instanceof api.DotsApiError && !api.isDotsAuthError(error), `a failed refresh is temporary (request ${i + 1})`);
+    flags.rejectOnce = 0;
+  }
+  assert.equal(forcedRefreshes, refreshesBeforeFail + 1, 'one refresh attempt inside the cooldown');
+  refreshFails = false;
   api.setDotsAuthForTests(fixtureAuth);
   const forcedBeforeEdge = forcedRefreshes;
 
