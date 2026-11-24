@@ -26,6 +26,21 @@ try {
   assert.equal(await dialog.getByText('Open in Canvas').count(),0);
   await dialog.locator('img').evaluate(el=>el.decode());
   const shot=mobile?process.env.PREVIEW_SCREENSHOT:process.env.DESKTOP_SCREENSHOT;if(shot) await page.screenshot({path:shot});
+  if(mobile){
+    const photo=dialog.locator('img'), stage=dialog.locator('.pc-lb-viewport');
+    const r=await stage.boundingBox(), cx=r.x+r.width/2, cy=r.y+r.height/2;
+    const cdp=await page.context().newCDPSession(page);
+    const touch=(type,...offsets)=>cdp.send('Input.dispatchTouchEvent',{type,touchPoints:offsets.map((dx,id)=>({id,x:cx+dx,y:cy}))});
+    const matrix=()=>photo.evaluate(el=>{const m=new DOMMatrix(getComputedStyle(el).transform==='none'?'':getComputedStyle(el).transform);return [m.a,m.e]});
+    await touch('touchStart',-18,18);await touch('touchMove',-65,65);await touch('touchEnd');
+    assert.ok((await matrix())[0]>3,'photo enlarged');assert.equal(await page.evaluate(()=>visualViewport.scale),1,'not page zoom');
+    await touch('touchStart',-70);await touch('touchMove',70);await touch('touchEnd');
+    assert.ok((await matrix())[1]>30,'photo pans');assert.equal(await photo.getAttribute('alt'),'High tide');
+    if(process.env.ZOOM_SCREENSHOT)await page.screenshot({path:process.env.ZOOM_SCREENSHOT});
+    await dialog.getByLabel('Next',{exact:true}).tap();assert.deepEqual(await matrix(),[1,0],'new slide fits');await dialog.getByLabel('Previous',{exact:true}).tap();
+    await touch('touchStart',-25,25);await touch('touchMove',-75,75);await touch('touchMove',-12,12);await touch('touchEnd');
+    assert.deepEqual(await matrix(),[1,0],'pinch back to fit');await cdp.detach();
+  }
   if(mobile){const rect=await dialog.locator('img').boundingBox();const cdp=await page.context().newCDPSession(page);for(const [type,pos] of [['touchStart',.79],['touchMove',.62],['touchMove',.42],['touchMove',.22],['touchEnd',null]]) await cdp.send('Input.dispatchTouchEvent',{type,touchPoints:pos===null?[]:[{x:rect.x+rect.width*pos,y:rect.y+rect.height*.6}]});}else await page.keyboard.press('ArrowRight');
   assert.equal(await dialog.locator('img').getAttribute('alt'),'Dusk');await dialog.getByLabel('Next',{exact:true}).click();assert.equal(await dialog.locator('img').getAttribute('alt'),'Dawn');await dialog.getByLabel('Previous',{exact:true}).click();assert.equal(await dialog.locator('img').getAttribute('alt'),'Dusk');
   await dialog.getByLabel('Close').click();assert.equal(await scroll(),before);
