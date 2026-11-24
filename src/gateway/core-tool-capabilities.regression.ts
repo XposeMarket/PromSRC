@@ -56,11 +56,11 @@ assert.equal(tierOf('tool_call'), 'commit', 'tool_call is gated on the inner too
 const metaOf = (name: string, args: Record<string, any> = {}) => resolveToolCapabilityMetadata(name, undefined, args);
 for (const [name, args] of [
   ['task_control', { action: 'list' }], ['task_control', { action: 'get', task_id: 't' }], ['task_control', { action: 'list_approvals' }],
-  ['prometheus_thread_ops', { action: 'read', session_id: 's' }], ['prometheus_thread_ops', { action: 'supervision_wait' }],
+  ['prometheus_thread_ops', { action: 'read', session_id: 's' }], ['prometheus_thread_ops', { action: 'status' }],
   ['prometheus_thread_ops', { action: 'LIST_PROJECTS' }], ['agent_run_ops', { action: 'list' }], ['agent_run_ops', { action: 'get', task_id: 't' }],
-  ['internal_watch', { action: 'list' }], ['schedule_job_patch', { action: 'preview', job_id: 'j' }], ['schedule_job_patch', { job_id: 'j' }],
+  ['schedule_job_patch', { action: 'preview', job_id: 'j' }], ['schedule_job_patch', { job_id: 'j' }], ['schedule_job_patch', { action: '', job_id: 'j' }],
   ['prometheus_request_ops', { action: 'recovery_candidates' }], ['prometheus_audit_ops', { action: 'skill_routing_stats' }],
-  ['team_manage', { action: 'list' }], ['team_manage', { team_action: 'list' }], ['team_escalation', { escalation_action: 'list' }],
+  ['team_manage', { action: 'list' }], ['team_escalation', { escalation_action: 'list' }],
   ['browser_intercept_network', { action: 'read' }], ['connection_ops', { action: 'status' }], ['mcp_server_manage', { action: 'list_tools' }],
   ['secure_access', { action: 'list' }], ['webhook_manage', { action: 'get' }], ['integration_quick_setup', { action: 'list_presets' }],
   ['request_final_action_approval', {}], ['get_composite', {}], ['run_accessibility_check', {}], ['creative_measure_text', {}],
@@ -74,7 +74,11 @@ for (const [name, args] of [
   ['task_control', { action: 'steer' }], ['task_control', { action: 'pause' }], ['prometheus_thread_ops', { action: 'send' }],
   ['prometheus_thread_ops', { action: 'create_and_supervise' }], ['agent_run_ops', { action: 'rerun' }], ['internal_watch', { action: 'create' }],
   ['prometheus_request_ops', { action: 'recover' }], ['prometheus_audit_ops', { action: 'context_receipt_configure' }],
-  ['team_escalation', { action: 'dismiss' }], ['browser_intercept_network', { action: 'start' }],
+  ['team_escalation', { escalation_action: 'dismiss' }], ['browser_intercept_network', { action: 'start' }],
+  // Review findings: these look like reads but persist state, so they are writes.
+  ['prometheus_thread_ops', { action: 'supervision_wait' }], ['internal_watch', { action: 'list' }],
+  // Review finding: the handler reads escalation_action only, so a decoy `action` must not decide the tier.
+  ['team_escalation', { action: 'list', escalation_action: 'dismiss' }],
   ['dispatch_team_agent', {}], ['message_main_agent', {}], ['write_entity', {}], ['set_agent_model', {}], ['memory_accept_claim', {}],
   ['edit_proposal', {}], ['run_task_now', {}], ['schedule_job_stuck_control', { action: 'rerun_clean' }],
 ] as Array<[string, Record<string, any>]>) {
@@ -99,6 +103,15 @@ for (const [name, args] of [
   ['connection_ops', { action: 'connect' }], ['connection_ops', {}], ['mcp_server_manage', { action: 'upsert' }], ['mcp_server_manage', { action: 'connect' }],
   ['mcp_server_manage', { action: 'delete' }], ['secure_access', { action: 'fill' }], ['secure_access', { action: 'request' }], ['secure_access', { action: 'revoke' }],
   ['webhook_manage', { action: 'set' }], ['integration_quick_setup', { action: 'setup' }], ['constructor', { action: 'list' }], ['toString', {}],
+  // Review finding: handlers do String(args.action), so ["apply"] runs as apply. A supplied
+  // non-string action must never fall back to the documented default.
+  ['schedule_job_patch', { action: ['apply'], job_id: 'j', confirm: true }], ['schedule_job_patch', { action: ['preview'], job_id: 'j' }],
+  ['schedule_job_patch', { action: 0, job_id: 'j' }], ['schedule_job_patch', { action: { toString: () => 'preview' }, job_id: 'j' }],
+  ['browser_intercept_network', { action: ['read'] }],
+  // Review finding: only the argument the handler reads counts; wrapper aliases do not classify.
+  ['team_escalation', { action: 'list' }], ['team_manage', { team_action: 'list' }], ['browser_intercept_network', { network_action: 'read' }],
+  // Review finding: this "list" creates the session's creative folder.
+  ['creative_list_html_motion_templates', {}],
 ] as Array<[string, Record<string, any>]>) {
   assert.equal(metaOf(name, args).known, false, `${name} ${JSON.stringify(args)} stays fail-closed`);
   assert.equal(tierOf(name, args), 'commit');

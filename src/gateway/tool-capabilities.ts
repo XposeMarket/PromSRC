@@ -67,8 +67,9 @@ const READ_ONLY_TOOLS = new Set([
   // is still gated on its own name and needs the approval id it returns.
   'request_final_action_approval',
   // Reads that were falling through to the unknown tier (2026-11 tool audit).
+  // creative_list_html_motion_templates is not here: it creates the session's creative folder.
   'get_composite', 'run_accessibility_check', 'get_creative_mode', 'creative_model_status',
-  'creative_list_motion_templates', 'creative_list_html_motion_templates', 'creative_measure_text',
+  'creative_list_motion_templates', 'creative_measure_text',
 ]);
 
 const LOCAL_WRITE_TOOLS = new Set([
@@ -164,8 +165,8 @@ const UNKNOWN_FAIL_CLOSED: ToolCapabilityMetadata = Object.freeze({
 });
 
 interface ActionToolCapabilities {
-  /** Argument names that carry the action, first non-empty wins. Default: action. */
-  keys?: readonly string[];
+  /** The ONE argument the handler reads its action from. Default: action. */
+  key?: string;
   /** Action used when none is given, only where the tool documents one. */
   defaultAction?: string;
   read?: readonly string[];
@@ -183,11 +184,19 @@ interface ActionToolCapabilities {
  * label. A missing or unlisted action still fails closed, so a new action is
  * gated until someone classifies it here. task_control resolve_approval is
  * left out on purpose: resolving an approval is never a quiet action.
+ *
+ * Rules this table must keep (each was a review finding):
+ * - `key` is the argument the HANDLER reads, never an alias the wrapper accepts.
+ * - An action that is supplied but is not a plain string fails closed. Handlers
+ *   do String(args.action), so ["apply"] would run as apply.
+ * - "read" means the handler persists nothing. A list or wait that refreshes
+ *   stored state (internal_watch list, thread supervision_wait) is a write.
  */
 const ACTION_TOOL_CAPABILITIES: Readonly<Record<string, ActionToolCapabilities>> = Object.freeze({
   prometheus_thread_ops: {
-    read: ['list', 'find', 'search', 'read', 'status', 'supervisions', 'list_projects', 'supervision_wait'],
-    write: ['create', 'create_and_ping', 'create_and_forget', 'create_and_supervise', 'create_many', 'send', 'steer',
+    read: ['list', 'find', 'search', 'read', 'status', 'supervisions', 'list_projects'],
+    // supervision_wait leases the pending review and updates its counters.
+    write: ['supervision_wait', 'create', 'create_and_ping', 'create_and_forget', 'create_and_supervise', 'create_many', 'send', 'steer',
       'interrupt', 'rename', 'pin', 'unpin', 'reopen', 'open', 'unsettle', 'follow', 'unfollow', 'review_decision',
       'revise_supervision', 'pause_supervision', 'resume_supervision', 'create_project', 'move_to_project', 'remove_from_project'],
   },
@@ -201,7 +210,8 @@ const ACTION_TOOL_CAPABILITIES: Readonly<Record<string, ActionToolCapabilities>>
     write: ['steer', 'recover', 'resume', 'rerun', 'pause', 'benchmark_disposable'],
     destructive: ['cancel'],
   },
-  internal_watch: { read: ['list'], write: ['create', 'cancel'] },
+  // list refreshes and persists each active watch's observation, so it is not a read.
+  internal_watch: { write: ['list', 'create', 'cancel'] },
   schedule_job_patch: { defaultAction: 'preview', read: ['preview'], destructive: ['apply'] },
   prometheus_request_ops: { read: ['list', 'find', 'read', 'status', 'recovery_candidates'], write: ['recover'] },
   prometheus_audit_ops: {
@@ -209,9 +219,9 @@ const ACTION_TOOL_CAPABILITIES: Readonly<Record<string, ActionToolCapabilities>>
       'skill_routing_evidence', 'skill_routing_stats', 'context_receipts', 'context_receipt_settings'],
     write: ['context_receipt_review', 'context_receipt_configure'],
   },
-  team_manage: { keys: ['action', 'team_action'], read: ['list'] },
-  team_escalation: { keys: ['action', 'escalation_action'], read: ['list'], write: ['dismiss', 'escalate_to_user', 'answered'] },
-  browser_intercept_network: { keys: ['action', 'network_action'], read: ['read'], write: ['start', 'stop', 'clear'] },
+  team_manage: { read: ['list'] },
+  team_escalation: { key: 'escalation_action', read: ['list'], write: ['dismiss', 'escalate_to_user', 'answered'] },
+  browser_intercept_network: { read: ['read'], write: ['start', 'stop', 'clear'] },
   connection_ops: { read: ['discover', 'status', 'list', 'list_connections'], destructive: ['disconnect'] },
   mcp_server_manage: { read: ['list', 'status', 'list_tools', 'oauth_status'] },
   secure_access: { read: ['status', 'list'] },
@@ -222,12 +232,15 @@ const ACTION_TOOL_CAPABILITIES: Readonly<Record<string, ActionToolCapabilities>>
 function resolveActionToolCapabilities(name: string, args?: Record<string, any>): ToolCapabilityMetadata | undefined {
   if (!Object.prototype.hasOwnProperty.call(ACTION_TOOL_CAPABILITIES, name)) return undefined;
   const spec = ACTION_TOOL_CAPABILITIES[name];
-  let action = '';
-  for (const key of spec.keys || ['action']) {
-    const value = args?.[key];
-    if (typeof value === 'string' && value.trim()) { action = value.trim().toLowerCase(); break; }
+  const supplied = args?.[spec.key || 'action'];
+  let action: string;
+  if (supplied === undefined || supplied === null || supplied === '') {
+    action = spec.defaultAction || '';
+  } else if (typeof supplied === 'string') {
+    action = supplied.trim().toLowerCase();
+  } else {
+    return undefined; // supplied but not a string: the handler would stringify it
   }
-  if (!action) action = spec.defaultAction || '';
   if (!action) return undefined;
   if (spec.read?.includes(action)) return READ_ONLY;
   if (spec.destructive?.includes(action)) return DESTRUCTIVE;
