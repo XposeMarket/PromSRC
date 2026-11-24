@@ -181,3 +181,5 @@ Use `browser_extract` for page content, not for actions. Use a screenshot when e
 
 ## In-house file upload repair
 `browserUploadFile` routes an existing in-house session through authenticated Electron `/upload-file` before checking Playwright sessions. `electron/browser-upload.cjs` selects an explicit file-input selector or snapshot ref (including nested/hidden inputs), validates regular local files, and uses CDP `DOM.setFileInputFiles` on that session's webContents. It releases remote handles and only detaches a debugger it attached. File selection is not publication or proof of server-side processing: observe the page afterward. Existing tool approval policy is unchanged. Electron main changes require app relaunch, not merely gateway restart. Regression: `node scripts/test-inhouse-upload.cjs` uses real headless Chromium.
+
+A fresh in-app tab inherits the desktop-selected profile only in a matching interactive owner turn attested by the gateway. A session name or a missing owner classification is not authorization. Per-chat explicit choices still win.
