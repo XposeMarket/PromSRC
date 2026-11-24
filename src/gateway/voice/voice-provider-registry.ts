@@ -101,7 +101,7 @@ export function getVoiceProviderRegistry(config: any = getConfig().getConfig()):
       const item = record(candidate);
       const id = customId(key);
       const apiKeyRef = text(item.apiKeyRef, 160);
-      const connected = apiKeyRef.startsWith('vault:') && getVault().has(apiKeyRef.slice(6));
+      const connected = apiKeyRef.startsWith('vault:') && getVault(getConfig().getConfigDir()).has(apiKeyRef.slice(6));
       if (!id || item.enabled === false || !isSafeVoiceProviderBaseUrl(item.baseUrl) || !apiKeyRef) return [];
       const model = text(item.model, 160) || 'gpt-realtime-2';
       const voices = Array.isArray(item.voices) ? item.voices.map((v: unknown) => text(v, 80)).filter(Boolean).slice(0, 40) : [];
@@ -126,7 +126,7 @@ export async function getCustomVoiceProvider(config: unknown, id: string): Promi
   if (item.enabled === false || !isSafeVoiceProviderBaseUrl(item.baseUrl)) return null;
   const apiKeyRef = text(item.apiKeyRef, 160);
   if (!apiKeyRef.startsWith('vault:')) return null;
-  const apiKey = getVault().get(apiKeyRef.slice(6), 'voice:custom-provider')?.expose() || '';
+  const apiKey = getVault(getConfig().getConfigDir()).get(apiKeyRef.slice(6), 'voice:custom-provider')?.expose() || '';
   if (!apiKey) return null;
   return { id: providerId, label: text(item.label, 120) || providerId.slice(7), baseUrl: normalizedBaseUrl(item.baseUrl), model: text(item.model, 160) || 'gpt-4o-realtime-preview', voices: Array.isArray(item.voices) ? item.voices.map((v: unknown) => text(v, 80)).filter(Boolean).slice(0, 40) : [], apiKey, apiKeyRef, kind: 'openai_realtime_compatible' };
 }

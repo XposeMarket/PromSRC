@@ -575,27 +575,22 @@ export class SecretVault {
 // ─── Singleton ────────────────────────────────────────────────────────────────
 
 const _vaults = new Map<string, SecretVault>();
-let _defaultVaultKey: string | null = null;
 
-export function getVault(configDir?: string): SecretVault {
-  if (configDir) {
-    const resolved = path.resolve(configDir);
-    let vault = _vaults.get(resolved);
-    if (!vault) {
-      vault = new SecretVault(resolved);
-      _vaults.set(resolved, vault);
-    }
-    if (!_defaultVaultKey) _defaultVaultKey = resolved;
-    return vault;
+/**
+ * Returns the vault stored in `configDir`. The directory is required: an
+ * argument-less form used to fall back to whichever directory an earlier caller
+ * happened to pass, and threw "configDir required for first initialisation" when
+ * nothing had primed it yet. Production callers pass getConfig().getConfigDir().
+ */
+export function getVault(configDir: string): SecretVault {
+  if (!configDir) {
+    throw new Error('[Vault] configDir is required');
   }
-
-  if (!_defaultVaultKey) {
-    throw new Error('[Vault] configDir required for first initialisation');
-  }
-
-  const vault = _vaults.get(_defaultVaultKey);
+  const resolved = path.resolve(configDir);
+  let vault = _vaults.get(resolved);
   if (!vault) {
-    throw new Error('[Vault] default vault unavailable');
+    vault = new SecretVault(resolved);
+    _vaults.set(resolved, vault);
   }
   return vault;
 }

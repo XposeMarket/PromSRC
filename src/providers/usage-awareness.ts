@@ -17,7 +17,7 @@ export function providerOAuthVaultKey(providerId: string, accountId?: string): s
 /** Same current-user config/vault discovery used by Settings and chat. */
 export function listCredentialedModelProviderIds(): string[] {
   const providers = (getConfig().getConfig() as any)?.llm?.providers || {};
-  const keys = new Set(getVault().keys());
+  const keys = new Set(getVault(getConfig().getConfigDir()).keys());
   const ids = new Set<string>();
   const saved = (cfg: any, field: string) => typeof cfg?.[field] === 'string' && !!cfg[field].trim();
   for (const [id, field] of listProviderSecretFieldPaths()) {

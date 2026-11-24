@@ -44,7 +44,7 @@ router.post('/api/voice/providers/custom', (req, res) => {
     const normalized = normalizeCustomVoiceProvider({ ...incoming, apiKeyRef: existing?.apiKeyRef });
     const vaultKey = `voice.providers.${normalized.id.slice(7)}.apiKey`;
     const apiKeyRef = normalized.apiKey ? `vault:${vaultKey}` : String(normalized.value.apiKeyRef);
-    if (normalized.apiKey) getVault().set(vaultKey, normalized.apiKey, 'voice:custom-provider');
+    if (normalized.apiKey) getVault(getConfig().getConfigDir()).set(vaultKey, normalized.apiKey, 'voice:custom-provider');
     if (!apiKeyRef.startsWith('vault:')) throw new Error('apiKeyRef must be a vault reference');
     const providers = { ...record(record(current.voice).providers), [normalized.id]: { ...normalized.value, apiKeyRef } };
     manager.updateConfig({ voice: { ...record(current.voice), providers } } as any);
@@ -61,7 +61,7 @@ router.delete('/api/voice/providers/custom/:id', (req, res) => {
     const existing = record(providers[id]);
     if (!Object.keys(existing).length) { res.status(404).json({ error: 'Custom voice provider not found' }); return; }
     const ref = String(existing.apiKeyRef || '');
-    if (ref.startsWith('vault:')) getVault().delete(ref.slice(6), 'voice:custom-provider');
+    if (ref.startsWith('vault:')) getVault(getConfig().getConfigDir()).delete(ref.slice(6), 'voice:custom-provider');
     delete providers[id];
     // updateConfig deep-merges records, so remove from the live record first.
     if (current.voice?.providers) delete current.voice.providers[id];
