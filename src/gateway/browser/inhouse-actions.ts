@@ -17,7 +17,7 @@ import { getUserChromeRelay } from '../user-chrome-relay.js';
 import { BrowserObserveMode, BrowserPerformanceObserver, markBrowserPerformance } from './types.js';
 import { resolveSessionId } from './extraction.js';
 import { callInHouseBrowser, getInHouseSession } from './inhouse.js';
-import { resolveInHouseProfileId, upsertInHouseSession, broadcastInHouseBrowserStatus, recoverInHouseSessionMapping } from './inhouse-sessions.js';
+import { inHouseOpenProfileOptions, resolveInHouseProfileId, upsertInHouseSession, broadcastInHouseBrowserStatus, recoverInHouseSessionMapping } from './inhouse-sessions.js';
 import { resolveBrowserObserveMode, shouldReturnSnapshot, attachShortcutsContext } from './observation.js';
 import { boundedBrowserSnapshot } from './snapshot-format.js';
 import { buildBrowserRunJsEnvelopeSource, formatBrowserRunJsEnvelope } from './diagnostics.js';
@@ -34,7 +34,7 @@ export async function browserOpenInHouse(
   let targetUrl = String(rawUrl || '').trim();
   if (!/^[a-z][a-z0-9+.-]*:/i.test(targetUrl)) targetUrl = `https://${targetUrl}`;
   try {
-    const state: any = await callInHouseBrowser('open', { sessionId: resolved, url: targetUrl, profile: resolveInHouseProfileId(resolved) });
+    const state: any = await callInHouseBrowser('open', { sessionId: resolved, url: targetUrl, ...inHouseOpenProfileOptions(resolved) });
     if (!state || typeof state !== 'object' || !String(state.url || '').trim()) {
       return `ERROR: In-house browser open returned no page state; session=${resolved}.`;
     }
@@ -48,7 +48,7 @@ export async function browserOpenInHouse(
     // before the snapshot. Off by default; never throws into the open path.
     const sync = await maybeAutoSyncChromeSignins(defaultChromeSigninDeps(), {
       sessionId: resolved,
-      profileId: resolveInHouseProfileId(resolved),
+      profileId: inHouse.profileId,
       url: String(inHouse.url || targetUrl),
     }).catch(() => null);
     const syncNote = sync?.synced && sync.imported > 0 ? `Chrome sign-ins synced for ${sync.domain} (${sync.imported} cookies).` : '';
@@ -446,7 +446,7 @@ export async function browserLoginImportFromChrome(sessionId: string, extraDomai
   const res: any = await callInHouseBrowser('import-cookies', { sessionId: resolved, cookies });
   const imported = Number(res?.imported || 0);
   // Stamp the sync cache so auto-sync does not re-import the same site right away.
-  if (imported > 0 && origin) markSynced(resolveInHouseProfileId(resolved), origin, Date.now());
+  if (imported > 0 && origin) markSynced(getInHouseSession(resolved)?.profileId || resolveInHouseProfileId(resolved), origin, Date.now());
   const failedCount = Number(res?.failedCount || 0);
   const byDomain: Record<string, number> = res?.byDomain && typeof res.byDomain === 'object' ? res.byDomain : {};
   const failed: string[] = Array.isArray(res?.failed) ? res.failed.map(String) : [];

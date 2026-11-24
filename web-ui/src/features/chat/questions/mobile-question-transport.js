@@ -1,3 +1,5 @@
+import { lookupQuestion } from './question-lookup.js';
+
 function clean(value) {
   return String(value ?? '').trim();
 }
@@ -17,9 +19,7 @@ export function createMobileQuestionTransport(options = {}) {
     const questionId = clean(id);
     if (!questionId) return null;
     try {
-      const data = await request('/api/questions?status=all');
-      return (Array.isArray(data?.questions) ? data.questions : [])
-        .find((item) => clean(item?.id || item?.questionId || item?.question_id) === questionId) || null;
+      return await lookupQuestion(request, questionId);
     } catch {
       return null;
     }
@@ -69,5 +69,5 @@ export function createMobileQuestionTransport(options = {}) {
     return true;
   }
 
-  return Object.freeze({ fetchQuestion, submit, cancel, resume });
+  return Object.freeze({ fetchQuestion, lookupQuestion: id => lookupQuestion(request, id), submit, cancel, resume });
 }

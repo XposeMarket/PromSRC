@@ -12,6 +12,7 @@
  * No dependency on deprecated page.accessibility or page.ariaSnapshot APIs.
  */
 
+import { currentTrace } from '../observability/turn-trace.js';
 import { getConfig } from '../../config/config.js';
 
 import { broadcastWS } from '../comms/broadcaster';
@@ -154,6 +155,17 @@ export function resolveInHouseProfileId(sessionId: string): string {
   }
   const ownerId = normalizeInHouseProfileId(metadata.ownerId || resolved) || normalizeInHouseProfileId(resolved) || 'agent';
   return `${metadata.ownerType}-${ownerId}`;
+}
+
+// Only a personal main chat with no explicit profile may inherit desktop Settings.
+export function inHouseOpenProfileOptions(sessionId: string): { profile: string } | { useDesktopProfile: true } {
+  const sid = resolveSessionId(sessionId);
+  const turn = currentTrace();
+  if (turn?.sessionId === sid && turn.executionMode === 'interactive' && turn.personalReferenceAccess === true
+    && !inHouseProfilePreferences.has(sid) && getBrowserSessionMetadata(sid).ownerType === 'main') {
+    return { useDesktopProfile: true };
+  }
+  return { profile: resolveInHouseProfileId(sid) };
 }
 
 export function shouldUseInHouseBrowser(sessionId: string): boolean {

@@ -8920,6 +8920,11 @@ function _projectMobileQuestionToLegacy({ sessionId, question, options = {} } = 
       }
       if (threadChanged) _scheduleMobileThreadCacheSave(threadSid, 80);
     });
+    // A runtime-only card has no compatibility row to trigger a repaint.
+    const host = document.getElementById('pm-mobile-question-popover');
+    if (sid === __pmChat.activeSessionId && host?.getAttribute('data-question-id') === qid) {
+      _syncMobileQuestionComposerPopover(sid);
+    }
     return changed;
   }
   if (_mobileQuestionIsResolved(qid)) {
