@@ -98,6 +98,7 @@ import { presentChatError, presentGoalAction } from '../chat-error-presentation.
 import { wsEventBus, wsSend } from '../ws.js';
 import './mobile-login-handoff.js';
 import { CHAT_COMPOSER_SUGGESTION_LIMIT, CHAT_SKILL_TRIGGER, getChatSlashCommands, mergeSlashCommandSkillIds } from '../chat-slash-commands.js';
+import { isManualCompactRowPersistable } from '../features/chat/core/manual-compact.js';
 import {
   appendCommandTerminalChunkToDom,
   applyCommandProcessEvent,
@@ -1219,6 +1220,7 @@ function _compactMobileThreadCacheMessage(m) {
     role: m?.role,
     messageId: String(m?.messageId || '').trim() || undefined,
     messageKind: String(m?.messageKind || '').trim() || undefined,
+    compactStatus: String(m?.compactStatus || '').trim() || undefined,
     timestamp: Number(m?.timestamp || 0) || 0,
     time: String(m?.time || '').trim() || undefined,
     streaming: m?.streaming === true,
@@ -1898,6 +1900,7 @@ function _mapServerMessageToMobile(m, index = -1) {
     messageKind: isLegacyGoalRuntimePrompt
       ? (legacyGoalRestart ? 'goal_restart_notice' : 'goal_continuation_notice')
       : (String(m?.messageKind || '').trim() || undefined),
+    compactStatus: String(m?.compactStatus || '').trim() || undefined,
     activeRunKind: String(m?.activeRunKind || '').trim() || undefined,
     agentRuntimeKind: String(m?.activeRunKind || '').trim() || undefined,
     goalId: String(m?.goalId || '').trim() || undefined,
@@ -2331,6 +2334,7 @@ function _mobileHistoryForServer(thread = _activeMobileThread()) {
     .filter((msg) => msg._voiceWorkerLocalTurn !== true && msg._voiceWorkerLocalFinal !== true)
     .filter((msg) => !_isMobileRestartContextPacketText(_mobileMessageCopyText(msg)))
     .filter((msg) => !msg._isRestartNotification)
+    .filter(isManualCompactRowPersistable)
     .map((msg) => {
       const clone = _cloneMobileMessageForBranch(msg) || {};
       // Runtime-created IDs identify a transport row, not a durable turn. The

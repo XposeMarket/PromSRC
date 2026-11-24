@@ -74,6 +74,7 @@ export function createDesktopSendChatRuntime(resolveContext = () => ({})) {
         getSessionStreamState,
         getSkillTriggerExcludedIds,
         handleImmediateChatSlashCommand,
+        manualCompactSendBlockReason,
         handleRealtimeVoiceInterruptionOnly,
         hasPendingPrometheusQuestion,
         highlightedTextToAttachmentPreview,
@@ -176,6 +177,20 @@ export function createDesktopSendChatRuntime(resolveContext = () => ({})) {
     }
     if (!message) return;
     if (!queuedTurn && handleImmediateChatSlashCommand(message)) return;
+    // While /compact owns the chat lane nothing is sent, queued or steered.
+    // The composer draft stays; a queued item returns to the front untouched.
+    const compactBlockReason = typeof manualCompactSendBlockReason === 'function'
+      ? manualCompactSendBlockReason(String(options.sessionIdOverride || '').trim() || window.activeChatSessionId)
+      : '';
+    if (compactBlockReason) {
+      if (queuedTurn && !Number.isInteger(options.reuseExistingUserIndex)) {
+        getSessionQueuedPrompts(String(options.sessionIdOverride || '').trim() || window.activeChatSessionId).unshift(queuedTurn);
+        updateQueuedPromptUI();
+      } else {
+        showToast('/compact', compactBlockReason, 'info');
+      }
+      return;
+    }
     const excludedSkillIds = queuedTurn
       ? (Array.isArray(queuedTurn.excludedSkillIds) ? queuedTurn.excludedSkillIds.slice() : [])
       : getSkillTriggerExcludedIds();

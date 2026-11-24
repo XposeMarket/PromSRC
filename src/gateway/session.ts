@@ -67,7 +67,10 @@ import {
   type WarmToolCategory,
 } from './tool-category-retention';
 
+import { isCompactRow, captureManualCompactionRollback, healOrphanedManualCompactions, getLastAssistantTimestamp, type CompactStatus } from './chat/manual-compact-state';
+
 export interface ChatMessage {
+  compactStatus?: CompactStatus;
   messageId?: string;
   messageKind?: 'goal_command_ack' | 'goal_turn' | 'goal_restart_checkpoint' | 'restart_status' | 'restart_checkpoint' | string;
   /**
@@ -1406,18 +1409,8 @@ export function getSessionDisplayTitle(session: Pick<Session, 'title' | 'history
   return current || getSessionTitleFromHistory(session?.history || []);
 }
 
-function getLastAssistantTimestamp(history: any[]): number | undefined {
-  if (!Array.isArray(history)) return undefined;
-  for (let i = history.length - 1; i >= 0; i--) {
-    const msg = history[i];
-    if (msg?.role !== 'assistant') continue;
-    const ts = Number(msg.timestamp || 0);
-    return Number.isFinite(ts) && ts > 0 ? ts : Date.now();
-  }
-  return undefined;
-}
-
 function isSummaryTimelineMessage(msg: any): boolean {
+  if (msg && isCompactRow(msg)) return false;
   const content = String(msg?.content || '').trim();
   if (!content) return false;
   if (content === PRE_COMPACTION_SUMMARY_PROMPT) return false;
@@ -2103,6 +2096,7 @@ function resolveNumCtx(): number {
 }
 
 function estimateMessageTokens(msg: ChatMessage): number {
+  if (isCompactRow(msg)) return 0;
   const content = appendDurableCommentaryContext(msg.content, msg);
   const contentTokens = Math.max(1, Math.ceil(content.length / 3.5));
   // Per-message framing overhead
@@ -2471,6 +2465,8 @@ export function recordSessionCompaction(
   const session = getSession(sessionId);
   const cleanSummary = String(summaryText || '').trim();
   if (!cleanSummary) return;
+  const rollback = extra?.manualStatusId ? captureManualCompactionRollback(session) : null;
+  if (rollback) session.pendingCompaction = false;
   session.latestContextSummary = cleanSummary;
   session.contextStartIndex = Math.max(0, Math.floor(Number(baseMessageCount) || 0));
   session.contextStartMessageId = session.contextStartIndex < session.history.length
@@ -2486,6 +2482,11 @@ export function recordSessionCompaction(
   // Reconcile persisted pressure immediately after compaction so diagnostics
   // and the next preflight reflect the new active context rather than the old peak.
   session.contextTokenEstimate = estimateActiveContextTokens(session);
+  // Flush the manual checkpoint and its success card in the SAME atomic session snapshot.
+  if (rollback && !flushSession(sessionId)) {
+    Object.assign(session, rollback);
+    throw new Error('Could not save the manual checkpoint.');
+  }
   appendCompactionArtifacts(sessionId, kind, session.latestContextSummary, session.contextStartIndex, extra);
   appendContinuityEvent(sessionId, 'compaction', {
     kind,
@@ -2810,6 +2811,7 @@ export function getSession(id: string): Session {
       setSessionCacheWeight(sessionId, session);
       touchSessionCache(sessionId);
       pruneSessionCache();
+      healOrphanedManualCompactions(sessionId, session.history, () => saveSession(sessionId));
       if (historyWasHealed) {
         console.log(`[session] healed re-appended assistant rows in ${sessionId}: ${rawHistory.length} -> ${healedHistory.length}`);
         saveSession(sessionId);
@@ -3146,7 +3148,7 @@ export function getActiveHistoryForPersistence(id: string, maxMessages = 60): Ch
   const rawMessages = Array.isArray(session.history) ? session.history : [];
   const summary = String(session.latestContextSummary || '').trim();
   const base = summary ? resolveCompactionStartIndex(session, rawMessages) : 0;
-  const active = summary ? rawMessages.slice(base) : rawMessages;
+  const active = (summary ? rawMessages.slice(base) : rawMessages).filter(m => !isCompactRow(m));
   const max = Number.isFinite(Number(maxMessages))
     ? Math.max(1, Math.floor(Number(maxMessages)))
     : active.length;
@@ -3264,16 +3266,17 @@ export function getHistoryForApiCall(
       timestamp: Number(session.contextSummaryUpdatedAt || Date.now()),
       channel: 'system',
     };
-    const since = base < rawMessages.length ? rawMessages.slice(base) : [];
+    const since = rawMessages.slice(base).filter(m => !isCompactRow(m));
     messages = goalSummaryMsg ? [summaryMsg, goalSummaryMsg, ...since] : [summaryMsg, ...since];
     if (Number.isFinite(maxMessages) && messages.length > maxMessages) {
       const preserved = goalSummaryMsg ? [summaryMsg, goalSummaryMsg] : [summaryMsg];
       messages = [...preserved, ...since.slice(-maxMessages)];
     }
   } else {
+    const eligible = rawMessages.filter(m => !isCompactRow(m));
     messages = goalSummaryMsg
-      ? [goalSummaryMsg, ...rawMessages.slice(-(maxMessages - 1))]
-      : rawMessages.slice(-maxMessages);
+      ? [goalSummaryMsg, ...eligible.slice(-(maxMessages - 1))]
+      : eligible.slice(-maxMessages);
   }
 
   const includeCommentaryContext = options?.includeCommentaryContext !== false;

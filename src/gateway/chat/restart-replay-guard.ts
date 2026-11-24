@@ -62,14 +62,14 @@ export function isRealAssistantReply(message: ReplayGuardMessage): boolean {
   if ((message as any)?.interruptionCheckpoint === true) return false;
   if (MARKER_PREFIXES.some((prefix) => text.startsWith(prefix))) return false;
   const kind = String(message.messageKind || '').trim();
-  if (kind && (kind.startsWith('restart') || kind.startsWith('goal_'))) return false;
+  if (kind && (kind.startsWith('restart') || kind.startsWith('goal_') || kind === 'manual_compact_status')) return false;
   if (String(message.workflowPart || '').trim() === 'before_interruption') return false;
   return true;
 }
 
 /** A user row that starts a new request (steers belong to the running turn). */
 function isNewUserRequest(message: ReplayGuardMessage): boolean {
-  if (message?.role !== 'user') return false;
+  if (message?.role !== 'user' || message.messageKind === 'manual_compact_command') return false;
   if (String(message.workflowPart || '').trim() === 'interruption') return false;
   return textOf(message).length > 0;
 }

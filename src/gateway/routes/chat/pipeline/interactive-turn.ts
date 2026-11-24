@@ -3,6 +3,8 @@ import { hasRecentVoiceWorkflowUserMessage } from '../.././chat/voice/spoken-rep
 import crypto from 'crypto';
 import { createTurnTimingRecorder, type TurnTimingRecorder } from '../../../chat/turn-timing';
 import { enqueuePostTurnJob } from '../../../chat/post-turn-queue';
+import { requestManualCompact } from '../manual-compact';
+import { COMPACT_BUSY, isCompactCommand, manualCompactions } from '../../../chat/manual-compact-state';
 import { getConfig } from '../../../../config/config';
 import { captureModelUsageLogCursor, readModelUsageEventsForSession, readModelUsageEventsSince } from '../../../../providers/model-usage';
 import { getSession, addMessage, getHistory, recordWorkingContextPacket, persistToolLog, getWorkspace, getSessionExternalAgent, type TurnOrigin } from '../../../session';
@@ -93,6 +95,20 @@ export async function runInteractiveTurn(
     /** Optional token-stream sink forwarded to handleChat (see callerOnToken there). */
     callerOnToken?: (token: string) => void,
 ): Promise<HandleChatResult> {
+  if (isCompactCommand(message)) {
+    if (flags?.preAcquiredTurnLease || turnOriginInput?.channel === 'system' || flags?.directSubagentChat || flags?.supervisionLoop || Object.entries(flags || {}).some(([key, value]) => key.startsWith('synthetic') && value)) {
+      if (flags?.preAcquiredTurnLease) mainChatTurnCoordinator.release(flags.preAcquiredTurnLease);
+      return { type: 'chat', text: 'Send /compact directly in an idle native chat.' };
+    }
+    try { return { type: 'chat', text: (await requestManualCompact(sessionId, { message, attachments, attachmentPreviews, ...requestMeta }, abortSignal?.signal)).message }; }
+    catch (error) { return { type: 'chat', text: (error as Error).message }; }
+  }
+  // Explicit user input is refused while compaction owns the chat. Scheduled timers, wakes and
+  // agent completions are not user input: they fall through to the normal lease wait below and run after it.
+  const scheduledOrigin = turnOriginInput?.channel === 'system' || !!flags?.directSubagentChat || !!flags?.supervisionLoop
+    || /^\s*\[Timer fired\]/i.test(String(message || ''))
+    || Object.entries(flags || {}).some(([key, value]) => key.startsWith('synthetic') && value);
+  if (manualCompactions.has(sessionId) && !scheduledOrigin) return { type: 'chat', text: COMPACT_BUSY };
   // Install the watch policy around the entire synthetic turn, including
   // preflight routers and voice/mobile wrappers that bypass executeTool.
   if (flags?.internalWatchContext && flags.internalWatchContextInstalled !== true) {

@@ -12,6 +12,7 @@ const ALL_CHAT_SLASH_COMMANDS = [
   { command: '/goal clear', label: 'Stop and archive the goal', placeholder: 'Optional archive note...', surfaces: ['desktop', 'mobile'] },
   { command: '/goal revise', label: 'Rewrite the active goal', placeholder: 'Write the revised goal...', surfaces: ['desktop', 'mobile'] },
   { command: '/models', label: 'Open provider and model controls', placeholder: 'Use without extra text to open model settings...', surfaces: ['mobile'] },
+  { command: '/compact', label: 'Compact this chat\'s context now', placeholder: 'Send /compact by itself, without extra text...', surfaces: ['desktop', 'mobile'] },
   { command: '/new', label: 'Start a fresh chat', placeholder: 'Use without extra text to open a new chat...', surfaces: ['desktop', 'mobile'] },
   { command: '/screenshot', label: 'Open screenshot controls', placeholder: 'Use without extra text for screenshot options...', surfaces: ['mobile'] },
   { command: '/restart', label: 'Open gateway restart controls', placeholder: 'Use without extra text for quick/full restart...', surfaces: ['mobile'] },

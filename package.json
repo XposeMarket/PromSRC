@@ -306,6 +306,7 @@
     "test:mobile-gateway": "node scripts/test-mobile-gateway-contract.mjs",
     "test:mobile-file-viewer-auth": "node scripts/test-mobile-file-viewer-auth.mjs",
     "test:chat-composer-drafts": "node scripts/test-chat-composer-drafts.mjs",
+    "test:manual-compact-ui": "node scripts/test-manual-compact-ui.mjs",
     "test:funnel-routing": "tsx src/gateway/routes/funnel-routing.regression.ts",
     "test:gateway-instance-mode": "tsx src/cli/gateway-instance-mode.regression.ts",
     "test:mobile-voice-media": "node scripts/test-mobile-voice-media-contract.mjs",

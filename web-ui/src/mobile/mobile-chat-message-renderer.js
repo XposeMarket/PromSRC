@@ -2,6 +2,7 @@ import { renderConnectionChatCards } from '../features/connectors/connection-cha
 import { pendingStatusMarkup } from './mobile-ttft-state.js';
 import { highlightMobileVoiceMarkdown } from './mobile-voice-markdown-highlight.js';
 import { isMobileQuestionOnlyRow, isPendingMobileQuestion } from './mobile-question-rows.js';
+import { isManualCompactCommandRow, isManualCompactStatusRow, manualCompactRowStatus, manualCompactTraceEntry } from '../features/chat/core/manual-compact.js';
 
 // True while the row is blocked on its own pending question: no answer text
 // streams and no other tool has started since. Resolving the question or a
@@ -82,7 +83,13 @@ export function createMobileChatMessageRenderer(resolveContext = () => ({})) {
       const contentHtml = `${attachmentHtml}${userBubbleHtml}`;
       return `<div class="pm-msg from-user${isEditing ? ' editing' : ''}${isWorkerHandoff ? ' voice-worker-handoff' : ''}${m.workflowPart ? ` workflow-${escapeHtml(String(m.workflowPart))}` : ''}" data-msg-index="${msgIndex}" data-pm-row-key="${escapeHtml(stableRowKey)}" data-pm-row-signature="${escapeHtml(`${stableRowSignature}:${isEditing ? 'editing' : 'view'}`)}">
         ${workflowLabel && !isWorkerHandoff ? `<div class="pm-workflow-transition-label">${escapeHtml(workflowLabel)}</div>` : ''}
-        ${contentHtml}${isEditing ? '' : _renderMobileMessageActions(m, msgIndex)}${revealTime}</div>`;
+        ${contentHtml}${isEditing || isManualCompactCommandRow(m) ? '' : _renderMobileMessageActions(m, msgIndex)}${revealTime}</div>`;
+    }
+    if (isManualCompactStatusRow(m)) {
+      // A /compact status is not an answer: only the existing compaction break.
+      const status = manualCompactRowStatus(m);
+      const text = String(m.body?.text || m.content || '');
+      return `<div class="pm-msg from-ai manual-compact-status" data-manual-compact-status="${escapeHtml(status)}" data-msg-index="${msgIndex}" data-pm-row-key="${escapeHtml(stableRowKey)}" data-pm-row-signature="${escapeHtml(`${stableRowSignature}:compact:${status}:${text}`)}">${_renderMobileGroupedTrace([manualCompactTraceEntry(m)], { streaming: false })}</div>`;
     }
     const b = m.body || {};
     if (m._pmCoalescedError) return '';

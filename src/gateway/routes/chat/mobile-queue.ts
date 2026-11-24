@@ -1,3 +1,4 @@
+import { isCompactCommand, manualCompactions, COMPACT_BUSY } from '../../chat/manual-compact-state';
 import { createHash } from 'node:crypto';
 import { readFileSync, realpathSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
@@ -211,6 +212,7 @@ export function registerMobileMainChatQueue(router: Router, deps: {
     if (!writable()) { res.status(503).json({ error: 'The gateway queue is not ready. Your draft has not been queued.' }); return; }
     try {
       const { id, sessionId, message, attachments, selectedSkillIds, excludedSkillIds } = req.body || {};
+      if (manualCompactions.has(sessionId) || isCompactCommand(message)) { res.status(409).json({ error: COMPACT_BUSY }); return; }
       const sid = assertSafeStorageId(sessionId, 'session id');
       if (typeof id !== 'string' || !isMobileQueueRequestId(id) || typeof message !== 'string' || !message.trim() || !eligibleSession(sid)) {
         res.status(400).json({ error: 'Queue requires text or files in an existing active chat.' }); return;
@@ -239,6 +241,7 @@ export function registerMobileMainChatQueue(router: Router, deps: {
     try {
       const { id, sessionId, action, message, expectedRuntimeId } = req.body || {};
       const sid = assertSafeStorageId(sessionId, 'session id');
+      if (isCompactCommand(message) || (manualCompactions.has(sid) && action !== 'delete')) { res.status(409).json({ error: COMPACT_BUSY }); return; }
       if (!eligibleSession(sid)) { res.status(404).json({ error: 'This chat is unavailable.' }); return; }
       if (action === 'steer' && isMobileQueueRequestId(id)) {
         const item = store().claim(sid, id);

@@ -1,6 +1,7 @@
 import { getApprovalQueue } from '../../verification-flow';
 import { getPrometheusQuestionQueue } from '../../prometheus-questions';
 import type { Router, RequestHandler } from 'express';
+import { manualCompactions, COMPACT_BUSY } from '../../chat/manual-compact-state';
 import express from 'express';
 import { slimSessionList } from '.././perf-projections';
 import { sendJsonText } from '../../core/json-response';
@@ -506,6 +507,11 @@ router.post('/api/sessions/:id/history', requireSafeSessionParam, (req, res) => 
     const id = String(req.params.id || '').trim();
     if (!id) {
       res.status(400).json({ error: 'Session id required' });
+      return;
+    }
+    // A history replace while /compact holds the chat would detach its status row. Refuse until it settles.
+    if (manualCompactions.has(id)) {
+      res.status(409).json({ success: false, code: 'COMPACT_BUSY', error: COMPACT_BUSY });
       return;
     }
     const rawHistory = Array.isArray(req.body?.history) ? req.body.history : [];

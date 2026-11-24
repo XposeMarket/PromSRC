@@ -39,6 +39,15 @@ import { createDesktopChatRuntimeAdapter } from '../features/chat/runtime/deskto
 import { createSessionPersistenceScheduler, attachSessionPersistenceLifecycle } from '../features/chat/core/session-persistence-scheduler.js';
 import { createDesktopSendChatRuntime } from '../features/chat/runtime/desktop-send-chat-runtime.js';
 import { composerDraftKey, readComposerDraft, saveComposerDraft } from '../features/chat/composer-drafts.js';
+import { isManualCompactRow, isManualCompactRowPersistable, isManualCompactStatusRow, manualCompactMergeKey } from '../features/chat/core/manual-compact.js';
+import { createDesktopManualCompact } from '../features/chat/runtime/desktop-manual-compact.js';
+// Manual /compact: a maintenance request, never a model turn. Context is resolved lazily.
+const desktopManualCompact = createDesktopManualCompact(() => ({
+  api, getChatSessionById, persistSession, renderChatMessages, showToast, restoreDesktopComposerAfterFailedSend,
+  loadSessionFromServer: _loadSessionFromServer, scheduleChatContextWindowRefresh, isSessionThinking, isActiveMainGoalRunning,
+  getSessionQueuedPrompts, hasPendingPrometheusQuestion, pendingChatFiles, clearChatComposerAfterSend, escHtml,
+  desktopTimelineRowSignature, renderLiveTraceCompactionBreak,
+}));
 import { createChatPerformanceRuntime } from '../features/chat/runtime/chat-performance-runtime.js';
 import {
   normalizeQuestionRecord,
@@ -7387,6 +7396,7 @@ function ensurePromptVariantsForEdit(userIndex) {
 function historyForServer(history = window.chatHistory || []) {
   return (Array.isArray(history) ? history : [])
     .filter((msg) => msg && (msg.role === 'user' || isAssistantLikeMessage(msg)))
+    .filter(isManualCompactRowPersistable)
     .map((msg) => ({
       ...sanitizeChatMessageForDurableStorage(cloneChatMessageForBranch(msg)),
       role: msg.role === 'user' ? 'user' : 'assistant',
@@ -8143,6 +8153,8 @@ async function _loadSessionFromServer(id, options = {}) {
     }
     delete sess._needsServerLoad;
     setDesktopSessionLoadState(id, 'ready');
+    // A reload during /compact joins the same gateway operation by request id.
+    desktopManualCompact.resumeFromTranscript(id);
     syncDesktopChatRuntime(sess, { source: 'desktop-initial-page', pageInfo: sess.historyPage });
     saveChatSessions();
     if (window.activeChatSessionId === id) {
@@ -14512,6 +14524,8 @@ function renderVisibleChatHistoryHtml(history = [], options = {}) {
     .filter((entry) => !(options.hideSideChatBoundary !== false && entry.msg?.sideChatBoundary === true));
 
   return visibleHistory.map(({ msg, originalIndex, key, signature }) => {
+    // The status row is not an answer: only the existing compaction break.
+    if (isManualCompactStatusRow(msg)) return desktopManualCompact.renderStatusRow(msg, originalIndex, key, signature);
     const isSyntheticTimerTrigger =
       String(msg?.channelLabel || '').toLowerCase() === 'timer'
       && msg.role === 'user'
@@ -14580,7 +14594,7 @@ function renderVisibleChatHistoryHtml(history = [], options = {}) {
       ? `<div class="msg-role">${channelTag}</div>`
       : '';
     const hasVisualContent = !isUser && /\bvisual-block\b/.test(assistantContentHtml);
-    const actionsHtml = options.readonly || isSideBoundary ? '' : renderMessageActions(msg, originalIndex);
+    const actionsHtml = options.readonly || isSideBoundary || isManualCompactRow(msg) ? '' : renderMessageActions(msg, originalIndex);
     return `
     <div class="msg-shell ${displayRole}${hasVisualContent ? ' has-visual' : ''}${isWorkerHandoff ? ' voice-worker-handoff' : ''}${msg.workflowPart ? ` workflow-${escHtml(String(msg.workflowPart))}` : ''}${isSideBoundary ? ' side-chat-boundary-msg' : ''}" data-chat-message-index="${originalIndex}" data-chat-row-key="${escHtml(String(key || `message:${originalIndex}`))}" data-chat-row-signature="${escHtml(`${String(signature || desktopTimelineRowSignature(msg))}:${isEditingThisUserMessage ? 'editing' : 'view'}`)}">
       <div class="msg ${displayRole}${hasVisualContent ? ' has-visual' : ''}${isWorkerHandoff ? ' voice-worker-handoff' : ''}">
@@ -16457,6 +16471,8 @@ function mergeProcessEntryLists(...lists) {
 
 function chatMessageMergeKey(msg) {
   if (!msg || typeof msg !== 'object') return '';
+  const manualCompactKey = manualCompactMergeKey(msg);
+  if (manualCompactKey) return manualCompactKey;
   const role = String(msg.role || '');
   const content = String(msg.content || '').replace(/\s+/g, ' ').trim().slice(0, 500);
   const bucket = Math.floor(Number(msg.timestamp || 0) / 5000);
@@ -16487,6 +16503,7 @@ function stabilizeChatHistoryOrder(history) {
 
 function assistantContentMergeKey(msg) {
   if (!isAssistantLikeMessage(msg)) return '';
+  if (isManualCompactRow(msg)) return '';
   if (msg?.workflowGroupId || msg?.workflowPart) return '';
   const content = String(msg?.content || '').replace(/\s+/g, ' ').trim();
   return content ? `assistant|${content}` : '';
@@ -16802,6 +16819,12 @@ function mergeServerAndLocalHistory(localHistory, serverHistory) {
     }
     const existing = key ? byKey.get(key) : null;
     if (existing) {
+      // The gateway owns /compact receipts and their compactStatus.
+      if (source === 'server' && isManualCompactRow(msg)) {
+        Object.assign(existing, msg);
+        delete existing._manualCompactLocal;
+        return;
+      }
       mergeChatMessageMetadata(existing, msg);
       return;
     }
@@ -18116,10 +18139,15 @@ async function handleDesktopUpdateCommand() {
   }
 }
 
+function manualCompactSendBlockReason(sessionId = window.activeChatSessionId) {
+  return desktopManualCompact.sendBlockReason(sessionId);
+}
+
 function handleImmediateChatSlashCommand(message) {
   const raw = String(message || '').trim();
   const command = raw.toLowerCase();
   const input = document.getElementById('chat-input');
+  if (desktopManualCompact.handleCommand(raw, input)) return true;
   if (command === '/new') {
     clearChatComposerAfterSend(input);
     newChatSession();
@@ -18306,6 +18334,7 @@ const desktopSendChatRuntime = createDesktopSendChatRuntime(() => ({
   getSessionStreamState,
   getSkillTriggerExcludedIds,
   handleImmediateChatSlashCommand,
+  manualCompactSendBlockReason,
   handleRealtimeVoiceInterruptionOnly,
   hasPendingPrometheusQuestion,
   highlightedTextToAttachmentPreview,
