@@ -21,6 +21,46 @@ interface StockResult {
   extra?: { richArtifacts: any[] };
 }
 
+const finite = (value: unknown): number | undefined => {
+  const n = Number(value);
+  return value != null && Number.isFinite(n) ? n : undefined;
+};
+
+/**
+ * The close the day change is measured against.
+ *
+ * meta.chartPreviousClose is the close before the FIRST bar of the requested
+ * range, so on the default 1-month chart it is a month old and the card showed
+ * the month's move as today's (NVDA -31.71%). Yahoo only sends a true previous
+ * close on intraday ranges, so for daily bars take it from the bars: the bar
+ * before the current session's.
+ */
+export function resolvePreviousClose(result: any): number | undefined {
+  const meta = result?.meta || {};
+  const direct = finite(meta.previousClose) ?? finite(meta.regularMarketPreviousClose);
+  if (direct !== undefined) return direct;
+
+  const stamps: any[] = Array.isArray(result?.timestamp) ? result.timestamp : [];
+  const rawCloses: any[] = Array.isArray(result?.indicators?.quote?.[0]?.close) ? result.indicators.quote[0].close : [];
+  const bars: Array<{ at: number; close: number }> = [];
+  for (let i = 0; i < Math.min(stamps.length, rawCloses.length); i++) {
+    const at = finite(stamps[i]);
+    const close = finite(rawCloses[i]);
+    if (at !== undefined && close !== undefined) bars.push({ at, close });
+  }
+  if (bars.length >= 2) {
+    const last = bars[bars.length - 1];
+    const marketTime = finite(meta.regularMarketTime);
+    // A daily bar is stamped at the session open. If the latest bar belongs to
+    // the session the live price is from, the previous close is the bar before it.
+    const lastIsCurrentSession = marketTime === undefined || marketTime - last.at < 20 * 3600;
+    return lastIsCurrentSession ? bars[bars.length - 2].close : last.close;
+  }
+  // One bar or none (one-day chart, or a new listing): the close before the
+  // first bar is the previous close.
+  return finite(meta.chartPreviousClose);
+}
+
 async function yahooQuote(symbol: string, range: string): Promise<MarketItem | null> {
   try {
     const res = await fetch(`${YAHOO}/${encodeURIComponent(symbol)}?range=${encodeURIComponent(range)}&interval=1d`, {
@@ -33,7 +73,7 @@ async function yahooQuote(symbol: string, range: string): Promise<MarketItem | n
     const m = r.meta;
     const price = Number(m.regularMarketPrice);
     if (!Number.isFinite(price)) return null;
-    const prev = Number(m.chartPreviousClose ?? m.previousClose);
+    const prev = resolvePreviousClose(r) ?? NaN;
     const closes: number[] = Array.isArray(r?.indicators?.quote?.[0]?.close)
       ? r.indicators.quote[0].close.filter((n: any) => Number.isFinite(n))
       : [];
