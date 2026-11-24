@@ -3127,7 +3127,7 @@
   }
 
   #settings-modal .smh-sec {
-    padding: 16px 6px 7px;
+    padding: 10px 4px 4px;
     color: var(--muted);
     font-size: 11px;
     font-weight: 800;
@@ -3145,16 +3145,16 @@
   #settings-modal .smh-row {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 9px;
     width: 100%;
-    min-height: 52px;
-    padding: 8px 14px;
+    min-height: 44px;
+    padding: 4px 10px;
     border: 0;
     border-bottom: 1px solid color-mix(in srgb, var(--text) 6%, transparent);
     background: transparent;
     color: var(--text);
     font: inherit;
-    font-size: 15px;
+    font-size: 14px;
     text-align: left;
     cursor: pointer;
   }
@@ -3167,9 +3167,9 @@
   #settings-modal .smh-ico {
     display: inline-grid;
     place-items: center;
-    flex: 0 0 30px;
-    width: 30px;
-    height: 30px;
+    flex: 0 0 24px;
+    width: 24px;
+    height: 24px;
     border-radius: 8px;
     background: color-mix(in srgb, var(--brand) 14%, transparent);
     color: var(--brand);
@@ -3208,30 +3208,34 @@
     flex-wrap: wrap;
     gap: 2px 12px;
     min-height: 0;
-    padding: 6px 16px 10px;
+    padding: 2px 12px;
     background: var(--panel);
     border-bottom: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
   }
 
   #settings-modal.smh-page .settings-page-toolbar h1 {
     margin: 0;
-    font-size: 24px;
-    line-height: 1.15;
+    font-size: 18px;
+    line-height: 1.2;
   }
 
-  #settings-modal.smh-page .settings-page-toolbar > div { flex: 1 0 100%; order: 2; }
+  #settings-modal.smh-page .settings-page-toolbar > div { flex: 1 1 8em; min-width: 0; order: 2; }
   #settings-modal.smh-page .settings-page-kicker { display: none; }
   #settings-modal.smh-page .settings-close-btn { display: none; }
 
+  #settings-modal .settings-section { margin-bottom: 16px; }
+  #settings-modal .settings-section-heading { margin-bottom: 5px; }
+  #settings-modal .settings-models-layout { gap: 10px; }
+
   /* Save/Cancel: sticky inside the scroll area, never covering content. */
   #settings-modal .settings-page-main > [id^="settings-panel-"] {
-    padding-bottom: 28px !important;
+    padding: 12px 12px 20px !important;
   }
 
   #settings-modal .settings-page-footer {
     position: sticky;
     bottom: 0;
-    padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px));
+    padding: 4px 12px calc(4px + env(safe-area-inset-bottom, 0px));
     background: var(--panel);
     box-shadow: 0 -8px 18px rgba(0, 0, 0, .18);
   }
