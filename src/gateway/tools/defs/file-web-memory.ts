@@ -117,13 +117,13 @@ export function getFileWebMemoryTools(): any[] {
       type: 'function',
       function: {
         name: 'workspace_run',
-        description: 'Unified terminal command/process/check wrapper. Use run for bounded commands, start for supervised processes, status/log/wait/kill/submit for runIds, and test/lint/format/typecheck for project checks. Default permissions ask before outside-workspace paths; Lite permissions allow full-computer terminal access except hard-blocked dangerous commands.',
+        description: 'Unified terminal command/process wrapper. Use run for bounded commands (including tests, linters, formatters and typechecks), start for supervised processes, and status/log/wait/kill/submit for runIds. Default permissions ask before outside-workspace paths; Lite permissions allow full-computer terminal access except hard-blocked dangerous commands.',
         parameters: {
           type: 'object',
           required: ['action'],
           properties: {
-            action: { type: 'string', enum: ['run', 'start', 'status', 'log', 'wait', 'kill', 'submit', 'test', 'lint', 'format', 'typecheck', 'telemetry', 'benchmark_summary'], description: 'Command/process/check/telemetry action.' },
-            command: { type: 'string', description: 'Raw shell command or explicit check. Simple Windows batches report per-step exits. Do not combine with program/argv or search.' },
+            action: { type: 'string', enum: ['run', 'start', 'status', 'log', 'wait', 'kill', 'submit'], description: 'Command/process action.' },
+            command: { type: 'string', description: 'Raw shell command. Simple Windows batches report per-step exits. Do not combine with program/argv or search.' },
             program: { type: 'string', enum: ['git','node','rg'], description: 'Windows captured run: native executable with literal argv. Prefer for paths, spaces, nested quotes or inline code.' },
             argv: { type:'array', items:{type:'string'}, description:'Exact arguments to program; no shell escaping.' },
             search: {type:'object', required:['text'], additionalProperties:false, properties:{ text:{type:'string'}, directory:{type:'string'}, glob:{type:'string'}, regex:{type:'boolean'} }, description:'Windows captured run: search with rg. Literal text by default. Directory and filename glob are separate.' },
@@ -133,7 +133,7 @@ export function getFileWebMemoryTools(): any[] {
             shell: { type: 'string', enum: ['auto', 'powershell', 'cmd', 'bash'] },
             elevated: { type: 'boolean', description: 'Windows only. Run this bounded command through the administrator broker. Always requires a fresh one-shot user approval; Lite mode, goals, and saved permissions cannot bypass it. Broker installation may require UAC once; later commands do not. Not supported with action=start.' },
             pty: { type: 'boolean' },
-            timeout_ms: { type: 'number', description: 'Timeout in milliseconds for run/check; for wait: default 10000, range 1000–300000, returns early on completion. Prefer one longer wait over repeated polling. Wait timeout/cancellation ends observation, not the process; use kill to terminate it.' },
+            timeout_ms: { type: 'number', description: 'Timeout in milliseconds for run; for wait: default 10000, range 1000–300000, returns early on completion. Prefer one longer wait over repeated polling. Wait timeout/cancellation ends observation, not the process; use kill to terminate it.' },
             timeoutMs: { type: 'number', description: 'Legacy camelCase timeout alias.' },
             noOutputTimeoutMs: { type: 'number' },
             title: { type: 'string' },
@@ -187,12 +187,12 @@ export function getFileWebMemoryTools(): any[] {
       type: 'function',
       function: {
         name: 'workspace_safety',
-        description: 'Unified recovery and risk-check wrapper for snapshots/restores/reverts, secret and large-file scans, operation plans, and patch previews.',
+        description: 'Unified recovery and risk-check wrapper for snapshots/restores/reverts and secret and large-file scans. Patch previews live on workspace_edit(action:"preview_patch").',
         parameters: {
           type: 'object',
           required: ['action'],
           properties: {
-            action: { type: 'string', enum: ['snapshot', 'restore', 'revert_last', 'scan_secrets', 'scan_large_files', 'operation_plan', 'preview_patch'], description: 'Safety action.' },
+            action: { type: 'string', enum: ['snapshot', 'restore', 'revert_last', 'scan_secrets', 'scan_large_files'], description: 'Safety action.' },
             path: { type: 'string' },
             snapshot_id: { type: 'string' },
             confirm: { type: 'boolean' },
@@ -202,8 +202,6 @@ export function getFileWebMemoryTools(): any[] {
             max_bytes: { type: 'number' },
             min_bytes: { type: 'number' },
             max_results: { type: 'number' },
-            operations: { type: 'array', items: { type: 'object' } },
-            patch: { type: 'string' },
           },
         },
       },

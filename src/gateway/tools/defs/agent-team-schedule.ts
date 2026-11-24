@@ -64,12 +64,12 @@ export function getAgentTeamScheduleTools(): any[] {
         name: 'agent_chat_ops',
         description:
           'Unified standalone-agent communication wrapper. Prefer action="chat" for persistent conversation, "delegate" to create exactly one formal background task, "steer" to guide an existing task, and "send_mailbox" to deliver without starting work. ' +
-          'Legacy talk/message/send actions remain accepted. A delegate assignment must describe the work itself; the tool already creates the task.',
+          'A delegate assignment must describe the work itself; the tool already creates the task.',
         parameters: {
           type: 'object',
           required: ['action'],
           properties: {
-            action: { type: 'string', enum: ['chat', 'delegate', 'steer', 'send_mailbox', 'talk', 'message', 'send', 'turn_request', 'reply_wait', 'thread_watch'] },
+            action: { type: 'string', enum: ['chat', 'delegate', 'steer', 'send_mailbox'] },
             agent_id: { type: 'string' },
             subagent_id: { type: 'string' },
             assignment: { type: 'string', description: 'For delegate: direct executable work. Do not say create/start/spawn a task; this call already creates it.' },
@@ -83,8 +83,6 @@ export function getAgentTeamScheduleTools(): any[] {
             background: { type: 'boolean' },
             user_label: { type: 'string' },
             force_new_task: { type: 'boolean', description: 'For delegate only: true only when the user explicitly requested separate parallel work.' },
-            thread_id: { type: 'string' },
-            request_id: { type: 'string' },
             timeout_ms: { type: 'number' },
           },
         },
@@ -99,7 +97,7 @@ export function getAgentTeamScheduleTools(): any[] {
           type: 'object',
           required: ['action'],
           properties: {
-            action: { type: 'string', enum: ['manage', 'delete', 'manage_goal', 'manage_context_ref', 'update_goal', 'reply', 'post_chat', 'message_main', 'dispatch', 'dispatch_team_agent', 'request_member_turn', 'get_agent_result', 'escalation'] },
+            action: { type: 'string', enum: ['manage', 'manage_goal', 'manage_context_ref', 'update_goal', 'reply', 'post_chat', 'message_main', 'dispatch', 'request_member_turn', 'get_agent_result', 'escalation'] },
             team_action: { type: 'string', description: 'Sub-action for action="manage", e.g. list/create/start/dispatch/pause/resume/delete.' },
             team_id: { type: 'string' },
             teamId: { type: 'string' },
@@ -133,7 +131,7 @@ export function getAgentTeamScheduleTools(): any[] {
             timeout_ms: { type: 'number', description: 'get_agent_result: max wait when block=true.' },
             confirm: { type: 'boolean' },
             delete_agents: { type: 'boolean' },
-            background: { type: 'boolean', description: 'dispatch_team_agent only. Default: true when called from main chat (returns task_id immediately; poll with get_agent_result), false inside the team manager. Pass false to block until the member finishes.' },
+            background: { type: 'boolean', description: 'dispatch only. Default: true when called from main chat (returns task_id immediately; poll with get_agent_result), false inside the team manager. Pass false to block until the member finishes.' },
             escalation_action: { type: 'string', enum: ['list', 'dismiss', 'escalate_to_user', 'answered'], description: 'For action="escalation". list (team_id optional: all teams when omitted), dismiss, escalate_to_user, or answered. Needs message_id for the last three.' },
             message_id: { type: 'string', description: 'For action="escalation": the escalation id from list.' },
             note: { type: 'string', description: 'For action="escalation" with dismiss, escalate_to_user, or answered: optional reason, posted to the team chat as Main Agent when the escalation changes. Ignored for list.' },
