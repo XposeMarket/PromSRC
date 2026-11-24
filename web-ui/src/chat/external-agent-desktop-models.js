@@ -1,9 +1,10 @@
 // Desktop: the ORIGINAL model switcher (quick reasoning slider + Advanced)
 // stays in charge. When a connected agent owns the chat it reads this hook
 // instead of Prometheus providers, so only the harness's models/efforts show.
+import { desktopModelLabel } from '../components/desktop-model-label.js';
 import { setAgentPlaceholder } from './external-agent-placeholder.js';
 import {
-  setAgentModelContext, hasAgentModelContext, agentModelBadge, agentModelState, agentModelStateCached,
+  setAgentModelContext, hasAgentModelContext, agentModelState, agentModelStateCached,
   saveAgentModel, saveAgentEffort, agentModelForSend, agentEffortForSend, agentEffortLabel, agentModelGroups,
 } from './external-agent-models.js';
 const request = async (path, options = {}) => {
@@ -16,18 +17,18 @@ let generation = 0;
 let displayed = '';
 let watched;
 let labels = new Map();
-function paintLabel(text) {
-  displayed = text;
+function paintLabel(state) {
+  const html = desktopModelLabel(state?.provider, state?.model, state?.label || 'Model', agentEffortLabel(state?.effort));
   const label = document.getElementById('chat-model-name');
   if (label && label !== watched) {
     watched = label;
-    new MutationObserver(() => { if (current && displayed && label.textContent !== displayed) label.textContent = displayed; }).observe(label, { childList: true, subtree: true, characterData: true });
+    new MutationObserver(() => { if (current && displayed && label.innerHTML !== displayed) label.innerHTML = displayed; }).observe(label, { childList: true, subtree: true, characterData: true });
   }
-  if (label && text && label.textContent !== text) label.textContent = text;
+  if (label) { label.innerHTML = html; displayed = label.innerHTML; }
 }
 function repaint() {
   const stamp = generation;
-  return agentModelBadge(request).then((text) => { if (stamp === generation && current && text) paintLabel(text); }).catch(() => {});
+  return agentModelState(request).then((state) => { if (stamp === generation && current && state) paintLabel(state); }).catch(() => { if (stamp === generation && current) paintLabel(null); });
 }
 export function setDesktopAgentModel(context) {
   setAgentPlaceholder(context?.id || '');
@@ -35,9 +36,9 @@ export function setDesktopAgentModel(context) {
   const key = context ? `${context.id}|${context.sessionId || ''}|${context.cwd || ''}` : '';
   if (key === (current?.key || '')) return;
   generation++; current = context ? { ...context, key } : null; displayed = '';
-  if (context && savedLabel === null) savedLabel = label?.textContent || '';
+  if (context && savedLabel === null) savedLabel = Array.from(label?.childNodes || [], node => node.cloneNode(true));
   setAgentModelContext(context);
-  if (!context) { if (label && savedLabel !== null) label.textContent = savedLabel; savedLabel = null; return; }
+  if (!context) { if (label && savedLabel !== null) label.replaceChildren(...savedLabel); savedLabel = null; return; }
   void repaint();
 }
 // Catalog labels ("GPT-6-Luna", "Haiku") instead of Prometheus provider names.
