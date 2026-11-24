@@ -1,4 +1,3 @@
-import { renderMobileContextChip, wireMobileContextWindow } from './mobile-context-window.js';
 import { clearMobileQueueDraftReceipt, createMobileDurableQueue } from './mobile-durable-queue.js';
 import { noteMobilePendingEvent } from './mobile-ttft-state.js';
 
@@ -385,6 +384,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
       receipts,
       setReceipts,
       reconcileMobileChatTurn,
+      renderMobileContextChip, wireMobileContextWindow,
       renderMobileHeader,
       renderVoicePage,
       requestMobileUpdate,

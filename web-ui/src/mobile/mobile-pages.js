@@ -10867,8 +10867,9 @@ function _saveMobileLastChatContext(context = {}) {
 let mobileChatPageRendererPromise = null;
 function loadMobileChatPageRenderer() {
   if (!mobileChatPageRendererPromise) {
-    mobileChatPageRendererPromise = import('./mobile-chat-page-runtime.js')
-      .then(({ createMobileChatPageRenderer }) => createMobileChatPageRenderer(() => ({
+    mobileChatPageRendererPromise = Promise.all([import('./mobile-chat-page-runtime.js'), import('./mobile-context-window.js')])
+      .then(([{ createMobileChatPageRenderer }, { renderMobileContextChip, wireMobileContextWindow }]) => createMobileChatPageRenderer(() => ({
+  renderMobileContextChip, wireMobileContextWindow,
   ICONS,
   isMobileChatPinned,
   MOBILE_CHAT_SESSION_ID,
