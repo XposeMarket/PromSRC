@@ -1,4 +1,3 @@
-import { api as gatewayApi } from '../api.js';
 import { cachedSessionBinding, isDotSessionId } from '../chat/external-agent-ui.js';
 import {
   MANUAL_COMPACT_LABELS,
@@ -7149,7 +7148,10 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
   function mobileManualCompact() {
     if (!mobileManualCompactInstance) {
       mobileManualCompactInstance = createManualCompactController({
-        request: (path, opts) => gatewayApi(path, opts),
+        request: async (path, opts) => {
+          const { api } = await import('../api.js');
+          return api(path, opts);
+        },
         readStatus: async (sessionId, id) => {
           const session = await loadMobileChatSession(sessionId, { force: true, historyLimit: 20, fullProcess: false });
           return session?.history?.find((row) => row.messageId === id);

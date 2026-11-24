@@ -57,7 +57,7 @@ import {
 } from './external-agents/types';
 import { retainAnthropicToolCategories, ANTHROPIC_RETAINED_CATEGORY_LIMIT } from '../providers/anthropic-tool-cache';
 
-import { isCompactRow, compactLabels, manualCompactions, type CompactStatus } from './chat/manual-compact-state';
+import { isCompactRow, captureManualCompactionRollback, healOrphanedManualCompactions, getLastAssistantTimestamp, type CompactStatus } from './chat/manual-compact-state';
 
 export interface ChatMessage {
   compactStatus?: CompactStatus;
@@ -1461,17 +1461,6 @@ export function getSessionDisplayTitle(session: Pick<Session, 'title' | 'history
   return current || getSessionTitleFromHistory(session?.history || []);
 }
 
-function getLastAssistantTimestamp(history: any[]): number | undefined {
-  if (!Array.isArray(history)) return undefined;
-  for (let i = history.length - 1; i >= 0; i--) {
-    const msg = history[i];
-    if (msg?.role !== 'assistant' || isCompactRow(msg)) continue;
-    const ts = Number(msg.timestamp || 0);
-    return Number.isFinite(ts) && ts > 0 ? ts : Date.now();
-  }
-  return undefined;
-}
-
 function isSummaryTimelineMessage(msg: any): boolean {
   if (msg && isCompactRow(msg)) return false;
   const content = String(msg?.content || '').trim();
@@ -2528,12 +2517,7 @@ export function recordSessionCompaction(
   const session = getSession(sessionId);
   const cleanSummary = String(summaryText || '').trim();
   if (!cleanSummary) return;
-  const rollback = extra?.manualStatusId ? {
-    latestContextSummary: session.latestContextSummary, contextStartIndex: session.contextStartIndex,
-    contextStartMessageId: session.contextStartMessageId, contextSummaryUpdatedAt: session.contextSummaryUpdatedAt,
-    workingContextPackets: session.workingContextPackets, contextTokenEstimate: session.contextTokenEstimate,
-    pendingCompaction: session.pendingCompaction,
-  } : null;
+  const rollback = extra?.manualStatusId ? captureManualCompactionRollback(session) : null;
   if (rollback) session.pendingCompaction = false;
   session.latestContextSummary = cleanSummary;
   session.contextStartIndex = Math.max(0, Math.floor(Number(baseMessageCount) || 0));
@@ -2879,12 +2863,7 @@ export function getSession(id: string): Session {
       setSessionCacheWeight(sessionId, session);
       touchSessionCache(sessionId);
       pruneSessionCache();
-      // A maintenance operation is never replayed after restart. Success is stored with its checkpoint.
-      if (!manualCompactions.has(sessionId)) for (const row of session.history) {
-        if (row.messageKind === 'manual_compact_status' && row.compactStatus === 'running') {
-          row.compactStatus = 'failed'; row.content = compactLabels.failed; saveSession(sessionId);
-        }
-      }
+      healOrphanedManualCompactions(sessionId, session.history, () => saveSession(sessionId));
       if (historyWasHealed) {
         console.log(`[session] healed re-appended assistant rows in ${sessionId}: ${rawHistory.length} -> ${healedHistory.length}`);
         saveSession(sessionId);

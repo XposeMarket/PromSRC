@@ -11,14 +11,22 @@ import { mobileQueueBlocksNewTurn } from './mobile-queue';
 import { formatCompactionArtifactPaths, isCompactionSummaryMessage, runContextCompactor } from './pipeline/compaction';
 
 class Refused extends Error { constructor(readonly code: number, message: string) { super(message); } }
-export async function requestManualCompact(sid: string, body: Record<string, any>, signal?: AbortSignal): Promise<CompactReply> {
+interface ManualCompactRequest {
+  message?: unknown;
+  clientMessageId?: unknown;
+  clientRequestId?: unknown;
+  attachments?: { length?: number };
+  attachmentPreviews?: { length?: number };
+  agent?: string | { id?: string };
+}
+export async function requestManualCompact(sid: string, body: ManualCompactRequest, signal?: AbortSignal): Promise<CompactReply> {
   assertSafeStorageId(sid, 'session id');
   if (String(body.message || '').trim().toLowerCase() !== '/compact' || body.attachments?.length || body.attachmentPreviews?.length)
     throw new Refused(400, 'Send /compact by itself, without attachments.');
   const id = String(body.clientMessageId || body.clientRequestId || randomUUID());
   if (!/^[\w.:~-]{1,160}$/.test(id)) throw new Refused(400, 'Invalid command request ID.');
   const session = getSession(sid);
-  const agent = body.agent?.id || body.agent;
+  const agent = typeof body.agent === 'object' ? body.agent?.id || body.agent : body.agent;
   if (session.externalAgent || session.externalImport || /^subagent_chat_/i.test(sid) || (agent && agent !== 'prometheus'))
     throw new Refused(409, '/compact is available in native Prometheus chats only.');
   const owner = manualCompactions.get(sid);

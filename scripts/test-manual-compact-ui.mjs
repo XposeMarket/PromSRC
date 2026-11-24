@@ -9,6 +9,11 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (name) => fs.readFileSync(path.join(root, name), 'utf8');
 const mod = (name) => import(pathToFileURL(path.join(root, name)).href);
 
+// The mobile page is importable without browser globals. Its command transport loads
+// the authenticated browser API only when a real maintenance request is dispatched.
+assert.equal(typeof globalThis.localStorage, 'undefined');
+await mod('web-ui/src/mobile/mobile-chat-page-runtime.js');
+
 const mc = await mod('web-ui/src/features/chat/core/manual-compact.js');
 const { getChatSlashCommands } = await mod('web-ui/src/features/chat/core/slash-commands.js');
 
