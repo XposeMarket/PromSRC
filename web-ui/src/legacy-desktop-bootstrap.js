@@ -1,3 +1,4 @@
+import { desktopModelLabel } from './components/desktop-model-label.js';
 import { groupModelsByFamily } from './model-family-grouping.js';
 
 // ═══ CHAT PAGE — EXTRACTED to src/pages/ChatPage.js (F3f) ═══
@@ -2569,7 +2570,8 @@ function _renderActiveModelLabels(model, provider, effort = '', sessionId = '', 
   if (composer) {
     composer.dataset.baseName = baseName;
     composer.dataset.rawModel = rawModel;
-    composer.textContent = fullName;
+    const suffix = baseName && fullName.startsWith(baseName + ' ') ? fullName.slice(baseName.length).trim() : '';
+    composer.innerHTML = desktopModelLabel(provider, rawModel, suffix ? baseName : fullName, suffix);
   }
   const speedIcon = sid
     ? Array.from(document.querySelectorAll('[data-composer-model-speed="1"]'))
@@ -3379,7 +3381,7 @@ document.addEventListener('click', (e) => {
   if (_modelSwitcherOpen) {
     const btn = document.getElementById('model-switcher-btn');
     const pop = document.getElementById('model-switcher-popover');
-    if (btn && pop && !btn.contains(e.target) && !pop.contains(e.target)) {
+    if (btn && pop && !e.composedPath().includes(btn) && !e.composedPath().includes(pop)) {
       pop.style.display = 'none';
       _modelSwitcherOpen = false;
     }
@@ -3387,7 +3389,7 @@ document.addEventListener('click', (e) => {
   document.querySelectorAll('[data-model-switcher-popover="1"]').forEach((pop) => {
     const wrap = pop.closest('.chat-model-switcher-wrap');
     const button = wrap?.querySelector('button');
-    if (wrap && !wrap.contains(e.target) && button && !button.contains(e.target)) pop.style.display = 'none';
+    if (wrap && !e.composedPath().includes(wrap) && button && !e.composedPath().includes(button)) pop.style.display = 'none';
   });
 });
 

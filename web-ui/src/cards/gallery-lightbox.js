@@ -1,3 +1,5 @@
+import { installGalleryTouch } from './gallery-touch.js';
+
 export function openLightbox(items, start = 0) {
   if (!items?.length || document.querySelector('dialog.pc-lightbox[open]')) return;
   let i = Math.max(0, Math.min(items.length - 1, start));
@@ -16,7 +18,16 @@ export function openLightbox(items, start = 0) {
 dialog.pc-lightbox{box-sizing:border-box;margin:0;border:0;width:100%;height:100%;max-width:none;max-height:none;overscroll-behavior:contain}dialog.pc-lightbox:not([open]){display:none}dialog.pc-lightbox::backdrop{background:transparent}.pc-lightbox img{touch-action:pan-y pinch-zoom}.pc-lightbox figcaption{overflow-wrap:anywhere}.pc-lightbox figcaption span{flex:none}.pc-lightbox .pc-lb-close{top:max(16px,env(safe-area-inset-top));right:max(16px,env(safe-area-inset-right))}`;
   box.append(style);
   const image = box.querySelector('img'), caption = box.querySelector('figcaption');
+  let resetZoom;
+  if (document.body.classList.contains('pm-mobile-active')) {
+    const stage = document.createElement('div');
+    stage.className = 'pc-lb-viewport';
+    image.replaceWith(stage); stage.append(image);
+    style.textContent += `.pc-lb-viewport{width:fit-content;max-width:100%;min-width:0;overflow:hidden;border-radius:8px;touch-action:none}.pc-lb-viewport img{display:block;pointer-events:none}.pc-lightbox button{z-index:1}`;
+    resetZoom = installGalleryTouch(stage, image, d => { if (multi) step(d); });
+  }
   const paint = () => {
+    resetZoom?.();
     const it = items[i];
     image.src = it.src || it.thumb;
     image.alt = it.title || '';
