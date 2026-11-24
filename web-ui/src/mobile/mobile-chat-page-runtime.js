@@ -2185,12 +2185,14 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
     const position = () => {
       const anchor = anchorElement?.getBoundingClientRect?.();
       const owner = form?.getBoundingClientRect?.();
-      if (!anchor || !owner) return;
+      if (!anchor?.width || !anchor.height || !owner?.width) return; // Never replace a valid anchor with the origin during a keyboard transition.
       const anchorPageX = anchor.left + anchor.width / 2;
       const anchorPageY = anchor.top + anchor.height / 2;
-      // Body-level fixed layer uses the same layout coordinates as the trigger.
-      attachSheet.style.setProperty('--pm-attach-origin-x', `${Math.round(anchorPageX)}px`);
-      attachSheet.style.setProperty('--pm-attach-origin-y', `${Math.round(anchorPageY)}px`);
+      // Convert both client rects into the portal's local coordinates. Safari's
+      // fixed origin can move while its visual viewport pans above the keyboard.
+      const portal = attachSheet.getBoundingClientRect();
+      attachSheet.style.setProperty('--pm-attach-origin-x', `${Math.round(anchorPageX - portal.left)}px`);
+      attachSheet.style.setProperty('--pm-attach-origin-y', `${Math.round(anchorPageY - portal.top)}px`);
 
       const viewportWidth = Math.max(160, Math.round(window.visualViewport?.width || window.innerWidth || 390));
       // Keep the fan directly above the trigger, not above the composer card.
@@ -9227,6 +9229,23 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       updateComposerExpandedState();
     });
   };
+  // Safari can move focus during the compatibility mouse events after touchend,
+  // even when pointerdown was cancelled. Consume a focused tap at release and
+  // activate once, synchronously. Ignore swipes, multi-touch and cancelled taps.
+  let attachTouchStart;
+  attachBtn?.addEventListener('touchstart', (event) => {
+    attachTouchStart = document.activeElement === input && event.touches.length === 1 ? event.touches[0] : null;
+  }, { passive: true });
+  attachBtn?.addEventListener('touchcancel', () => { attachTouchStart = null; });
+  attachBtn?.addEventListener('touchend', (event) => {
+    const start = attachTouchStart, end = event.changedTouches[0];
+    attachTouchStart = null;
+    if (!start || !end || end.identifier !== start.identifier || event.touches.length || !event.cancelable) return;
+    event.preventDefault();
+    if (Math.hypot(end.clientX - start.clientX, end.clientY - start.clientY) > 10) return;
+    if (document.activeElement !== input) input.focus({ preventScroll: true });
+    attachBtn.click();
+  }, { passive: false });
   preserveComposerFocusOnPointer(attachBtn, 'attach');
   preserveComposerFocusOnPointer(micBtn, 'dictation');
   const composerModelBadge = page.querySelector('.pm-composer-model-badge');
