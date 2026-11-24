@@ -14,7 +14,7 @@ import { backgroundSpawnLaneSummary, backgroundSpawnStatusLabel, mergeBackground
 import { dispatchDesktopChatLifecycle } from '../features/chat/lifecycle.js';
 import { animatePanelWidth } from '../features/shell/panel-motion.js';
 import { renderSourcePills } from '../cards/index.js';
-import { animateThinkingTextSwap, escHtml, renderMd, withoutInlineCards, renderThinkingState, showToast, timeAgo, buildVisualIframe, buildVisualSrcdoc, bgtToast, showConfirm, setInnerHTMLPreservingVisuals } from '../utils.js';
+import { animateThinkingTextSwap, escHtml, renderMd, withoutInlineCards, renderThinkingState, showToast, timeAgo, buildVisualIframe, buildVisualSrcdoc, bgtToast, showConfirm, preserveVisualIframes, setInnerHTMLPreservingVisuals } from '../utils.js';
 import { wsEventBus, wsSend, syncWsStreamFocus } from '../ws.js';
 import { formatModelDisplayName, formatModelWithReasoning } from '../model-display.js';
 import { applyRealtimeToolRefresh } from '../voice/realtime-tool-refresh.js';
@@ -12941,7 +12941,7 @@ function renderLiveTracePreview(entry) {
   const width = Number(preview?.width || entry?.width || 0);
   const height = Number(preview?.height || entry?.height || 0);
   const dims = width > 0 && height > 0 ? ` (${Math.round(width)}x${Math.round(height)})` : '';
-  return `<button type="button" class="live-turn-vision-preview" title="${escHtml(title + dims)}" onclick="openImgPreview(this.querySelector('img')?.src || '', ${encodeInlineJsString(title)})">
+  return `<button type="button" class="live-turn-vision-preview" style="--vision-aspect:${width > 0 && height > 0 && Number.isFinite(width / height) ? width / height : '16 / 9'}" title="${escHtml(title + dims)}" onclick="openImgPreview(this.querySelector('img')?.src || '', ${encodeInlineJsString(title)})">
     <img src="${escHtml(dataUrl)}" alt="${escHtml(title)}" loading="eager" decoding="async">
   </button>`;
 }
@@ -15697,7 +15697,7 @@ function patchStreamingAnswerText(content, nextContent) {
   // bubble's structure, so let the caller take the safe one-time fallback.
   if (!!currentText !== !!nextText) return false;
   if (currentText && nextText && currentText.innerHTML !== nextText.innerHTML) {
-    currentText.innerHTML = nextText.innerHTML;
+    setInnerHTMLPreservingVisuals(currentText, nextText.innerHTML);
   }
   return true;
 }
@@ -15738,7 +15738,9 @@ function patchStreamingChatBubble(sessionId) {
   const content = bubble?.querySelector('[data-live-stream-content]');
   if (!content) return false;
   const shouldFollow = (list.scrollHeight - (list.scrollTop + list.clientHeight)) <= 60;
-  const nextContent = document.createElement('div');
+  // Parse off-document without starting image loads for discarded stream frames.
+  const stagingDocument = document.createElement('template').content?.ownerDocument || document;
+  const nextContent = stagingDocument.createElement('div');
   nextContent.innerHTML = renderSessionThinkingBodyHtml(sid);
   // Keep placeholder styling in sync when the first answer/tool arrives.
   const st = getSessionStreamState(sid) || {};
@@ -15754,15 +15756,8 @@ function patchStreamingChatBubble(sessionId) {
     || content.querySelector('.chat-question-card, .chat-approval-card')
     || nextContent.querySelector('.chat-question-card, .chat-approval-card')
     || !hasTimeline) && content.innerHTML !== nextContent.innerHTML) {
-    // Structural transitions affect the live body only, never historical rows.
-    // Reuse unchanged interactive cards so token paints do not reset their UI.
-    const cards = Array.from(content.querySelectorAll('.chat-question-card, .chat-approval-card'));
-    Array.from(nextContent.querySelectorAll('.chat-question-card, .chat-approval-card')).forEach((card) => {
-      const previous = cards.find((node) => node.outerHTML === card.outerHTML);
-      if (previous) card.replaceWith(previous);
-    });
     const disclosures = captureLiveTraceDisclosureState(content);
-    content.replaceChildren(...Array.from(nextContent.childNodes));
+    preserveVisualIframes(content, nextContent);
     restoreLiveTraceDisclosureState(content, disclosures);
   }
 

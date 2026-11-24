@@ -2326,8 +2326,9 @@ export function createMobileChatRendererRuntime(context = {}) {
       && isMobileDeliveryRow(_activeMobileThread()[msgIndex + 1])) return false;
     const currentEl = threadEl.querySelector(`[data-msg-index="${msgIndex}"]`);
     if (!currentEl) return false;
-    const nextWrap = document.createElement('div');
-    nextWrap.innerHTML = _renderChatMessageHtml(
+    const template = document.createElement('template');
+    const nextWrap = template.content;
+    template.innerHTML = _renderChatMessageHtml(
       message,
       msgIndex,
       currentEl.getAttribute('data-pm-row-key') || '',
