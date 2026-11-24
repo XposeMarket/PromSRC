@@ -24,8 +24,10 @@ export async function requestManualCompact(sid: string, body: Record<string, any
   const owner = manualCompactions.get(sid);
   if (owner?.id === id) return owner.done;
   const statusId = `manual_compact:${id}:status`;
-  const prior = session.history.find(m => m.messageId === statusId && m.messageKind === 'manual_compact_status');
+  const prior = getSession(sid).history.find(m => m.messageId === statusId && m.messageKind === 'manual_compact_status');
   if (prior?.compactStatus && prior.compactStatus !== 'running') return { status: prior.compactStatus, message: prior.content };
+  // A running row with no in-memory owner is orphaned: heal it terminal and never replay it as running.
+  if (prior && !owner) { prior.compactStatus = 'failed'; prior.content = compactLabels.failed; flushSession(sid); return { status: 'failed', message: compactLabels.failed }; }
   if (owner || session.mainChatGoal?.status === 'active' || mobileQueueBlocksNewTurn(sid)
     || [...listLiveRuntimes(), ...listInterruptedRuntimes()].some(r => r.sessionId === sid && (r.kind === 'main_chat' || r.kind === 'main_chat_goal')))
     throw new Refused(409, COMPACT_BUSY);
@@ -43,7 +45,7 @@ export async function requestManualCompact(sid: string, body: Record<string, any
     let result: CompactReply['status'] = 'skipped';
     if (window.length) {
       result = 'failed';
-      const boundary = session.history.length;
+      const boundary = getSession(sid).history.length;
       try {
         const { snapshot } = captureChatTurnRouteSnapshot(sid);
         const admission = await gatewayRuntimeAdmission.acquire({ lane: 'interactive', resourceWeight: 1, signal, metadata: { sessionId: sid, executionMode: 'manual_compact' } });
@@ -54,22 +56,29 @@ export async function requestManualCompact(sid: string, body: Record<string, any
             targetLengthText: 'adaptive', maxWords: Number.MAX_SAFE_INTEGER, provider: snapshot.provider, model: snapshot.model,
             numCtx: snapshot.contextProfile.contextWindowTokens, numPredict: snapshot.contextProfile.maxOutputTokens, routeSnapshot: snapshot,
             abortSignal: { get aborted() { return !!signal?.aborted; }, signal }, recordMeta: { manualStatusId: statusId },
-            manualBoundary: { count: boundary, row: status },
+            manualBoundary: { count: boundary, statusId },
           });
           if (compacted.compacted) result = 'success';
         } finally { admission.release(); }
       } catch (error) { console.warn('[manual-compact] Compaction unavailable:', (error as Error).message); }
     }
-    status.compactStatus = result; status.content = compactLabels[result];
-    if (result !== 'success' && !flushSession(sid)) throw new Refused(503, 'Could not persist compaction status. Reload the conversation to check it.');
-    return { status: result, message: status.content };
+    // Settle the durable row by id, never the (possibly replaced) object captured at start.
+    const hist = getSession(sid).history;
+    let row = hist.find(m => m.messageId === statusId && m.messageKind === 'manual_compact_status');
+    if (!row) { row = { role: 'assistant', messageKind: 'manual_compact_status', messageId: statusId, compactStatus: result, content: compactLabels[result], timestamp: Date.now() }; hist.push(row); }
+    row.compactStatus = result; row.content = compactLabels[result];
+    if (!flushSession(sid)) throw new Refused(503, 'Could not persist compaction status. Reload the conversation to check it.');
+    return { status: result, message: row.content };
   }).finally(() => { manualCompactions.delete(sid); mainChatTurnCoordinator.release(lease); });
   manualCompactions.set(sid, { id, done });
   return done;
 }
 export async function manualCompactHttp(req: Request, res: Response): Promise<void> {
   let sid: string;
-  try { sid = assertSafeStorageId(String(req.body?.sessionId || 'default'), 'session id'); }
+  // No default chat: a compact command must name its session explicitly (desktop included).
+  const rawSid = req.body?.sessionId;
+  if (typeof rawSid !== 'string' || !rawSid.trim()) { res.status(400).json({ error: 'Session id required.' }); return; }
+  try { sid = assertSafeStorageId(rawSid.trim(), 'session id'); }
   catch { res.status(400).json({ error: 'Invalid session id.' }); return; }
   try { res.json(await requestManualCompact(sid, req.body || {})); }
   catch (err) { res.status(err instanceof Refused ? err.code : 500).json({ error: err instanceof Refused ? err.message : 'Manual compaction unavailable.' }); }

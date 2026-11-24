@@ -103,7 +103,11 @@ export async function runInteractiveTurn(
     try { return { type: 'chat', text: (await requestManualCompact(sessionId, { message, attachments, attachmentPreviews, ...requestMeta }, abortSignal?.signal)).message }; }
     catch (error) { return { type: 'chat', text: (error as Error).message }; }
   }
-  if (manualCompactions.has(sessionId)) return { type: 'chat', text: COMPACT_BUSY };
+  // Explicit user input is refused while compaction owns the chat. Scheduled timers, wakes and
+  // agent completions are not user input: they fall through to the normal lease wait below and run after it.
+  const scheduledOrigin = turnOriginInput?.channel === 'system' || !!flags?.directSubagentChat || !!flags?.supervisionLoop
+    || Object.keys(flags || {}).some(k => k.startsWith('synthetic') && (flags as any)[k]);
+  if (manualCompactions.has(sessionId) && !scheduledOrigin) return { type: 'chat', text: COMPACT_BUSY };
   // Install the watch policy around the entire synthetic turn, including
   // preflight routers and voice/mobile wrappers that bypass executeTool.
   if (flags?.internalWatchContext && flags.internalWatchContextInstalled !== true) {

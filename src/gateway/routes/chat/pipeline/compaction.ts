@@ -104,7 +104,7 @@ export function formatCompactionArtifactPaths(sessionId: string): string {
 export interface ContextCompactorRunInput {
   sessionId: string;
   strategy: 'rolling_window' | 'mid_workflow_token_budget' | 'manual';
-  manualBoundary?: { count: number; row: import('../../../session').ChatMessage };
+  manualBoundary?: { count: number; statusId: string };
   targetLengthText: string;
   maxWords: number;
   previousSummary: string;
@@ -234,10 +234,12 @@ export async function runContextCompactor(input: ContextCompactorRunInput): Prom
       },
       commit: (summary, passCount) => {
         if (input.manualBoundary) {
+          // Identity boundary: the status row is found by id in the current history, never by object reference.
           const history = getSession(input.sessionId).history;
-          if (history.length !== input.manualBoundary.count || history[history.length - 1] !== input.manualBoundary.row) throw new Error('Transcript changed during compaction.');
-          input.manualBoundary.row.compactStatus = 'success';
-          input.manualBoundary.row.content = compactLabels.success;
+          const last = history[history.length - 1];
+          if (history.length !== input.manualBoundary.count || last?.messageId !== input.manualBoundary.statusId) throw new Error('Transcript changed during compaction.');
+          last.compactStatus = 'success';
+          last.content = compactLabels.success;
         }
         recordSessionCompaction(input.sessionId, 'rolling', summary, baseMessageCount, {
         ...input.recordMeta,
