@@ -14,7 +14,7 @@ import { backgroundSpawnLaneSummary, backgroundSpawnStatusLabel, mergeBackground
 import { dispatchDesktopChatLifecycle } from '../features/chat/lifecycle.js';
 import { animatePanelWidth } from '../features/shell/panel-motion.js';
 import { renderSourcePills } from '../cards/index.js';
-import { animateThinkingTextSwap, escHtml, renderMd, withoutInlineCards, renderThinkingState, showToast, timeAgo, buildVisualIframe, buildVisualSrcdoc, bgtToast, showConfirm, setInnerHTMLPreservingVisuals } from '../utils.js';
+import { animateThinkingTextSwap, escHtml, renderMd, withoutInlineCards, renderThinkingState, showToast, timeAgo, buildVisualIframe, buildVisualSrcdoc, bgtToast, showConfirm, preserveVisualIframes, setInnerHTMLPreservingVisuals } from '../utils.js';
 import { wsEventBus, wsSend, syncWsStreamFocus } from '../ws.js';
 import { formatModelDisplayName, formatModelWithReasoning } from '../model-display.js';
 import { applyRealtimeToolRefresh } from '../voice/realtime-tool-refresh.js';
@@ -15756,19 +15756,8 @@ function patchStreamingChatBubble(sessionId) {
     || content.querySelector('.chat-question-card, .chat-approval-card')
     || nextContent.querySelector('.chat-question-card, .chat-approval-card')
     || !hasTimeline) && content.innerHTML !== nextContent.innerHTML) {
-    // Structural transitions affect the live body only, never historical rows.
-    // Reuse unchanged interactive cards so token paints do not reset their UI.
-    const cards = Array.from(content.querySelectorAll('.chat-question-card, .chat-approval-card'));
-    Array.from(nextContent.querySelectorAll('.chat-question-card, .chat-approval-card')).forEach((card) => {
-      const previous = cards.find((node) => node.outerHTML === card.outerHTML);
-      if (previous) card.replaceWith(previous);
-    });
     const disclosures = captureLiveTraceDisclosureState(content);
-    if (!cards.length && content.querySelector('img[src]')) {
-      setInnerHTMLPreservingVisuals(content, nextContent.innerHTML);
-    } else {
-      content.replaceChildren(...Array.from(nextContent.childNodes));
-    }
+    preserveVisualIframes(content, nextContent);
     restoreLiveTraceDisclosureState(content, disclosures);
   }
 

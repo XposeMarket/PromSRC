@@ -42,6 +42,19 @@ try {
     console.log(mobile?'mobile':'desktop',result);
     assert.equal(result.remounts,0); assert.equal(result.shifts,0);
     assert.ok(result.width<=169 && result.width>=96 && result.height<=141); assert.ok(result.changed && result.removed);
+    if (!mobile) await page.evaluate(async () => {
+      const {preserveVisualIframes: patch} = await import('/src/utils.js');
+      const body = document.querySelector('#rows');
+      for (const type of ['question', 'approval']) {
+        const markup = (i,id) => `<p>${i}</p>${i % 2 ? '<em>stream</em>' : ''}<img src="/attachment.svg"><div class="chat-${type}-card" data-${type}-id="${id}"><input></div>`;
+        body.innerHTML = markup(0,'one'); const img = body.querySelector('img'), input = body.querySelector('input');
+        input.value = 'draft'; input.focus();
+        for(let i=1;i<=30;i++){ const t=document.createElement('template'); t.innerHTML=markup(i,'one'); patch(body,t.content);
+          if(body.querySelector('img')!==img || body.querySelector('input')!==input || document.activeElement!==input || input.value!=='draft') throw Error(type+' remounted or lost input'); }
+        const t=document.createElement('template'); t.innerHTML=markup(31,'two'); patch(body,t.content);
+        if(body.querySelector('input')===input || body.querySelector('input').value) throw Error('new card inherited old state');
+      }
+    });
     if(process.env.CHAT_IMAGE_SHOTS) await page.screenshot({path:resolve(process.env.CHAT_IMAGE_SHOTS,`${mobile?'mobile':'desktop'}-trace.png`)});
     await page.close();
   }

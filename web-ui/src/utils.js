@@ -940,12 +940,20 @@ function visualIframeReuseKey(frame) {
   ].join('\u0000');
 }
 
+const liveCardSelector = '.chat-question-card[data-question-id], .chat-approval-card[data-approval-id]';
+function liveCardKey(node) {
+  return node?.matches?.(liveCardSelector)
+    ? `card:${node.dataset.questionId ? 'q:' + node.dataset.questionId : 'a:' + node.dataset.approvalId}` : '';
+}
+
 function visualKeyForNode(node) {
   if (!node?.querySelector && !node?.matches) return '';
   const frame = node.matches?.('iframe[data-prom-visual="true"]')
     ? node
     : node.querySelector?.('iframe[data-prom-visual="true"]');
   if (frame) return visualIframeReuseKey(frame);
+  const cardKey = liveCardKey(node) || liveCardKey(node.querySelector?.(liveCardSelector));
+  if (cardKey) return cardKey;
   const img = node.matches?.('img[src]') ? node : node.querySelector?.('img[src]');
   return img ? `img:${img.getAttribute('src')}` : '';
 }
@@ -1052,6 +1060,9 @@ function morphVisualDomNode(current, next) {
       ? { reused: 1 }
       : null;
   }
+  const card = liveCardKey(current);
+  if (card !== liveCardKey(next)) return null;
+  if (card && current.isEqualNode(next)) return { reused: 1 };
   syncMorphAttributes(current, next);
   return { reused: patchMorphChildren(current, next) };
 }
