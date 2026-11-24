@@ -16,21 +16,20 @@ export const CHATGPT_SANDBOX_TOOL_DEF = {
   function: {
     name: 'chatgpt_sandbox',
     description:
-      'Delegate a self-contained job to ChatGPT\'s own native tools via the connected OpenAI Codex login: '
-      + 'its Python sandbox (Linux VM, pip packages, pandas/matplotlib, /mnt/data), its web search, and file/chart generation. '
-      + 'Use for heavy computation, data analysis, plotting, isolated code execution away from this PC, or a second web-search engine. '
-      + 'Files ChatGPT writes to /mnt/data and links in its answer are downloaded into the workspace under chatgpt-files/. '
-      + 'Each call is a fresh ChatGPT turn (roughly 15-90s) with a fresh sandbox: include all data and instructions in the task. '
-      + 'Do not use for work on local files (it cannot see this PC) or when Prometheus tools already cover it quickly.',
+      'Delegate a self-contained job to ChatGPT\'s own tools through the connected OpenAI Codex login: '
+      + 'a Python sandbox (Linux VM, pip, /mnt/data), web search, and file/chart generation. '
+      + 'Use for heavy computation, data analysis or plotting away from this PC. '
+      + 'Files it writes to /mnt/data come back under chatgpt-files/. '
+      + 'Each call is a fresh 15-90s turn with a fresh sandbox, so put all data and instructions in the task. It cannot see local files.',
     parameters: {
       type: 'object',
       required: ['task'],
       properties: {
-        task: { type: 'string', description: 'Complete, self-contained instructions. Say which native tool to use (python / web search) and which files to produce.' },
+        task: { type: 'string', description: 'Complete instructions: which tool to use (python / web search) and which files to produce.' },
         mode: {
           type: 'string',
           enum: ['instant', 'thinking', 'extended', 'heavy', 'pro'],
-          description: 'ChatGPT mode. Default thinking. instant is fast but unreliable for multi-step tool work; pro is slowest.',
+          description: 'Default thinking. instant is unreliable for multi-step tool work; pro is slowest.',
         },
       },
     },

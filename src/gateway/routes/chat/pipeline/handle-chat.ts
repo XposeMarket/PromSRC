@@ -38,7 +38,7 @@ import { getOllamaClient } from '../../../../agents/ollama-client';
 import { parseProviderModelRef } from '../../../../agents/model-routing.js';
 import { captureModelUsageLogCursor, readModelUsageEventsSince, resolveProviderPromptTokens } from '../../../../providers/model-usage';
 import { estimateContextCostMicros, resolveModelPricing } from '../../../../providers/model-pricing';
-import { getHistory, persistBackgroundResultMessage, getActiveHistoryForApiCall, getRecentToolObservationsForContext, getWorkingContextForContext, getWorkspace, setWorkspace, getCreativeMode, getCreativeReferences, getActivatedToolCategories, activateToolCategory, captureToolCategoryActivationState, restoreToolCategoryActivationState, isBusinessContextEnabled, getSessionExternalAgent } from '../../../session';
+import { getHistory, persistBackgroundResultMessage, getActiveHistoryForApiCall, getRecentToolObservationsForContext, getWorkingContextForContext, getWorkspace, setWorkspace, getCreativeMode, getCreativeReferences, getActivatedToolCategories, activateToolCategory, seedDefaultWarmToolCategories, captureToolCategoryActivationState, restoreToolCategoryActivationState, isBusinessContextEnabled, getSessionExternalAgent } from '../../../session';
 import { BrainRunBudget, type BrainRunBudgetOptions } from '../../../agents-runtime/brain-run-budget';
 import { collectRichArtifacts, extractVisualArtifactsFromMarkdown, productCarouselToArtifact } from '../../../rich-artifacts';
 import { buildTurnSourcesArtifact } from '../../../turn-sources';
@@ -492,6 +492,21 @@ export async function handleChatUntraced(
   const automaticallyActivatedCategories = !isSupervisionLoop && !skipAutomaticToolCategoryActivation
     ? autoActivateToolCategories(sessionId, toolCategoryDetectionText, history.length, (label, fields) => htime(label, fields))
     : [];
+  // New main chats start with the file tools loaded; warm retention unloads them
+  // again if the chat never uses them. Agents, workers, voice and allowlisted
+  // runtimes keep their declared surface.
+  if (
+    executionMode === 'interactive'
+    && history.length === 0
+    && !isSupervisionLoop
+    && !skipAutomaticToolCategoryActivation
+    && !(Array.isArray(toolFilter) && toolFilter.length > 0)
+  ) {
+    const actor = getRuntimeActorContext(sessionId);
+    if (!actor || actor.kind === 'main') {
+      try { seedDefaultWarmToolCategories(sessionId); } catch { /* retention is best-effort */ }
+    }
+  }
   // Minimal agents (explicit tool allowlist): load the categories that hold the
   // allowlisted tools, otherwise e.g. allowed_tools:["workspace_run"] would be
   // filtered out because workspace_write was never activated. The filter below

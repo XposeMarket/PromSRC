@@ -37,6 +37,11 @@ export const TOOL_CATEGORY_PROMPT_SIGNALS: Readonly<Record<PromptSignalToolCateg
       'schedule_job', 'schedule_job_detail', 'schedule_job_history',
       'schedule_job_log_search', 'schedule_job_outputs', 'schedule_job_patch',
       'schedule_job_stuck_control',
+      // update_heartbeat lives in this pack.
+      'update_heartbeat', 'update heartbeat', 'update the heartbeat', 'change the heartbeat', 'change heartbeat',
+      'heartbeat interval', 'heartbeat timer', 'heartbeat instructions', 'heartbeat.md', 'heartbeat model',
+      'enable heartbeat', 'disable heartbeat', 'turn on heartbeat', 'turn off heartbeat',
+      'enable the heartbeat', 'disable the heartbeat', 'turn on the heartbeat', 'turn off the heartbeat',
     ],
     allOf: [
       ['schedule', 'create'], ['schedule', 'update'], ['schedule', 'pause'],

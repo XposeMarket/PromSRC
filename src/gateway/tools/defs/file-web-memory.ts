@@ -1513,19 +1513,17 @@ export function getFileWebMemoryTools(): any[] {
       type: 'function',
       function: {
         name: 'shopping_search_products',
-        description: 'Fast product search for shopping/product carousel requests using existing web_search providers plus short metadata/image fetches. No shopping API keys required. Use this FIRST when the user asks for products, shopping comparisons, prices, ratings, or a product carousel; use browser tools only if this result is missing details or needs visual verification.',
+        // Core tool: sent on every model call, so the schema carries only what a model
+        // needs to choose. The handler still accepts provider, include_metadata,
+        // include_images, metadata_timeout_ms and image_timeout_ms with their defaults.
+        description: 'Product search for shopping and product-carousel requests: returns product cards with titles, prices, links and images. Use this FIRST for products, price comparisons, ratings or a product carousel; use browser tools only if details are missing or need visual verification.',
         parameters: {
           type: 'object',
           required: ['query'],
           properties: {
             query: { type: 'string', description: 'Product search query, e.g. "cordless stick vacuum under $300".' },
             merchant: { type: 'string', description: 'Optional store/domain such as Amazon, Walmart, Target, Best Buy, ebay.com.' },
-            max_results: { type: 'number', description: 'Number of product cards to return. Default 8, max 12.' },
-            provider: { type: 'string', enum: ['multi', 'tinyfish', 'tavily', 'google', 'brave', 'ddg', 'xai'], description: 'Optional provider selector. Default multi.' },
-            include_metadata: { type: 'boolean', description: 'Default true. Briefly fetch top result pages for Open Graph images/titles/prices without browser automation.' },
-            include_images: { type: 'boolean', description: 'Default true. Briefly downloads discovered product images to downloads/product-carousel and sets imagePath for stable carousel rendering.' },
-            metadata_timeout_ms: { type: 'number', description: 'Per-page metadata timeout in ms. Default 1800, max 5000.' },
-            image_timeout_ms: { type: 'number', description: 'Per-image download timeout in ms. Default 1600, max 4000.' },
+            max_results: { type: 'number', description: 'Number of product cards. Default 8, max 12.' },
           },
         },
       },

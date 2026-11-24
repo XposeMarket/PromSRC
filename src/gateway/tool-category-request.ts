@@ -6,6 +6,7 @@ import {
   type ToolResult,
 } from './tool-builder';
 import { activateToolCategory } from './session';
+import { canKeepToolCategoryWarm } from './tool-category-retention';
 
 export function handleRequestToolCategory(
   args: any,
@@ -44,16 +45,19 @@ export function handleRequestToolCategory(
     return {
       name: 'request_tool_category',
       args,
-      result: `Tool category "external_apps" activated for ${requestedScope} scope. Use connector_list only if inventory is needed.`,
+      result: `Tool category "external_apps" activated for ${requestedScope} scope. Connected-app tools are not kept between turns: request it again in a later turn if needed. Use connector_list only if inventory is needed.`,
       error: false,
     };
   }
 
   const suffix = requestedScope === 'ttl' ? ` (${requestedTurns} user turns)` : '';
+  const keepNote = requestedScope !== 'session' && canKeepToolCategoryWarm(requestedCategory)
+    ? ' It stays loaded while you keep using its tools.'
+    : '';
   return {
     name: 'request_tool_category',
     args,
-    result: `Tool category "${requestedCategory}" activated with ${requestedScope} scope${suffix} in session ${sessionId}.`,
+    result: `Tool category "${requestedCategory}" activated with ${requestedScope} scope${suffix} in session ${sessionId}.${keepNote}`,
     error: false,
   };
 }

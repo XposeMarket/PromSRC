@@ -21,7 +21,12 @@ import { hookBus } from './hooks';
 import { repairReappendedAssistantRows } from './history-reconciliation';
 import { appendContinuityEvent, appendContinuityMessage } from './audit/continuity';
 import { listLiveRuntimes } from './live-runtime-registry';
-import { normalizeManifestToolCategory } from '../runtime/tool-category-manifest';
+import { AUTOMATION_WORKFLOW_PACK_IDS } from '../runtime/tool-category-manifest';
+import {
+  DEFAULT_WARM_TOOL_CATEGORIES, loadWarmToolCategories, normalizeScopedToolCategoryActivations, normalizeSessionToolCategory,
+  normalizeToolCategoryActivationScope, pruneScopedToolCategoryActivations, refreshLoadedWarmToolCategories, restoreWarmToolCategories,
+  type ToolCategoryActivationScope, type ScopedToolCategoryActivation, type ToolCategoryActivationSnapshot,
+} from './session-tool-categories';
 import { getExternalAgentEntry } from './external-agents/store';
 import {
   formatTurnContextPacketsForPrompt,
@@ -55,7 +60,12 @@ import {
   type ExternalAgentBinding,
   type ExternalAgentSummary,
 } from './external-agents/types';
-import { retainAnthropicToolCategories, ANTHROPIC_RETAINED_CATEGORY_LIMIT } from '../providers/anthropic-tool-cache';
+import {
+  isPromptCacheCold,
+  pruneWarmToolCategories,
+  touchWarmToolCategory,
+  type WarmToolCategory,
+} from './tool-category-retention';
 
 export interface ChatMessage {
   messageId?: string;
@@ -331,27 +341,7 @@ export interface CreativeReferenceRecord {
   updatedAt: string;
 }
 
-export type ToolCategoryActivationScope = 'session' | 'turn' | 'next_turn' | 'ttl';
-
-export interface ScopedToolCategoryActivation {
-  category: string;
-  scope: Exclude<ToolCategoryActivationScope, 'session'>;
-  activatedAtTurn: number;
-  expiresAfterTurn: number;
-  turns?: number;
-  activatedAt: number;
-}
-
-/**
- * Transaction snapshot for a single tool-category activation.  Provisioning
- * may temporarily add a turn-scoped activation, but a failed provider-surface
- * rebuild must restore the category exactly as it was before that attempt.
- */
-export interface ToolCategoryActivationSnapshot {
-  category: string;
-  persistent: boolean;
-  scoped: ScopedToolCategoryActivation[];
-}
+export type { ToolCategoryActivationScope, ScopedToolCategoryActivation, ToolCategoryActivationSnapshot } from './session-tool-categories';
 
 export interface CanvasProjectLink {
   rootPath?: string | null;
@@ -410,8 +400,8 @@ export interface Session {
   tags?: string[];
   userTurnCounter?: number;
   activatedToolCategories?: string[];
-  /** Bounded Anthropic-only warm category set; cleared by explicit category reset. */
-  anthropicCachedToolCategories?: string[];
+  /** Categories kept loaded because they were used recently; see tool-category-retention.ts. */
+  warmToolCategories?: WarmToolCategory[];
   scopedToolCategoryActivations?: ScopedToolCategoryActivation[];
   activatedSkillIds?: string[];
   activatedSkillResources?: Record<string, string[]>;
@@ -886,48 +876,6 @@ function normalizeCreativeReferences(input: any): CreativeReferenceRecord[] {
     .map(normalizeCreativeReferenceRecord)
     .filter((item): item is CreativeReferenceRecord => !!item)
     .slice(0, 120);
-}
-
-function normalizeToolCategoryActivationScope(input: any): ToolCategoryActivationScope {
-  const value = String(input || '').trim().toLowerCase();
-  if (value === 'session' || value === 'turn' || value === 'next_turn' || value === 'ttl') return value;
-  return 'session';
-}
-
-function normalizeSessionToolCategory(input: unknown): string {
-  const raw = String(input || '').trim();
-  return normalizeManifestToolCategory(raw) || raw;
-}
-
-function normalizeScopedToolCategoryActivations(input: any, fallbackTurn?: number): ScopedToolCategoryActivation[] {
-  if (!Array.isArray(input)) return [];
-  const fallback = Number.isFinite(Number(fallbackTurn)) ? Math.max(0, Math.floor(Number(fallbackTurn))) : 0;
-  const seen = new Set<string>();
-  const normalized: ScopedToolCategoryActivation[] = [];
-  for (const raw of input) {
-    const category = normalizeSessionToolCategory(raw?.category);
-    if (!category) continue;
-    const scope = normalizeToolCategoryActivationScope(raw?.scope);
-    if (scope === 'session') continue;
-    const activatedAtTurn = Number.isFinite(Number(raw?.activatedAtTurn))
-      ? Math.max(0, Math.floor(Number(raw.activatedAtTurn)))
-      : fallback;
-    const expiresAfterTurn = Number.isFinite(Number(raw?.expiresAfterTurn))
-      ? Math.max(activatedAtTurn, Math.floor(Number(raw.expiresAfterTurn)))
-      : activatedAtTurn;
-    const key = `${category}:${scope}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    normalized.push({
-      category,
-      scope,
-      activatedAtTurn,
-      expiresAfterTurn,
-      turns: Number.isFinite(Number(raw?.turns)) ? Math.max(1, Math.floor(Number(raw.turns))) : undefined,
-      activatedAt: Number.isFinite(Number(raw?.activatedAt)) ? Number(raw.activatedAt) : Date.now(),
-    });
-  }
-  return normalized.slice(0, 64);
 }
 
 function normalizeTextArray(input: any, maxItems = 12, maxChars = 500): string[] | undefined {
@@ -1949,7 +1897,7 @@ function readSessionFileForSearch(sessionId: string): Session | null {
         : Array.isArray(data?.history)
           ? data.history.filter((msg: any) => msg?.role === 'user').length
           : 0,
-      anthropicCachedToolCategories: Array.isArray(data?.anthropicCachedToolCategories) ? data.anthropicCachedToolCategories.map(normalizeSessionToolCategory).filter(Boolean).slice(0, ANTHROPIC_RETAINED_CATEGORY_LIMIT) : [],
+      warmToolCategories: loadWarmToolCategories(data),
       activatedToolCategories: Array.isArray(data?.activatedToolCategories) ? data.activatedToolCategories : [],
       scopedToolCategoryActivations: normalizeScopedToolCategoryActivations(data?.scopedToolCategoryActivations, Number(data?.userTurnCounter)),
       activatedSkillIds: Array.isArray(data?.activatedSkillIds) ? data.activatedSkillIds : [],
@@ -2837,7 +2785,7 @@ export function getSession(id: string): Session {
           : Array.isArray(data.history)
             ? data.history.filter((msg: any) => msg?.role === 'user').length
             : 0,
-        anthropicCachedToolCategories: Array.isArray(data.anthropicCachedToolCategories) ? data.anthropicCachedToolCategories.map(normalizeSessionToolCategory).filter(Boolean).slice(0, ANTHROPIC_RETAINED_CATEGORY_LIMIT) : [],
+        warmToolCategories: loadWarmToolCategories(data),
         activatedToolCategories: Array.isArray(data.activatedToolCategories) ? data.activatedToolCategories : [],
         scopedToolCategoryActivations: normalizeScopedToolCategoryActivations(data.scopedToolCategoryActivations, Number(data.userTurnCounter)),
         activatedSkillIds: Array.isArray(data.activatedSkillIds) ? data.activatedSkillIds : [],
@@ -2894,6 +2842,7 @@ export function getSession(id: string): Session {
     contextSummaryUpdatedAt: undefined,
     workingContextPackets: [],
     userTurnCounter: 0,
+    warmToolCategories: [],
     activatedToolCategories: [],
     scopedToolCategoryActivations: [],
     activatedSkillIds: [],
@@ -3032,7 +2981,16 @@ export function addMessage(id: string, msg: ChatMessage, options: AddMessageOpti
   if (!deferredForCompaction && !deferredForMemoryFlush) {
     session.history.push(storedMsg);
     if (storedMsg.role === 'user') {
-      session.userTurnCounter = Math.max(0, Math.floor(Number(session.userTurnCounter) || 0)) + 1;
+      const nextTurn = Math.max(0, Math.floor(Number(session.userTurnCounter) || 0)) + 1;
+      session.userTurnCounter = nextTurn;
+      // New user turn: unload categories that stopped being used, but only when
+      // the provider prompt cache has expired anyway. lastActiveAt still holds the
+      // previous activity here; it is refreshed below.
+      session.warmToolCategories = pruneWarmToolCategories(
+        session.warmToolCategories,
+        nextTurn,
+        isPromptCacheCold(session.lastAssistantAt || session.lastActiveAt),
+      );
     }
     if (storedMsg.role === 'assistant') {
       const assistantAt = Number(storedMsg.timestamp || Date.now());
@@ -4271,17 +4229,6 @@ export function clearChatModelRoute(id: string): void {
   flushSession(id);
 }
 
-function pruneScopedToolCategoryActivations(session: Session): boolean {
-  const currentTurn = getSessionUserTurnCounter(session);
-  const before = Array.isArray(session.scopedToolCategoryActivations)
-    ? session.scopedToolCategoryActivations.length
-    : 0;
-  const next = normalizeScopedToolCategoryActivations(session.scopedToolCategoryActivations, currentTurn)
-    .filter((entry) => entry.expiresAfterTurn >= currentTurn);
-  session.scopedToolCategoryActivations = next;
-  return next.length !== before;
-}
-
 export function activateToolCategory(
   id: string,
   category: string,
@@ -4292,7 +4239,7 @@ export function activateToolCategory(
   if (!cleanCategory) return;
   const scope = normalizeToolCategoryActivationScope(options.scope);
   const currentTurn = getSessionUserTurnCounter(session);
-  pruneScopedToolCategoryActivations(session);
+  pruneScopedToolCategoryActivations(session, getSessionUserTurnCounter(session));
 
   if (scope === 'session') {
     if (!session.activatedToolCategories) session.activatedToolCategories = [];
@@ -4326,6 +4273,52 @@ export function activateToolCategory(
     .filter((entry) => entry.category !== cleanCategory);
   scoped.push(nextEntry);
   session.scopedToolCategoryActivations = scoped.slice(-64);
+  // The scope above is the guaranteed minimum. The warm entry keeps the category
+  // loaded past it for as long as its tools keep being called.
+  session.warmToolCategories = touchWarmToolCategory(session.warmToolCategories, cleanCategory, currentTurn, false);
+  saveSession(id);
+}
+
+export { DEFAULT_WARM_TOOL_CATEGORIES } from './session-tool-categories';
+
+export function seedDefaultWarmToolCategories(id: string): void {
+  const session = getSession(id);
+  const turn = getSessionUserTurnCounter(session);
+  if (turn > 1 || (session.warmToolCategories || []).length > 0) return;
+  let warm = session.warmToolCategories || [];
+  for (const category of DEFAULT_WARM_TOOL_CATEGORIES) {
+    warm = touchWarmToolCategory(warm, normalizeSessionToolCategory(category), turn, true);
+  }
+  if (warm.length === 0) return;
+  session.warmToolCategories = warm;
+  saveSession(id);
+}
+
+function isWarmToolCategoryRetentionEnabled(session: Session): boolean {
+  try {
+    const cfg = getConfig().getConfig() as any;
+    const provider = session.chatModelRoute?.providerId || cfg.llm?.provider;
+    // The existing Anthropic opt-out keeps working; there is no other switch.
+    return !(provider === 'anthropic' && cfg.llm?.providers?.anthropic?.sticky_tool_categories === false);
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Called after a tool runs. Refreshes the warm entry of the tool's category so
+ * it stays loaded for the next turns. It only refreshes a category this session
+ * already has loaded; it never loads one and never creates a session.
+ */
+export function noteToolCategoryUse(id: string, category: string | null | undefined): void {
+  const session = sessions.get(String(id || ''));
+  if (!session) return;
+  const cleanCategory = normalizeSessionToolCategory(category);
+  if (!cleanCategory) return;
+  const before = session.warmToolCategories || [];
+  const warm = refreshLoadedWarmToolCategories(before, session.scopedToolCategoryActivations || [], cleanCategory, getSessionUserTurnCounter(session));
+  if (warm === before) return;
+  session.warmToolCategories = warm;
   saveSession(id);
 }
 
@@ -4335,7 +4328,7 @@ export function captureToolCategoryActivationState(
 ): ToolCategoryActivationSnapshot {
   const session = getSession(id);
   const cleanCategory = normalizeSessionToolCategory(category);
-  const changed = pruneScopedToolCategoryActivations(session);
+  const changed = pruneScopedToolCategoryActivations(session, getSessionUserTurnCounter(session));
   if (changed) saveSession(id);
   return {
     category: cleanCategory,
@@ -4346,6 +4339,7 @@ export function captureToolCategoryActivationState(
       : [])
       .filter((entry) => entry.category === cleanCategory)
       .map((entry) => ({ ...entry })),
+    warm: (session.warmToolCategories || []).map((entry) => ({ ...entry })),
   };
 }
 
@@ -4377,7 +4371,8 @@ export function restoreToolCategoryActivationState(
     .concat(snapshot.scoped.map((entry) => ({ ...entry })));
 
   session.activatedToolCategories = nextCategories;
-  session.anthropicCachedToolCategories = (session.anthropicCachedToolCategories || []).filter(entry => entry !== cleanCategory);
+  // A category whose provider surface could not be built must not stay advertised.
+  session.warmToolCategories = restoreWarmToolCategories(session.warmToolCategories || [], snapshot, cleanCategory);
   session.scopedToolCategoryActivations = nextScoped;
   saveSession(id);
 }
@@ -4393,10 +4388,10 @@ export function deactivateToolCategory(id: string, category: string): void {
   const cleanCategory = String(category || '').trim();
   if (!cleanCategory) return;
   let changed = false;
-  const retained = session.anthropicCachedToolCategories || [];
-  const nextRetained = retained.filter(entry => entry !== cleanCategory);
+  const retained = session.warmToolCategories || [];
+  const nextRetained = retained.filter((entry) => entry.category !== cleanCategory);
   if (nextRetained.length !== retained.length) {
-    session.anthropicCachedToolCategories = nextRetained;
+    session.warmToolCategories = nextRetained;
     changed = true;
   }
   const activeCategories = Array.isArray(session.activatedToolCategories)
@@ -4420,7 +4415,7 @@ export function deactivateToolCategory(id: string, category: string): void {
 
 export function expireScopedToolCategoryActivations(id: string): void {
   const session = getSession(id);
-  if (pruneScopedToolCategoryActivations(session)) {
+  if (pruneScopedToolCategoryActivations(session, getSessionUserTurnCounter(session))) {
     saveSession(id);
   }
 }
@@ -4521,14 +4516,14 @@ export function setActivatedToolCategories(id: string, categories: string[]): vo
       .filter(Boolean),
   ));
   session.activatedToolCategories = next;
-  session.anthropicCachedToolCategories = [];
+  session.warmToolCategories = [];
   session.scopedToolCategoryActivations = [];
   saveSession(id);
 }
 
 export function getActivatedToolCategories(id: string): Set<string> {
   const session = getSession(id);
-  const changed = pruneScopedToolCategoryActivations(session);
+  const changed = pruneScopedToolCategoryActivations(session, getSessionUserTurnCounter(session));
   const persistent = Array.from(new Set(
     (session.activatedToolCategories || [])
       .map((category) => normalizeSessionToolCategory(category))
@@ -4541,22 +4536,20 @@ export function getActivatedToolCategories(id: string): Set<string> {
     session.activatedToolCategories = persistent;
     session.scopedToolCategoryActivations = scoped;
   }
+  // Set order is the model-facing tool order. Keep it stable across turns:
+  // session categories, then warm categories in the order they were first
+  // loaded, then anything scoped that cannot be kept warm.
   const active = new Set(persistent);
+  let retentionChanged = false;
+  const warm = session.warmToolCategories || [];
+  if (isWarmToolCategoryRetentionEnabled(session)) {
+    for (const entry of warm) active.add(entry.category);
+  } else if (warm.length) {
+    session.warmToolCategories = [];
+    retentionChanged = true;
+  }
   for (const entry of scoped) {
     active.add(entry.category);
-  }
-  const cfg = getConfig().getConfig() as any;
-  const provider = session.chatModelRoute?.providerId || cfg.llm?.provider;
-  const anthropic = provider === 'anthropic' && cfg.llm?.providers?.anthropic?.sticky_tool_categories !== false;
-  let retentionChanged = false;
-  if (anthropic) {
-    const retained = retainAnthropicToolCategories(active, session.anthropicCachedToolCategories || []);
-    retentionChanged = JSON.stringify(retained) !== JSON.stringify(session.anthropicCachedToolCategories || []);
-    session.anthropicCachedToolCategories = retained;
-    for (const category of retained) active.add(category);
-  } else if (session.anthropicCachedToolCategories?.length) {
-    session.anthropicCachedToolCategories = [];
-    retentionChanged = true;
   }
   if (changed || categoriesChanged || retentionChanged) saveSession(id);
   return active;

@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import { AnthropicAdapter } from './anthropic-adapter';
-import { retainAnthropicToolCategories, ANTHROPIC_RETAINED_CATEGORY_LIMIT } from './anthropic-tool-cache';
 import { ModelResponseRecovery } from '../gateway/chat/model-response-recovery';
 import { PROMPT_CACHE_MARKER, type ChatMessage } from './LLMProvider';
 
@@ -13,10 +12,7 @@ const reorderedA = { function: { ...toolA.function, parameters: { properties: { 
 assert.equal(wire([toolA, toolB]), wire([reorderedA, toolB]), 'schema object key order must not change wire bytes');
 assert.equal(JSON.stringify(toolA).includes('cache_control'), false, 'serialization must not mutate source schemas');
 assert.notEqual(wire([toolA]), wire([toolA, toolB]), 'new tools still change the complete cache prefix');
-assert.deepEqual(retainAnthropicToolCategories(new Set(), ['workspace_write']), ['workspace_write'], 'turn expiry retains warmed categories');
-assert.deepEqual(retainAnthropicToolCategories(new Set(['browser_automation']), ['workspace_write']), ['workspace_write', 'browser_automation']);
-assert.equal(retainAnthropicToolCategories(new Set(Array.from({ length: 20 }, (_, i) => `cat_${i}`)), []).length, ANTHROPIC_RETAINED_CATEGORY_LIMIT);
-assert.deepEqual(retainAnthropicToolCategories(new Set(['external_apps', 'mcp_server_tools']), []), [], 'revocable dynamic tool registries must not be retained');
+// Category retention is provider-neutral now: see src/gateway/tool-category-retention.regression.ts.
 const systemBlocks = (adapter as any).buildSystemBlocks(
   `Stable instructions${PROMPT_CACHE_MARKER}Matched skill reference: imagegen`, true,
 );

@@ -185,3 +185,6 @@ Initial sanitized corpus: `scripts/fixtures/agent-behavior-cases.json`. Observed
 Reports bind HEAD/base, corpus hash, mode, provider/model and trial counts. Schema tokens are explicitly estimated; unavailable provider usage is null. Fixture/replay/live-adapter are distinct. Retain sanitized captures privately, never credentials; only score/provenance output is intended for commits. No automatic prompt trimming, provider switching, routing change, retention cleanup or production control change occurs. The 19 release-regression scenarios require separate runtime coverage; this harness does not substitute for them.
 
 Explicit file windows are honored before default limits. Return code and command output directly, not via scratch files. Use the session-scoped raw reference and next byte offset for oversized output; do not rerun a command for its output.
+
+## Category-state helper extraction (PR #957 CI follow-up)
+`src/gateway/session-tool-categories.ts` owns session category types, normalization (including legacy warm-list loading), default warm categories, usage refresh, and failed-activation warm-list restoration. `session.ts` retains session lookup, mutation, and persistence and re-exports its existing public category types/default list. This keeps the unchanged `check:file-budgets` limit satisfied without changing retention behavior.

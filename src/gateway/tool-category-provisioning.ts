@@ -31,7 +31,9 @@ export const TOOL_CATEGORY_REPRESENTATIVE_TOOLS: Readonly<Partial<Record<ToolCat
   social_intelligence: ['social_intel'],
   proposal_admin: ['write_proposal'],
   composite_tools: ['list_composites'],
-  creative_basic: ['switch_creative_mode'],
+  // switch_creative_mode is an action on the creative_project wrapper now; the
+  // raw name is schema-hidden, so requiring it rejected every activation.
+  creative_basic: ['creative_project', 'creative_scene'],
   creative_image: ['creative_image_ops'],
   creative_video: ['creative_video_ops'],
   creative_hyperframes: ['creative_hyperframes_ops'],

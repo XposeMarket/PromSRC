@@ -194,7 +194,7 @@
     },
     {
       "name": "Verify provider-facing tool category provisioning",
-      "run": "npm run test:tool-category-provisioning && npm run test:tool-category-activation && npm run test:tool-category-switch-model && npm run test:background-spawn-tool-surface",
+      "run": "npm run test:tool-category-provisioning && npm run test:tool-category-activation && npm run test:tool-category-switch-model && npm run test:background-spawn-tool-surface && npm run test:tool-category-retention",
       "seconds": 5
     },
     {
