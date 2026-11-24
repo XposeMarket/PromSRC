@@ -27,7 +27,8 @@ export function installComposerControls(tag, commands, request, advanced, refres
   customElements.define(tag,class extends HTMLElement {
     connectedCallback() {
       // Follow the adjacent paperclip, including mobile focus, haptic wrapping and theme sizing.
-      const attach=this.parentElement?.querySelector('.chat-attach-btn,#pm-attach-btn');
+      // The desktop footer's paperclip is a full-width menu item, not a sizing reference.
+      const attach=this.parentElement?.querySelector(':scope > .chat-attach-btn,#pm-attach-btn');
       const glyph=attach?.querySelector('svg');
       if (attach && glyph) {
         this.sizeWatch=new ResizeObserver(()=>{
@@ -41,7 +42,7 @@ export function installComposerControls(tag, commands, request, advanced, refres
         });
         this.sizeWatch.observe(attach,{box:'border-box'});this.sizeWatch.observe(glyph);
       }
-      if (this.button) return;
+      if (this.button) { window.addEventListener('focus',this.onFocus); return; }
       const root=this.attachShadow({mode:'open'});
       root.innerHTML=`<style>
         :host{display:inline-flex;align-items:center;flex:none}button{font:inherit;color:inherit;cursor:pointer}

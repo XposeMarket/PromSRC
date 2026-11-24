@@ -38,6 +38,8 @@ export function mountMinimalAgentComposer(enabled) {
   computer.title = 'Connected computers are a separate feature. Agents here run on this gateway.';
   menu.appendChild(computer);
   more.append(toggle, menu); footer.insertBefore(more, footer.firstChild);
+  const access = row.querySelector('prom-chat-access');
+  if (access) { remember(access); more.after(access); }
   remember(send); footer.appendChild(send);
   const dock = document.getElementById('chat-new-context-dock');
   const captionComputer = document.createElement('span');
