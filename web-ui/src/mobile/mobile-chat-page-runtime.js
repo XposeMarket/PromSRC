@@ -1,3 +1,12 @@
+import { api as gatewayApi } from '../api.js';
+import { cachedSessionBinding, isDotSessionId } from '../chat/external-agent-ui.js';
+import {
+  MANUAL_COMPACT_LABELS,
+  classifyManualCompactInput,
+  createManualCompactController,
+  isManualCompactExternalSession,
+  isManualCompactRow,
+} from '../features/chat/core/manual-compact.js';
 import { clearMobileQueueDraftReceipt, createMobileDurableQueue } from './mobile-durable-queue.js';
 import { noteMobilePendingEvent } from './mobile-ttft-state.js';
 
@@ -22,15 +31,7 @@ import { attachNativePicker } from './mobile-native-picker.js';
 import { mountSecureAccessDock, createSecureAccessContinuation } from '../features/secure-access/secure-access-core.js';
 import { installComposerSecretGuard } from '../features/secure-access/protected-plugin-entry.js';
 import { getCachedBusyComposerMode, loadBusyComposerModeFromServer, shouldAutoSteerBusyTurn } from '../features/chat/runtime/busy-composer-mode.js';
-import { api as gatewayApi } from '../api.js';
-import { cachedSessionBinding, isDotSessionId } from '../chat/external-agent-ui.js';
-import {
-  MANUAL_COMPACT_LABELS,
-  classifyManualCompactInput,
-  createManualCompactController,
-  isManualCompactExternalSession,
-  isManualCompactRow,
-} from '../features/chat/core/manual-compact.js';
+
 
 let mobileBusyComposerModeLoaded = false;
 
