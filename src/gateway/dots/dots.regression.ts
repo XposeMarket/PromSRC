@@ -20,7 +20,7 @@ let seq = 0;
 const room: any[] = [];
 const sends: any[] = [];
 /** Fault switches for the fake backend. */
-const flags = { dropPostAnswer: false, getStatus: 0, postStatus: 0, rejectOnce: 0, edgeBlock: false };
+const flags = { dropPostAnswer: false, getStatus: 0, postStatus: 0, rejectOnce: 0, edgeBlock: false, htmlRejectStatus: 0, htmlRejectCount: 0 };
 let forcedRefreshes = 0;
 /** Fake message times sit in the recent past of the real clock, as real ones do. */
 const T0 = Date.now() - 6 * 60 * 60_000;
@@ -39,6 +39,8 @@ room.push(msg('user-raul', 'thanks'));
   if (flags.getStatus && (init.method || 'GET') === 'GET') return json({ detail: 'fault' }, flags.getStatus);
   // ChatGPT rejects a token before its stated expiry, once.
   if (flags.rejectOnce > 0 && (init.method || 'GET') === 'GET') { flags.rejectOnce -= 1; return json({ detail: 'token expired' }, 401); }
+  // A rejection that happens to come back as an HTML page, with no Cloudflare challenge in it.
+  if (flags.htmlRejectCount > 0 && (init.method || 'GET') === 'GET') { flags.htmlRejectCount -= 1; return { ok: false, status: flags.htmlRejectStatus, headers: { get: (name: string) => (name === 'content-type' ? 'text/html' : null) }, text: async () => '<html><body>Unauthorized</body></html>' }; }
   // Cloudflare's bot check: 403 with an HTML page.
   if (flags.edgeBlock) return { ok: false, status: 403, headers: { get: (name: string) => (name === 'content-type' ? 'text/html; charset=UTF-8' : name === 'cf-mitigated' ? 'challenge' : null) }, text: async () => '<!DOCTYPE html><html><title>Just a moment...</title></html>' };
   if (u.pathname === '/backend-api/tbo') {
@@ -305,12 +307,33 @@ room.push(msg('user-raul', 'thanks'));
   assert.equal(forcedRefreshes, forcedBefore + 1, 'one forced refresh');
   assert.equal(store.getExternalAgentEntry('openai-dots').lastStatus, 'ready');
 
+  // Two requests rejected at the same moment: one refresh, both retried with the new token, neither says signed out.
+  api.setDotsAuthForTests(fixtureAuth);
+  flags.rejectOnce = 2;
+  const both = await Promise.all([api.listRoomMessages(ROOM, 5), api.listRoomMessages(ROOM, 5)]);
+  assert.equal(both.length, 2);
+  assert.equal(forcedRefreshes, forcedBefore + 2, 'one shared refresh for both');
+  // A rejection is still a rejection when its body is HTML: a 401 page, or a 403 page without a Cloudflare challenge.
+  for (const status of [401, 403]) {
+    api.setDotsAuthForTests(fixtureAuth);
+    flags.htmlRejectStatus = status;
+    flags.htmlRejectCount = 1;
+    const refreshesBefore = forcedRefreshes;
+    assert.ok((await api.listRoomMessages(ROOM, 5)).length > 0, `HTML ${status} is retried with a fresh token`);
+    assert.equal(forcedRefreshes, refreshesBefore + 1);
+    flags.htmlRejectCount = 2;
+    await assert.rejects(api.listRoomMessages(ROOM, 5), (error: any) => api.isDotsAuthError(error), `a repeated HTML ${status} is a rejected sign-in`);
+    flags.htmlRejectCount = 0;
+  }
+  api.setDotsAuthForTests(fixtureAuth);
+  const forcedBeforeEdge = forcedRefreshes;
+
   // Cloudflare's bot check is temporary: no sign-out and no token refresh.
   flags.edgeBlock = true;
   const blocked = await sync.syncAllDots(true).catch((error: any) => ({ failed: String(error?.message || error) }));
   assert.match(String((blocked as any).failed || ''), /Cloudflare/);
   assert.equal(store.getExternalAgentEntry('openai-dots').lastStatus, 'ready', 'a Cloudflare block is not a sign-out');
-  assert.equal(forcedRefreshes, forcedBefore + 1);
+  assert.equal(forcedRefreshes, forcedBeforeEdge);
   assert.equal(api.isDotsAuthError(new api.DotsApiError('x', 403)), false);
   flags.edgeBlock = false;
 
