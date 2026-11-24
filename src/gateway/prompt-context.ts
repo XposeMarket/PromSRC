@@ -1350,7 +1350,7 @@ export const CATEGORY_POLICIES: Record<string, string> = {
   creative_quality: TOOL_BLOCKS.media_quality,
   skills: TOOL_BLOCKS.skills,
   model_management: 'MODEL MANAGEMENT: get/set agent model defaults and manage reusable agent model templates. switch_model and set_current_model are core; activate only for agent fleet model administration.',
-  business: 'BUSINESS: list/read/write structured business entities and append entity events for clients, contacts, projects, vendors, and social accounts. business_context_mode is core for BUSINESS.md injection.',
+  business: 'BUSINESS: list/read/write structured business entities and append entity events for clients, contacts, projects, vendors, and social accounts. business_context_mode(action:"enable"|"disable"|"status") switches BUSINESS.md injection for this session.',
 };
 
 // ─── buildToolsContext ────────────────────────────────────────────────────────
@@ -1365,7 +1365,7 @@ const TOOL_CATEGORY_MATCH_HINTS: Record<string, string> = {
   advanced_memory: 'use advanced memory graph, timeline, related-record, project-search, or index tools when basic memory is insufficient.',
   media_assets: 'download or analyze existing image, video, audio, PDF, or remote media assets.',
   media_generation: 'use media_generate(action:"image"|"video", prompt, ...) for one-shot AI image/video generation, image-to-video, reference generation, editing, or extension.',
-  automation_scheduling: 'create, inspect, update, pause, resume, delete, or run recurring schedules and cron jobs.',
+  automation_scheduling: 'create, inspect, update, pause, resume, delete, or run recurring schedules and cron jobs, or change the heartbeat with update_heartbeat.',
   automation_tasks: 'inspect, start, control, monitor, or retrieve outputs from background tasks and automation executions.',
   automation_recovery: 'reconstruct and recover interrupted, stalled, failed, or approval-pending Prometheus requests and runs.',
   automation_sessions: 'create, find, read, send to, steer, interrupt, rename, pin, or follow Prometheus sessions and threads.',
@@ -1479,7 +1479,7 @@ function buildToolsContextUncached(activatedCategories: Set<string>, options?: {
     ? '[FILE EDIT ROUTING] Terminal-first mode is active. For workspace file work, use terminal or run_command with the existing workspace/path boundaries, approval gates, hard-deny rules, and audit trail. Use shell commands for reads, edits, searches, and file operations. Native workspace read/edit wrappers and the regular file primitives are not available in this turn; Git, code navigation, safety, process, and source/developer tools remain separate surfaces.'
     : '[FILE EDIT ROUTING] For workspace edits, activate/use workspace_write/file_ops. Use workspace_read(action:"grep"/"search"/"stats"/"read") when locating or understanding the target; if an exact file plus exact snippet/line range is already known, use workspace_edit(action:"find_replace"/"replace_lines"/"insert_after"/"delete_lines"/"patchset") directly. For obvious small single-file edits or bug fixes, do not call skill_list/skill_read just because broad file/frontend skills match; read a skill only when the user explicitly asks, the workflow is unfamiliar/high-risk, or the skill is needed for a specific non-obvious procedure. Edit tools fail safely and return post-edit context. Do not use workspace_run/terminal/Python/PowerShell/sed/node scripts as the default file editor.';
 
-  const legacyMenu = `[TOOLS] Core tools loaded (web_search/web_fetch, memory + write_note, skill_list/skill_read for skill discovery, background_ops/declare_plan/timer, question/approval/login cards, show_ui_card/delivery_send, tool_search/tool_call for connected apps, switch_model/set_current_model/update_heartbeat). File read/search/edit, terminal and git are NOT core: they live in workspace_write. Activate additional categories as needed:
+  const legacyMenu = `[TOOLS] Core tools loaded (web_search/web_fetch, memory + write_note, skill_list/skill_read for skill discovery, background_ops/declare_plan/timer, question/approval/login cards, show_ui_card/delivery_send, tool_search/tool_call for connected apps, switch_model/set_current_model). File read/search/edit, terminal and git live in workspace_write, which new chats start with; check [ACTIVE_TOOL_CATEGORIES]. Activate additional categories as needed:
   ${categoryMenu}
   Preferred category IDs are the names in the menu above; legacy IDs like browser, file_ops, team_ops, connectors, and mcp still work as aliases.
   Use: request_tool_category({"category":"browser_automation"}). A loaded category stays available while you keep using its tools and unloads by itself after a few unused turns, so never re-request an active one and do not use scope=session just to keep it. scope=ttl with turns guarantees a minimum lifetime; scope=session is only for an explicit ongoing workflow.
@@ -1515,7 +1515,7 @@ DURING PLANS/TASKS: write a note at each meaningful step — capturing gathered 
 
 [MEMORY CONTINUITY] Memory search is Prometheus' long-term recall. Use memory(action:"search", query=...) before answering from memory when the user asks about previous discussions, decisions, recurring preferences, project history, older tasks, "what did we decide", "what happened before", or any answer that depends on continuity. Use memory_read_record for important hits and memory_get_related to expand useful context. Use mode="timeline" when chronology matters.
 
-[BUSINESS CONTEXT] BUSINESS.md is available but not auto-injected by default. Use business_context_mode({"action":"enable"}) when ongoing work needs persistent business/company context across this session. Use "status" to check the mode and "disable" to turn it back off. Enabling returns the current BUSINESS.md snapshot immediately so you can use it in the same turn. Business entity tools are core: list_entities(type?), read_entity(type,id), write_entity(type,id,content), append_entity_event(type,id,event,display_name?,source?,confidence?). Use entities for clients, contacts, projects, vendors, and social accounts; use BUSINESS.md for company-level profile, offers, policies, and priorities.
+[BUSINESS CONTEXT] BUSINESS.md is available but not auto-injected by default. When ongoing work needs persistent business/company context across this session, activate the business category and call business_context_mode({"action":"enable"}). Use "status" to check the mode and "disable" to turn it back off. Enabling returns the current BUSINESS.md snapshot immediately so you can use it in the same turn. The business category also holds the entity tools: list_entities(type?), read_entity(type,id), write_entity(type,id,content), append_entity_event(type,id,event,display_name?,source?,confidence?). Use entities for clients, contacts, projects, vendors, and social accounts; use BUSINESS.md for company-level profile, offers, policies, and priorities.
 
 [TEAMS & AGENTS] Agent/task routes — activate agents_and_teams, then pick the right one:
   → chat_with_subagent(id,message) — normal persistent chat/check-in with a known standalone non-team agent.

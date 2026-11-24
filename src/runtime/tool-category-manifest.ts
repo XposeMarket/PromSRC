@@ -64,7 +64,7 @@ export const TOOL_CATEGORY_MANIFEST: Readonly<Record<ToolCategoryId, ToolCategor
   media_assets: entry('media_assets', ['media'], 'download/analyze images, video, audio, remote assets', 'media download or analysis'),
   media_generation: entry('media_generation', ['media_gen'], 'one-shot AI image/video generation with media_generate', 'AI image or video generation'),
   automations: entry('automations', ['schedule', 'scheduling'], 'schedule creation/detail/history/outputs/patch/stuck control/dashboard and Prometheus peer-session control', 'scheduling or automation operations'),
-  automation_scheduling: entry('automation_scheduling', ['scheduling_pack', 'schedule_pack'], 'create/inspect/update recurring schedules', 'schedule or recurring job operations'),
+  automation_scheduling: entry('automation_scheduling', ['scheduling_pack', 'schedule_pack'], 'create/inspect/update recurring schedules and the heartbeat', 'schedule, recurring job or heartbeat operations'),
   automation_tasks: entry('automation_tasks', ['task_pack', 'automation_task_pack'], 'inspect/run/watch task and automation executions', 'background task or automation run operations'),
   automation_recovery: entry('automation_recovery', ['recovery_pack', 'automation_recovery_pack'], 'recover interrupted requests, approvals, and failed runs', 'automation recovery or interrupted work'),
   automation_sessions: entry('automation_sessions', ['session_pack', 'thread_pack'], 'create/send/steer Prometheus sessions and threads', 'Prometheus thread or session operations'),
@@ -82,7 +82,7 @@ export const TOOL_CATEGORY_MANIFEST: Readonly<Record<ToolCategoryId, ToolCategor
   creative_quality: entry('creative_quality', ['creative_qa', 'media_quality'], 'creative_quality_ops QA wrapper', 'creative quality assurance'),
   skills: entry('skills', ['skill_authoring'], 'skill_ops wrapper for authoring, packaging, import/export, resource maintenance, inspection, and metadata audits', 'skill authoring or maintenance'),
   model_management: entry('model_management', ['agent_models', 'models'], 'agent fleet model administration and templates', 'agent model administration'),
-  business: entry('business', ['entities'], 'structured business entity lifecycle administration', 'business entity administration'),
+  business: entry('business', ['entities'], 'structured business entities and BUSINESS.md context mode', 'business entity or business context administration'),
 });
 
 const CATEGORY_ALIAS_INDEX: Readonly<Record<string, ToolCategoryId>> = Object.freeze(
@@ -111,7 +111,8 @@ const WORKSPACE = names('workspace_read workspace_edit workspace_run workspace_g
 const MEMORY = names('memory_browse memory_read_record memory_search_project memory_search_timeline memory_get_related memory_graph_snapshot memory_index_refresh memory_provider_status memory_embedding_status memory_embedding_backfill memory_debug_search memory_consolidate memory_review_claims memory_accept_claim memory_reject_claim memory_supersede_record');
 const MEDIA = names('download_url download_media video_social_cut analyze_image analyze_video');
 const MEDIA_GENERATION = names('media_generate video_project game_project');
-const AUTOMATION_SCHEDULING = names('schedule_job schedule_job_detail schedule_job_history schedule_job_log_search schedule_job_outputs schedule_job_patch schedule_job_stuck_control');
+// update_heartbeat left core on 2026-11-24: 1 real use in 30 days, and weaker models called it on greetings.
+const AUTOMATION_SCHEDULING = names('schedule_job schedule_job_detail schedule_job_history schedule_job_log_search schedule_job_outputs schedule_job_patch schedule_job_stuck_control update_heartbeat');
 const AUTOMATION_TASKS = names('automation_dashboard task_control run_task_now internal_watch trigger_ops');
 const AUTOMATION_RECOVERY = names('prometheus_request_ops prometheus_audit_ops');
 const AUTOMATION_SESSIONS = names('prometheus_thread_ops');
@@ -119,7 +120,7 @@ const AUTOMATIONS = new Set([...AUTOMATION_SCHEDULING, ...AUTOMATION_TASKS, ...A
 const RUNTIME_ADMIN = names('diagnostic_packet system_diagnostics gateway_restart');
 const SKILLS = names('skill_create skill_create_bundle skill_import_bundle skill_export_bundle skill_update_from_source skill_manifest_write skill_resource_write skill_resource_delete skill_inspect');
 const MODELS = names('get_agent_models set_agent_model provider_accounts list_agent_model_templates save_agent_model_template update_agent_model_template apply_agent_model_template select_agent_model_template delete_agent_model_template');
-const BUSINESS = names('list_entities read_entity write_entity append_entity_event');
+const BUSINESS = names('list_entities read_entity write_entity append_entity_event business_context_mode');
 const INTEGRATION_ADMIN = names('secure_access connection_ops mcp_server_manage webhook_manage integration_quick_setup plugin_ops');
 const EXTERNAL_APP_WRAPPERS = names('x_search_ops x_posts x_users x_lists x_dm x_admin vercel_ops');
 const COMPOSITES = names('create_composite get_composite edit_composite delete_composite list_composites');

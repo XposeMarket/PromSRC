@@ -20,6 +20,24 @@ const categories = [
   'media_generation',
 ] as const;
 
+// Every representative must be a real model-facing tool. creative_basic once
+// listed a schema-hidden raw name, so that category could never be activated.
+const coreToolNames = new Set(buildTools(deps as any, new Set<string>()).map((tool: any) => String(tool.function.name)));
+for (const [category, representatives] of Object.entries(TOOL_CATEGORY_REPRESENTATIVE_TOOLS)) {
+  if (category === 'prometheus_source_read' || category === 'prometheus_source_write') continue; // dev builds only
+  const built = new Set(buildTools(deps as any, new Set<string>([category])).map((tool: any) => String(tool.function.name)));
+  for (const name of representatives || []) {
+    assert.ok(built.has(name), `${category}: representative tool ${name} must be on the built surface`);
+  }
+}
+
+// Core diet: rare admin tools ride with their category, not on every model call.
+assert.equal(coreToolNames.has('update_heartbeat'), false, 'update_heartbeat is not core');
+assert.equal(coreToolNames.has('business_context_mode'), false, 'business_context_mode is not core');
+assert.ok(buildTools(deps as any, new Set<string>(['automation_scheduling'])).some((tool: any) => tool.function.name === 'update_heartbeat'));
+assert.ok(buildTools(deps as any, new Set<string>(['automations'])).some((tool: any) => tool.function.name === 'update_heartbeat'));
+assert.ok(buildTools(deps as any, new Set<string>(['business'])).some((tool: any) => tool.function.name === 'business_context_mode'));
+
 const coreSurface = buildTools(deps, new Set());
 const coreNames = new Set(coreSurface.map((tool: any) => tool?.function?.name));
 assert.equal(coreNames.has('request_tool_category'), true, 'core surface must retain request_tool_category');

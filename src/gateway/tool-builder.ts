@@ -430,8 +430,9 @@ const MODEL_MANAGEMENT_TOOL_NAMES = new Set([
   'delete_agent_model_template',
 ]);
 
-// Business entity lifecycle administration — business_context_mode stays core.
+// Business entity lifecycle administration and the BUSINESS.md context switch.
 const BUSINESS_TOOL_NAMES = new Set([
+  'business_context_mode',
   'list_entities',
   'read_entity',
   'write_entity',
