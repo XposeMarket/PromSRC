@@ -27,7 +27,9 @@ import { DOTS_AGENT_ID, startDotsPoller, syncAllDots } from '../dots/dots-sync';
 export const router = Router();
 
 // OpenAI Dots: mirror each dot's one conversation in the background (no-op while Dots is off).
-startDotsPoller();
+// While Dots is on but its last check failed, the poller re-checks it with backoff instead of
+// waiting for the user to toggle it.
+startDotsPoller({ heal: () => verifyExternalAgent(DOTS_AGENT_ID) });
 
 function syncDotsSoon(id: string): void {
   if (id === DOTS_AGENT_ID) void syncAllDots(true).catch(() => undefined);
@@ -36,6 +38,8 @@ function syncDotsSoon(id: string): void {
 /** Pull new dot messages now (opening a dot chat, pull-to-refresh). */
 router.post('/api/external-agents/openai-dots/sync', async (_req, res) => {
   try {
+    // On but not ready (an earlier check failed): opening the dot chat re-checks first, so it reconnects right away.
+    if (isExternalAgentUsable(DOTS_AGENT_ID).reason === 'not_ready') await verifyExternalAgent(DOTS_AGENT_ID);
     res.json({ success: true, ...(await syncAllDots(true)) });
   } catch (error) {
     res.status(502).json({ success: false, error: errorMessage(error) });

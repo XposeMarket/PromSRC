@@ -7,7 +7,7 @@
  * approvals (the dot acts with its own access inside ChatGPT).
  */
 import crypto from 'crypto';
-import { DotsApiError, hasOpenAISignIn, listRoomMessages, sendRoomMessage, type DotMessage } from '../../dots/dots-api';
+import { DotsApiError, hasOpenAISignIn, isDotsAuthError, listRoomMessages, sendRoomMessage, type DotMessage } from '../../dots/dots-api';
 import { addUncertainSend, cancelDotsSync, clearUncertainSend, getDots, getSeenIds, getUncertainSends, markUncertainLanded, rememberSeen, rememberSent, setDotRoomBusy } from '../../dots/dots-sync';
 import type { ExternalAgentAdapter, ExternalAgentVerifyResult, ExternalTurnInput, ExternalTurnResult } from '../types';
 
@@ -66,7 +66,8 @@ export class OpenAIDotsAdapter implements ExternalAgentAdapter {
         capabilities,
       };
     } catch (error: any) {
-      const status = error instanceof DotsApiError && (error.status === 401 || error.status === 403) ? 'signed_out' : 'error';
+      // Only a real sign-in rejection says "signed out"; anything else is temporary and the poller retries it.
+      const status = isDotsAuthError(error) ? 'signed_out' : 'error';
       return { status, statusText: String(error?.message || error).slice(0, 160), capabilities };
     }
   }
@@ -152,8 +153,7 @@ export class OpenAIDotsAdapter implements ExternalAgentAdapter {
           if (wait.signal.aborted) break;
           lastPollFailed = true;
           // A rejected sign-in or a run of failures ends the wait; it is reported, not hidden.
-          const status = error instanceof DotsApiError ? error.status : 0;
-          if (status === 401 || status === 403) { stopReason = 'ChatGPT rejected the OpenAI sign-in'; break; }
+          if (isDotsAuthError(error)) { stopReason = 'ChatGPT rejected the OpenAI sign-in'; break; }
           failures += 1;
           if (failures >= MAX_POLL_FAILURES) { stopReason = 'ChatGPT could not be reached'; break; }
           const pause = Math.max(error instanceof DotsApiError ? error.retryAfterMs : 0, Math.min(30_000, pollMs * 2 ** failures));

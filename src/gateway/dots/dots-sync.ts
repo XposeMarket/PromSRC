@@ -24,7 +24,7 @@ import {
   setSessionExternalAgent,
 } from '../session';
 import { getExternalAgentEntry, updateExternalAgentEntry } from '../external-agents/store';
-import { DotsApiError, listDots, listRoomMessages, type DotInfo, type DotMessage } from './dots-api';
+import { DotsApiError, isDotsAuthError, listDots, listRoomMessages, type DotInfo, type DotMessage } from './dots-api';
 
 export const DOTS_AGENT_ID = 'openai-dots' as const;
 const MAX_SEEN = 400;
@@ -330,11 +330,16 @@ let syncFailures = 0;
 let syncBlockedUntil = 0;
 let syncAbort = new AbortController();
 
-/** A rejected sign-in stops polling until the user signs in and checks again; other failures back off. */
+export const DOTS_RECONNECTING_TEXT = 'ChatGPT rejected the OpenAI sign-in. Reconnecting automatically; if this stays, sign in again in Settings > Models.';
+
+/**
+ * A rejected sign-in (already retried once with a fresh token) pauses the sync and marks Dots as
+ * needing a reconnect; the poller then re-checks on its own (runDotsPollTick). Other failures back off.
+ */
 function noteSyncFailure(error: unknown): boolean {
-  const status = error instanceof DotsApiError ? error.status : 0;
-  if (status === 401 || status === 403) {
-    updateExternalAgentEntry(DOTS_AGENT_ID, { lastStatus: 'signed_out', lastStatusText: 'ChatGPT rejected the OpenAI sign-in. Sign in again in Settings > Models, then Check again.' });
+  if (isDotsAuthError(error)) {
+    console.warn('[dots] ChatGPT rejected the OpenAI sign-in during sync; pausing sync and reconnecting automatically.');
+    updateExternalAgentEntry(DOTS_AGENT_ID, { lastStatus: 'signed_out', lastStatusText: DOTS_RECONNECTING_TEXT });
     return true;
   }
   syncFailures += 1;
@@ -374,10 +379,52 @@ export function cancelDotsSync(): void {
   syncAbort = new AbortController();
 }
 
+/** First automatic reconnect attempt comes on the next tick; later ones back off to this cap. */
+const HEAL_BASE_MS = 60_000;
+const HEAL_MAX_MS = 15 * 60_000;
+let healFailures = 0;
+let nextHealAt = 0;
+let healing = false;
+
+/**
+ * One poller tick. Ready: sync. On but not ready (sign-in rejected, ChatGPT unreachable at the last
+ * check): re-check with backoff, and sync as soon as the check says ready again. Before this, a single
+ * failed check left Dots off until the user toggled it. Off: nothing, and the backoff resets.
+ * `heal` is the registry's verify (passed in to keep this module free of a registry import cycle).
+ */
+export async function runDotsPollTick(heal?: () => Promise<unknown>): Promise<'off' | 'synced' | 'waiting' | 'healed' | 'still_down'> {
+  const entry = getExternalAgentEntry(DOTS_AGENT_ID);
+  if (!entry.enabled) { healFailures = 0; nextHealAt = 0; return 'off'; }
+  if (entry.lastStatus === 'ready') {
+    healFailures = 0;
+    nextHealAt = 0;
+    await syncAllDots().catch(() => undefined);
+    return 'synced';
+  }
+  if (!heal || healing || Date.now() < nextHealAt) return 'waiting';
+  healing = true;
+  try { await heal(); } catch { /* the check records its own status */ } finally { healing = false; }
+  if (dotsEnabled()) {
+    if (healFailures) console.log(`[dots] Reconnected to ChatGPT after ${healFailures} failed check${healFailures === 1 ? '' : 's'}.`);
+    healFailures = 0;
+    nextHealAt = 0;
+    await syncAllDots(true).catch(() => undefined);
+    return 'healed';
+  }
+  healFailures += 1;
+  nextHealAt = Date.now() + Math.min(HEAL_MAX_MS, HEAL_BASE_MS * 2 ** (healFailures - 1));
+  const now = getExternalAgentEntry(DOTS_AGENT_ID);
+  console.warn(`[dots] Reconnect check ${healFailures} failed (${now.lastStatus || 'unknown'}: ${String(now.lastStatusText || '').slice(0, 120)}); next try in ${Math.round((nextHealAt - Date.now()) / 1000)}s.`);
+  return 'still_down';
+}
+
+/** Tests: forget the reconnect backoff. */
+export function resetDotsHealForTests(): void { healFailures = 0; nextHealAt = 0; healing = false; }
+
 let pollTimer: NodeJS.Timeout | null = null;
-export function startDotsPoller(intervalMs = POLL_MS): void {
+export function startDotsPoller(options: { intervalMs?: number; heal?: () => Promise<unknown> } = {}): void {
   if (pollTimer || process.env.PROMETHEUS_DISABLE_DOTS_POLL === '1') return;
-  pollTimer = setInterval(() => { void syncAllDots().catch(() => undefined); }, intervalMs);
+  pollTimer = setInterval(() => { void runDotsPollTick(options.heal).catch(() => undefined); }, options.intervalMs ?? POLL_MS);
   pollTimer.unref?.();
 }
 

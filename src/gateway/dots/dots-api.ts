@@ -13,7 +13,7 @@
  */
 import crypto from 'crypto';
 import { getConfig } from '../../config/config';
-import { getValidToken, loadTokens } from '../../auth/openai-oauth';
+import { getValidToken, loadTokens, refreshTokens } from '../../auth/openai-oauth';
 import { buildChatGPTWebHeaders, CHATGPT_WEB_ORIGIN } from '../../providers/chatgpt-web/chatgpt-web-client';
 
 export interface DotInfo {
@@ -37,7 +37,13 @@ export interface DotMessage {
 }
 
 export class DotsApiError extends Error {
-  constructor(message: string, public status = 0, public retryAfterMs = 0) { super(message); }
+  /** auth = ChatGPT really rejected the OpenAI sign-in (after one retry with a fresh token). */
+  constructor(message: string, public status = 0, public retryAfterMs = 0, public auth = false) { super(message); }
+}
+
+/** The sign-in itself was rejected or is missing. Anything else (timeouts, 5xx, 429, Cloudflare checks) is temporary. */
+export function isDotsAuthError(error: unknown): boolean {
+  return error instanceof DotsApiError && error.auth === true;
 }
 
 /** Wait for `work`, but give up as soon as the request is cancelled or its deadline passes. */
@@ -55,10 +61,10 @@ const ROOM_ID = /^[A-Za-z0-9_-]{8,80}$/;
 const REQUEST_TIMEOUT_MS = 20_000;
 export const MAX_PAGE = 32;
 
-type DotsAuth = () => Promise<{ accessToken: string; accountId: string }>;
+type DotsAuth = (options: { force: boolean }) => Promise<{ accessToken: string; accountId: string }>;
 let authForTests: DotsAuth | null = null;
 /** Tests only: replace the OpenAI sign-in with a fixture token. */
-export function setDotsAuthForTests(fn: DotsAuth | null): void { authForTests = fn; }
+export function setDotsAuthForTests(fn: DotsAuth | null): void { authForTests = fn; lastForcedRefreshAt = 0; }
 
 /** Cheap: is there an OpenAI (Codex) sign-in with a ChatGPT account? Never returns the token. */
 export function hasOpenAISignIn(): boolean {
@@ -66,30 +72,64 @@ export function hasOpenAISignIn(): boolean {
   try { return !!String(loadTokens(getConfig().getConfigDir(), undefined)?.account_id || '').trim(); } catch { return false; }
 }
 
-async function authHeaders(json: boolean): Promise<Record<string, string>> {
-  if (authForTests) return { ...buildChatGPTWebHeaders(await authForTests()), ...(json ? { 'content-type': 'application/json' } : {}) };
+/** A forced refresh after a rejected request happens at most this often, so a real sign-out can't loop refreshes. */
+const FORCED_REFRESH_GAP_MS = 60_000;
+let lastForcedRefreshAt = 0;
+
+/** Refresh failures that mean the sign-in is gone, not that the network blinked. */
+function signInGone(error: unknown): boolean {
+  return /No refresh token|Not connected to OpenAI|Token refresh failed \((400|401|403)\)/i.test(String((error as any)?.message || error));
+}
+
+async function authHeaders(json: boolean, force = false): Promise<Record<string, string>> {
+  const extra = json ? { 'content-type': 'application/json' } : {};
+  if (authForTests) return { ...buildChatGPTWebHeaders(await authForTests({ force })), ...extra };
   const dir = getConfig().getConfigDir();
   const accountId = String(loadTokens(dir, undefined)?.account_id || '').trim();
-  if (!accountId) throw new DotsApiError('Sign in to OpenAI in Settings > Models first.', 401);
-  const token = await getValidToken(dir, undefined);
-  return { ...buildChatGPTWebHeaders({ accessToken: token, accountId }), ...(json ? { 'content-type': 'application/json' } : {}) };
+  if (!accountId) throw new DotsApiError('Sign in to OpenAI in Settings > Models first.', 401, 0, true);
+  let token: string;
+  try {
+    // ChatGPT can reject an access token before its stated expiry; one forced refresh usually fixes that.
+    token = force ? (await refreshTokens(dir, undefined)).access_token : await getValidToken(dir, undefined);
+  } catch (error: any) {
+    if (signInGone(error)) throw new DotsApiError('The OpenAI sign-in has expired. Sign in again in Settings > Models.', 401, 0, true);
+    throw new DotsApiError(`Couldn't refresh the OpenAI sign-in: ${String(error?.message || error).slice(0, 120)}`);
+  }
+  return { ...buildChatGPTWebHeaders({ accessToken: token, accountId }), ...extra };
+}
+
+/** Cloudflare's bot check answers 403 with an HTML page: that is a temporary block, not a rejected sign-in. */
+function isEdgeBlock(res: any, text: string): boolean {
+  const header = (name: string) => String(res?.headers?.get?.(name) || '');
+  return /challenge/i.test(header('cf-mitigated')) || /text\/html/i.test(header('content-type')) || /^\s*<(!doctype|html)/i.test(text);
 }
 
 async function call(pathname: string, init: { method?: string; body?: unknown; signal?: AbortSignal } = {}): Promise<any> {
   const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
   const signal = init.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
   const hasBody = init.body !== undefined;
-  // Refreshing the sign-in runs under the same deadline and cancel signal as the request itself.
-  const headers = await raceAbort(authHeaders(hasBody), signal);
-  const res = await fetch(CHATGPT_WEB_ORIGIN + pathname, {
-    method: init.method || 'GET',
-    headers,
-    ...(hasBody ? { body: JSON.stringify(init.body) } : {}),
-    signal,
-  });
-  const text = await res.text();
+  const send = async (force: boolean) => {
+    // Refreshing the sign-in runs under the same deadline and cancel signal as the request itself.
+    const headers = await raceAbort(authHeaders(hasBody, force), signal);
+    const res = await fetch(CHATGPT_WEB_ORIGIN + pathname, {
+      method: init.method || 'GET',
+      headers,
+      ...(hasBody ? { body: JSON.stringify(init.body) } : {}),
+      signal,
+    });
+    return { res, text: await res.text() };
+  };
+  let { res, text } = await send(false);
+  const rejected = () => (res.status === 401 || res.status === 403) && !isEdgeBlock(res, text);
+  // A rejected request was not processed, so it is safe to send once more with a fresh token
+  // (a POST keeps its idempotency token). Throttled so a real sign-out cannot loop refreshes.
+  if (rejected() && Date.now() - lastForcedRefreshAt >= FORCED_REFRESH_GAP_MS) {
+    lastForcedRefreshAt = Date.now();
+    ({ res, text } = await send(true));
+  }
   if (!res.ok) {
-    if (res.status === 401 || res.status === 403) throw new DotsApiError('ChatGPT rejected the OpenAI sign-in. Sign in again in Settings > Models.', res.status);
+    if (res.status === 403 && isEdgeBlock(res, text)) throw new DotsApiError('ChatGPT is blocking requests for now (Cloudflare check). Retrying automatically.', 403);
+    if (rejected()) throw new DotsApiError('ChatGPT rejected the OpenAI sign-in. Sign in again in Settings > Models.', res.status, 0, true);
     // Retry-After is either seconds or a date.
     const rawRetry = String((res as any).headers?.get?.('retry-after') || '').trim();
     const retryAfter = /^\d+(\.\d+)?$/.test(rawRetry) ? Number(rawRetry) : (rawRetry ? (Date.parse(rawRetry) - Date.now()) / 1000 : 0);

@@ -26,7 +26,7 @@ import {
 import { expandHome } from './executable';
 import { buildHarnessProjectContext, fileSessionIntoFolderProject, HARNESS_PROJECT_CONTEXT_CLEARED } from '../projects/project-store';
 import { createPendingRequest } from './pending-requests';
-import { getExternalAgentAdapter, isExternalAgentUsable, registerLiveExternalTurn } from './registry';
+import { getExternalAgentAdapter, isExternalAgentUsable, registerLiveExternalTurn, verifyExternalAgent } from './registry';
 import type { ExternalAgentBinding, ExternalAgentEvent, ExternalAgentId, ExternalUserRequest } from './types';
 import type { TurnFileChanges } from '../file-change-summary';
 import { buildHarnessFileChanges, closingAnswer } from './file-touches';
@@ -189,7 +189,13 @@ export async function runExternalAgentTurn(params: ExternalTurnRunParams, bindin
   const { sessionId, sendSSE } = params;
   const agentName = externalAgentName(binding.agentId);
   const adapter = getExternalAgentAdapter(binding.agentId);
-  const usable = isExternalAgentUsable(binding.agentId);
+  let usable = isExternalAgentUsable(binding.agentId);
+  // A contact (OpenAI Dots) that is on but whose last check failed is re-checked once before the
+  // message is refused: a passing ChatGPT hiccup should not make the user toggle it off and on.
+  if (adapter?.kind === 'contact' && usable.reason === 'not_ready') {
+    await verifyExternalAgent(binding.agentId).catch(() => null);
+    usable = isExternalAgentUsable(binding.agentId);
+  }
   if (!adapter || !usable.ok) {
     return refuse(params, binding, usable.reason === 'disabled'
       ? `${agentName} is turned off. Turn ${agentName} back on in Settings > Agents & imports to continue this chat.`

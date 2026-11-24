@@ -20,7 +20,8 @@ let seq = 0;
 const room: any[] = [];
 const sends: any[] = [];
 /** Fault switches for the fake backend. */
-const flags = { dropPostAnswer: false, getStatus: 0, postStatus: 0 };
+const flags = { dropPostAnswer: false, getStatus: 0, postStatus: 0, rejectOnce: 0, edgeBlock: false };
+let forcedRefreshes = 0;
 /** Fake message times sit in the recent past of the real clock, as real ones do. */
 const T0 = Date.now() - 6 * 60 * 60_000;
 function msg(author: string, text: string, extra: any = {}) {
@@ -36,6 +37,10 @@ room.push(msg('user-raul', 'thanks'));
   assert.match(String(init.headers?.authorization || init.headers?.Authorization || ''), /Bearer fixture-token/);
   const json = (body: any, status = 200) => ({ ok: status < 400, status, text: async () => JSON.stringify(body) });
   if (flags.getStatus && (init.method || 'GET') === 'GET') return json({ detail: 'fault' }, flags.getStatus);
+  // ChatGPT rejects a token before its stated expiry, once.
+  if (flags.rejectOnce > 0 && (init.method || 'GET') === 'GET') { flags.rejectOnce -= 1; return json({ detail: 'token expired' }, 401); }
+  // Cloudflare's bot check: 403 with an HTML page.
+  if (flags.edgeBlock) return { ok: false, status: 403, headers: { get: (name: string) => (name === 'content-type' ? 'text/html; charset=UTF-8' : name === 'cf-mitigated' ? 'challenge' : null) }, text: async () => '<!DOCTYPE html><html><title>Just a moment...</title></html>' };
   if (u.pathname === '/backend-api/tbo') {
     return json({ items: [{ id: 'dot-1', display_name: 'tbo', messaging_room_id: ROOM, is_primary: true, status: 'active' }, { id: 'gone', display_name: 'old', messaging_room_id: 'abcdefgh1234', status: 'deleted' }] });
   }
@@ -83,7 +88,8 @@ room.push(msg('user-raul', 'thanks'));
   assert.equal((await adapter.verify()).status, 'signed_out');
   assert.deepEqual(await sync.syncAllDots(true), { dots: 0, added: 0, sessions: [] });
 
-  api.setDotsAuthForTests(async () => ({ accessToken: 'fixture-token', accountId: 'acct-fixture' }));
+  const fixtureAuth = async ({ force }: { force: boolean }) => { if (force) forcedRefreshes += 1; return { accessToken: 'fixture-token', accountId: 'acct-fixture' }; };
+  api.setDotsAuthForTests(fixtureAuth);
   registry.setExternalAgentAdapterForTests(adapter, 'openai-dots');
   const snap = await registry.enableExternalAgent('openai-dots');
   assert.equal(snap?.status, 'ready');
@@ -291,13 +297,54 @@ room.push(msg('user-raul', 'thanks'));
   assert.equal((await sync.syncAllDots(true)).added, 32);
   assert.ok(session.getSession(sid).history.some((m: any) => m.content === sync.DOT_GAP_TEXT));
 
-  // A rejected sign-in stops the background sync until the user signs in and checks again.
+  // A token ChatGPT rejects early is retried once with a fresh sign-in: the sync carries on, Dots stays ready.
+  const forcedBefore = forcedRefreshes;
+  flags.rejectOnce = 1;
+  room.push(msg(DOT_AUTHOR, 'after a token refresh', { message_metadata: { turn_trigger: 'parent_notification' } }));
+  assert.equal((await sync.syncAllDots(true)).added, 1);
+  assert.equal(forcedRefreshes, forcedBefore + 1, 'one forced refresh');
+  assert.equal(store.getExternalAgentEntry('openai-dots').lastStatus, 'ready');
+
+  // Cloudflare's bot check is temporary: no sign-out and no token refresh.
+  flags.edgeBlock = true;
+  const blocked = await sync.syncAllDots(true).catch((error: any) => ({ failed: String(error?.message || error) }));
+  assert.match(String((blocked as any).failed || ''), /Cloudflare/);
+  assert.equal(store.getExternalAgentEntry('openai-dots').lastStatus, 'ready', 'a Cloudflare block is not a sign-out');
+  assert.equal(forcedRefreshes, forcedBefore + 1);
+  assert.equal(api.isDotsAuthError(new api.DotsApiError('x', 403)), false);
+  flags.edgeBlock = false;
+
+  // A sign-in that stays rejected (even after a fresh token) pauses the sync...
+  api.setDotsAuthForTests(fixtureAuth); // forget the refresh throttle
   flags.getStatus = 401;
   const rejected = await sync.syncAllDots(true).catch((error: any) => ({ failed: String(error?.message || error) }));
   assert.ok((rejected as any).failed || (rejected as any).errors?.length, 'the failure is reported');
   assert.equal(store.getExternalAgentEntry('openai-dots').lastStatus, 'signed_out');
+  assert.equal(store.getExternalAgentEntry('openai-dots').enabled, true, 'the user\'s on/off choice is untouched');
   assert.equal(sync.dotsEnabled(), false);
+  // ...and the poller re-checks on its own with backoff, instead of waiting for the user to toggle it.
+  const heal = () => registry.verifyExternalAgent('openai-dots');
+  sync.resetDotsHealForTests();
+  assert.equal(await sync.runDotsPollTick(heal), 'still_down');
+  assert.equal(await sync.runDotsPollTick(heal), 'waiting', 'backs off after a failed check');
   flags.getStatus = 0;
+  sync.resetDotsHealForTests();
+  assert.equal(await sync.runDotsPollTick(heal), 'healed');
+  assert.equal(sync.dotsEnabled(), true, 'reconnected without a toggle');
+  assert.equal(await sync.runDotsPollTick(heal), 'synced');
+
+  // A temporary failure at the last check (ChatGPT down) is also re-checked when the user sends.
+  store.updateExternalAgentEntry('openai-dots', { lastStatus: 'error', lastStatusText: 'ChatGPT returned 503.' });
+  const resumed = await run('after a hiccup');
+  assert.equal(resumed.externalAgent.status, 'completed', 'the send re-checks instead of refusing');
+  assert.equal(posted('after a hiccup'), 1);
+  assert.equal(store.getExternalAgentEntry('openai-dots').lastStatus, 'ready');
+  await settle();
+
+  // Turned off, the poller does nothing.
+  store.updateExternalAgentEntry('openai-dots', { enabled: false });
+  assert.equal(await sync.runDotsPollTick(heal), 'off');
+  store.updateExternalAgentEntry('openai-dots', { enabled: true });
 
   // Off: sync stops; the chat stays.
   session.flushSession(sid);
