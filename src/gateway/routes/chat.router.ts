@@ -2781,12 +2781,13 @@ async function runAdmittedMainChatTurn({
 		      Array.isArray(attachments) && attachments.length > 0 ? attachments : undefined,
           Array.isArray(attachmentPreviews) && attachmentPreviews.length > 0 ? attachmentPreviews : undefined,
           undefined,
-          { excludedSkillIds, forcedSkillIds, toolFilter: benchmarkToolFilter, timingRecorder: turnTiming, preAcquiredTurnLease: admissionLease, runtimeId, promptMemoryMode: benchmarkPromptMemoryMode },
+          { mainChatUsageNotice: true, excludedSkillIds, forcedSkillIds, toolFilter: benchmarkToolFilter, timingRecorder: turnTiming, preAcquiredTurnLease: admissionLease, runtimeId, promptMemoryMode: benchmarkPromptMemoryMode },
           turnOrigin,
           { clientRequestId },
 			    );
 		    if (!abortSignal.aborted) {
-		      markProviderStatus(true);
+		      if (result.usageLimitPaused) plannedRunFailed = true;
+          else markProviderStatus(true);
           notifyChatCompletion({
             sessionId: resolvedSessionId,
             source: turnOrigin.channel === 'mobile' ? 'mobile' : 'desktop',

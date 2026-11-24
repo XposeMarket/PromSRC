@@ -317,7 +317,7 @@ export function recordPlannedChatProgress(runtimeId: string, sessionId: string, 
   try {
     // Serialized async write; broadcast only after it lands.
     const prior = !resumedFromRuntimeId && payload?.reason === 'plan_resumed' ? findResumableChatPlan(sessionId, 'Continue') : undefined;
-    void store().progress(runtimeId, sessionId, payload, title, resumedFromRuntimeId || prior?.runtimeId, originPrompt || prior?.originPrompt).then(() => {
+    void store().progress(runtimeId, sessionId, payload, title, resumedFromRuntimeId || prior?.runtimeId, originPrompt, prior && { originPrompt: prior.originPrompt, activity: prior.activity, items: prior.runtimeProgress.items }).then(() => {
       if (payload?.source === 'declared') broadcastWS({ type: 'planned_chat_updated', runtimeId, sessionId });
     }).catch(error => console.warn('[planned-chat] Could not save progress:', error));
   } catch (error) { console.warn('[planned-chat] Could not save progress:', error); }

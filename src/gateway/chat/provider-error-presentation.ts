@@ -21,3 +21,29 @@ export function presentProviderCallFailure(error: unknown): string {
   }
   return `Error: ${raw}`;
 }
+
+/** Only a confirmed limit, not generic provider overload/auth. Never echo the payload. */
+export function usageCutoffNotice(error: any, now = Date.now()): string | undefined {
+  const raw = String(error?.message ?? error ?? '');
+  if (!/\busage_limit_reached\b|\brate_limit_(?:error|exceeded)\b|\binsufficient_quota\b|\busage limit (?:has been |was )?reached\b/i.test(raw)
+    && !((Number(error?.status ?? error?.response?.status) === 429 || /\b429\b/.test(raw)) && /rate limit|usage limit|quota|exceed your account/i.test(raw))) return;
+  const headers = error?.rateLimitHeaders ?? {};
+  const absolute = (value: unknown) => {
+    if (value == null || value === '') return NaN;
+    const n = Number(value);
+    const ms = Number.isFinite(n) ? n * (n < 1e12 ? 1000 : 1) : Date.parse(String(value));
+    return Number.isFinite(new Date(ms).getTime()) && ms > now ? ms : NaN;
+  };
+  const times = [absolute(headers['anthropic-ratelimit-unified-reset']), absolute(error?.resets_at),
+    absolute(raw.match(/"resets_at"\s*:\s*"?([\dT:.+Z-]+)/i)?.[1])];
+  for (const window of ['5h','7d']) {
+    const key = `anthropic-ratelimit-unified-${window}`;
+    if (headers[`${key}-status`] === 'rejected' || Number(headers[`${key}-utilization`]) === 1) times.push(absolute(headers[`${key}-reset`]));
+  }
+  const fmt = (ms: number) => new Intl.DateTimeFormat(undefined, {month:'short',day:'numeric',hour:'numeric',minute:'2-digit',timeZoneName:'short'}).format(ms);
+  const reset = Math.max(...times.filter(Number.isFinite));
+  const retry = headers['retry-after'];
+  const retryAt = typeof retry === 'string' && /^\d+$/.test(retry) ? now + Number(retry)*1000 : absolute(retry);
+  const timing = Number.isFinite(reset) ? `Resets ${fmt(reset)}.` : retryAt > now && Number.isFinite(new Date(retryAt).getTime()) ? `Try again ${fmt(retryAt)}.` : 'Reset time unavailable.';
+  return `Usage limit reached. ${timing}\n\nType \`continue\` to resume.`;
+}

@@ -1207,7 +1207,9 @@ export class AnthropicAdapter implements LLMProvider {
           + `Provider said: ${raw.slice(0, 300)}`,
         );
       }
-      throw new Error(`${this.id} API error ${response.status}: ${raw.slice(0, 500)}`);
+      throw Object.assign(new Error(`${this.id} API error ${response.status}: ${raw.slice(0, 500)}`), {
+        status: response.status, rateLimitHeaders: collectRateLimitHeaders(response),
+      });
     };
 
     // Anthropic intermittently bills a single setup-token request to extra

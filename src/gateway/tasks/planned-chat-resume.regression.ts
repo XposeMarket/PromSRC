@@ -69,6 +69,44 @@ async function main() {
    assert.match(answer.text,finish?/Verification complete/:/paused.*Verify restart/i);
    assert.equal(events.some(([e,p])=>e==='progress_state' && p.items[2]?.status==='done'),finish);
  }
+ // A real provider cutoff after plan work, followed by a typed Continue four days later.
+ const usageSid='mobile_usage_cutoff'; const realNow=Date.now; const t0=realNow();
+ const runUsage=(msg:string,id:string,events:Array<[string,any]>)=>handleChat(msg,usageSid,(e:string,p:any)=>{
+   events.push([e,p]); if(e==='progress_state') plans.recordPlannedChatProgress(id,usageSid,p,msg,undefined,msg);
+ },undefined,undefined,undefined,undefined,'interactive',undefined,undefined,undefined,undefined,undefined,{runtimeId:id,mainChatUsageNotice:true});
+ const tool=(name:string,args:any)=>({message:{role:'assistant',content:'',tool_calls:[{id:name,type:'function',function:{name,arguments:args}}]}});
+ let rounds=0; const usageEvents:Array<[string,any]>=[];
+ client.chatWithThinking=async()=>{
+   if(++rounds===1)return tool('declare_plan',{task_summary:'Release',steps:['Build release','Verify release']});
+   if(rounds===2)return tool('complete_plan_step',{note:'Build verified'});
+   throw new Error('anthropic API error 429: {"error":{"type":"rate_limit_error","message":"This request would exceed your account limit"}}');
+ };
+ const cutoff=await runUsage('Build and verify the release','usage-old',usageEvents);
+ assert.match(cutoff.text,/^Usage limit reached\. Reset time unavailable\.\n\nType `continue` to resume\.$/);
+ assert.equal(cutoff.usageLimitPaused,true); assert(usageEvents.some(([e,p])=>e==='progress_state' && p.reason==='usage_limit_paused' && p.activeIndex===1));
+ assert.equal(rounds,3,'no extra provider call to summarize a usage cutoff'); assert(cutoff.toolResults?.length);
+ plans.finishPlannedChatRun('usage-old','completed'); // A final chat reply is not a finished checklist.
+ for(let i=0;i<100 && plans.getPlannedChatRunDetail('usage-old')?.status!=='paused';i++)await sleep();
+ try {
+   Date.now=()=>t0+4*86400000; const events:Array<[string,any]>=[]; let calls=0;
+   client.chatWithThinking=async(_m:any,_r:any,opts:any)=>{
+     if(++calls===1)return tool('declare_plan',{task_summary:'Replacement',steps:['Wrong one','Wrong two']});
+     if(calls===2)return tool('complete_plan_step',{note:'Release verified'});
+     assert(calls<8);return {message:{role:'assistant',content:'Verified release.'}};
+   };
+   await runUsage('Continue','usage-new',events);
+   const snapshots=events.filter(([e,p])=>e==='progress_state'&&p.source==='declared').map(([,p])=>p);
+   assert.equal(snapshots[0]?.activeIndex,1); assert.deepEqual(snapshots[0]?.items.map((i:any)=>i.status),['done','in_progress']);
+   assert(!snapshots.some(p=>p.items.some((i:any)=>i.text==='Wrong one')),'typed Continue must protect the original plan just like a restart');
+   assert(snapshots.some(p=>p.items[1]?.text==='Verify release' && p.items[1].status==='done'));
+   for(let i=0;i<100 && !plans.getPlannedChatRunDetail('usage-new');i++)await sleep();
+   const linked=plans.getPlannedChatRunDetail('usage-new'); assert.equal(linked?.resumedFromRuntimeId,'usage-old');
+   assert.equal(linked?.originPrompt,'Build and verify the release','Continue must not replace the assignment');
+ } finally {Date.now=realNow;}
+ // Background tools sometimes use interactive mode: without main-chat opt-in they still see failure.
+ client.chatWithThinking=async()=>{throw new Error('anthropic API error 429: rate_limit_error');};
+ const worker=await handleChat('Analyze this task','worker-usage',()=>{},undefined,undefined,undefined,undefined,'interactive');
+ assert.match(worker.text,/^Error:/); assert.equal(worker.usageLimitPaused,undefined); assert.doesNotMatch(worker.text,/Type `continue`/);
  const {buildNeedsYouItems}=require('../needs-you');
  const pending=buildNeedsYouItems({proposals:[{id:'approval',status:'pending',requiresSrcEdit:true,sourceSessionId:sid}]});
  assert.equal(pending[0].sessionId,sid,'sourceSessionId normalized before resume guard');

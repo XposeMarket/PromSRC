@@ -19,7 +19,7 @@ import { createTurnTimingRecorder, type TurnTimingRecorder } from '../../../chat
 import { shouldRecordWorkerBatchTiming } from '../../../chat/worker-batch-timing';
 import { goalReminderForTool } from '../../../chat/goal-reminder';
 import { ModelResponseRecovery, appendRecoveryTurn, recoverableEmptyCompletionResponse } from '../../../chat/model-response-recovery';
-import { presentProviderCallFailure } from '../../../chat/provider-error-presentation';
+import { presentProviderCallFailure, usageCutoffNotice } from '../../../chat/provider-error-presentation';
 import { attemptModelDigest, buildDeterministicTurnDigest, describeTurnCutoffCause } from '../../../chat/degraded-turn-finish';
 import { fitToolDefinitionsToBudget } from '../../../tools/schema-compaction';
 import { currentTrace, recordSpan, runInTrace, withSpan } from '../../../observability/turn-trace';
@@ -227,7 +227,7 @@ export async function handleChatUntraced(
    * sized bubble splitting. Errors thrown by this callback are swallowed.
    */
   callerOnToken?: (token: string) => void,
-  runtimeOptions?: { personalReferenceAccess?: boolean; directSubagentChat?: boolean; syntheticThreadSupervisionReview?: boolean; supervisionLoop?: boolean; silentSupervisionLoop?: boolean; supervisionOwnerSessionId?: string; supervisionId?: string; excludedSkillIds?: string[]; forcedSkillIds?: string[]; instructionCallerRequirements?: string[]; timingRecorder?: TurnTimingRecorder; turnRouteSnapshot?: TurnRouteSnapshot; promptMemoryMode?: 'full' | 'compact'; brainThoughtRuntime?: boolean; allowNativeWorkspaceTools?: boolean; runtimeId?: string; predecessorRuntimeId?: string; admissionLease?: RuntimeAdmissionLease; skipAutomaticToolCategoryActivation?: boolean; toolCategoryDetectionText?: string; speedOverride?: 'standard' | 'fast'; brainRunBudget?: BrainRunBudgetOptions; internalWatchContext?: { watchId: string; actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed'; targetTaskId?: string; delivery: 'follow_up' | 'live_steer' } },
+  runtimeOptions?: { mainChatUsageNotice?: boolean; personalReferenceAccess?: boolean; directSubagentChat?: boolean; syntheticThreadSupervisionReview?: boolean; supervisionLoop?: boolean; silentSupervisionLoop?: boolean; supervisionOwnerSessionId?: string; supervisionId?: string; excludedSkillIds?: string[]; forcedSkillIds?: string[]; instructionCallerRequirements?: string[]; timingRecorder?: TurnTimingRecorder; turnRouteSnapshot?: TurnRouteSnapshot; promptMemoryMode?: 'full' | 'compact'; brainThoughtRuntime?: boolean; allowNativeWorkspaceTools?: boolean; runtimeId?: string; predecessorRuntimeId?: string; admissionLease?: RuntimeAdmissionLease; skipAutomaticToolCategoryActivation?: boolean; toolCategoryDetectionText?: string; speedOverride?: 'standard' | 'fast'; brainRunBudget?: BrainRunBudgetOptions; internalWatchContext?: { watchId: string; actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed'; targetTaskId?: string; delivery: 'follow_up' | 'live_steer' } },
 ): Promise<HandleChatResult> {
   const latencyStartAt = Date.now();
   // Stable key for this turn's cross-turn edit-log entries. Restart-resumed
@@ -1780,7 +1780,7 @@ export async function handleChatUntraced(
   const getProgressRemaining = (): number => (
     progressState.items.filter((item) => item.status === 'pending' || item.status === 'in_progress').length
   );
-  const openRecoveryStep = () => runtimeOptions?.predecessorRuntimeId && resumedPlanContext ? progressState.items.find(i => i.status === 'pending' || i.status === 'in_progress') : undefined;
+  const openRecoveryStep = () => resumedPlanContext ? progressState.items.find(i => i.status === 'pending' || i.status === 'in_progress') : undefined;
   emitProgressState('reset');
 
   htime('before preempt watchdog setup');
@@ -4385,14 +4385,17 @@ Do not produce prose. Use the canonical thread tool now.` });
             toolResults: preservedToolResults,
           };
         }
+        const usageNotice = runtimeOptions?.mainChatUsageNotice && !abortSignal?.aborted ? usageCutoffNotice(err) : undefined;
+        if (usageNotice && progressState.source === 'declared') emitProgressState('usage_limit_paused');
         return {
           type: 'chat',
           noResultFailure: preservedToolResults ? undefined : 'provider_failure',
-          text: preservedToolResults && !abortSignal?.aborted
+          ...(usageNotice ? { usageLimitPaused: true } : {}),
+          text: usageNotice ?? (preservedToolResults && !abortSignal?.aborted
             ? await finishDegradedTurn('provider_failure', String(err?.message || err).slice(0, 140), lastPartialText,
               isUsageLimitError(err) || [401, 403, 429].includes(Number(err?.status || err?.statusCode || err?.response?.status))
               || /(?:^|\D)(?:401|403|429)(?:\D|$)|auth(?:orization|entication)?|rate.limit|usage.limit|quota/i.test(String(err?.message || err)))
-            : presentProviderCallFailure(err),
+            : presentProviderCallFailure(err)),
           thinking: preservedThinking,
           reasoningSummary: preservedReasoningSummary,
           toolResults: preservedToolResults,
