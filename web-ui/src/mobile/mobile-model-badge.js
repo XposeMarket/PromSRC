@@ -804,7 +804,7 @@ export async function refreshMobileModelBadge(force = false, modelChangeDetail =
   // made the "global fallback" show the previous chat's model.
   _setBadgeFast(supportsFastSpeed(provider, model) && (cfg.speed === 'fast' || cfg.fast_mode === true));
   _setComposerModelIdentity(provider, model, cfg.reasoning_effort);
-  if (usesDraftDefault) window.__pmModelBadgeReasoningLabel = `Default (${formatReasoningDisplayName(cfg.reasoning_effort) || 'Auto'})`;
+  if (usesDraftDefault) window.__pmModelBadgeReasoningLabel = ''; // Inherited effort stays available in the reasoning picker.
   return _setBadgeLabel(formatModelWithReasoning(model, provider, cfg.reasoning_effort));
 }
 

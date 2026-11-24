@@ -1224,7 +1224,15 @@ body.pm-mobile-active .pm-mobile-side-sheet .pm-mobile-side-handle::after {
   }
 }
 
-/* In expanded mode keep both controls in the first toolbar track. */
+/* Keep only the paperclip at the leading edge until there is an expanded draft. */
+body.pm-mobile-active #pm-composer:not(.has-text):not(.has-attachments) :is(pm-chat-access, .pm-composer-model-badge),
+#pm-composer:not(.is-focused):not(.has-attachments) pm-chat-access { display: none; }
+#pm-composer:is(.is-focused, .has-attachments) .pm-composer-row { column-gap: 2px; }
 #pm-composer:is(.is-focused, .has-attachments) .pm-composer-row > pm-chat-access {
-  grid-area: 2 / 1; justify-self: start; margin-inline-start: 44px;
+  grid-area: 2 / 1; justify-self: start; margin-inline-start: 36px;
 }
+/* Keep separate, non-overlapping touch targets instead of squeezing glyphs with transforms. */
+#pm-composer:is(.is-focused, .has-attachments) .pm-composer-row > #pm-attach-btn {
+  width: 36px; min-width: 36px;
+}
+#pm-composer:is(.is-focused, .has-attachments) .pm-composer-model-badge { grid-area: 2 / 2; justify-self: start; }
