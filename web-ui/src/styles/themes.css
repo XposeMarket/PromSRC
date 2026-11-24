@@ -2129,6 +2129,10 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area .chat-model-switcher-w
   gap: 8px;
 }
 
+.chat-model-switcher-wrap .composer-provider-mark { width:14px; height:14px; vertical-align:-3px; margin-inline-end:4px; }
+.chat-model-switcher-wrap .composer-model-title { color:var(--text); font-weight:700; }
+.chat-model-switcher-wrap .composer-model-effort { color:inherit; font-weight:400; }
+
 /* The context gauge is kept in the same functional wrapper, but leads the
    model/reasoning selector visually. This also keeps its outside-click logic
    intact. */
