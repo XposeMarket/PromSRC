@@ -41,6 +41,13 @@ async function main() {
   const onDisk = JSON.parse(fs.readFileSync(storePath, 'utf-8')).questions.map((q: any) => q.id);
   assert.ok(onDisk.includes(other.id), 'replacement write keeps the host card');
   assert.ok(onDisk.includes(card.id), 'answered card survives');
+  const fresh = host.create(createPrometheusQuestionPayload({ sessionId: 's4', questions: [{ id: 'z', label: 'Z?' }] }));
+  assert.equal(replacement.cancel(fresh.id)?.status, 'cancelled', 'direct cancel sees a card created since boot without a prior list');
+  const answeredElsewhere = host.create(createPrometheusQuestionPayload({ sessionId: 's5', questions: [{ id: 'q', label: 'Q?' }] }));
+  assert.equal(replacement.get(answeredElsewhere.id)?.status, 'pending');
+  host.submit(answeredElsewhere.id, [{ id: 'q', text: 'yes' }], '', 'web');
+  assert.equal(replacement.cancel(answeredElsewhere.id), null, 'stale local pending cannot overwrite an answer');
+  assert.equal(replacement.get(answeredElsewhere.id)?.status, 'answered');
   console.log('prometheus questions cross-process regression passed');
 }
 
