@@ -23,7 +23,6 @@ import {
   resetMobileDraftModelRoute,
   setMobileSubagentReasoningContext,
 } from './mobile-model-badge.js';
-import { renderMobileContextChip, wireMobileContextWindow } from './mobile-context-window.js';
 import { formatModelWithReasoning } from '../model-display.js';
 import {
   SOURCE_PANEL_SURFACE,
@@ -11167,7 +11166,6 @@ function loadMobileChatPageRenderer() {
   receipts,
   setReceipts: (value) => { receipts = value; },
   reconcileMobileChatTurn,
-  renderMobileContextChip,
   renderMobileHeader,
   refreshMobileDrawerSessions,
   toggleMobileChatPin,
@@ -11188,7 +11186,6 @@ function loadMobileChatPageRenderer() {
   targetNamespacedId,
   updateMobileChatSessionHistory,
   wireHeaderActions,
-  wireMobileContextWindow,
   wsEventBus,
       })));
   }
@@ -12624,7 +12621,6 @@ export {
   pmToast,
   registerAgentModelPickerOnSaved,
   registerAgentVoicePickerOnSaved,
-  renderMobileContextChip,
   renderMobileHeader,
   resumeTeam,
   runBgTaskAction,
@@ -12645,7 +12641,6 @@ export {
   updateMobileSchedule,
   uploadMobileBinaryFile,
   wireHeaderActions,
-  wireMobileContextWindow,
   wsEventBus,
 };
 

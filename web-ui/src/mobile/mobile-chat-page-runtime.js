@@ -1,3 +1,4 @@
+import { renderMobileContextChip, wireMobileContextWindow } from './mobile-context-window.js';
 import { clearMobileQueueDraftReceipt, createMobileDurableQueue } from './mobile-durable-queue.js';
 import { noteMobilePendingEvent } from './mobile-ttft-state.js';
 
@@ -384,7 +385,6 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
       receipts,
       setReceipts,
       reconcileMobileChatTurn,
-      renderMobileContextChip,
       renderMobileHeader,
       renderVoicePage,
       requestMobileUpdate,
@@ -403,7 +403,6 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
       targetNamespacedId,
       updateMobileChatSessionHistory,
       wireHeaderActions,
-      wireMobileContextWindow,
       wsEventBus,
     } = resolveContext() || {};
   // A remount (iOS refresh/bfcache) can leave an old history request in flight.
