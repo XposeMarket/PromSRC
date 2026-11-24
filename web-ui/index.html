@@ -355,7 +355,7 @@
 <link rel="stylesheet" href="src/styles/projects.css?v=desktop-sidebar-priority-v2">
 <link rel="stylesheet" href="src/styles/hub.css?v=skill-hover-actions">
 <link rel="stylesheet" href="src/styles/themes.css?v=desktop-sidebar-priority-v2">
-<link rel="stylesheet" href="src/styles/settings.css?v=full-page-settings-v2">
+<link rel="stylesheet" href="src/styles/settings.css?v=full-page-settings-v3">
 <link rel="stylesheet" href="src/styles/agents-imports.css?v=agents-imports-v1">
 <link rel="stylesheet" href="src/styles/external-agents.css?v=external-agents-v1">
 <link rel="stylesheet" href="src/styles/new-chat-glance.css?v=glance-v1">
@@ -3739,7 +3739,7 @@
       </label>
       <div id="settings-tabstrip" class="settings-tabstrip">
         <div class="settings-nav-group-label">Personal</div>
-        <button id="settings-tab-system" class="settings-tab-item" data-settings-search="general system appearance" onclick="setSettingsTab('system')"><span class="settings-nav-icon" data-settings-nav-icon="sliders" aria-hidden="true"></span><span>General</span></button>
+        <button id="settings-tab-system" class="settings-tab-item" data-settings-search="general system appearance chat messages busy queue steer" onclick="setSettingsTab('system')"><span class="settings-nav-icon" data-settings-nav-icon="sliders" aria-hidden="true"></span><span>General</span></button>
         <button id="settings-tab-appearance" class="settings-tab-item" data-settings-search="appearance themes theme colors background embers opacity customize" onclick="setSettingsTab('appearance')"><span class="settings-nav-icon" data-settings-nav-icon="palette" aria-hidden="true"></span><span>Appearance</span></button>
         <button id="settings-tab-models" class="settings-tab-item" data-settings-search="models ai providers" onclick="setSettingsTab('models')"><span class="settings-nav-icon" data-settings-nav-icon="grid" aria-hidden="true"></span><span>Models</span></button>
         <button id="settings-tab-search" class="settings-tab-item" data-settings-search="search web research credentials keys api tokens" onclick="setSettingsTab('search')"><span class="settings-nav-icon" data-settings-nav-icon="search" aria-hidden="true"></span><span>Search</span></button>
@@ -3767,6 +3767,21 @@
       </div>
 
       <div id="settings-panel-system" class="settings-system-panel">
+        <section class="settings-section">
+          <div class="settings-section-heading"><h2>Chat messages</h2></div>
+          <div class="settings-section-panel">
+            <div class="settings-row settings-busy-composer-row">
+              <div class="settings-row-copy">
+                <label class="settings-row-label" for="settings-busy-composer-mode">When I send a message while Prom is working</label>
+                <div class="settings-row-help">Keep it queued for the next turn, or send it into the current turn immediately.</div>
+              </div>
+              <select id="settings-busy-composer-mode" class="settings-row-select">
+                <option value="queue">Keep queued (default)</option>
+                <option value="steer">Steer immediately</option>
+              </select>
+            </div>
+          </div>
+        </section>
         <section class="settings-section">
           <div class="settings-section-heading">
             <h2>Account</h2>
@@ -3888,16 +3903,7 @@
               </div>
               <div id="settings-auto-settle-status" class="settings-row-status"></div>
             </div>
-            <div class="settings-row settings-busy-composer-row">
-              <div class="settings-row-copy">
-                <div class="settings-row-label">Messages sent while Prometheus is busy</div>
-                <div class="settings-row-help">Queue waits and runs next. Steer sends it straight into the active run.</div>
-              </div>
-              <select id="settings-busy-composer-mode" class="settings-row-select" aria-label="Busy composer mode">
-                <option value="queue">Queue (default)</option>
-                <option value="steer">Steer into active run</option>
-              </select>
-            </div>
+
 
           </div>
         </section>
@@ -4255,7 +4261,7 @@
     <div id="settings-panel-models" class="settings-models-page" style="display:none;padding:14px 16px">
 
       <div class="settings-models-usage" id="settings-models-usage" style="display:none">
-        <div class="settings-models-usage-title">Usage &amp; Limits</div>
+        <div class="settings-models-usage-title">Usage &amp; Limits <small role="status" id="settings-usage-freshness"></small></div>
         <div class="hub-providers-grid" id="settings-models-usage-grid"></div>
       </div>
 
@@ -4433,7 +4439,8 @@
                 <option value="auto" selected>auto — let model decide (enables preamble)</option>
                 <option value="required">required — force tool call on first turn</option>
               </select>
-              <button class="btn btn-sm" onclick="disconnectCodex()" style="margin-top:10px;background:transparent;border:1px solid var(--err);color:var(--err)">Disconnect Account</button>
+              <button id="codex-disconnect" type="button" class="btn btn-sm" onclick="disconnectCodex()" style="margin-top:10px;background:transparent;border:1px solid var(--err);color:var(--err)">Disconnect Account</button>
+              <div id="codex-disconnect-status" role="status" aria-live="polite"></div>
             </div>
           </div>
 

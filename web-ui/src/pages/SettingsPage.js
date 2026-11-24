@@ -2147,14 +2147,21 @@ function collectInUseProviders() {
   return ids;
 }
 
-async function renderModelsUsage() {
+let modelsUsageRequest = null;
+function renderModelsUsage() {
+  if (!modelsUsageRequest) modelsUsageRequest = refreshModelsUsage().finally(() => { modelsUsageRequest = null; });
+  return modelsUsageRequest;
+}
+async function refreshModelsUsage() {
   const wrap = document.getElementById('settings-models-usage');
   const grid = document.getElementById('settings-models-usage-grid');
   if (!wrap || !grid) return;
 
-  const inUse = collectInUseProviders().filter(id => !MODELS_USAGE_LOCAL.has(id));
-  wrap.style.display = '';
-  grid.innerHTML = `<div class="hub-empty">Loading…</div>`;
+  const freshness = document.getElementById('settings-usage-freshness');
+  if (!grid.hasChildNodes() && !grid.dataset.usageLoaded) {
+    wrap.style.display = '';
+    grid.innerHTML = `<div class="hub-empty">Loading…</div>`;
+  }
 
   // A failed request (gateway restarting, timeout, flaky phone network) is not
   // the same as "no saved credentials". Retry once, then say it failed instead
@@ -2175,6 +2182,11 @@ async function renderModelsUsage() {
     } catch { /* retried below, then shown as a load error */ }
   }
   if (!loaded) {
+    if (grid.dataset.usageLoaded && grid.hasChildNodes()) {
+      if (freshness) freshness.textContent = 'Last known';
+      return;
+    }
+    wrap.style.display = '';
     grid.innerHTML = `<div class="usage-provider-card">
       <div class="usage-provider-head">
         <span class="usage-provider-name">Usage unavailable</span>
@@ -2189,8 +2201,12 @@ async function renderModelsUsage() {
 
   // A connected account may be used by a per-chat model route even when it
   // is absent from the global main/agent defaults shown in this form.
+  if (freshness) freshness.textContent = '';
+  const inUse = collectInUseProviders().filter(id => !MODELS_USAGE_LOCAL.has(id));
   const visibleIds = [...new Set([...inUse, ...Object.keys(byId)])];
-  if (!visibleIds.length) { wrap.style.display = 'none'; grid.innerHTML = ''; return; }
+  grid.dataset.usageLoaded = 'true';
+  if (!visibleIds.length) { wrap.style.display = 'none'; grid.replaceChildren(); return; }
+  wrap.style.display = '';
 
   const mainId = (document.getElementById('amd-main-chat-prov') || {}).value || window._llmSettingsCache?.provider || '';
   const mainAccountId = String(window._llmSettingsCache?.accountId || getProviderConfigFromCache(mainId)?.defaultAccountId || '').trim();
@@ -2213,7 +2229,11 @@ async function renderModelsUsage() {
       <div class="usage-provider-note">Assigned to an agent but no saved API key / token — connect it above to track usage.</div>
     </div>`;
   });
-  grid.innerHTML = cards.join('');
+  const html = cards.join('');
+  if (grid._renderedUsage !== html || !grid.querySelector('.usage-provider-card')) {
+    grid.innerHTML = html;
+    grid._renderedUsage = html;
+  }
 }
 window.renderModelsUsage = renderModelsUsage;
 
@@ -2616,11 +2636,13 @@ function buildProviderPayload(providerOverride) {
 
 // --- Codex OAuth UI ------------------------------------------------
 
+let codexStatusRevision = 0;
 async function refreshCodexStatus() {
+  const revision = ++codexStatusRevision;
   try {
     const accountId = getSelectedProviderAccountId('openai_codex');
     const data = await api(`/api/auth/openai/status?accountId=${encodeURIComponent(accountId)}`);
-    if (getSelectedProviderAccountId('openai_codex') !== accountId) return;
+    if (revision !== codexStatusRevision || getSelectedProviderAccountId('openai_codex') !== accountId) return;
     const account = window._llmSettingsCache?.providers?.openai_codex?.accounts?.[accountId];
     if (account) account.status = data?.connected ? 'connected' : 'disconnected';
     const disc = document.getElementById('codex-disconnected-state');
@@ -2706,8 +2728,31 @@ async function submitManualCodexUrl() {
 }
 
 async function disconnectCodex() {
-  await api('/api/auth/openai/disconnect', { method: 'POST', body: JSON.stringify({ accountId: getSelectedProviderAccountId('openai_codex') }) });
-  await refreshCodexStatus();
+  const button = document.getElementById('codex-disconnect');
+  if (button?.disabled) return;
+  const accountId = getSelectedProviderAccountId('openai_codex');
+  const status = document.getElementById('codex-disconnect-status');
+  if (button) button.disabled = true;
+  setSettingsStatus(status, 'info', 'Disconnecting…');
+  try {
+    const result = await api('/api/auth/openai/disconnect', { method: 'POST', body: JSON.stringify({ accountId }) });
+    if (!result?.success) throw new Error('Disconnect was not confirmed.');
+    const account = window._llmSettingsCache?.providers?.openai_codex?.accounts?.[accountId];
+    if (account) account.status = 'disconnected';
+    if (getSelectedProviderAccountId('openai_codex') === accountId) {
+      ++codexStatusRevision; // Ignore older status reads still in flight.
+      document.getElementById('codex-connected-state').style.display = 'none';
+      document.getElementById('codex-disconnected-state').style.display = 'block';
+      setSettingsStatus(document.getElementById('codex-oauth-status'), 'success', 'Disconnected. You can sign in again.');
+    }
+    setSettingsStatus(status, 'info', '');
+  } catch {
+    setSettingsStatus(status, 'error', getSelectedProviderAccountId('openai_codex') === accountId
+      ? 'Could not confirm disconnect. Check your connection and try again.' : '');
+    return;
+  } finally {
+    if (button) button.disabled = false;
+  }
   await refreshCredentialedRoutingProviderChoices();
 }
 

@@ -224,7 +224,22 @@ export function saveTokens(configDir: string, tokens: OAuthTokens, accountId?: s
 }
 
 export function clearTokens(configDir: string, accountId?: string): void {
-  getVault(configDir).delete(accountVaultKey(accountId), 'oauth:clear');
+  const id = String(accountId || '').trim();
+  const vault = getVault(configDir);
+  const invalidate = (slot: string) => refreshInFlight.delete(`${path.resolve(configDir)}:${slot}`);
+  const pending = activeFlows.get(path.resolve(configDir));
+  if (pending && (pending.accountId || 'default') === (id || 'default')) {
+    pending.lifecycle?.finish({ success: false, error: 'Account disconnected.' });
+  }
+  if (id === 'default' || !id) {
+    // A default status read falls back to the unscoped vault entry, and can
+    // migrate the pre-vault file. Neither may rehydrate a disconnected login.
+    fs.rmSync(path.join(configDir, 'credentials', 'oauth-openai.json'), { force: true });
+    vault.delete(VAULT_KEY, 'oauth:clear_legacy');
+    invalidate('');
+  }
+  if (id) vault.delete(accountVaultKey(id), 'oauth:clear');
+  invalidate(id);
   log.security('[oauth] Tokens cleared from vault');
 }
 
@@ -250,7 +265,8 @@ export async function refreshTokens(configDir: string, accountId?: string): Prom
   const existingRefresh = refreshInFlight.get(key);
   if (existingRefresh) return existingRefresh;
 
-  const refreshPromise = (async () => {
+  let refreshPromise!: Promise<OAuthTokens>;
+  refreshPromise = (async () => {
     const existing = loadTokens(configDir, accountId);
     if (!existing?.refresh_token) throw new Error('No refresh token — please reconnect.');
 
@@ -292,6 +308,7 @@ export async function refreshTokens(configDir: string, accountId?: string): Prom
       account_id:    oauthAccountId,
       id_token:      idToken,
     };
+    if (refreshInFlight.get(key) !== refreshPromise) throw new Error('Account disconnected during refresh.');
     saveTokens(configDir, tokens, accountId);
     return tokens;
   })();
@@ -300,7 +317,7 @@ export async function refreshTokens(configDir: string, accountId?: string): Prom
   try {
     return await refreshPromise;
   } finally {
-    refreshInFlight.delete(key);
+    if (refreshInFlight.get(key) === refreshPromise) refreshInFlight.delete(key);
   }
 }
 
