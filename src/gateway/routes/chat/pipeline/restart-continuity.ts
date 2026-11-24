@@ -346,7 +346,7 @@ export function retriggerInterruptedMainChat(runtime: InterruptedMainChatRuntime
     undefined,
     undefined,
     undefined,
-    { syntheticRestartRecovery: true, predecessorRuntimeId: runtime.id, preAcquiredTurnLease: admissionLease, runtimeId, turnContextId: rootTurnContextId },
+    { mainChatUsageNotice: true, syntheticRestartRecovery: true, predecessorRuntimeId: runtime.id, preAcquiredTurnLease: admissionLease, runtimeId, turnContextId: rootTurnContextId },
     origin,
     { clientRequestId: runtime.clientRequestId },
   ).catch((err: any) => {

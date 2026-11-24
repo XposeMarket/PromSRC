@@ -32,7 +32,7 @@ export async function continuePlannedChat(id: string, runTurn?: typeof import('.
       if (event === 'progress_state') recordPlannedChatProgress(runtimeId, sid, data, row.title, row.runtimeId, row.originPrompt);
       if (event === 'error') failed = true;
       recordPlannedChatActivity(runtimeId, event, data);
-    }, undefined, signal, context, undefined, undefined, undefined, undefined, { runtimeId }, origin)
+    }, undefined, signal, context, undefined, undefined, undefined, undefined, { runtimeId, mainChatUsageNotice: true }, origin)
       .catch(error => { failed = true; console.warn('[planned-chat] Resume failed:', error); })
       .finally(() => { finishPlannedChatRun(runtimeId, signal.aborted ? (/watchdog|restart|shutdown/i.test(signal.reason) ? 'interrupted' : 'cancelled') : failed ? 'failed' : 'completed'); finishLiveRuntime(runtimeId); resuming.delete(sid); });
     return { success: true, sessionId: sid };

@@ -73,7 +73,7 @@ async function main() {
  const usageSid='mobile_usage_cutoff'; const realNow=Date.now; const t0=realNow();
  const runUsage=(msg:string,id:string,events:Array<[string,any]>)=>handleChat(msg,usageSid,(e:string,p:any)=>{
    events.push([e,p]); if(e==='progress_state') plans.recordPlannedChatProgress(id,usageSid,p,msg,undefined,msg);
- },undefined,undefined,undefined,undefined,'interactive',undefined,undefined,undefined,undefined,undefined,{runtimeId:id});
+ },undefined,undefined,undefined,undefined,'interactive',undefined,undefined,undefined,undefined,undefined,{runtimeId:id,mainChatUsageNotice:true});
  const tool=(name:string,args:any)=>({message:{role:'assistant',content:'',tool_calls:[{id:name,type:'function',function:{name,arguments:args}}]}});
  let rounds=0; const usageEvents:Array<[string,any]>=[];
  client.chatWithThinking=async()=>{
@@ -103,6 +103,10 @@ async function main() {
    const linked=plans.getPlannedChatRunDetail('usage-new'); assert.equal(linked?.resumedFromRuntimeId,'usage-old');
    assert.equal(linked?.originPrompt,'Build and verify the release','Continue must not replace the assignment');
  } finally {Date.now=realNow;}
+ // Background tools sometimes use interactive mode: without main-chat opt-in they still see failure.
+ client.chatWithThinking=async()=>{throw new Error('anthropic API error 429: rate_limit_error');};
+ const worker=await handleChat('Analyze this task','worker-usage',()=>{},undefined,undefined,undefined,undefined,'interactive');
+ assert.match(worker.text,/^Error:/); assert.equal(worker.usageLimitPaused,undefined); assert.doesNotMatch(worker.text,/Type `continue`/);
  const {buildNeedsYouItems}=require('../needs-you');
  const pending=buildNeedsYouItems({proposals:[{id:'approval',status:'pending',requiresSrcEdit:true,sourceSessionId:sid}]});
  assert.equal(pending[0].sessionId,sid,'sourceSessionId normalized before resume guard');
