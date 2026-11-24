@@ -32,7 +32,6 @@ import { mountSecureAccessDock, createSecureAccessContinuation } from '../featur
 import { installComposerSecretGuard } from '../features/secure-access/protected-plugin-entry.js';
 import { getCachedBusyComposerMode, loadBusyComposerModeFromServer, shouldAutoSteerBusyTurn } from '../features/chat/runtime/busy-composer-mode.js';
 
-
 let mobileBusyComposerModeLoaded = false;
 
 
