@@ -197,7 +197,33 @@ async function main(): Promise<void> {
     assert.equal(retention.pruneWarmToolCategories(list, 9, false), list, 'warm cache returns the same list');
     assert.equal(retention.touchWarmToolCategory(list, 'a', 1, true), list, 'no-op touch returns the same list');
 
-    console.log('warm tool category retention regression passed');
+    // Extraction contract: malformed persisted scopes, alias dedupe, and expiry boundaries.
+    const state = await import('./session-tool-categories');
+    assert.equal(state.normalizeToolCategoryActivationScope('unknown'), 'session');
+    assert.deepEqual(state.normalizeScopedToolCategoryActivations(null), []);
+    const scoped = state.normalizeScopedToolCategoryActivations([
+      { category: 'file_ops', scope: 'turn', activatedAtTurn: 4, expiresAfterTurn: 3, activatedAt: 1 },
+      { category: 'workspace_write', scope: 'turn', activatedAtTurn: 9, activatedAt: 2 },
+      { category: 'browser', scope: 'ttl', turns: -2, activatedAt: 3 },
+      { category: 'skills', scope: 'session' },
+    ], 5);
+    assert.deepEqual(scoped, [
+      { category: 'workspace_write', scope: 'turn', activatedAtTurn: 4, expiresAfterTurn: 4, turns: undefined, activatedAt: 1 },
+      { category: 'browser_automation', scope: 'ttl', activatedAtTurn: 5, expiresAfterTurn: 5, turns: 1, activatedAt: 3 },
+    ]);
+    const scopedState = { scopedToolCategoryActivations: scoped };
+    assert.equal(state.pruneScopedToolCategoryActivations(scopedState, 5), true);
+    assert.equal(state.pruneScopedToolCategoryActivations(scopedState, 5), false);
+    assert.deepEqual(scopedState.scopedToolCategoryActivations, [scoped[1]]);
+    assert.deepEqual(state.loadWarmToolCategories({ warmToolCategories: [], anthropicCachedToolCategories: ['skills'] }), [], 'explicit warm state wins over legacy data');
+    assert.equal(state.refreshLoadedWarmToolCategories(list, [], 'a', 1), list, 'no-op refresh preserves identity');
+    const newer = { category: 'skills', lastUsedTurn: 9, used: true };
+    const restored = state.restoreWarmToolCategories([newer, { category: 'business', lastUsedTurn: 9, used: true }], {
+      category: 'business', persistent: false, scoped: [], warm: [list[0], { ...newer, lastUsedTurn: 2 }],
+    }, 'business');
+    assert.deepEqual(restored, [list[0], newer], 'rollback restores evicted entries and retains newer surviving state');
+    assert.equal(restored[1], newer);
+    console.log('warm tool category retention and extracted session-state regression passed');
   } finally {
     try {
       const api = await import('./session');
