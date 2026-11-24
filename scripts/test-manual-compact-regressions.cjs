@@ -168,8 +168,14 @@ async function main() {
     assert.equal(explicit.text, COMPACT_BUSY, 'explicit user input is refused while compacting');
     const ordinaryBefore = fake.ordinary;
     let scheduledText;
-    const scheduled = runInteractiveTurn('scheduled wake', id, () => {}, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
-      { syntheticGoalContinuation: true }).then((r) => { scheduledText = r?.text; });
+    // Exact six-argument call the real timer-runner.ts:111 makes: (message, sessionId, sendSSE, pinned, abortSignal, callerContext).
+    // No flags and no turn origin: the trusted signal is the "[Timer fired]" message prefix, as in timer-runner.ts:84.
+    const timerAbort = { aborted: false, signal: new AbortController().signal };
+    const scheduled = runInteractiveTurn(
+      '[Timer fired]\nUser asked earlier: wake\nTimer label: r3\nScheduled for: now\nProceed now as if the user just sent this request.',
+      id, () => {}, undefined, timerAbort,
+      '[Timer r3-timer] This is a delayed main-chat user turn. Treat it like the user just sent it in this same chat session.',
+    ).then((r) => { scheduledText = r?.text; });
     await tick(200);
     assert.equal(scheduledText, undefined, 'scheduled turn is queued, not answered with busy text');
     assert.equal(coordinator.isActive(id), true, 'compaction still owns the lease');

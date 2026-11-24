@@ -106,6 +106,7 @@ export async function runInteractiveTurn(
   // Explicit user input is refused while compaction owns the chat. Scheduled timers, wakes and
   // agent completions are not user input: they fall through to the normal lease wait below and run after it.
   const scheduledOrigin = turnOriginInput?.channel === 'system' || !!flags?.directSubagentChat || !!flags?.supervisionLoop
+    || /^\s*\[Timer fired\]/i.test(String(message || ''))
     || Object.keys(flags || {}).some(k => k.startsWith('synthetic') && (flags as any)[k]);
   if (manualCompactions.has(sessionId) && !scheduledOrigin) return { type: 'chat', text: COMPACT_BUSY };
   // Install the watch policy around the entire synthetic turn, including
