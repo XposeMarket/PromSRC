@@ -55,6 +55,63 @@ function firstSentence(text: string, max = 90): string {
   return cut.length > max ? `${cut.slice(0, max - 3)}...` : cut;
 }
 
+function schemaTypeLabel(schema: any): string {
+  const type = schema?.type;
+  if (Array.isArray(type)) return type.map(String).join(' or ');
+  return type ? String(type) : 'any';
+}
+
+function cappedDescription(text: string, max: number): string {
+  const clean = String(text || '').replace(/\s+/g, ' ').trim();
+  return clean.length > max ? `${clean.slice(0, max - 3)}...` : clean;
+}
+
+/**
+ * Merge one argument name that several actions declare. Actions can use the same
+ * name for different things (GitHub `body` is a JSON object for api_request and a
+ * string for comment/create_pr), so the first declaration must not win:
+ * - different types: no `type` at all (accepted by every provider adapter, which
+ *   pass schemas through unchanged, including local Ollama builds that only parse
+ *   a single string `type`), and a description naming which actions take which type;
+ * - same type, different descriptions or constraints: keep only the type (plus a
+ *   permissive `items` for arrays) and a neutral description naming the actions.
+ */
+function mergeSharedConnectorProperty(uses: Array<{ action: string; schema: any }>): any {
+  const strip = (schema: any) => {
+    const { description, ...rest } = schema || {};
+    return rest;
+  };
+  if (uses.length === 1) {
+    const description = uses[0].schema?.description;
+    return { ...strip(uses[0].schema), ...(description ? { description: String(description).slice(0, 120) } : {}) };
+  }
+  const actionsByType = new Map<string, string[]>();
+  for (const use of uses) {
+    const label = schemaTypeLabel(use.schema);
+    actionsByType.set(label, [...(actionsByType.get(label) || []), use.action]);
+  }
+  if (actionsByType.size > 1) {
+    const byType = [...actionsByType.entries()].map(([type, actions]) => `${type} for ${actions.join(', ')}`).join('; ');
+    return { description: cappedDescription(`Type depends on action: ${byType}.`, 400) };
+  }
+  const actionsByDescription = new Map<string, string[]>();
+  for (const use of uses) {
+    const text = String(use.schema?.description || '').replace(/\s+/g, ' ').trim();
+    if (text) actionsByDescription.set(text, [...(actionsByDescription.get(text) || []), use.action]);
+  }
+  const shapes = new Set(uses.map((use) => JSON.stringify(strip(use.schema))));
+  const base = shapes.size === 1
+    ? strip(uses[0].schema)
+    : { type: uses[0].schema?.type, ...(uses[0].schema?.type === 'array' ? { items: {} } : {}) };
+  // Differing descriptions: name each action's own wording when that stays short,
+  // otherwise a neutral line that is true for every action using the argument.
+  const perAction = [...actionsByDescription.entries()].map(([text, actions]) => `${actions.join(', ')}: ${text}`).join('; ');
+  const description = actionsByDescription.size <= 1
+    ? ([...actionsByDescription.keys()][0] || '').slice(0, 120)
+    : perAction.length <= 200 ? perAction : cappedDescription(`Argument for ${uses.map((use) => use.action).join(', ')}.`, 240);
+  return { ...base, ...(description ? { description } : {}) };
+}
+
 /**
  * Compact provider-facing definition for a generated connector wrapper. The
  * union of every action's properties keeps typed arguments; the description
@@ -65,13 +122,14 @@ export function buildConnectorWrapperDefinition(spec: ConnectorWrapperSpec): any
     action: { type: 'string', enum: Object.keys(spec.actions), description: 'Which operation to run. Pass that operation\'s arguments alongside.' },
     account: CONNECTOR_ACCOUNT_PROPERTY,
   };
-  for (const action of Object.values(spec.actions)) {
+  const uses = new Map<string, Array<{ action: string; schema: any }>>();
+  for (const [actionName, action] of Object.entries(spec.actions)) {
     for (const [key, schema] of Object.entries<any>(action.parameters?.properties || {})) {
       if (key === 'action' || properties[key]) continue;
-      const { description, ...rest } = schema || {};
-      properties[key] = { ...rest, ...(description ? { description: String(description).slice(0, 120) } : {}) };
+      uses.set(key, [...(uses.get(key) || []), { action: actionName, schema }]);
     }
   }
+  for (const [key, list] of uses) properties[key] = mergeSharedConnectorProperty(list);
   const actionLines = Object.entries(spec.actions)
     .map(([action, def]) => `${action}(${describeActionArgs(def.parameters)}): ${firstSentence(def.description)}`)
     .join('\n');
