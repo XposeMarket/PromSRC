@@ -19,7 +19,7 @@ const REMOVED_TOOLS = [
   'memory_embedding_backfill', 'memory_provider_status',
   'list_agent_model_templates', 'save_agent_model_template', 'update_agent_model_template',
   'apply_agent_model_template', 'select_agent_model_template', 'delete_agent_model_template',
-  'social_intel', 'desktop_macro', 'webhook_manage', 'integration_quick_setup',
+  'social_intel', 'desktop_macro', 'integration_quick_setup',
   'save_site_shortcut', 'run_task_now',
 ];
 
@@ -44,6 +44,11 @@ const KEPT_TOOLS = [
   'media_generate', 'video_project',
   'get_agent_models', 'set_agent_model', 'provider_accounts',
   'trigger_ops', 'connection_ops', 'mcp_server_manage', 'secure_access', 'plugin_ops',
+  // webhook_manage stays: its set_provider action is the only way to set the
+  // GitHub/Stripe/Slack signing secret and event map under hooks.providers.
+  // Settings and /api/settings/hooks cover only enabled/token/path, and
+  // trigger_ops manages its own separate endpoints.
+  'webhook_manage',
   'task_control', 'internal_watch', 'automation_dashboard',
   'agent_chat_ops', 'team_ops_wrapper', 'browser_session',
 ];

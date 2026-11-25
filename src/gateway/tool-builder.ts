@@ -954,7 +954,7 @@ const SCHEMA_HIDDEN_COMPAT_TOOL_NAMES = new Set([
 ]);
 
 const INTEGRATION_ADMIN_TOOL_NAMES = new Set([
-  'secure_access', 'connection_ops', 'mcp_server_manage', 'plugin_ops',
+  'secure_access', 'connection_ops', 'mcp_server_manage', 'webhook_manage', 'plugin_ops',
 ]);
 
 const PROPOSAL_ADMIN_TOOL_NAMES = new Set(['edit_proposal', 'write_proposal']);

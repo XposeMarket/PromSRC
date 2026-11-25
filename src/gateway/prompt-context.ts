@@ -1367,7 +1367,7 @@ const TOOL_CATEGORY_MATCH_HINTS: Record<string, string> = {
   runtime_admin: 'use diagnostic_packet, system_diagnostics, or gateway_restart for Prometheus runtime diagnostics, incident recovery, and controlled restart operations.',
   prometheus_source_read: 'inspect Prometheus app/source files with dev_source_read plus shared search_files/read_files_batch/file_tree helpers for src/ and web-ui/.',
   prometheus_source_write: 'edit Prometheus app/source files after approval with dev_source_edit; use request_dev_source_edit or an approved code_change proposal first.',
-  integration_admin: 'connect, configure, authorize, or diagnose connectors, MCP servers, APIs, and plugins with connection_ops, mcp_server_manage, secure_access, and plugin_ops. Webhook endpoints and trigger rules use trigger_ops in automation_tasks.',
+  integration_admin: 'connect, configure, authorize, or diagnose connectors, MCP servers, APIs, and plugins with connection_ops, mcp_server_manage, secure_access, and plugin_ops; webhook_manage configures the core webhook endpoint and GitHub/Stripe/Slack provider webhooks. Custom webhook endpoints and trigger rules use trigger_ops in automation_tasks.',
   external_apps: 'use connected application wrappers after checking connector availability when needed.',
   proposal_admin: 'use write_proposal to create a pending proposal and edit_proposal to revise pending proposal metadata/details/diffs before approval.',
   mcp_server_tools: 'use dynamic mcp__server__tool functions exposed by connected MCP servers; inspect/setup servers with integration_admin first when needed.',

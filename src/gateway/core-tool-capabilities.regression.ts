@@ -62,7 +62,7 @@ for (const [name, args] of [
   ['prometheus_request_ops', { action: 'recovery_candidates' }], ['prometheus_audit_ops', { action: 'skill_routing_stats' }],
   ['team_manage', { action: 'list' }], ['team_escalation', { escalation_action: 'list' }],
   ['browser_intercept_network', { action: 'read' }], ['connection_ops', { action: 'status' }], ['mcp_server_manage', { action: 'list_tools' }],
-  ['secure_access', { action: 'list' }], ['webhook_manage', { action: 'get' }], ['integration_quick_setup', { action: 'list_presets' }],
+  ['secure_access', { action: 'list' }], ['webhook_manage', { action: 'get' }],
   ['request_final_action_approval', {}], ['get_composite', {}], ['run_accessibility_check', {}], ['creative_measure_text', {}],
 ] as Array<[string, Record<string, any>]>) {
   assert.equal(tierOf(name, args), 'read', `${name} ${JSON.stringify(args)} is a read`);
@@ -80,14 +80,14 @@ for (const [name, args] of [
   // Review finding: the handler reads escalation_action only, so a decoy `action` must not decide the tier.
   ['team_escalation', { action: 'list', escalation_action: 'dismiss' }],
   ['dispatch_team_agent', {}], ['message_main_agent', {}], ['write_entity', {}], ['set_agent_model', {}], ['memory_accept_claim', {}],
-  ['edit_proposal', {}], ['run_task_now', {}], ['schedule_job_stuck_control', { action: 'rerun_clean' }],
+  ['edit_proposal', {}], ['schedule_job_stuck_control', { action: 'rerun_clean' }],
 ] as Array<[string, Record<string, any>]>) {
   assert.equal(tierOf(name, args), 'propose', `${name} ${JSON.stringify(args)} changes local state`);
 }
 for (const [name, args] of [
   ['task_control', { action: 'delete' }], ['task_control', { action: 'cancel' }], ['agent_run_ops', { action: 'cancel' }],
   ['schedule_job_patch', { action: 'apply', job_id: 'j' }], ['connection_ops', { action: 'disconnect' }],
-  ['delete_composite', {}], ['delete_agent_model_template', {}],
+  ['delete_composite', {}],
 ] as Array<[string, Record<string, any>]>) {
   assert.equal(tierOf(name, args), 'commit', `${name} ${JSON.stringify(args)} is destructive`);
   assert.equal(metaOf(name, args).known, true);
@@ -102,7 +102,7 @@ for (const [name, args] of [
   ['internal_watch', {}], ['team_manage', { action: 'delete' }], ['team_manage', { action: 'create' }],
   ['connection_ops', { action: 'connect' }], ['connection_ops', {}], ['mcp_server_manage', { action: 'upsert' }], ['mcp_server_manage', { action: 'connect' }],
   ['mcp_server_manage', { action: 'delete' }], ['secure_access', { action: 'fill' }], ['secure_access', { action: 'request' }], ['secure_access', { action: 'revoke' }],
-  ['webhook_manage', { action: 'set' }], ['integration_quick_setup', { action: 'setup' }], ['constructor', { action: 'list' }], ['toString', {}],
+  ['webhook_manage', { action: 'set' }], ['constructor', { action: 'list' }], ['toString', {}],
   // Review finding: handlers do String(args.action), so ["apply"] runs as apply. A supplied
   // non-string action must never fall back to the documented default.
   ['schedule_job_patch', { action: ['apply'], job_id: 'j', confirm: true }], ['schedule_job_patch', { action: ['preview'], job_id: 'j' }],

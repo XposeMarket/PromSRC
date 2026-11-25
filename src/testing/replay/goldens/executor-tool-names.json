@@ -467,6 +467,7 @@
   "web_search",
   "web_search_multi",
   "web_search_single",
+  "webhook_manage",
   "webui_source_stats",
   "webui_stats",
   "write_entity",

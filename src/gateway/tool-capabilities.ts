@@ -105,7 +105,7 @@ const DESTRUCTIVE_TOOLS = new Set([
   'delete', 'delete_file', 'delete_lines', 'restore_snapshot', 'revert_last_tool_change',
   'revert_own_patch', 'process_kill', 'stop_process', 'self_update',
   'skill_resource_delete', 'deploy_analysis_team', 'schedule_job', 'gateway_restart',
-  'delete_agent_model_template', 'delete_composite',
+  'delete_composite',
 ]);
 
 const COMMAND_TOOLS = new Set([
@@ -222,7 +222,6 @@ const ACTION_TOOL_CAPABILITIES: Readonly<Record<string, ActionToolCapabilities>>
   mcp_server_manage: { read: ['list', 'status', 'list_tools', 'oauth_status'] },
   secure_access: { read: ['status', 'list'] },
   webhook_manage: { read: ['get'] },
-  integration_quick_setup: { read: ['list_presets'] },
 });
 
 function resolveActionToolCapabilities(name: string, args?: Record<string, any>): ToolCapabilityMetadata | undefined {

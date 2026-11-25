@@ -70,7 +70,7 @@ export const TOOL_CATEGORY_MANIFEST: Readonly<Record<ToolCategoryId, ToolCategor
   automation_sessions: entry('automation_sessions', ['session_pack', 'thread_pack'], 'create/send/steer Prometheus sessions and threads', 'Prometheus thread or session operations'),
   runtime_admin: entry('runtime_admin', ['runtime', 'diagnostics'], 'Prometheus runtime diagnostics, incident packets, and controlled gateway restart', 'Prometheus runtime diagnostics or restart'),
   external_apps: entry('external_apps', ['connectors'], 'live tools from connected extension-backed applications', 'connected application use'),
-  integration_admin: entry('integration_admin', ['integrations'], 'connection setup, MCP server admin, secure access, plugin import', 'integration administration'),
+  integration_admin: entry('integration_admin', ['integrations'], 'connection setup, MCP server admin, secure access, provider webhooks, plugin import', 'integration administration'),
   proposal_admin: entry('proposal_admin', [], 'create/edit pending proposals before approval', 'proposal creation or administration'),
   mcp_server_tools: entry('mcp_server_tools', ['mcp'], 'dynamic mcp__server__tool functions from connected servers', 'connected MCP server tools'),
   composite_tools: entry('composite_tools', ['composites'], 'saved multi-step tools and composite management', 'saved composite tools'),
@@ -120,7 +120,7 @@ const RUNTIME_ADMIN = names('diagnostic_packet system_diagnostics gateway_restar
 const SKILLS = names('skill_create skill_create_bundle skill_import_bundle skill_export_bundle skill_update_from_source skill_manifest_write skill_resource_write skill_resource_delete skill_inspect');
 const MODELS = names('get_agent_models set_agent_model provider_accounts');
 const BUSINESS = names('list_entities read_entity write_entity append_entity_event business_context_mode');
-const INTEGRATION_ADMIN = names('secure_access connection_ops mcp_server_manage plugin_ops');
+const INTEGRATION_ADMIN = names('secure_access connection_ops mcp_server_manage webhook_manage plugin_ops');
 const EXTERNAL_APP_WRAPPERS = names('x_search_ops x_posts x_users x_lists x_dm x_admin vercel_ops');
 const COMPOSITES = names('create_composite get_composite edit_composite delete_composite list_composites');
 const CREATIVE_CORE = names('get_creative_mode switch_creative_mode');

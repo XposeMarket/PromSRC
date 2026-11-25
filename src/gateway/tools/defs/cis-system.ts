@@ -339,6 +339,27 @@ export function getCisSystemTools(): any[] {
         },
       },
     },
+    {
+      type: 'function',
+      function: {
+        name: 'webhook_manage',
+        description: 'Manage core and provider webhook settings without exposing stored secrets. Actions: get, set, set_provider, test.',
+        parameters: {
+          type: 'object',
+          required: ['action'],
+          properties: {
+            action: { type: 'string', description: 'Action: get | set | set_provider | test' },
+            enabled: { type: 'boolean', description: 'Enable/disable webhook endpoint (set action)' },
+            token: { type: 'string', description: 'Webhook auth token (set action)' },
+            path: { type: 'string', description: 'Webhook base path, e.g. /hooks (set action)' },
+            provider: { type: 'string', enum: ['github', 'stripe', 'slack'], description: 'Provider for set_provider or provider-specific test.' },
+            secret: { type: 'string', description: 'Provider signing secret for set_provider. Stored in the vault and never returned.' },
+            events: { type: 'object', description: 'Provider event-to-action map. Values: audit | wake | agent | ignore.' },
+            deliver: { type: 'boolean', description: 'Allow configured provider agent results to be delivered to Telegram. Default false.' },
+          },
+        },
+      },
+    },
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     require('../../../extensions/plugin-import/plugin-ops').PLUGIN_OPS_TOOL_DEF,
     // ── edit_proposal tool ────────────────────────────────────────
