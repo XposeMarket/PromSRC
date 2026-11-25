@@ -23,7 +23,7 @@ import { presentProviderCallFailure, usageCutoffNotice } from '../../../chat/pro
 import { attemptModelDigest, buildDeterministicTurnDigest, describeTurnCutoffCause } from '../../../chat/degraded-turn-finish';
 import { fitToolDefinitionsToBudget } from '../../../tools/schema-compaction';
 import { currentTrace, recordSpan, runInTrace, withSpan } from '../../../observability/turn-trace';
-import { BACKGROUND_WORKER_WITHHELD_TOOL_NAMES, backgroundWorkerWithheldReason, evaluateToolDispatch, isBackgroundSpawnWorkerSession, resolveIdleRoundLimit, resolveToolSurfaceEnforcementMode, toolNameSetOf, type ToolDispatchDecision } from '../../../chat/tool-dispatch-policy';
+import { BACKGROUND_WORKER_WITHHELD_TOOL_NAMES, backgroundWorkerToolRefusal, evaluateToolDispatch, isBackgroundSpawnWorkerSession, resolveIdleRoundLimit, resolveToolSurfaceEnforcementMode, toolNameSetOf, type ToolDispatchDecision } from '../../../chat/tool-dispatch-policy';
 import { ToolPerformanceTracker } from '../../../chat/tool-performance-telemetry';
 import { formatToolCategoryProvisioningFailure, preserveActivatedToolCategoriesForTurnOverride, verifyToolCategorySurface } from '../../../tool-category-provisioning';
 import { normalizeManifestToolCategory } from '../../../../runtime/tool-category-manifest';
@@ -1088,7 +1088,9 @@ export async function handleChatUntraced(
         return category && runtimeCategoryIds.has(String(category)) ? String(category) : null;
       },
       isCategoryActive: (category) => getActivatedToolCategories(sessionId).has(category),
-      withheldReason: isBackgroundWorkerRun ? backgroundWorkerWithheldReason : undefined,
+      // Same check executeTool enforces for every execution; here it only
+      // refuses a direct call before dispatch.
+      withheldReason: (name) => backgroundWorkerToolRefusal(name, sessionId),
     });
   };
   let midWorkflowCompactionsThisTurn = 0;

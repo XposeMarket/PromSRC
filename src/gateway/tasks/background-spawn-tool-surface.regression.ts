@@ -161,7 +161,12 @@ assert.equal(mainSurface.has('request_final_action_approval'), true);
 // handleChat wires the strip and the dispatch refusal to the worker predicate.
 assert.match(chatRouterSource, /const isBackgroundWorkerRun = isBackgroundSpawnWorkerSession\(sessionId\);/);
 assert.match(chatRouterSource, /\.\.\.\(isBackgroundWorkerRun \? BACKGROUND_WORKER_WITHHELD_TOOL_NAMES : \[\]\)/);
-assert.match(chatRouterSource, /withheldReason: isBackgroundWorkerRun \? backgroundWorkerWithheldReason : undefined/);
+assert.match(chatRouterSource, /withheldReason: \(name\) => backgroundWorkerToolRefusal\(name, sessionId\)/);
+// executeTool enforces the same check for every execution (composites, tool_call).
+assert.match(
+  readFileSync(path.join(repoRoot, 'src', 'gateway', 'agents-runtime', 'subagent-executor.ts'), 'utf8'),
+  /const workerRefusal = backgroundWorkerToolRefusal\(name, sessionId\);\s+if \(workerRefusal\) return/,
+);
 
 // Dispatch: a worker calling a stripped name is refused in every enforcement
 // mode, including the schema-hidden background_* aliases; other tools pass.

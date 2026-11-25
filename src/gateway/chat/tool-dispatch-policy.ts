@@ -88,6 +88,18 @@ export function backgroundWorkerWithheldReason(name: string): string | null {
   return `Tool not available to background workers: ${tool} was not run. A background worker cannot change the live model or the heartbeat, or start or manage other background agents. Finish the assignment with your other tools and say in your final reply if the main chat should do this.`;
 }
 
+/**
+ * The refusal for one tool execution in a session, or null when allowed.
+ * This is the enforcement point: executeTool (subagent-executor) calls it for
+ * every execution, so composite steps, tool_call re-entries and nested calls
+ * are covered. background_ops is refused by its own name before its action is
+ * normalized, and the legacy background_* names are refused directly. The turn
+ * loop's dispatch check reuses it only to refuse a direct call earlier.
+ */
+export function backgroundWorkerToolRefusal(name: string, sessionId: unknown): string | null {
+  return isBackgroundSpawnWorkerSession(sessionId) ? backgroundWorkerWithheldReason(name) : null;
+}
+
 /** Names whose arguments may legitimately arrive as a bare (non-JSON) string. */
 const SHORTHAND_ARGUMENT_TOOLS = new Set(['request_tool_category']);
 
