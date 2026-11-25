@@ -77,8 +77,9 @@ async function main() {
     const SUBAGENT = 'subagent_researcher_1732500000000';
     // A configured session key that merely looks like a worker (webhook sessionKey).
     const LOOKALIKE = 'background_custom';
-    // startBackgroundExecution registers the session when a worker round starts.
-    registerBackgroundSpawnWorkerSession(WORKER);
+    // startBackgroundExecution registers the session when a worker round starts
+    // and releases it when the round settles.
+    const releaseWorkerRound = registerBackgroundSpawnWorkerSession(WORKER);
 
     for (const step of stripped) {
       reached.length = 0;
@@ -130,6 +131,18 @@ async function main() {
       await executeTool(name, {}, tempRoot, {} as any, WORKER);
       assert.deepEqual(reached, [name], `worker may still run ${name}`);
     }
+
+    // After the round settles, the same session id used by a non-worker run
+    // keeps the tools, directly and through a composite.
+    releaseWorkerRound();
+    for (const name of ['set_current_model', 'switch_model', 'update_heartbeat', 'background_ops']) {
+      reached.length = 0;
+      await executeTool(name, {}, tempRoot, {} as any, WORKER);
+      assert.deepEqual(reached, [name], `settled worker session id may run ${name}`);
+    }
+    reached.length = 0;
+    await run('worker_probe_nested', WORKER);
+    assert.deepEqual(reached, ['set_current_model'], 'nested composite runs once the worker round settled');
 
     setToolExecutionOverrideForTesting(null);
     finished = true;

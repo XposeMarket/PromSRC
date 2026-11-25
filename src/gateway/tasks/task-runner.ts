@@ -735,13 +735,14 @@ function createBackgroundPrompt(prompt: string): any[] {
 
 function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: string): Promise<void> {
   let runtimeAdmissionLease: RuntimeAdmissionLease | null = null;
+  // Every worker round (spawn, follow-up, steer continuation, resume after a
+  // restart) starts here, so the worker identity is registered per round,
+  // before any tool call, and released below when this round settles.
+  const releaseWorkerSession = registerBackgroundSpawnWorkerSession(backgroundRuntimeSessionId(record));
   const execution = (async () => {
     const abortController = new AbortController();
     const abortSignal = record.abortSignal || { aborted: false };
     const runtimeSessionId = backgroundRuntimeSessionId(record);
-    // Every worker round (spawn, follow-up, steer continuation, resume after a
-    // restart) starts here, so the worker identity is registered per round.
-    registerBackgroundSpawnWorkerSession(runtimeSessionId);
     abortSignal.signal = abortController.signal;
     record.abortSignal = abortSignal;
     record.abortController = abortController;
@@ -1142,6 +1143,8 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
     }
   })();
   return execution.finally(() => {
+    // Runs whether the round completed, failed, was cancelled or threw.
+    releaseWorkerSession();
     runtimeAdmissionLease?.release();
   });
 }

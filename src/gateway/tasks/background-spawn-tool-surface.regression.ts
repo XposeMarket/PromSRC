@@ -131,31 +131,53 @@ assert.match(
 const WITHHELD = ['set_current_model', 'switch_model', 'update_heartbeat', 'background_ops'];
 assert.deepEqual([...BACKGROUND_WORKER_WITHHELD_TOOL_NAMES].sort(), [...WITHHELD].sort());
 
-// A worker is identified by registration, not by its session name: every
-// spawn/follow-up/steer/resume round registers its session when it starts.
-// A webhook can be configured with any sessionKey, so a background_ name that
-// no spawn started (for example background_custom) is not a worker.
+// A worker is identified by a live round, not by its session name: every
+// spawn/follow-up/steer/resume round registers its session when it starts and
+// releases it when it settles. A webhook can be configured with any sessionKey,
+// so a background_ name that no spawn started (for example background_custom)
+// is not a worker, and neither is a worker's id once its round has settled.
+const refusedAll = (session: string) => WITHHELD.every((name) => /not available to background workers/.test(backgroundWorkerToolRefusal(name, session) || ''));
+const refusedNone = (session: string) => WITHHELD.every((name) => backgroundWorkerToolRefusal(name, session) === null);
 assert.equal(isBackgroundSpawnWorkerSession('background_custom'), false, 'configured background_custom session keeps the tools');
+assert.ok(refusedNone('background_custom'), 'background_custom may call all four tools');
 assert.equal(isBackgroundSpawnWorkerSession('background_bg_123'), false, 'unregistered background_ name is not a worker');
-registerBackgroundSpawnWorkerSession('background_bg_123');
-assert.equal(isBackgroundSpawnWorkerSession('background_bg_123'), true, 'registered background_ops spawn worker session');
+const releaseRound1 = registerBackgroundSpawnWorkerSession('background_bg_123');
+assert.equal(isBackgroundSpawnWorkerSession('background_bg_123'), true, 'live background_ops spawn round is a worker');
+assert.ok(refusedAll('background_bg_123'), 'live worker round is refused all four tools');
 assert.equal(isBackgroundSpawnWorkerSession('background_custom'), false, 'registering one worker does not mark other background_ names');
+releaseRound1();
+assert.equal(isBackgroundSpawnWorkerSession('background_bg_123'), false, 'settled round releases the session');
+assert.ok(refusedNone('background_bg_123'), 'a non-worker run reusing the settled session id keeps all four tools');
+releaseRound1();
+assert.equal(isBackgroundSpawnWorkerSession('background_bg_123'), false, 'a second release is a no-op');
+// A second round on the same session (follow-up) is refused again.
+const releaseRound2 = registerBackgroundSpawnWorkerSession('background_bg_123');
+assert.ok(refusedAll('background_bg_123'), 'second round on the same session is refused again');
+// Overlapping rounds: a new round can start while the previous one is still
+// settling. The first to settle must not release the other.
+const releaseRound3 = registerBackgroundSpawnWorkerSession('background_bg_123');
+releaseRound2();
+releaseRound2();
+assert.ok(refusedAll('background_bg_123'), 'overlapping round stays a worker after the other round settles (double release included)');
+releaseRound3();
+assert.ok(refusedNone('background_bg_123'), 'all overlapping rounds settled: session released');
 // Follow-up after a gateway restart: this process starts with an empty
 // registry, and the follow-up round's start registers the conversation session
 // again before its first tool call.
 const FOLLOW_UP_SESSION = 'background_bg_conv_after_restart';
 assert.equal(isBackgroundSpawnWorkerSession(FOLLOW_UP_SESSION), false, 'fresh process: not yet registered');
-registerBackgroundSpawnWorkerSession(FOLLOW_UP_SESSION);
+const releaseFollowUp = registerBackgroundSpawnWorkerSession(FOLLOW_UP_SESSION);
 assert.equal(isBackgroundSpawnWorkerSession(FOLLOW_UP_SESSION), true, 'follow-up round start registers the worker again');
 assert.match(backgroundWorkerToolRefusal('background_ops', FOLLOW_UP_SESSION) || '', /not available to background workers/, 'follow-up worker is refused');
-assert.equal(backgroundWorkerToolRefusal('background_ops', 'background_custom'), null, 'background_custom is not refused');
-for (const name of ['set_current_model', 'switch_model', 'update_heartbeat', 'background_ops']) {
-  assert.equal(backgroundWorkerToolRefusal(name, 'background_custom'), null, `background_custom may call ${name}`);
-}
-// Registration lives where every worker round starts, and every round path
+releaseFollowUp();
+// Registration lives where every worker round starts, before the round's
+// async body, and the release is in the promise's finally, which runs whether
+// the round completed, failed, was cancelled or threw. Every round path
 // (recover after restart, spawn, follow-up, steer continuation) goes through it.
-assert.match(taskRunnerSource, /function startBackgroundExecution\([^)]*\)[^{]*\{[\s\S]{0,400}?const runtimeSessionId = backgroundRuntimeSessionId\(record\);[\s\S]{0,300}?registerBackgroundSpawnWorkerSession\(runtimeSessionId\);/,
+assert.match(taskRunnerSource, /function startBackgroundExecution\([^)]*\)[^{]*\{[\s\S]{0,400}?const releaseWorkerSession = registerBackgroundSpawnWorkerSession\(backgroundRuntimeSessionId\(record\)\);\s*(?:\/\/[^\n]*\n\s*)*const execution = \(async \(\) => \{/,
   'startBackgroundExecution must register the worker session before the round runs');
+assert.match(taskRunnerSource, /return execution\.finally\(\(\) => \{[\s\S]{0,200}?releaseWorkerSession\(\);/,
+  'startBackgroundExecution must release the worker session when the round settles');
 for (const fn of ['recoverBackgroundExecutions', 'backgroundSpawn', 'backgroundFollowUp', 'backgroundSteer']) {
   const start = taskRunnerSource.indexOf(`export function ${fn}(`);
   assert.ok(start >= 0, `${fn} exists`);
