@@ -117,6 +117,21 @@ if (!/syncSourcesMinimizedLayout\(true\)/.test(minimizedOpen)
   throw new Error('minimized Sources opener must not open or resize the right drawer');
 }
 
+// The panel-icon button in the Sources header opens the docked right-side Canvas
+// (files/browser). It used to minimize Sources into the floating peek.
+const indexHtml = read('web-ui/index.html');
+const topbarHtml = indexHtml.match(/<div id="right-panel-topbar"[\s\S]*?<\/div>\s*<!--/)?.[0] || '';
+const openCanvasBtn = topbarHtml.match(/<button id="right-panel-open-canvas"[^>]*>/)?.[0] || '';
+if (!openCanvasBtn || !/onclick="toggleCanvas\(true\)"/.test(openCanvasBtn)) {
+  throw new Error('Sources header panel button must open the docked Canvas with toggleCanvas(true)');
+}
+if (/source/i.test(openCanvasBtn.replace(/class="[^"]*"/, ''))) {
+  throw new Error('Canvas opener id/label must not contain "source" or the split-chat Sources picker intercepts it');
+}
+if (/showSourcesMinimizedPanel|Minimize sources/.test(topbarHtml)) {
+  throw new Error('Sources header must not offer a minimize-to-peek button');
+}
+
 const miniItems = extractFunction(sourceChat, 'function sourcePanelMiniItems(', 'function toggleSourcePanelMiniFilter');
 if (!/data\.recent/.test(miniItems) || !/data\.gitItems/.test(miniItems)) {
   throw new Error('populated Sources state must continue to use minimized source items');

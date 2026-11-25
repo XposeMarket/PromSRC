@@ -229,7 +229,7 @@ body.shot .pulse::before { animation: none; }
 }
 body:not(.pm-mobile-active) #right-panel.open:not(.canvas-open){background:var(--sources-surface,var(--panel));border-radius:16px}
 body:not(.pm-mobile-active) #sources-minimized-panel .sources-minimized-card{background:var(--sources-surface,var(--panel));color:var(--text);border:1px solid var(--border);border-radius:14px;display:flex;flex-direction:column;padding:0;gap:0;max-height:min(620px,calc(100dvh - 80px));overflow:hidden;box-shadow:0 14px 36px rgba(0,0,0,.45)}
-#right-panel.canvas-open #source-panel-minimize {display:none}
+#right-panel.canvas-open #right-panel-open-canvas {display:none}
 
 /* The outer shell theme otherwise overrides the reference surface with !important. */
 body:not(.pm-mobile-active) #right-panel.open:not(.canvas-open),body:not(.pm-mobile-active) #right-panel:not(.canvas-open) :is(#source-panel-shell,#source-panel-tabs,#source-panel-body,#right-panel-topbar),body:not(.pm-mobile-active) #sources-minimized-panel .sources-minimized-card{background:var(--sources-surface,var(--panel)) !important}
