@@ -317,6 +317,7 @@
     "test:shared-chat-runtime": "node scripts/test-shared-chat-runtime.mjs && tsx src/gateway/chat/history-cursor.regression.ts",
     "test:mobile-voice-preview-deck": "node scripts/test-mobile-voice-preview-deck.mjs",
     "test:memory-tool-latency": "tsx src/gateway/agents-runtime/capabilities/memory-tool-latency.regression.ts",
+    "test:memory-write-latency": "tsx src/gateway/agents-runtime/capabilities/memory-write-latency.regression.ts",
     "test:automatic-memory-search": "tsx src/gateway/memory-index/automatic-memory-search.regression.ts",
     "test:runtime-workers": "tsx src/gateway/process/runtime-worker-broker.regression.ts && tsx src/gateway/memory-index/memory-index.regression.ts && tsx src/gateway/memory-index/automatic-memory-search.regression.ts",
     "test:model-call-worker-interactive": "tsx src/gateway/process/model-call-worker-pool-interactive.regression.ts && tsx src/gateway/process/model-call-worker-pool-interactive.regression.ts --single",

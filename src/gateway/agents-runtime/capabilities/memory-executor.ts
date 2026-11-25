@@ -3,13 +3,14 @@ import path from 'path';
 import { getConfig } from '../../../config/config';
 import {
   compactMemorySearchResult,
+  forgetIndexedWorkspaceFile,
   readMemoryRecord,
-  refreshMemoryIndexInWorker,
+  scheduleMemoryIndexRefresh,
 } from '../../memory-index/index';
 import {
   searchMemoryInWorker,
 } from '../../memory-index/search-worker-client';
-import { getMemoryAccessGateState } from '../../memory-index/memory-access-gate';
+import { acquireMemoryAccess, getMemoryAccessGateState } from '../../memory-index/memory-access-gate';
 import { invalidateMemoryAtomSnapshot } from '../../memory-index/memory-atoms.js';
 import {
   BULLET_ID_RE,
@@ -103,6 +104,41 @@ function commitMemoryFile(memoryPath: string, content: string, archived: string[
     return String(err?.message || err);
   }
 }
+
+export const MEMORY_FILE_SYNC_GATE_TIMEOUT_MS = 2000;
+
+/**
+ * Make one committed memory-file edit visible to the next search without a
+ * full index rebuild. This used to await a forced full refresh: a fresh worker
+ * re-listed and re-stat'ed every source file, rewrote the whole JSON store and
+ * rebuilt the whole SQLite index, holding the exclusive memory gate for 15-45s
+ * so concurrent searches timed out "queued behind maintenance".
+ *  - Recall index (what memory search answers from first): this file is
+ *    re-indexed now, in-process.
+ *  - Structured SQLite index: the stale record of this file is dropped now
+ *    (a few deletes under the gate) and an ordinary background refresh is
+ *    queued to re-add it from disk. If the index holds no record for the file
+ *    there is nothing stale and nothing is queued. If the SQLite index cannot
+ *    be read, or maintenance already holds the gate, the drop is skipped and
+ *    the queued refresh converges instead.
+ */
+async function syncMemoryFileIndexes(memoryPath: string): Promise<void> {
+  const root = path.dirname(memoryPath);
+  try { require('../../memory-index/recall-index').reindexRecallMemoryFile(root, memoryPath); } catch { /* the periodic recall rescan catches up */ }
+  let queueRefresh = true;
+  if (!maintenanceHoldsMemoryGate()) {
+    let release: (() => void) | undefined;
+    try {
+      release = await acquireMemoryAccess('maintenance', { timeoutMs: MEMORY_FILE_SYNC_GATE_TIMEOUT_MS });
+      // Only "the index holds no record for this file" needs no refresh; an
+      // unavailable SQLite index means search reads the JSON store, which may be stale.
+      queueRefresh = forgetIndexedWorkspaceFile(root, memoryPath) !== 'absent';
+    } catch { /* gate busy or SQLite unavailable: the queued refresh converges */ }
+    finally { release?.(); }
+  }
+  if (queueRefresh) scheduleMemoryIndexRefresh(root, { minIntervalMs: 0, maxChangedFiles: 500, syncSqlite: true });
+}
+
 const MEMORY_TOOL_NAMES = new Set([
   'business_context_mode',
   'list_entities',
@@ -557,7 +593,7 @@ export const memoryCapabilityExecutor: CapabilityExecutor = {
         { const commitErr = commitMemoryFile(memoryPath, write.content, archived); if (commitErr) return { name, args, result: `memory_write failed; ${filename} unchanged: ${commitErr}`, error: true }; }
         if (filename === 'MEMORY.md') invalidateMemoryAtomSnapshot(path.dirname(memoryPath));
         // Do not leave a stale active row retrievable after a contradiction or poison write.
-        await refreshMemoryIndexInWorker(path.dirname(memoryPath), { force: true, minIntervalMs: 0, maxChangedFiles: 500, syncSqlite: true });
+        await syncMemoryFileIndexes(memoryPath);
         const actor = getRuntimeActorContext(sessionId);
         const scope = actor?.kind === 'agent' || actor?.kind === 'manager' ? `${actor.kind}:${actor.agentId || 'unknown'}` : 'main';
         const supersededNote = write.supersededCount
@@ -618,7 +654,7 @@ export const memoryCapabilityExecutor: CapabilityExecutor = {
           const write = writeMemoryFact(fileContent, found.category, content, today);
           { const commitErr = commitMemoryFile(memoryPath, write.content, archived); if (commitErr) return { name, args, result: `memory_update failed; ${filename} unchanged: ${commitErr}`, error: true }; }
           if (filename === 'MEMORY.md') invalidateMemoryAtomSnapshot(path.dirname(memoryPath));
-          await refreshMemoryIndexInWorker(path.dirname(memoryPath), { force: true, minIntervalMs: 0, maxChangedFiles: 500, syncSqlite: true });
+          await syncMemoryFileIndexes(memoryPath);
           return { name, args, result: `Updated ${scope} ${filename} [${found.category}] m:${targetId}: kept "${found.text}". Candidate was flagged as untrusted instruction-like content and was not allowed to supersede the existing fact.`, error: false };
         }
         // Same id, same line position: replace in place and archive the old text.
@@ -633,7 +669,7 @@ export const memoryCapabilityExecutor: CapabilityExecutor = {
         }
         { const commitErr = commitMemoryFile(memoryPath, swept.content, archived); if (commitErr) return { name, args, result: `memory_update failed; ${filename} unchanged: ${commitErr}`, error: true }; }
         if (filename === 'MEMORY.md') invalidateMemoryAtomSnapshot(path.dirname(memoryPath));
-        await refreshMemoryIndexInWorker(path.dirname(memoryPath), { force: true, minIntervalMs: 0, maxChangedFiles: 500, syncSqlite: true });
+        await syncMemoryFileIndexes(memoryPath);
         return { name, args, result: `Updated ${scope} ${filename} [${found.category}] m:${targetId}: ${found.text} -> ${content}.`, error: false };
       }
       case 'memory_delete': {
@@ -669,8 +705,8 @@ export const memoryCapabilityExecutor: CapabilityExecutor = {
         }
         { const commitErr = commitMemoryFile(memoryPath, next, archived); if (commitErr) return { name, args, result: `memory_delete failed; ${filename} unchanged: ${commitErr}`, error: true }; }
         if (filename === 'MEMORY.md') invalidateMemoryAtomSnapshot(path.dirname(memoryPath));
-        await refreshMemoryIndexInWorker(path.dirname(memoryPath), { force: true, minIntervalMs: 0, maxChangedFiles: 500, syncSqlite: true });
-        return { name, args, result: `Deleted from ${filename} ${label}. Removed from the refreshed retrieval index.`, error: false };
+        await syncMemoryFileIndexes(memoryPath);
+        return { name, args, result: `Deleted from ${filename} ${label}.`, error: false };
       }
 
       case 'memory_read': {
@@ -681,7 +717,7 @@ export const memoryCapabilityExecutor: CapabilityExecutor = {
         if (!fs.existsSync(memoryPath)) return { name, args, result: `${filename} not found at ${memoryPath}`, error: true };
         const raw = fs.readFileSync(memoryPath, 'utf-8');
         const migrated = migrateMemoryContent(raw);
-        if (migrated.content !== raw || migrated.archived.length) { const commitErr = commitMemoryFile(memoryPath, migrated.content, migrated.archived); if (commitErr) return { name, args, result: `memory_read: could not write migrated ${filename}: ${commitErr}`, error: true }; if (filename === 'MEMORY.md') invalidateMemoryAtomSnapshot(path.dirname(memoryPath)); await refreshMemoryIndexInWorker(path.dirname(memoryPath), { force: true, minIntervalMs: 0, maxChangedFiles: 500, syncSqlite: true }); }
+        if (migrated.content !== raw || migrated.archived.length) { const commitErr = commitMemoryFile(memoryPath, migrated.content, migrated.archived); if (commitErr) return { name, args, result: `memory_read: could not write migrated ${filename}: ${commitErr}`, error: true }; if (filename === 'MEMORY.md') invalidateMemoryAtomSnapshot(path.dirname(memoryPath)); await syncMemoryFileIndexes(memoryPath); }
         return { name, args, result: renderMemoryIdsForPrompt(migrated.content), error: false };
       }
       case 'memory_search': {
