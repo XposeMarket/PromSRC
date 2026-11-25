@@ -26,6 +26,7 @@ async function main() {
   try {
     const { saveComposite, executeCompositeDetailed } = await import('../tools/composite-tools.js');
     const { executeTool, setToolExecutionOverrideForTesting } = await import('../agents-runtime/subagent-executor.js');
+    const { registerBackgroundSpawnWorkerSession } = await import('../chat/tool-dispatch-policy.js');
 
     // Production wiring this test mirrors: composite steps re-enter executeTool
     // with the caller's session id.
@@ -74,6 +75,10 @@ async function main() {
     const WORKER = 'background_bg_probe';
     const MAIN = 'main_chat_probe';
     const SUBAGENT = 'subagent_researcher_1732500000000';
+    // A configured session key that merely looks like a worker (webhook sessionKey).
+    const LOOKALIKE = 'background_custom';
+    // startBackgroundExecution registers the session when a worker round starts.
+    registerBackgroundSpawnWorkerSession(WORKER);
 
     for (const step of stripped) {
       reached.length = 0;
@@ -92,6 +97,11 @@ async function main() {
       const subagent = await run(`worker_probe_${step.tool}`, SUBAGENT);
       assert.doesNotMatch(String(subagent.result), /not available to background workers/, `standalone subagent composite step ${step.tool} is not refused`);
       assert.deepEqual(reached, [step.tool]);
+
+      reached.length = 0;
+      const lookalike = await run(`worker_probe_${step.tool}`, LOOKALIKE);
+      assert.doesNotMatch(String(lookalike.result), /not available to background workers/, `background_custom composite step ${step.tool} is not refused`);
+      assert.deepEqual(reached, [step.tool]);
     }
 
     reached.length = 0;
@@ -109,6 +119,11 @@ async function main() {
       assert.equal(direct.error, true);
       assert.match(String(direct.result), /not available to background workers/);
       assert.deepEqual(reached, []);
+    }
+    for (const name of ['set_current_model', 'switch_model', 'update_heartbeat', 'background_ops']) {
+      reached.length = 0;
+      await executeTool(name, {}, tempRoot, {} as any, LOOKALIKE);
+      assert.deepEqual(reached, [name], `background_custom may run ${name}`);
     }
     for (const name of ['write_note', 'bg_plan_declare', 'bg_plan_advance']) {
       reached.length = 0;

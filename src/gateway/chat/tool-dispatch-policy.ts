@@ -71,15 +71,33 @@ const BACKGROUND_WORKER_WITHHELD_DISPATCH = new Set<string>([
   'background_progress', 'background_wait', 'background_join',
 ]);
 
+// Sessions whose rounds were started by background_ops spawn or follow_up.
+// Filled only by task-runner's startBackgroundExecution, which every round
+// passes through (first spawn, follow-up, steer continuation and resume after
+// a gateway restart), so the identity is re-established in a fresh process
+// before the round's first tool call. Process memory only: nothing a user
+// configures (a webhook sessionKey, a Telegram or team session id) can add to it.
+// Held on globalThis so a second copy of this module (CJS and ESM loaders in
+// one process) still sees the same registry.
+const WORKER_SESSIONS_KEY = Symbol.for('prometheus.backgroundSpawnWorkerSessions');
+const backgroundSpawnWorkerSessions: Set<string> = ((globalThis as any)[WORKER_SESSIONS_KEY] ||= new Set<string>());
+
+/** Mark a session as a background_ops worker. Called when a worker round starts. */
+export function registerBackgroundSpawnWorkerSession(sessionId: string): void {
+  const id = String(sessionId || '').trim();
+  if (id) backgroundSpawnWorkerSessions.add(id);
+}
+
 /**
- * A run started by background_ops spawn or follow_up. Only those runs use a
- * `background_<conversation id>` session (task-runner backgroundRuntimeSessionId;
- * follow-up rounds reuse the conversation's session). executionMode is not
- * used: 'background_task' is shared with team coordinators, webhooks and
- * Telegram background runs, and 'background_agent' with standalone subagents.
+ * A run started by background_ops spawn or follow_up: the session was
+ * registered when the round started. The session name is not trusted on its
+ * own: a webhook can be configured with any session key, including one that
+ * starts with background_. executionMode is not used either: 'background_task'
+ * is shared with team coordinators, webhooks and Telegram background runs, and
+ * 'background_agent' with standalone subagents.
  */
 export function isBackgroundSpawnWorkerSession(sessionId: unknown): boolean {
-  return String(sessionId || '').startsWith('background_');
+  return backgroundSpawnWorkerSessions.has(String(sessionId || '').trim());
 }
 
 export function backgroundWorkerWithheldReason(name: string): string | null {

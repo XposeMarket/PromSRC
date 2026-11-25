@@ -19,6 +19,7 @@ import { formatResumeEvidence, recordToolCall, recordToolResult, shouldDeleteExe
 import { recomputeFollowUpScope } from './background-follow-up-scope';
 import { followUpAdmissionKey } from './background-follow-up-identity';
 import { getSessionToolCeiling, intersectToolCeiling } from '../agents-runtime/tool-ceiling';
+import { registerBackgroundSpawnWorkerSession } from '../chat/tool-dispatch-policy';
 import { persistBackgroundSpawnReceipt, readBackgroundSpawnReceipts } from './background-spawn-continuity';
 import {
   deleteBackgroundConversation,
@@ -738,6 +739,9 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
     const abortController = new AbortController();
     const abortSignal = record.abortSignal || { aborted: false };
     const runtimeSessionId = backgroundRuntimeSessionId(record);
+    // Every worker round (spawn, follow-up, steer continuation, resume after a
+    // restart) starts here, so the worker identity is registered per round.
+    registerBackgroundSpawnWorkerSession(runtimeSessionId);
     abortSignal.signal = abortController.signal;
     record.abortSignal = abortSignal;
     record.abortController = abortController;

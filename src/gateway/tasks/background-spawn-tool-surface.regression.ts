@@ -6,9 +6,11 @@ import { normalizeBackgroundSpawnToolCategories, resolveBackgroundAgentModelRout
 import { readChatRouterSource } from '../../testing/chat-router-source';
 import {
   BACKGROUND_WORKER_WITHHELD_TOOL_NAMES,
+  backgroundWorkerToolRefusal,
   backgroundWorkerWithheldReason,
   evaluateToolDispatch,
   isBackgroundSpawnWorkerSession,
+  registerBackgroundSpawnWorkerSession,
   toolNameSetOf,
 } from '../chat/tool-dispatch-policy';
 
@@ -129,9 +131,38 @@ assert.match(
 const WITHHELD = ['set_current_model', 'switch_model', 'update_heartbeat', 'background_ops'];
 assert.deepEqual([...BACKGROUND_WORKER_WITHHELD_TOOL_NAMES].sort(), [...WITHHELD].sort());
 
-// A worker is identified only by its session: spawn and follow_up rounds run
-// in background_<conversation root id> (task-runner backgroundRuntimeSessionId).
-assert.equal(isBackgroundSpawnWorkerSession('background_bg_123'), true, 'background_ops spawn worker session');
+// A worker is identified by registration, not by its session name: every
+// spawn/follow-up/steer/resume round registers its session when it starts.
+// A webhook can be configured with any sessionKey, so a background_ name that
+// no spawn started (for example background_custom) is not a worker.
+assert.equal(isBackgroundSpawnWorkerSession('background_custom'), false, 'configured background_custom session keeps the tools');
+assert.equal(isBackgroundSpawnWorkerSession('background_bg_123'), false, 'unregistered background_ name is not a worker');
+registerBackgroundSpawnWorkerSession('background_bg_123');
+assert.equal(isBackgroundSpawnWorkerSession('background_bg_123'), true, 'registered background_ops spawn worker session');
+assert.equal(isBackgroundSpawnWorkerSession('background_custom'), false, 'registering one worker does not mark other background_ names');
+// Follow-up after a gateway restart: this process starts with an empty
+// registry, and the follow-up round's start registers the conversation session
+// again before its first tool call.
+const FOLLOW_UP_SESSION = 'background_bg_conv_after_restart';
+assert.equal(isBackgroundSpawnWorkerSession(FOLLOW_UP_SESSION), false, 'fresh process: not yet registered');
+registerBackgroundSpawnWorkerSession(FOLLOW_UP_SESSION);
+assert.equal(isBackgroundSpawnWorkerSession(FOLLOW_UP_SESSION), true, 'follow-up round start registers the worker again');
+assert.match(backgroundWorkerToolRefusal('background_ops', FOLLOW_UP_SESSION) || '', /not available to background workers/, 'follow-up worker is refused');
+assert.equal(backgroundWorkerToolRefusal('background_ops', 'background_custom'), null, 'background_custom is not refused');
+for (const name of ['set_current_model', 'switch_model', 'update_heartbeat', 'background_ops']) {
+  assert.equal(backgroundWorkerToolRefusal(name, 'background_custom'), null, `background_custom may call ${name}`);
+}
+// Registration lives where every worker round starts, and every round path
+// (recover after restart, spawn, follow-up, steer continuation) goes through it.
+assert.match(taskRunnerSource, /function startBackgroundExecution\([^)]*\)[^{]*\{[\s\S]{0,400}?const runtimeSessionId = backgroundRuntimeSessionId\(record\);[\s\S]{0,300}?registerBackgroundSpawnWorkerSession\(runtimeSessionId\);/,
+  'startBackgroundExecution must register the worker session before the round runs');
+for (const fn of ['recoverBackgroundExecutions', 'backgroundSpawn', 'backgroundFollowUp', 'backgroundSteer']) {
+  const start = taskRunnerSource.indexOf(`export function ${fn}(`);
+  assert.ok(start >= 0, `${fn} exists`);
+  const next = taskRunnerSource.indexOf('\nexport function ', start + 10);
+  assert.match(taskRunnerSource.slice(start, next < 0 ? undefined : next), /startBackgroundExecution\(/, `${fn} must start its round through startBackgroundExecution`);
+}
+assert.equal((taskRunnerSource.match(/handleChat\(/g) || []).length, 1, 'the only worker handleChat call is inside startBackgroundExecution');
 assert.equal(isBackgroundSpawnWorkerSession('main_chat'), false, 'main chat keeps the tools');
 assert.equal(isBackgroundSpawnWorkerSession('meta_coordinator_abc'), false, 'team coordinator keeps the tools');
 assert.equal(isBackgroundSpawnWorkerSession('webhook_abc'), false, 'webhook runs keep the tools');
