@@ -85,7 +85,8 @@ const CASES: Case[] = [
   { id: 'skill-audit', message: 'Audit the skill triggers and repair the skill metadata.', expected: ['skills'] },
   { id: 'model-template', message: 'Set the agent model and save a reusable model template.', expected: ['model_management'] },
   { id: 'business-entity', message: 'Update the client record and append an entity event.', expected: ['business'] },
-  { id: 'social-profile', message: 'Analyze the social profile engagement and recommend content.', expected: ['social_intelligence'] },
+  // social_intelligence was removed with social_intel; social-profile requests route nowhere special now.
+  { id: 'social-profile', message: 'Analyze the social profile engagement and recommend content.', negative: true },
   { id: 'web-research', message: 'Research the latest competitors and summarize the strongest sources.', negative: true },
   { id: 'general-chat', message: 'Give me three ideas for a birthday dinner.', negative: true },
   { id: 'general-code-explanation', message: 'How does a JavaScript promise work?', negative: true },

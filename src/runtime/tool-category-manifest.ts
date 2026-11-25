@@ -16,7 +16,7 @@ export const TOOL_CATEGORY_IDS = [
   'advanced_memory', 'media_assets', 'media_generation', 'automations',
   'automation_scheduling', 'automation_tasks', 'automation_recovery', 'automation_sessions',
   'runtime_admin', 'external_apps',
-  'integration_admin', 'social_intelligence', 'proposal_admin',
+  'integration_admin', 'proposal_admin',
   'mcp_server_tools', 'composite_tools', 'creative_basic', 'creative_image',
   'creative_video', 'creative_hyperframes', 'creative_quality', 'skills',
   'model_management', 'business',
@@ -28,7 +28,7 @@ export const TOOL_CATEGORY_MENU_ORDER: readonly ToolCategoryId[] = [
   'browser_automation', 'desktop_automation', 'agents_and_teams', 'workspace_write',
   'prometheus_source_read', 'prometheus_source_write', 'advanced_memory', 'media_assets',
   'media_generation', 'creative_quality', 'automations', 'runtime_admin', 'integration_admin', 'external_apps',
-  'social_intelligence', 'proposal_admin', 'mcp_server_tools', 'composite_tools',
+  'proposal_admin', 'mcp_server_tools', 'composite_tools',
   'creative_basic', 'creative_image', 'creative_video', 'creative_hyperframes',
   'skills', 'model_management', 'business',
 ];
@@ -55,12 +55,12 @@ const entry = (
 
 export const TOOL_CATEGORY_MANIFEST: Readonly<Record<ToolCategoryId, ToolCategoryManifestEntry>> = Object.freeze({
   browser_automation: entry('browser_automation', ['browser'], 'browser_session/observe/act/extract wrappers', 'browser or web UI interaction'),
-  desktop_automation: entry('desktop_automation', ['desktop'], 'desktop_screen/apps/window/input/macro/background wrappers', 'desktop or native application interaction'),
+  desktop_automation: entry('desktop_automation', ['desktop'], 'desktop_screen/apps/window/input/background wrappers', 'desktop or native application interaction'),
   agents_and_teams: entry('agents_and_teams', ['team_ops', 'teams', 'agents'], 'agent_ops/chat_ops/team wrappers', 'agent or team administration and dispatch'),
   prometheus_source_read: entry('prometheus_source_read', ['source_read'], 'dev_source_read for Prometheus src/, web-ui/, and allowlisted root files', 'Prometheus source inspection'),
   prometheus_source_write: entry('prometheus_source_write', ['source_write'], 'dev_source_edit for approved Prometheus src/web-ui edits', 'approved Prometheus source changes'),
   workspace_write: entry('workspace_write', ['file_ops', 'files', 'shell', 'commands', 'run_commands'], 'unified workspace read/edit/run/git/safety/code-nav wrappers', 'workspace changes or command execution'),
-  advanced_memory: entry('advanced_memory', ['memory'], 'memory graph, timeline, related records, project search, index refresh', 'advanced memory operations'),
+  advanced_memory: entry('advanced_memory', ['memory'], 'full memory record reads, memory consolidation, and claim review', 'advanced memory operations'),
   media_assets: entry('media_assets', ['media'], 'download/analyze images, video, audio, remote assets', 'media download or analysis'),
   media_generation: entry('media_generation', ['media_gen'], 'one-shot AI image/video generation with media_generate', 'AI image or video generation'),
   automations: entry('automations', ['schedule', 'scheduling'], 'schedule creation/detail/history/outputs/patch/stuck control/dashboard and Prometheus peer-session control', 'scheduling or automation operations'),
@@ -70,8 +70,7 @@ export const TOOL_CATEGORY_MANIFEST: Readonly<Record<ToolCategoryId, ToolCategor
   automation_sessions: entry('automation_sessions', ['session_pack', 'thread_pack'], 'create/send/steer Prometheus sessions and threads', 'Prometheus thread or session operations'),
   runtime_admin: entry('runtime_admin', ['runtime', 'diagnostics'], 'Prometheus runtime diagnostics, incident packets, and controlled gateway restart', 'Prometheus runtime diagnostics or restart'),
   external_apps: entry('external_apps', ['connectors'], 'live tools from connected extension-backed applications', 'connected application use'),
-  integration_admin: entry('integration_admin', ['integrations'], 'MCP server setup, webhooks, integration quick setup', 'integration administration'),
-  social_intelligence: entry('social_intelligence', [], 'social profile analysis and recommendations', 'social intelligence analysis'),
+  integration_admin: entry('integration_admin', ['integrations'], 'connection setup, MCP server admin, secure access, provider webhooks, plugin import', 'integration administration'),
   proposal_admin: entry('proposal_admin', [], 'create/edit pending proposals before approval', 'proposal creation or administration'),
   mcp_server_tools: entry('mcp_server_tools', ['mcp'], 'dynamic mcp__server__tool functions from connected servers', 'connected MCP server tools'),
   composite_tools: entry('composite_tools', ['composites'], 'saved multi-step tools and composite management', 'saved composite tools'),
@@ -81,7 +80,7 @@ export const TOOL_CATEGORY_MANIFEST: Readonly<Record<ToolCategoryId, ToolCategor
   creative_hyperframes: entry('creative_hyperframes', ['hyperframes'], 'creative_hyperframes_ops wrapper', 'HyperFrames work'),
   creative_quality: entry('creative_quality', ['creative_qa', 'media_quality'], 'creative_quality_ops QA wrapper', 'creative quality assurance'),
   skills: entry('skills', ['skill_authoring'], 'skill_ops wrapper for authoring, packaging, import/export, resource maintenance, inspection, and metadata audits', 'skill authoring or maintenance'),
-  model_management: entry('model_management', ['agent_models', 'models'], 'agent fleet model administration and templates', 'agent model administration'),
+  model_management: entry('model_management', ['agent_models', 'models'], 'agent fleet model defaults and saved provider accounts', 'agent model administration'),
   business: entry('business', ['entities'], 'structured business entities and BUSINESS.md context mode', 'business entity or business context administration'),
 });
 
@@ -108,20 +107,20 @@ const TEAM = names('agent_ops agent_chat_ops team_ops_wrapper team_collab_ops sp
 const SOURCE_READ = names('dev_source_read request_dev_source_edit update_dev_source_edit await_dev_source_edit_approval read_dev_sources read_source list_source grep_source source_stats src_stats read_webui_source list_webui_source grep_webui_source webui_source_stats webui_stats list_prom prom_file_stats read_prom_file grep_prom source_stats_batch');
 const SOURCE_WRITE = names('dev_source_edit apply_dev_source_patchset find_replace_source replace_lines_source insert_after_source delete_lines_source write_source delete_source find_replace_webui_source replace_lines_webui_source insert_after_webui_source delete_lines_webui_source write_webui_source delete_webui_source find_replace_prom replace_lines_prom insert_after_prom delete_lines_prom write_prom_file delete_prom_file prom_apply_dev_changes');
 const WORKSPACE = names('workspace_read workspace_edit workspace_run workspace_git workspace_safety workspace_code_nav validate_file read_file list_files list_directory grep_file grep_files file_stats mkdir present_file apply_workspace_patchset clone_repo search_files read_files_batch file_tree create_file replace_lines insert_after delete_lines find_replace delete_file write_file rename_file copy_file move_file copy_directory move_directory path_exists show_diff preview_patch apply_patch format_changed_files revert_last_tool_change revert_own_patch git_status git_diff git_log git_branch git_commit git_push open_pr run_tests run_linter run_formatter run_typecheck start_dev_server stop_process read_process_output snapshot_workspace restore_snapshot scan_secrets scan_large_files operation_plan code_outline get_symbols go_to_definition find_references terminal run_command start_process process_status process_log process_wait process_kill process_submit');
-const MEMORY = names('memory_browse memory_read_record memory_search_project memory_search_timeline memory_get_related memory_graph_snapshot memory_index_refresh memory_provider_status memory_embedding_status memory_embedding_backfill memory_debug_search memory_consolidate memory_review_claims memory_accept_claim memory_reject_claim memory_supersede_record');
+const MEMORY = names('memory_read_record memory_consolidate memory_review_claims memory_accept_claim memory_reject_claim memory_supersede_record');
 const MEDIA = names('download_url download_media video_social_cut analyze_image analyze_video');
 const MEDIA_GENERATION = names('media_generate video_project game_project');
 // update_heartbeat left core on 2026-11-24: 1 real use in 30 days, and weaker models called it on greetings.
 const AUTOMATION_SCHEDULING = names('schedule_job schedule_job_detail schedule_job_history schedule_job_log_search schedule_job_outputs schedule_job_patch schedule_job_stuck_control update_heartbeat');
-const AUTOMATION_TASKS = names('automation_dashboard task_control run_task_now internal_watch trigger_ops');
+const AUTOMATION_TASKS = names('automation_dashboard task_control internal_watch trigger_ops');
 const AUTOMATION_RECOVERY = names('prometheus_request_ops prometheus_audit_ops');
 const AUTOMATION_SESSIONS = names('prometheus_thread_ops');
 const AUTOMATIONS = new Set([...AUTOMATION_SCHEDULING, ...AUTOMATION_TASKS, ...AUTOMATION_RECOVERY, ...AUTOMATION_SESSIONS]);
 const RUNTIME_ADMIN = names('diagnostic_packet system_diagnostics gateway_restart');
 const SKILLS = names('skill_create skill_create_bundle skill_import_bundle skill_export_bundle skill_update_from_source skill_manifest_write skill_resource_write skill_resource_delete skill_inspect');
-const MODELS = names('get_agent_models set_agent_model provider_accounts list_agent_model_templates save_agent_model_template update_agent_model_template apply_agent_model_template select_agent_model_template delete_agent_model_template');
+const MODELS = names('get_agent_models set_agent_model provider_accounts');
 const BUSINESS = names('list_entities read_entity write_entity append_entity_event business_context_mode');
-const INTEGRATION_ADMIN = names('secure_access connection_ops mcp_server_manage webhook_manage integration_quick_setup plugin_ops');
+const INTEGRATION_ADMIN = names('secure_access connection_ops mcp_server_manage webhook_manage plugin_ops');
 const EXTERNAL_APP_WRAPPERS = names('x_search_ops x_posts x_users x_lists x_dm x_admin vercel_ops');
 const COMPOSITES = names('create_composite get_composite edit_composite delete_composite list_composites');
 const CREATIVE_CORE = names('get_creative_mode switch_creative_mode');
@@ -168,7 +167,7 @@ export function classifyToolFromManifest(nameInput: string, options: { isSavedCo
   const name = String(nameInput || '').trim();
   if (!name || CORE_OVERRIDES.has(name)) return null;
   if (CREATIVE_CORE.has(name)) return creativeCategory(name);
-  if (name === 'save_site_shortcut' || name === 'inspect_console' || name === 'run_accessibility_check' || name === 'browser_smoke_test' || name.startsWith('browser_')) return 'browser_automation';
+  if (name === 'inspect_console' || name === 'run_accessibility_check' || name === 'browser_smoke_test' || name.startsWith('browser_')) return 'browser_automation';
   if (name.startsWith('desktop_')) return 'desktop_automation';
   if (EXTERNAL_APP_WRAPPERS.has(name) || name.startsWith('connector_') || name.startsWith('x_api_')) return 'external_apps';
   if (name.startsWith('mcp__')) return 'mcp_server_tools';
@@ -188,7 +187,6 @@ export function classifyToolFromManifest(nameInput: string, options: { isSavedCo
   if (BUSINESS.has(name)) return 'business';
   if (name.startsWith('creative_')) return creativeCategory(name);
   if (INTEGRATION_ADMIN.has(name)) return 'integration_admin';
-  if (name === 'social_intel') return 'social_intelligence';
   if (name === 'edit_proposal' || name === 'write_proposal') return 'proposal_admin';
   if (name === 'video_compose') return 'creative_video';
   if (COMPOSITES.has(name) || options.isSavedComposite?.(name)) return 'composite_tools';

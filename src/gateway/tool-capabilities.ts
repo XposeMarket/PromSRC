@@ -14,9 +14,7 @@ const READ_ONLY_TOOLS = new Set([
   'file_tree', 'validate_file', 'validate_file_syntax', 'show_diff', 'preview_patch',
   'git_status', 'git_diff', 'git_log', 'git_branch', 'code_outline', 'get_symbols',
   'go_to_definition', 'find_references', 'time_now', 'agent_list', 'agent_info',
-  'memory', 'memory_browse', 'memory_read', 'memory_read_record', 'memory_search',
-  'memory_search_project', 'memory_search_timeline', 'memory_get_related',
-  'memory_graph_snapshot', 'memory_provider_status', 'memory_embedding_status',
+  'memory', 'memory_read', 'memory_read_record', 'memory_search',
   'web_search', 'web_search_single', 'web_search_multi', 'web_fetch', 'web_fetch_batch',
   'shopping_search_products', 'view_connections', 'process_status', 'process_log',
   'process_wait', 'read_process_output', 'desktop_doctor', 'desktop_screenshot',
@@ -49,10 +47,10 @@ const READ_ONLY_TOOLS = new Set([
   'show_run_result', 'show_prediction_market', 'show_map',
   // Reading progress/results of work that was already approved to start.
   'background_wait', 'background_progress', 'background_status', 'get_agent_result',
-  'get_agent_models', 'list_agent_model_templates', 'schedule_job_history',
+  'get_agent_models', 'schedule_job_history',
   'schedule_job_detail', 'schedule_job_log_search',
   'list_entities', 'read_entity', 'list_composites', 'brain_activity_read',
-  'brain_context_search', 'memory_debug_search', 'memory_review_claims',
+  'brain_context_search', 'memory_review_claims',
   // Prometheus source reads (siblings of read_source/list_source above).
   'read_webui_source', 'grep_source', 'grep_webui_source', 'list_webui_source',
   'read_dev_sources', 'read_prom_file', 'grep_prom', 'list_prom', 'source_stats_batch',
@@ -76,8 +74,7 @@ const LOCAL_WRITE_TOOLS = new Set([
   'write', 'write_file', 'create_file', 'edit', 'replace_lines', 'insert_after',
   'find_replace', 'rename', 'rename_file', 'copy', 'copy_file', 'copy_directory',
   'move_file', 'move_directory', 'mkdir', 'append', 'apply_patch',
-  'apply_workspace_patchset', 'write_note', 'memory_write', 'memory_index_refresh',
-  'memory_embedding_backfill', 'persona_update', 'schedule_memory',
+  'apply_workspace_patchset', 'write_note', 'memory_write', 'persona_update', 'schedule_memory',
   'snapshot_workspace', 'format_changed_files', 'clone_repo', 'download_url',
   'download_media', 'video_social_cut', 'generate_image', 'generate_video', 'media_generate', 'chatgpt_sandbox', 'video_compose', 'write_proposal', 'memory', 'upload_image',
   'skill_import_bundle', 'skill_manifest_write', 'skill_update_metadata',
@@ -94,14 +91,13 @@ const LOCAL_WRITE_TOOLS = new Set([
   // unknown-tool fallback.
   'append_file', 'git_commit', 'timer', 'business_context_mode', 'update_heartbeat',
   'set_current_model', 'background_spawn', 'background_follow_up', 'background_steer', 'spawn_subagent',
-  'save_site_shortcut', 'browser_close', 'browser_close_tab',
+  'browser_close', 'browser_close_tab',
   // Local Prometheus state that was falling through to the unknown tier
   // (2026-11 tool audit). Still approval-gated on Default permissions.
   'dispatch_team_agent', 'message_main_agent', 'browser_set_profile_target',
   'memory_accept_claim', 'memory_reject_claim', 'memory_supersede_record', 'memory_consolidate',
-  'write_entity', 'append_entity_event', 'set_agent_model', 'save_agent_model_template',
-  'update_agent_model_template', 'apply_agent_model_template', 'select_agent_model_template',
-  'edit_proposal', 'run_task_now', 'create_composite', 'edit_composite', 'skill_candidate_submit',
+  'write_entity', 'append_entity_event', 'set_agent_model',
+  'edit_proposal', 'create_composite', 'edit_composite', 'skill_candidate_submit',
   'schedule_job_stuck_control',
 ]);
 
@@ -109,7 +105,7 @@ const DESTRUCTIVE_TOOLS = new Set([
   'delete', 'delete_file', 'delete_lines', 'restore_snapshot', 'revert_last_tool_change',
   'revert_own_patch', 'process_kill', 'stop_process', 'self_update',
   'skill_resource_delete', 'deploy_analysis_team', 'schedule_job', 'gateway_restart',
-  'delete_agent_model_template', 'delete_composite',
+  'delete_composite',
 ]);
 
 const COMMAND_TOOLS = new Set([
@@ -129,7 +125,7 @@ const EXTERNAL_WRITE_TOOLS = new Set([
   'desktop_replay_macro', 'desktop_click_text', 'desktop_window_click',
   'desktop_window_type', 'desktop_window_press_key', 'desktop_window_scroll',
   'desktop_window_drag', 'desktop_screen', 'desktop_apps', 'desktop_window',
-  'desktop_input', 'desktop_macro', 'desktop_background',
+  'desktop_input', 'desktop_background',
   // Can reach Telegram/Discord/other channels or act inside logged-in pages.
   'delivery_send', 'browser_run_js', 'browser_type', 'browser_drag',
   'browser_vision_click', 'browser_vision_type',
@@ -226,7 +222,6 @@ const ACTION_TOOL_CAPABILITIES: Readonly<Record<string, ActionToolCapabilities>>
   mcp_server_manage: { read: ['list', 'status', 'list_tools', 'oauth_status'] },
   secure_access: { read: ['status', 'list'] },
   webhook_manage: { read: ['get'] },
-  integration_quick_setup: { read: ['list_presets'] },
 });
 
 function resolveActionToolCapabilities(name: string, args?: Record<string, any>): ToolCapabilityMetadata | undefined {

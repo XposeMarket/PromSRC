@@ -17,7 +17,7 @@ export const TOOL_CATEGORY_REPRESENTATIVE_TOOLS: Readonly<Partial<Record<ToolCat
   prometheus_source_read: ['read_source', 'read_dev_sources'],
   prometheus_source_write: ['prom_apply_dev_changes'],
   workspace_write: ['workspace_edit', 'workspace_run', 'workspace_read'],
-  advanced_memory: ['memory_search_project', 'memory_graph_snapshot'],
+  advanced_memory: ['memory_read_record', 'memory_review_claims'],
   media_assets: ['download_media', 'analyze_image'],
   media_generation: ['media_generate', 'video_project', 'game_project'],
   automations: ['schedule_job', 'task_control'],
@@ -28,7 +28,6 @@ export const TOOL_CATEGORY_REPRESENTATIVE_TOOLS: Readonly<Partial<Record<ToolCat
   runtime_admin: ['diagnostic_packet'],
   external_apps: ['x_search_ops'],
   integration_admin: ['connection_ops'],
-  social_intelligence: ['social_intel'],
   proposal_admin: ['write_proposal'],
   composite_tools: ['list_composites'],
   // switch_creative_mode is an action on the creative_project wrapper now; the

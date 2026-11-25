@@ -554,7 +554,6 @@ export function normalizeWorkspaceWrapperTool(name: string, rawArgs: any, worksp
       try { args.command = literalCommand(args) + ARGV_SUFFIX; } catch (e) { return {name,args,error:String(e)}; }
       delete args.program; delete args.argv; delete args.search;
     }
-    if (action === 'telemetry' || action === 'benchmark_summary') return { name: 'tool_benchmark_summary', args };
     if (['run', 'start', 'status', 'log', 'wait', 'kill', 'submit'].includes(action)) {
       const runArgs = {
         ...args,
@@ -576,10 +575,6 @@ export function normalizeWorkspaceWrapperTool(name: string, rawArgs: any, worksp
       }
       return { name: 'terminal', args: runArgs };
     }
-    if (action === 'test') return { name: 'run_tests', args };
-    if (action === 'lint') return { name: 'run_linter', args };
-    if (action === 'format') return { name: 'run_formatter', args };
-    if (action === 'typecheck') return { name: 'run_typecheck', args };
     return { name, args: rawArgs, error: `Unsupported workspace_run action "${action}".` };
   }
 
@@ -600,8 +595,6 @@ export function normalizeWorkspaceWrapperTool(name: string, rawArgs: any, worksp
     if (action === 'revert_last') return { name: 'revert_last_tool_change', args };
     if (action === 'scan_secrets') return { name: 'scan_secrets', args };
     if (action === 'scan_large_files') return { name: 'scan_large_files', args };
-    if (action === 'operation_plan') return { name: 'operation_plan', args };
-    if (action === 'preview_patch') return { name: 'preview_patch', args };
     return { name, args: rawArgs, error: `Unsupported workspace_safety action "${action}".` };
   }
 
@@ -901,7 +894,6 @@ export function normalizeAgentTeamWrapperTool(name: string, rawArgs: any): { nam
     },
     team_ops_wrapper: {
       manage: 'team_manage',
-      delete: 'team_manage',
       manage_goal: 'manage_team_goal',
       manage_context_ref: 'manage_team_context_ref',
       update_goal: 'update_team_goal',
@@ -914,7 +906,6 @@ export function normalizeAgentTeamWrapperTool(name: string, rawArgs: any): { nam
       // with no team/session binding, so talk_to_manager cannot identify the
       // team and the result never reaches the team room.
       dispatch: 'dispatch_team_agent',
-      dispatch_team_agent: 'dispatch_team_agent',
       request_member_turn: 'request_team_member_turn',
       get_agent_result: 'get_agent_result',
     },
@@ -992,7 +983,6 @@ export function normalizeAgentTeamWrapperTool(name: string, rawArgs: any): { nam
   }
   if (target === 'team_manage') {
     if (args.team_action != null && args.action == null) args.action = args.team_action;
-    if (action === 'delete' && args.action == null) args.action = 'delete';
     if (args.team_context == null && args.teamContext != null) args.team_context = args.teamContext;
     if (args.team_context == null && args.context != null) args.team_context = args.context;
     if (args.subagent_ids == null && Array.isArray(args.subagentIds)) args.subagent_ids = args.subagentIds;

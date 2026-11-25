@@ -34,10 +34,6 @@ export function listMemoryProviders(workspacePath: string): MemoryProvider[] {
   ];
 }
 
-export async function getMemoryProviderStatus(workspacePath: string) {
-  return await Promise.all(listMemoryProviders(workspacePath).map(provider => provider.status()));
-}
-
 export function getPrimaryMemoryProvider(workspacePath: string): MemoryProvider {
   return createSqliteLocalMemoryProvider(workspacePath);
 }

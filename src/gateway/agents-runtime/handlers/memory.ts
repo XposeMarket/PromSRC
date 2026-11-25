@@ -4,7 +4,7 @@ import { getConfig } from './../../../config/config';
 import { splitCsv, formatCompactSkillList, skillsCapabilityExecutor } from './../capabilities/skills-executor';
 import { formatIntradayNoteSourceLine, inferIntradayNoteSource } from './../../intraday-note-source';
 import { appendTeamMemoryEvent } from './../../teams/team-workspace';
-import { compactMemorySearchResult, refreshMemoryIndexInWorker, readMemoryRecord, getMemoryGraphSnapshot, getRelatedMemory } from './../../memory-index/index';
+import { compactMemorySearchResult, readMemoryRecord } from './../../memory-index/index';
 import { searchMemoryInWorker } from './../../memory-index/search-worker-client';
 import { parseJsonLike } from './../../tool-builder';
 import { activateSkillForSession, activateSkillResourceForSession, isBusinessContextEnabled, setBusinessContextEnabled } from './../../session';
@@ -67,42 +67,6 @@ export async function handleMemoryTool(ctx: handleMemoryToolContext): Promise<Aw
           result: `BUSINESS.md auto-injection enabled for session ${sessionId}. Future turns in this session will receive [BUSINESS] context.${snapshotBlock}`,
           error: false,
         };
-      }
-
-	      case 'memory_browse': {
-        const mbFileRaw = String(args.file || 'user').toLowerCase().trim();
-        const mbFile = mbFileRaw === 'memory' ? 'memory' : (mbFileRaw === 'soul' ? 'soul' : 'user');
-        const mbFilename = mbFile === 'soul' ? 'SOUL.md' : (mbFile === 'memory' ? 'MEMORY.md' : 'USER.md');
-        const mbPath = path.join(workspacePath, mbFilename);
-        console.log(`[memory_browse] workspacePath: ${workspacePath}`);
-        console.log(`[memory_browse] mbPath: ${mbPath}`);
-        console.log(`[memory_browse] exists: ${fs.existsSync(mbPath)}`);
-        if (!fs.existsSync(mbPath)) {
-          // Try absolute path fallback
-          const configWorkspace = getConfig().getWorkspacePath();
-          const fallbackPath = path.join(configWorkspace, mbFilename);
-          console.log(`[memory_browse] fallback configWorkspace: ${configWorkspace}`);
-          console.log(`[memory_browse] fallback path: ${fallbackPath}`);
-          console.log(`[memory_browse] fallback exists: ${fs.existsSync(fallbackPath)}`);
-          if (!fs.existsSync(fallbackPath)) {
-            return { name, args, result: `${mbFilename} not found at ${mbPath} or ${fallbackPath}. Create it first.`, error: true };
-          }
-          // Use fallback
-          const mbContent = fs.readFileSync(fallbackPath, 'utf-8');
-          const mbMatches = mbContent.match(/^## (.+)/gm) || [];
-          const mbCategories = mbMatches.map((m: string) => m.replace(/^## /, '').trim());
-          if (mbCategories.length === 0) {
-            return { name, args, result: `${mbFilename} has no categories yet. Use memory(action="write") to create the first one.`, error: false };
-          }
-          return { name, args, result: `${mbFilename} categories:\n${mbCategories.map((c: string) => `- ${c}`).join('\n')}\n\nUse memory(action="write", file="${mbFile}", category="<name>", content="...") to add a fact.`, error: false };
-        }
-        const mbContent = fs.readFileSync(mbPath, 'utf-8');
-        const mbMatches = mbContent.match(/^## (.+)/gm) || [];
-        const mbCategories = mbMatches.map((m: string) => m.replace(/^## /, '').trim());
-        if (mbCategories.length === 0) {
-          return { name, args, result: `${mbFilename} has no categories yet. Use memory(action="write") to create the first one.`, error: false };
-        }
-        return { name, args, result: `${mbFilename} categories:\n${mbCategories.map((c: string) => `- ${c}`).join('\n')}\n\nUse memory(action="write", file="${mbFile}", category="<name>", content="...") to add a fact.`, error: false };
       }
 
       case 'memory_write': {
@@ -203,70 +167,6 @@ export async function handleMemoryTool(ctx: handleMemoryToolContext): Promise<Aw
           return { name, args, result: `Record not found: ${recordId}`, error: true };
         } catch (err: any) {
           return { name, args, result: `memory_read_record failed: ${String(err?.message || err)}`, error: true };
-        }
-      }
-
-      case 'memory_search_project': {
-        try {
-          const projectId = String(args.project_id || '').trim();
-          const query = String(args.query || '').trim();
-          if (!projectId) return { name, args, result: 'memory_search_project: project_id is required', error: true };
-          if (!query) return { name, args, result: 'memory_search_project: query is required', error: true };
-          const result = await searchMemoryInWorker('memory_search_project', {
-            workspacePath,
-            projectId,
-            query,
-            limit: Number(args.limit || 10),
-          }, { signal: deps.abortSignal?.signal });
-          return { name, args, result: compactMemorySearchResult(result), error: false };
-        } catch (err: any) {
-          return { name, args, result: `memory_search_project failed: ${String(err?.message || err)}`, error: true };
-        }
-      }
-
-      case 'memory_search_timeline': {
-        try {
-          const query = String(args.query || '').trim();
-          if (!query) return { name, args, result: 'memory_search_timeline: query is required', error: true };
-          const result = await searchMemoryInWorker('memory_search_timeline', {
-            workspacePath,
-            query,
-            dateFrom: args.date_from ? String(args.date_from) : undefined,
-            dateTo: args.date_to ? String(args.date_to) : undefined,
-            limit: Number(args.limit || 20),
-          }, { signal: deps.abortSignal?.signal });
-          return { name, args, result: compactMemorySearchResult(result), error: false };
-        } catch (err: any) {
-          return { name, args, result: `memory_search_timeline failed: ${String(err?.message || err)}`, error: true };
-        }
-      }
-
-      case 'memory_get_related': {
-        try {
-          const recordId = String(args.record_id || '').trim();
-          if (!recordId) return { name, args, result: 'memory_get_related: record_id is required', error: true };
-          const related = getRelatedMemory(workspacePath, recordId, Number(args.limit || 8));
-          return { name, args, result: JSON.stringify({ record_id: recordId, hits: related }, null, 2), error: false };
-        } catch (err: any) {
-          return { name, args, result: `memory_get_related failed: ${String(err?.message || err)}`, error: true };
-        }
-      }
-
-      case 'memory_graph_snapshot': {
-        try {
-          const graph = getMemoryGraphSnapshot(workspacePath);
-          return { name, args, result: JSON.stringify(graph, null, 2), error: false };
-        } catch (err: any) {
-          return { name, args, result: `memory_graph_snapshot failed: ${String(err?.message || err)}`, error: true };
-        }
-      }
-
-      case 'memory_index_refresh': {
-        try {
-          const out = await refreshMemoryIndexInWorker(workspacePath, { force: true, maxChangedFiles: 500, minIntervalMs: 0 });
-          return { name, args, result: JSON.stringify(out, null, 2), error: false };
-        } catch (err: any) {
-          return { name, args, result: `memory_index_refresh failed: ${String(err?.message || err)}`, error: true };
         }
       }
 

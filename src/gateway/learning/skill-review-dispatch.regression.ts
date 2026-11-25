@@ -21,7 +21,7 @@ async function main() {
   const invalid = await skillsCapabilityExecutor.execute({ name: 'skill_curator', args: { ...args, request_hash: '0'.repeat(64) }, sessionId: 'brain_judge', workspacePath: root, deps: {} as any });
   assert.equal(invalid.error, true);
   const brain = fs.readFileSync(path.join(__dirname, '../brain/brain-runner.ts'), 'utf8');
-  assert.ok(brain.includes("'memory_browse',\n          'prometheus_audit_ops',\n          'skill_curator'"), 'cleanup allowlist includes evidence read and reviewer');
+  assert.ok(brain.includes("'delete_lines',\n          'prometheus_audit_ops',\n          'skill_curator'"), 'cleanup allowlist includes evidence read and reviewer');
   assert.ok(brain.includes('maximum 3 offers per cleanup'));
   console.log('skill review native dispatch and scheduled access: PASS');
  } finally { fs.rmSync(root, { recursive: true, force: true }); }

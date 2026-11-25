@@ -510,22 +510,6 @@ export async function runStartup(deps: StartupDeps): Promise<LiveRuntimeSnapshot
     console.warn('[AnalysisTeam] Could not inject analysis team deps:', e.message);
   }
 
-  // CIS Phase 3: Inject social intel deps
-  try {
-    const { injectSocialScraperDeps } = require('../../tools/social-scraper.js');
-    const cm2 = getConfig();
-    injectSocialScraperDeps({
-      workspacePath: config.workspace.path,
-      resolveSecret: async (ref: string) => {
-        try { return cm2.resolveSecret(ref) ?? null; } catch { return null; }
-      },
-      broadcast: broadcastWS,
-    });
-    console.log('[SocialIntel] social_intel deps injected.');
-  } catch (e: any) {
-    console.warn('[SocialIntel] Could not inject social intel deps:', e.message);
-  }
-
   // CIS Phase 4: Init OAuth connector registry
   try {
     const { initConnectorRegistry } = require('../../integrations/connector-registry.js') as any;

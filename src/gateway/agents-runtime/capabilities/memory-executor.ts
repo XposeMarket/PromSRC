@@ -2,13 +2,9 @@ import fs from 'fs';
 import path from 'path';
 import { getConfig } from '../../../config/config';
 import {
-  backfillMemoryEmbeddingsInWorker,
   compactMemorySearchResult,
   forgetIndexedWorkspaceFile,
-  getMemoryGraphSnapshot,
-  getRelatedMemory,
   readMemoryRecord,
-  refreshMemoryIndexInWorker,
   scheduleMemoryIndexRefresh,
 } from '../../memory-index/index';
 import {
@@ -29,8 +25,6 @@ import {
   supersedeSectionConflicts,
   writeMemoryFact,
 } from '../../memory-index/memory-recall.js';
-import { getMemoryEmbeddingStatus } from '../../memory/embeddings/registry';
-import { getMemoryProviderStatus } from '../../memory/providers/registry';
 import { consolidateMemory, listMemoryClaims, reviewMemoryClaim } from '../../memory/consolidation/runner';
 import { isBusinessContextEnabled, setBusinessContextEnabled } from '../../session';
 import { appendTeamMemoryEvent } from '../../teams/team-workspace';
@@ -152,22 +146,12 @@ const MEMORY_TOOL_NAMES = new Set([
   'write_entity',
   'append_entity_event',
   'memory',
-  'memory_browse',
   'memory_write',
   'memory_update',
   'memory_delete',
   'memory_read',
   'memory_search',
   'memory_read_record',
-  'memory_search_project',
-  'memory_search_timeline',
-  'memory_get_related',
-  'memory_graph_snapshot',
-  'memory_index_refresh',
-  'memory_provider_status',
-  'memory_embedding_status',
-  'memory_embedding_backfill',
-  'memory_debug_search',
   'memory_consolidate',
   'memory_review_claims',
   'memory_accept_claim',
@@ -582,29 +566,6 @@ export const memoryCapabilityExecutor: CapabilityExecutor = {
         }
       }
 
-      case 'memory_browse': {
-        const { key, filename } = resolveMemoryFile(args.file);
-        const primaryPath = path.join(workspacePath, filename);
-        let memoryPath = '';
-        try { memoryPath = resolveMemoryPath(workspacePath, filename, sessionId); }
-        catch (err: any) { return { name, args, result: `memory_browse blocked: ${String(err?.message || err)}`, error: true }; }
-        if (!fs.existsSync(memoryPath)) {
-          return { name, args, result: `${filename} not found at ${primaryPath} or ${memoryPath}. Create it first.`, error: true };
-        }
-        const content = fs.readFileSync(memoryPath, 'utf-8');
-        const matches = content.match(/^## (.+)/gm) || [];
-        const categories = matches.map((m: string) => m.replace(/^## /, '').trim());
-        if (categories.length === 0) {
-          return { name, args, result: `${filename} has no categories yet. Use memory(action="write") to create the first one.`, error: false };
-        }
-        return {
-          name,
-          args,
-          result: `${filename} categories:\n${categories.map((c: string) => `- ${c}`).join('\n')}\n\nUse memory(action="write", file="${key}", category="<name>", content="...") to add a fact.`,
-          error: false,
-        };
-      }
-
       case 'memory_write': {
         const { filename } = resolveMemoryFile(args.file);
         const category = normalizeMemoryCategory(args.category);
@@ -804,129 +765,6 @@ export const memoryCapabilityExecutor: CapabilityExecutor = {
           return { name, args, result: `Record not found: ${recordId}`, error: true };
         } catch (err: any) {
           return { name, args, result: `memory_read_record failed: ${String(err?.message || err)}`, error: true };
-        }
-      }
-
-      case 'memory_search_project': {
-        try {
-          const projectId = String(args.project_id || '').trim();
-          const query = String(args.query || '').trim();
-          if (!projectId) return { name, args, result: 'memory_search_project: project_id is required', error: true };
-          if (!query) return { name, args, result: 'memory_search_project: query is required', error: true };
-          if (ctx.deps.abortSignal?.aborted || ctx.deps.abortSignal?.signal?.aborted) {
-            return { name, args, result: 'memory_search_project cancelled before execution', error: true };
-          }
-          const result = await searchMemoryInWorker('memory_search_project', {
-            workspacePath,
-            projectId,
-            query,
-            limit: Number(args.limit || 10),
-          }, { signal: ctx.deps.abortSignal?.signal });
-          return { name, args, result: compactMemorySearchResult(result), error: false };
-        } catch (err: any) {
-          return { name, args, result: `memory_search_project failed: ${String(err?.message || err)}`, error: true };
-        }
-      }
-
-      case 'memory_search_timeline': {
-        try {
-          const query = String(args.query || '').trim();
-          if (!query) return { name, args, result: 'memory_search_timeline: query is required', error: true };
-          if (ctx.deps.abortSignal?.aborted || ctx.deps.abortSignal?.signal?.aborted) {
-            return { name, args, result: 'memory_search_timeline cancelled before execution', error: true };
-          }
-          const dateFrom = args.date_from ? String(args.date_from) : undefined;
-          const dateTo = args.date_to ? String(args.date_to) : undefined;
-          const limit = Number(args.limit || 20);
-          const result = await searchMemoryInWorker('memory_search_timeline', {
-            workspacePath,
-            query,
-            dateFrom,
-            dateTo,
-            limit,
-          }, { signal: ctx.deps.abortSignal?.signal });
-          return { name, args, result: compactMemorySearchResult(result), error: false };
-        } catch (err: any) {
-          return { name, args, result: `memory_search_timeline failed: ${String(err?.message || err)}`, error: true };
-        }
-      }
-
-      case 'memory_get_related': {
-        try {
-          const recordId = String(args.record_id || '').trim();
-          if (!recordId) return { name, args, result: 'memory_get_related: record_id is required', error: true };
-          const related = getRelatedMemory(workspacePath, recordId, Number(args.limit || 8));
-          return { name, args, result: JSON.stringify({ record_id: recordId, hits: related }, null, 2), error: false };
-        } catch (err: any) {
-          return { name, args, result: `memory_get_related failed: ${String(err?.message || err)}`, error: true };
-        }
-      }
-
-      case 'memory_graph_snapshot': {
-        try {
-          return { name, args, result: JSON.stringify(getMemoryGraphSnapshot(workspacePath), null, 2), error: false };
-        } catch (err: any) {
-          return { name, args, result: `memory_graph_snapshot failed: ${String(err?.message || err)}`, error: true };
-        }
-      }
-
-      case 'memory_index_refresh': {
-        try {
-          const out = await refreshMemoryIndexInWorker(workspacePath, { force: true, maxChangedFiles: 500, minIntervalMs: 0, syncSqlite: true });
-          return { name, args, result: JSON.stringify(out, null, 2), error: false };
-        } catch (err: any) {
-          return { name, args, result: `memory_index_refresh failed: ${String(err?.message || err)}`, error: true };
-        }
-      }
-
-      case 'memory_provider_status': {
-        try {
-          return { name, args, result: JSON.stringify(await getMemoryProviderStatus(workspacePath), null, 2), error: false };
-        } catch (err: any) {
-          return { name, args, result: `memory_provider_status failed: ${String(err?.message || err)}`, error: true };
-        }
-      }
-
-      case 'memory_embedding_status': {
-        try {
-          return { name, args, result: JSON.stringify(await getMemoryEmbeddingStatus(), null, 2), error: false };
-        } catch (err: any) {
-          return { name, args, result: `memory_embedding_status failed: ${String(err?.message || err)}`, error: true };
-        }
-      }
-
-      case 'memory_embedding_backfill': {
-        try {
-          const out = await backfillMemoryEmbeddingsInWorker(workspacePath, {
-            limit: args.limit != null ? Number(args.limit) : undefined,
-            provider: args.provider ? String(args.provider) : undefined,
-            force: args.force === true,
-          });
-          return { name, args, result: JSON.stringify(out, null, 2), error: !out.ok };
-        } catch (err: any) {
-          return { name, args, result: `memory_embedding_backfill failed: ${String(err?.message || err)}`, error: true };
-        }
-      }
-
-      case 'memory_debug_search': {
-        try {
-          const query = String(args.query || '').trim();
-          if (!query) return { name, args, result: 'memory_debug_search: query is required', error: true };
-          const result = await searchMemoryInWorker('memory_search', {
-            workspacePath,
-            params: {
-              query,
-              mode: (['quick', 'deep', 'project', 'timeline'].includes(String(args.mode || 'quick')) ? String(args.mode || 'quick') : 'quick') as any,
-              limit: Number(args.limit || 12),
-              projectId: args.project_id ? String(args.project_id) : undefined,
-              debug: true,
-              rerank: args.rerank !== false,
-              queryRoute: 'debug_tool',
-            },
-          }, { signal: ctx.deps.abortSignal?.signal });
-          return { name, args, result, error: false };
-        } catch (err: any) {
-          return { name, args, result: `memory_debug_search failed: ${String(err?.message || err)}`, error: true };
         }
       }
 

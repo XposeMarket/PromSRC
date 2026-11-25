@@ -3,7 +3,8 @@
  * Run after `npm run build:backend`:
  *   node scripts/test-desktop-registry-parity.mjs
  *
- * The model sees exactly six desktop_* wrappers. Every granular handler they
+ * The model sees exactly five desktop_* wrappers (desktop_macro was retired
+ * from the model surface in 2026-11; its granular handlers stay internal). Every granular handler they
  * route to must exist, have a dispatch case in the shared tool executor, and
  * stay schema-hidden in tool-builder.
  */
@@ -20,7 +21,6 @@ const EXPECTED_WRAPPERS = new Set([
   'desktop_apps',
   'desktop_window',
   'desktop_input',
-  'desktop_macro',
   'desktop_background',
 ]);
 
@@ -44,7 +44,7 @@ for (const name of EXPECTED_WRAPPERS) {
 for (const name of modelNames) {
   if (!EXPECTED_WRAPPERS.has(name)) fail(`unexpected model-facing desktop tool ${name}`);
 }
-if (modelNames.size === EXPECTED_WRAPPERS.size && !failed) pass('main gateway exposes exactly six desktop wrappers');
+if (modelNames.size === EXPECTED_WRAPPERS.size && !failed) pass('main gateway exposes exactly five desktop wrappers');
 
 const dispatchNames = new Set(
   [...execSrc.matchAll(/case '(desktop_[a-z0-9_]+)':/g)].map((match) => match[1]),

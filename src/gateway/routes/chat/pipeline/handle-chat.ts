@@ -859,7 +859,7 @@ export async function handleChatUntraced(
     'read_file', 'read_files_batch', 'create_file', 'replace_lines', 'insert_after', 'delete_lines', 'find_replace', 'apply_patchset',
     'list_files', 'list_directory', 'mkdir', 'file_stats', 'validate_file', 'grep_file', 'grep_files', 'search_files',
     'write_note',
-    'memory', 'memory_search', 'memory_read_record', 'memory_search_project', 'memory_search_timeline', 'memory_get_related', 'memory_graph_snapshot',
+    'memory', 'memory_search', 'memory_read_record',
     'task_control',
     'declare_plan', 'complete_plan_step', 'step_complete',
     'request_tool_category',
@@ -1581,7 +1581,7 @@ export async function handleChatUntraced(
   const READ_ONLY_PROGRESS_TOOLS = new Set([
     'list_files', 'list_directory', 'read_file', 'read_files_batch', 'read_dev_sources', 'web_search', 'web_fetch',
     'browser_snapshot', 'browser_get_page_text', 'browser_get_focused_item',
-    'memory', 'memory_browse', 'memory_read', 'memory_search', 'memory_read_record', 'memory_search_project', 'memory_search_timeline', 'memory_get_related', 'memory_graph_snapshot',
+    'memory', 'memory_read', 'memory_search', 'memory_read_record',
     'skill_list', 'skill_read',
   ]);
 
@@ -6087,18 +6087,6 @@ Do not produce prose. Use the canonical thread tool now.` });
           modelRef,
           source: 'agent_model_defaults.main_chat',
         });
-      }
-      if ((toolName === 'apply_agent_model_template' || toolName === 'select_agent_model_template') && !toolResult.error) {
-        const modelRef = String((getConfig().getConfig() as any)?.agent_model_defaults?.main_chat || '').trim();
-        if (modelRef) {
-          const slashIdx = modelRef.indexOf('/');
-          sendSSE('main_model_changed', {
-            providerId: slashIdx > 0 ? modelRef.slice(0, slashIdx) : '',
-            model: slashIdx > 0 ? modelRef.slice(slashIdx + 1) : modelRef,
-            modelRef,
-            source: 'agent_model_default_template',
-          });
-        }
       }
 
       // Only on success, only for file-mutation tools, not during background tasks.

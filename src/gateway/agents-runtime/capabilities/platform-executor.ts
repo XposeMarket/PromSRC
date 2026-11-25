@@ -7,7 +7,6 @@ import type { CapabilityExecutionContext, CapabilityExecutor } from './types';
 import type { ToolResult } from '../../tool-builder';
 import { resolveHookConfig } from '../../comms/webhook-handler';
 import { getConfig } from '../../../config/config';
-import { listMcpPresets, buildMcpServerConfigFromPreset } from '../../../extensions/mcp-preset-service';
 import * as secureAccessRuntime from '../../../security/secure-access-runtime';
 import { waitForSecureAccess } from '../../../security/secure-access-waits';
 
@@ -18,7 +17,6 @@ const PLATFORM_TOOL_NAMES = new Set([
   'secure_access',
   'connector_list',
   'webhook_manage',
-  'integration_quick_setup',
   'create_composite',
   'get_composite',
   'edit_composite',
@@ -515,25 +513,6 @@ export const platformCapabilityExecutor: CapabilityExecutor = {
         };
       }
       return { name, args, result: `Unknown webhook_manage action: ${action}`, error: true };
-    }
-
-    if (name === 'integration_quick_setup') {
-      ensurePrometheusExtensionRuntimeLoaded();
-      const action = String(args.action || 'list_presets').trim().toLowerCase();
-      if (action === 'list_presets') return { name, args, result: JSON.stringify({ presets: listMcpPresets() }, null, 2), error: false };
-      if (action !== 'setup') return { name, args, result: `Unknown integration_quick_setup action: ${action}`, error: true };
-      const preset = String(args.preset || '').trim();
-      if (!preset) return { name, args, result: 'setup requires preset', error: true };
-      const credentials: Record<string, string> = {};
-      for (const [key, value] of Object.entries(args || {})) if (typeof value === 'string') credentials[key] = value;
-      if (args.github_token) credentials.GITHUB_PERSONAL_ACCESS_TOKEN = String(args.github_token);
-      if (args.brave_api_key) credentials.BRAVE_API_KEY = String(args.brave_api_key);
-      const built = buildMcpServerConfigFromPreset(preset, credentials);
-      const cfg = { ...built, id: String(args.id || built.id), name: String(args.name || preset), enabled: args.enabled !== false } as any;
-      getMCPManager().upsertConfig(cfg);
-      if (args.connect === false) return { name, args, result: `Saved MCP preset "${preset}" as "${cfg.id}".`, error: false };
-      const connected = await getMCPManager().connect(cfg.id);
-      return { name, args, result: connected.success ? `Saved and connected "${cfg.id}" (${(connected.tools || []).length} tools).` : `Saved "${cfg.id}", but connection failed: ${connected.error}`, error: !connected.success };
     }
 
     if (name === 'connector_list') {

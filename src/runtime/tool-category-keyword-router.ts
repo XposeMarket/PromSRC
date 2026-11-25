@@ -34,7 +34,6 @@ export type KeywordRoutingCategory =
   | 'skills'
   | 'model_management'
   | 'business'
-  | 'social_intelligence'
   | 'prometheus_source_read'
   | 'prometheus_source_write';
 
@@ -179,7 +178,7 @@ export function detectKeywordToolCategories(input: string): RoutingSet {
   const browserAction = /\b(?:open|navigate|go to|click|fill|type|press|scroll|browse|login|log in|sign in|submit|post|publish|inspect|extract|scrape|download)\b/.test(text);
   if ((browserTool || browserTarget && browserAction) && !meaningQuestion) add(categories, 'browser_automation');
 
-  const desktopTool = /\b(?:desktop_screen|desktop_apps|desktop_window|desktop_input|desktop_macro|desktop_background)\b/.test(text);
+  const desktopTool = /\b(?:desktop_screen|desktop_apps|desktop_window|desktop_input|desktop_background)\b/.test(text);
   const desktopTarget = /\b(?:desktop|native app|installed app|active window|screen|clipboard|monitor)\b/.test(text)
     || /\b(?:window)\b/.test(text) && /\b(?:app|focus|click|type|close|launch|screenshot|control|inspect)\b/.test(text);
   const desktopAction = /\b(?:screenshot|capture|focus|click|type|press|drag|launch|open|close|control|inspect|list|clipboard|wait)\b/.test(text);
@@ -235,8 +234,6 @@ export function detectKeywordToolCategories(input: string): RoutingSet {
     && !meaningQuestion) add(categories, 'skills');
   if (/\b(?:business entity|client record|contact record|vendor record|project record|crm record|entity file|business context)\b/.test(text)
     && action && !meaningQuestion) add(categories, 'business');
-  if (/\b(?:social profile|social intelligence|engagement analysis|growth trajectory|social account)\b/.test(text)
-    && action && !meaningQuestion) add(categories, 'social_intelligence');
 
   // Web search is core, but retaining this label lets prompt context and
   // telemetry distinguish research from browser UI work without activating a

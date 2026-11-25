@@ -133,7 +133,6 @@ import '../tasks/spawn-tool-categories-arg';
 import './background-work-dir';
 import '../site-shortcuts';
 import '../../tools/deploy-analysis-team.js';
-import '../../tools/social-scraper.js';
 import { type ToolResult, type TaskControlResponse } from '../tool-builder';
 import { addCreativeReferences, getCanvasProjectRoot, getCreativeReferences, noteToolCategoryUse } from '../session';
 import { classifyToolFromManifest } from '../../runtime/tool-category-manifest';
@@ -1117,7 +1116,7 @@ export function getStandaloneSubagentForChat(agentId: string): { agent?: any; er
   }
   const team = listManagedTeams().find((t: any) => Array.isArray(t.subagentIds) && t.subagentIds.includes(cleanAgentId));
   if (team) {
-    return { error: `Agent "${cleanAgentId}" belongs to team "${team.name}" (${team.id}). Use agent_message_send (or agent_chat_ops action "send") with target_type="team_member", team_id="${team.id}" and request_turn=true, or team dispatch.` };
+    return { error: `Agent "${cleanAgentId}" belongs to team "${team.name}" (${team.id}). Use agent_chat_ops action "send_mailbox" with target_type="team_member", team_id="${team.id}" and request_turn=true, or team dispatch.` };
   }
   return { agent };
 }
@@ -3482,7 +3481,6 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
         case 'read_entity':
         case 'write_entity':
         case 'append_entity_event':
-        case 'social_intel':
         return await handleMiscTool({ ...workspaceHelpers, name, args, workspacePath, deps, sessionId, __dirname });
 
       case 'web_search':
@@ -3678,21 +3676,12 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
       case 'desktop_send_to_telegram':
       case 'desktop_task':
         return await handleBrowserDesktopTool({ name, args, workspacePath, deps, sessionId, broadcastBrowserStatus, maybeBroadcastBrowserStatus });
-      case 'memory_browse':
-        case 'memory_write':
+      case 'memory_write':
         case 'memory_read':
         case 'memory_search':
         case 'memory_read_record':
-        case 'memory_search_project':
-        case 'memory_search_timeline':
-        case 'memory_get_related':
-        case 'memory_graph_snapshot':
-        case 'memory_index_refresh':
         case 'write_note':
         return await handleMemoryTool({ ...workspaceHelpers, name, args, workspacePath, deps, sessionId, __dirname });
-
-      case 'save_site_shortcut':
-        return await handleMiscTool({ ...workspaceHelpers, name, args, workspacePath, deps, sessionId, __dirname });
 
       case 'architect_workflow':
       case 'verify_workflow_credentials':

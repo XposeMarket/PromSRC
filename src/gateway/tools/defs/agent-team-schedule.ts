@@ -64,12 +64,12 @@ export function getAgentTeamScheduleTools(): any[] {
         name: 'agent_chat_ops',
         description:
           'Unified standalone-agent communication wrapper. Prefer action="chat" for persistent conversation, "delegate" to create exactly one formal background task, "steer" to guide an existing task, and "send_mailbox" to deliver without starting work. ' +
-          'Legacy talk/message/send actions remain accepted. A delegate assignment must describe the work itself; the tool already creates the task.',
+          'A delegate assignment must describe the work itself; the tool already creates the task.',
         parameters: {
           type: 'object',
           required: ['action'],
           properties: {
-            action: { type: 'string', enum: ['chat', 'delegate', 'steer', 'send_mailbox', 'talk', 'message', 'send', 'turn_request', 'reply_wait', 'thread_watch'] },
+            action: { type: 'string', enum: ['chat', 'delegate', 'steer', 'send_mailbox'] },
             agent_id: { type: 'string' },
             subagent_id: { type: 'string' },
             assignment: { type: 'string', description: 'For delegate: direct executable work. Do not say create/start/spawn a task; this call already creates it.' },
@@ -83,8 +83,6 @@ export function getAgentTeamScheduleTools(): any[] {
             background: { type: 'boolean' },
             user_label: { type: 'string' },
             force_new_task: { type: 'boolean', description: 'For delegate only: true only when the user explicitly requested separate parallel work.' },
-            thread_id: { type: 'string' },
-            request_id: { type: 'string' },
             timeout_ms: { type: 'number' },
           },
         },
@@ -99,7 +97,7 @@ export function getAgentTeamScheduleTools(): any[] {
           type: 'object',
           required: ['action'],
           properties: {
-            action: { type: 'string', enum: ['manage', 'delete', 'manage_goal', 'manage_context_ref', 'update_goal', 'reply', 'post_chat', 'message_main', 'dispatch', 'dispatch_team_agent', 'request_member_turn', 'get_agent_result', 'escalation'] },
+            action: { type: 'string', enum: ['manage', 'manage_goal', 'manage_context_ref', 'update_goal', 'reply', 'post_chat', 'message_main', 'dispatch', 'request_member_turn', 'get_agent_result', 'escalation'] },
             team_action: { type: 'string', description: 'Sub-action for action="manage", e.g. list/create/start/dispatch/pause/resume/delete.' },
             team_id: { type: 'string' },
             teamId: { type: 'string' },
@@ -133,7 +131,7 @@ export function getAgentTeamScheduleTools(): any[] {
             timeout_ms: { type: 'number', description: 'get_agent_result: max wait when block=true.' },
             confirm: { type: 'boolean' },
             delete_agents: { type: 'boolean' },
-            background: { type: 'boolean', description: 'dispatch_team_agent only. Default: true when called from main chat (returns task_id immediately; poll with get_agent_result), false inside the team manager. Pass false to block until the member finishes.' },
+            background: { type: 'boolean', description: 'dispatch only. Default: true when called from main chat (returns task_id immediately; poll with get_agent_result), false inside the team manager. Pass false to block until the member finishes.' },
             escalation_action: { type: 'string', enum: ['list', 'dismiss', 'escalate_to_user', 'answered'], description: 'For action="escalation". list (team_id optional: all teams when omitted), dismiss, escalate_to_user, or answered. Needs message_id for the last three.' },
             message_id: { type: 'string', description: 'For action="escalation": the escalation id from list.' },
             note: { type: 'string', description: 'For action="escalation" with dismiss, escalate_to_user, or answered: optional reason, posted to the team chat as Main Agent when the escalation changes. Ignored for list.' },
@@ -1797,43 +1795,6 @@ export function getAgentTeamScheduleTools(): any[] {
             agent_id: { type: 'string', description: 'The ID of the agent to dispatch to (from agent_list)' },
             message: { type: 'string', description: 'The task/message to send to the agent. Be specific and self-contained.' },
             context: { type: 'string', description: 'Optional additional context for the agent' },
-          },
-        },
-      },
-    },
-    // ── run_task_now: one-off background task with silent verification ─────────
-    {
-      type: 'function',
-      function: {
-        name: 'run_task_now',
-        legacy_description:
-          'Run a task immediately in the background — silently, with no logs or tool calls shown. ' +
-          'Continue executing the task here in this same conversation while progress mirrors into the Tasks panel. ' +
-          'Tool calls, plan steps, errors, and final output stay visible live in chat and are also persisted on the task card. ' +
-          'Use this when the user wants the work tracked as a task/run while still seeing the live chat stream. ' +
-          'This does not launch a silent detached background runner; for short ephemeral parallel work, use background_spawn instead.',
-        description:
-          'Start a persisted task card for the current live chat turn. Continue executing the task here in this same conversation; tool calls, plan steps, errors, and final output are mirrored into the Tasks panel. This does not launch a silent detached background runner.',
-        parameters: {
-          type: 'object',
-          required: ['title', 'prompt'],
-          properties: {
-            title: {
-              type: 'string',
-              description: 'Short display name shown in the Tasks panel (e.g. "Research competitor pricing")',
-            },
-            prompt: {
-              type: 'string',
-              description: 'Fully self-contained instructions for the task agent. Include all context, file paths, and specific steps — the agent has no session history.',
-            },
-            subagent_id: {
-              type: 'string',
-              description: 'Optional: ID of a configured subagent to inherit system instructions from. If provided, the subagent\'s AGENT.md is injected as context for the task.',
-            },
-            timeout_ms: {
-              type: 'number',
-              description: 'Optional max milliseconds for the task phase (default 300000 = 5 min). Verification runs separately after task completes.',
-            },
           },
         },
       },

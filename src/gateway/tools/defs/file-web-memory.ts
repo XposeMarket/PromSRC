@@ -117,13 +117,13 @@ export function getFileWebMemoryTools(): any[] {
       type: 'function',
       function: {
         name: 'workspace_run',
-        description: 'Unified terminal command/process/check wrapper. Use run for bounded commands, start for supervised processes, status/log/wait/kill/submit for runIds, and test/lint/format/typecheck for project checks. Default permissions ask before outside-workspace paths; Lite permissions allow full-computer terminal access except hard-blocked dangerous commands.',
+        description: 'Unified terminal command/process wrapper. Use run for bounded commands (including tests, linters, formatters and typechecks), start for supervised processes, and status/log/wait/kill/submit for runIds. Default permissions ask before outside-workspace paths; Lite permissions allow full-computer terminal access except hard-blocked dangerous commands.',
         parameters: {
           type: 'object',
           required: ['action'],
           properties: {
-            action: { type: 'string', enum: ['run', 'start', 'status', 'log', 'wait', 'kill', 'submit', 'test', 'lint', 'format', 'typecheck', 'telemetry', 'benchmark_summary'], description: 'Command/process/check/telemetry action.' },
-            command: { type: 'string', description: 'Raw shell command or explicit check. Simple Windows batches report per-step exits. Do not combine with program/argv or search.' },
+            action: { type: 'string', enum: ['run', 'start', 'status', 'log', 'wait', 'kill', 'submit'], description: 'Command/process action.' },
+            command: { type: 'string', description: 'Raw shell command. Simple Windows batches report per-step exits. Do not combine with program/argv or search.' },
             program: { type: 'string', enum: ['git','node','rg'], description: 'Windows captured run: native executable with literal argv. Prefer for paths, spaces, nested quotes or inline code.' },
             argv: { type:'array', items:{type:'string'}, description:'Exact arguments to program; no shell escaping.' },
             search: {type:'object', required:['text'], additionalProperties:false, properties:{ text:{type:'string'}, directory:{type:'string'}, glob:{type:'string'}, regex:{type:'boolean'} }, description:'Windows captured run: search with rg. Literal text by default. Directory and filename glob are separate.' },
@@ -133,7 +133,7 @@ export function getFileWebMemoryTools(): any[] {
             shell: { type: 'string', enum: ['auto', 'powershell', 'cmd', 'bash'] },
             elevated: { type: 'boolean', description: 'Windows only. Run this bounded command through the administrator broker. Always requires a fresh one-shot user approval; Lite mode, goals, and saved permissions cannot bypass it. Broker installation may require UAC once; later commands do not. Not supported with action=start.' },
             pty: { type: 'boolean' },
-            timeout_ms: { type: 'number', description: 'Timeout in milliseconds for run/check; for wait: default 10000, range 1000–300000, returns early on completion. Prefer one longer wait over repeated polling. Wait timeout/cancellation ends observation, not the process; use kill to terminate it.' },
+            timeout_ms: { type: 'number', description: 'Timeout in milliseconds for run; for wait: default 10000, range 1000–300000, returns early on completion. Prefer one longer wait over repeated polling. Wait timeout/cancellation ends observation, not the process; use kill to terminate it.' },
             timeoutMs: { type: 'number', description: 'Legacy camelCase timeout alias.' },
             noOutputTimeoutMs: { type: 'number' },
             title: { type: 'string' },
@@ -187,12 +187,12 @@ export function getFileWebMemoryTools(): any[] {
       type: 'function',
       function: {
         name: 'workspace_safety',
-        description: 'Unified recovery and risk-check wrapper for snapshots/restores/reverts, secret and large-file scans, operation plans, and patch previews.',
+        description: 'Unified recovery and risk-check wrapper for snapshots/restores/reverts and secret and large-file scans. Patch previews live on workspace_edit(action:"preview_patch").',
         parameters: {
           type: 'object',
           required: ['action'],
           properties: {
-            action: { type: 'string', enum: ['snapshot', 'restore', 'revert_last', 'scan_secrets', 'scan_large_files', 'operation_plan', 'preview_patch'], description: 'Safety action.' },
+            action: { type: 'string', enum: ['snapshot', 'restore', 'revert_last', 'scan_secrets', 'scan_large_files'], description: 'Safety action.' },
             path: { type: 'string' },
             snapshot_id: { type: 'string' },
             confirm: { type: 'boolean' },
@@ -202,8 +202,6 @@ export function getFileWebMemoryTools(): any[] {
             max_bytes: { type: 'number' },
             min_bytes: { type: 'number' },
             max_results: { type: 'number' },
-            operations: { type: 'array', items: { type: 'object' } },
-            patch: { type: 'string' },
           },
         },
       },
@@ -2263,20 +2261,6 @@ export function getFileWebMemoryTools(): any[] {
     {
       type: 'function',
       function: {
-        name: 'memory_browse',
-        description: 'List the category sections currently in USER.md, SOUL.md, or MEMORY.md. Call this before memory(action="write") to find the right category or decide to create a new one.',
-        parameters: {
-          type: 'object',
-          required: ['file'],
-          properties: {
-            file: { type: 'string', description: '"user" for USER.md, "soul" for SOUL.md, or "memory" for MEMORY.md' },
-          },
-        },
-      },
-    },
-    {
-      type: 'function',
-      function: {
         name: 'memory_read_record',
         description: 'Read a full memory record by record_id from memory_search. Resolves both operational records (opr_* IDs — canonical decisions/preferences/proposals/tasks/projects) and raw evidence records. Use this to get full body, sourceRefs, entities, and outcome fields.',
         parameters: {
@@ -2284,128 +2268,6 @@ export function getFileWebMemoryTools(): any[] {
           required: ['record_id'],
           properties: {
             record_id: { type: 'string', description: 'Record id from memory_search hit.recordId.' },
-          },
-        },
-      },
-    },
-    {
-      type: 'function',
-      function: {
-        name: 'memory_search_project',
-        description: 'Search long-term memory constrained to a project id.',
-        parameters: {
-          type: 'object',
-          required: ['project_id', 'query'],
-          properties: {
-            project_id: { type: 'string', description: 'Project id to search within.' },
-            query: { type: 'string', description: 'Project memory query.' },
-            limit: { type: 'number', description: 'Maximum hits to return (default 10, max 50).' },
-          },
-        },
-      },
-    },
-    {
-      type: 'function',
-      function: {
-        name: 'memory_search_timeline',
-        description: 'Search long-term memory and return results in chronological order.',
-        parameters: {
-          type: 'object',
-          required: ['query'],
-          properties: {
-            query: { type: 'string', description: 'Timeline query.' },
-            date_from: { type: 'string', description: 'Optional lower date bound, YYYY-MM-DD or ISO timestamp.' },
-            date_to: { type: 'string', description: 'Optional upper date bound, YYYY-MM-DD or ISO timestamp.' },
-            limit: { type: 'number', description: 'Maximum hits to return (default 20, max 50).' },
-          },
-        },
-      },
-    },
-    {
-      type: 'function',
-      function: {
-        name: 'memory_get_related',
-        description: 'Expand from one memory record to related records by project/day/source and lexical similarity.',
-        parameters: {
-          type: 'object',
-          required: ['record_id'],
-          properties: {
-            record_id: { type: 'string', description: 'Record id from memory_search hit.recordId.' },
-            limit: { type: 'number', description: 'Maximum related hits (default 8, max 50).' },
-          },
-        },
-      },
-    },
-    {
-      type: 'function',
-      function: {
-        name: 'memory_graph_snapshot',
-        description: 'Return graph-ready memory nodes/edges projected from the indexed memory relation layer.',
-        parameters: {
-          type: 'object',
-          required: [],
-          properties: {},
-        },
-      },
-    },
-    {
-      type: 'function',
-      function: {
-        name: 'memory_index_refresh',
-        description: 'Force-refresh the memory index from workspace/audit immediately. Use for diagnostics or after major archive changes.',
-        parameters: {
-          type: 'object',
-          required: [],
-          properties: {},
-        },
-      },
-    },
-    {
-      type: 'function',
-      function: {
-        name: 'memory_provider_status',
-        description: 'Show configured memory backends and their capabilities/status: sqlite-local, Obsidian adapter slot, external-vector adapter slot, and cloud-memory adapter slot.',
-        parameters: { type: 'object', required: [], properties: {} },
-      },
-    },
-    {
-      type: 'function',
-      function: {
-        name: 'memory_embedding_status',
-        description: 'Show memory embedding provider preference, active provider, and availability for OpenAI, Ollama, LM Studio, Voyage, Jina, and hash fallback.',
-        parameters: { type: 'object', required: [], properties: {} },
-      },
-    },
-    {
-      type: 'function',
-      function: {
-        name: 'memory_embedding_backfill',
-        description: 'Backfill stored memory embeddings with a real provider when available. Keeps hash vectors as fallback. Use after configuring OpenAI/Ollama/LM Studio/Voyage/Jina embedding credentials.',
-        parameters: {
-          type: 'object',
-          required: [],
-          properties: {
-            provider: { type: 'string', description: 'Optional provider override: openai, ollama, lmstudio, voyage, jina, hash.' },
-            limit: { type: 'number', description: 'Maximum records to backfill this run. Default 500.' },
-            force: { type: 'boolean', description: 'Recompute even if a non-hash embedding already exists.' },
-          },
-        },
-      },
-    },
-    {
-      type: 'function',
-      function: {
-        name: 'memory_debug_search',
-        description: 'Run memory search with first-class diagnostics explaining why each hit appeared: FTS score, vector score, authority, recency, temporal decay, durability, status, source, and MMR score.',
-        parameters: {
-          type: 'object',
-          required: ['query'],
-          properties: {
-            query: { type: 'string', description: 'Memory search query.' },
-            mode: { type: 'string', description: 'quick, deep, project, or timeline.' },
-            limit: { type: 'number', description: 'Maximum hits. Default 12.' },
-            project_id: { type: 'string', description: 'Optional project filter.' },
-            rerank: { type: 'boolean', description: 'Set false to disable MMR reranking.' },
           },
         },
       },
@@ -2504,24 +2366,6 @@ export function getFileWebMemoryTools(): any[] {
             status: { type: 'string', enum: ['open', 'done', 'info'], description: 'open = unfinished work/bug/backlog item (stays in view and carries into later days until resolved); done = completed work; info = context only (default).' },
             resolves: { type: 'array', items: { type: 'string' }, description: 'Note ids (e.g. "n_abc123", shown as #n_... in TODAY_NOTES) this note completes. Those open items are marked done.' },
             thread: { type: 'string', description: 'Stable task key, e.g. "last-ward-combat" or "pr-549". Use the same key for every update on one task: the new note supersedes earlier open notes on that thread, so only the current state stays open.' },
-          },
-        },
-      },
-    },
-    {
-      type: 'function',
-      function: {
-        name: 'save_site_shortcut',
-        description: 'Save a keyboard shortcut for a website so Prometheus remembers it for all future sessions. Call this when you discover that a keyboard shortcut works on a site. Example: after pressing "n" successfully opens the X.com composer, save it.',
-        parameters: {
-          type: 'object', required: ['hostname', 'key', 'action'],
-          properties: {
-            hostname: { type: 'string', description: 'Domain name only, e.g. "x.com", "github.com"' },
-            key: { type: 'string', description: 'The key or combination, e.g. "n", "Control+p", "g i"' },
-            action: { type: 'string', description: 'What the shortcut does, e.g. "Open tweet composer modal"' },
-            context: { type: 'string', description: 'Optional: which page this applies on, e.g. "any page", "feed only"' },
-            preferred_for_compose: { type: 'boolean', description: 'True if this shortcut is the best way to start composing/creating content' },
-            notes: { type: 'string', description: 'Optional notes about how to use this shortcut' },
           },
         },
       },

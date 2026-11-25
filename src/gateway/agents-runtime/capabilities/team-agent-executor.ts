@@ -125,12 +125,6 @@ const TEAM_AGENT_TOOL_NAMES = new Set([
   'set_current_model',
   'set_agent_model',
   'get_agent_models',
-  'list_agent_model_templates',
-  'save_agent_model_template',
-  'update_agent_model_template',
-  'apply_agent_model_template',
-  'select_agent_model_template',
-  'delete_agent_model_template',
 ]);
 
 const VALID_AGENT_MODEL_TYPES = [
@@ -1832,73 +1826,6 @@ export const teamAgentCapabilityExecutor: CapabilityExecutor = {
           return { name, args, result: JSON.stringify(result, null, 2), error: false };
         } catch (err: any) {
           return { name, args, result: `get_agent_models error: ${err.message}`, error: true };
-        }
-      }
-
-      case 'list_agent_model_templates':
-      case 'save_agent_model_template':
-      case 'update_agent_model_template':
-      case 'apply_agent_model_template':
-      case 'select_agent_model_template':
-      case 'delete_agent_model_template': {
-        const { host, port } = resolveGatewayAddress();
-        const baseUrl = `http://${host}:${port}/api/settings/agent-model-default-templates`;
-
-        try {
-          if (name === 'list_agent_model_templates') {
-            const resp = await fetch(baseUrl);
-            const data = await resp.json() as any;
-            if (!data?.success) return { name, args, result: `ERROR: ${data?.error || 'Failed to list templates'}`, error: true };
-            return { name, args, result: JSON.stringify(data, null, 2), error: false };
-          }
-
-          if (name === 'save_agent_model_template') {
-            const templateName = String(args?.name || '').trim();
-            if (!templateName) return { name, args, result: 'ERROR: name is required.', error: true };
-            const body: any = { name: templateName };
-            if (args?.id) body.id = String(args.id).trim();
-            if (args?.defaults && typeof args.defaults === 'object') body.defaults = args.defaults;
-            const resp = await fetch(baseUrl, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(body),
-            });
-            const data = await resp.json() as any;
-            if (!data?.success) return { name, args, result: `ERROR: ${data?.error || 'Failed to save template'}`, error: true };
-            return { name, args, result: `Saved agent model template "${data.template?.name || templateName}" (${data.template?.id || 'new'}).`, error: false };
-          }
-
-          const id = String(args?.id || args?.name || '').trim();
-          if (!id) return { name, args, result: 'ERROR: id or name is required.', error: true };
-
-          if (name === 'update_agent_model_template') {
-            const body: any = {};
-            if (typeof args?.name === 'string' && args.name.trim()) body.name = args.name.trim();
-            if (args?.defaults && typeof args.defaults === 'object') body.defaults = args.defaults;
-            if (!Object.keys(body).length) return { name, args, result: 'ERROR: provide name and/or defaults to update.', error: true };
-            const resp = await fetch(`${baseUrl}/${encodeURIComponent(id)}`, {
-              method: 'PATCH',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(body),
-            });
-            const data = await resp.json() as any;
-            if (!data?.success) return { name, args, result: `ERROR: ${data?.error || 'Failed to update template'}`, error: true };
-            return { name, args, result: `Updated agent model template "${data.template?.name || id}" (${data.template?.id || id}).`, error: false };
-          }
-
-          if (name === 'apply_agent_model_template' || name === 'select_agent_model_template') {
-            const resp = await fetch(`${baseUrl}/${encodeURIComponent(id)}/apply`, { method: 'POST' });
-            const data = await resp.json() as any;
-            if (!data?.success) return { name, args, result: `ERROR: ${data?.error || 'Failed to apply template'}`, error: true };
-            return { name, args, result: `Selected and applied agent model template "${data.template?.name || id}". Current defaults: ${JSON.stringify(data.defaults || {}, null, 2)}`, error: false };
-          }
-
-          const resp = await fetch(`${baseUrl}/${encodeURIComponent(id)}`, { method: 'DELETE' });
-          const data = await resp.json() as any;
-          if (!data?.success) return { name, args, result: `ERROR: ${data?.error || 'Failed to delete template'}`, error: true };
-          return { name, args, result: `Deleted agent model template "${data.removed?.name || id}".`, error: false };
-        } catch (err: any) {
-          return { name, args, result: `${name} error: ${err.message}`, error: true };
         }
       }
 

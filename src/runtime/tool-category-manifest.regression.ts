@@ -53,7 +53,7 @@ function testRepresentativeClassification(): void {
     ['agent_ops', 'agents_and_teams'],
     ['read_source', 'prometheus_source_read'],
     ['write_source', 'prometheus_source_write'],
-    ['memory_graph_snapshot', 'advanced_memory'],
+    ['memory_read_record', 'advanced_memory'],
     ['download_media', 'media_assets'],
     ['media_generate', 'media_generation'],
     ['schedule_job_history', 'automation_scheduling'],

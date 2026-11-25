@@ -3712,7 +3712,6 @@ function prettify(name: string): string {
     memory:             'Memory operation',
     memory_read:        'Reading memory',
     memory_write:       'Writing memory',
-    memory_browse:      'Browsing memory',
     memory_search:      'Searching memory',
     memory_read_record: 'Reading memory',
     // Shell / commands

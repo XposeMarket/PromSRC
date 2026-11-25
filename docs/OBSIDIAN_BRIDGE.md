@@ -66,4 +66,4 @@ Obsidian is exposed as an optional connector, so these tools appear only when th
 - `connector_obsidian_sync`
 - `connector_obsidian_writeback`
 
-General memory retrieval still uses `memory_search`, `memory_read_record`, `memory_search_timeline`, and `memory_get_related`.
+General memory retrieval still uses `memory(action:"search")` (with `mode:"project"` or `mode:"timeline"` for scoped retrieval), `memory(action:"related")`, and `memory_read_record`.
