@@ -28,8 +28,9 @@ This preserves the existing supervised-process model while making “alive” an
 
 ## Automatic benchmark ledger
 
-`workspace_run(action="telemetry")` or `benchmark_summary` aggregates the
-session’s automatically persisted tool observations. It returns wall-clock and
+The session’s tool observations are persisted automatically (the
+`workspace_run` telemetry and benchmark_summary actions were retired from the
+model surface in 2026-11). The ledger aggregates them. It returns wall-clock and
 cumulative execution time, calls, successes, failures, inferred retries,
 argument/result/context tokens, estimated cost, p50/p95 latency, per-tool and
 per-action buckets, largest payloads, and error taxonomy.

@@ -9,7 +9,7 @@ const { buildAuthMetadataCandidates } = await import('../dist/gateway/mcp-oauth.
 const { readJsonRpcResponse } = await import('../dist/gateway/mcp-manager.js');
 
 assert(platformCapabilityExecutor.canHandle('webhook_manage'), 'webhook_manage must be registered');
-assert(platformCapabilityExecutor.canHandle('integration_quick_setup'), 'integration_quick_setup must be registered');
+assert(!platformCapabilityExecutor.canHandle('integration_quick_setup'), 'integration_quick_setup was retired; MCP presets live in connection_ops and the extensions routes');
 assert(platformCapabilityExecutor.canHandle('mcp_server_manage'), 'mcp_server_manage must remain registered');
 assert(platformCapabilityExecutor.canHandle('connection_ops'), 'connection_ops must be registered');
 
@@ -79,10 +79,6 @@ assert(!('token' in webhookStatus), 'webhook get must never expose the token');
 assert(Array.isArray(webhookStatus.providers), 'webhook get must report redacted provider readiness');
 assert(!JSON.stringify(webhookStatus).includes('secret"'), 'webhook get must never expose provider secret values');
 
-const presets = await platformCapabilityExecutor.execute({
-  name: 'integration_quick_setup', args: { action: 'list_presets' }, workspacePath: root, sessionId: 'integration-contract', deps: {},
-});
-assert.equal(presets.error, false);
-assert(Array.isArray(JSON.parse(presets.result).presets));
+assert(!defs.some((def) => def.function?.name === 'integration_quick_setup'), 'integration_quick_setup schema must stay retired');
 
-console.log('PASS: connector exposure, integration-admin registration, redaction, presets, and MCP OAuth schema contract');
+console.log('PASS: connector exposure, integration-admin registration, redaction, and MCP OAuth schema contract');

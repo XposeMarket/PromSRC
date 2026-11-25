@@ -1,16 +1,15 @@
 # Prometheus Desktop Automation Architecture
 
-Prometheus exposes six model-facing wrappers:
+Prometheus exposes five model-facing wrappers:
 
 - `desktop_screen`
 - `desktop_apps`
 - `desktop_window`
 - `desktop_input`
-- `desktop_macro`
 - `desktop_background`
 
 The granular `desktop_*` functions remain registered as compatibility/internal
-handlers. The main gateway and Reactor both present the same six wrappers; run
+handlers. The main gateway and Reactor both present the same five wrappers; run
 `npm run test:desktop` to detect surface or dispatch drift.
 
 ## Host window workflow
