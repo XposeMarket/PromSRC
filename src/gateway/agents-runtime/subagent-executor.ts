@@ -1115,7 +1115,7 @@ export function getStandaloneSubagentForChat(agentId: string): { agent?: any; er
   }
   const team = listManagedTeams().find((t: any) => Array.isArray(t.subagentIds) && t.subagentIds.includes(cleanAgentId));
   if (team) {
-    return { error: `Agent "${cleanAgentId}" belongs to team "${team.name}" (${team.id}). Use agent_message_send (or agent_chat_ops action "send") with target_type="team_member", team_id="${team.id}" and request_turn=true, or team dispatch.` };
+    return { error: `Agent "${cleanAgentId}" belongs to team "${team.name}" (${team.id}). Use agent_chat_ops action "send_mailbox" with target_type="team_member", team_id="${team.id}" and request_turn=true, or team dispatch.` };
   }
   return { agent };
 }
