@@ -23,7 +23,7 @@ import { presentProviderCallFailure, usageCutoffNotice } from '../../../chat/pro
 import { attemptModelDigest, buildDeterministicTurnDigest, describeTurnCutoffCause } from '../../../chat/degraded-turn-finish';
 import { fitToolDefinitionsToBudget } from '../../../tools/schema-compaction';
 import { currentTrace, recordSpan, runInTrace, withSpan } from '../../../observability/turn-trace';
-import { evaluateToolDispatch, resolveIdleRoundLimit, resolveToolSurfaceEnforcementMode, toolNameSetOf, type ToolDispatchDecision } from '../../../chat/tool-dispatch-policy';
+import { BACKGROUND_WORKER_WITHHELD_TOOL_NAMES, backgroundWorkerWithheldReason, evaluateToolDispatch, isBackgroundSpawnWorkerRun, resolveIdleRoundLimit, resolveToolSurfaceEnforcementMode, toolNameSetOf, type ToolDispatchDecision } from '../../../chat/tool-dispatch-policy';
 import { ToolPerformanceTracker } from '../../../chat/tool-performance-telemetry';
 import { formatToolCategoryProvisioningFailure, preserveActivatedToolCategoriesForTurnOverride, verifyToolCategorySurface } from '../../../tool-category-provisioning';
 import { normalizeManifestToolCategory } from '../../../../runtime/tool-category-manifest';
@@ -667,8 +667,14 @@ export async function handleChatUntraced(
   // Only the legacy recursive start_task guard remains.
   const isBackgroundOrSubagentMode = executionMode === 'background_task' || executionMode === 'proposal_execution' || executionMode === 'background_agent' || executionMode === 'cron' || executionMode === 'team_manager' || executionMode === 'team_subagent';
   const isProposalExecutionMode = executionMode === 'proposal_execution';
-  // Tools always stripped from background/subagent runs.
-  const alwaysStrip = new Set(isBackgroundOrSubagentMode ? ['start_task'] : []);
+  // Tools always stripped from background/subagent runs. Background workers
+  // (background_ops spawn) also lose tools that act on the user's live chat or
+  // start more workers; dispatch refuses them too (evaluateTurnToolDispatch).
+  const isBackgroundWorkerRun = isBackgroundSpawnWorkerRun(executionMode, sessionId);
+  const alwaysStrip = new Set<string>([
+    ...(isBackgroundOrSubagentMode ? ['start_task'] : []),
+    ...(isBackgroundWorkerRun ? BACKGROUND_WORKER_WITHHELD_TOOL_NAMES : []),
+  ]);
   const guaranteedAutonomousCoreTools = new Set<string>([
     ...(isBackgroundOrSubagentMode ? ['write_note'] : []),
   ]);
@@ -746,7 +752,7 @@ export async function handleChatUntraced(
           })
         : isTelegramSessionForTools || isBackgroundOrSubagentMode
           ? allBuiltTools.filter((t: any) => !alwaysStrip.has(String(t?.function?.name || '')) && String(t?.function?.name || '') !== 'start_task')
-          : allBuiltTools.filter((t: any) => !interactiveStrip.has(String(t?.function?.name || '')));
+          : allBuiltTools.filter((t: any) => !alwaysStrip.has(String(t?.function?.name || '')) && !interactiveStrip.has(String(t?.function?.name || '')));
   };
   let loopGateToolActive = false;
   const LOOP_CONTINUE_TOOL_DEF = {
@@ -1082,6 +1088,7 @@ export async function handleChatUntraced(
         return category && runtimeCategoryIds.has(String(category)) ? String(category) : null;
       },
       isCategoryActive: (category) => getActivatedToolCategories(sessionId).has(category),
+      withheldReason: isBackgroundWorkerRun ? backgroundWorkerWithheldReason : undefined,
     });
   };
   let midWorkflowCompactionsThisTurn = 0;

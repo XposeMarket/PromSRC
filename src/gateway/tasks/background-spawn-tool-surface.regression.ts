@@ -4,6 +4,13 @@ import path from 'node:path';
 import { buildTools } from '../tool-builder';
 import { normalizeBackgroundSpawnToolCategories, resolveBackgroundAgentModelRouting } from './task-runner';
 import { readChatRouterSource } from '../../testing/chat-router-source';
+import {
+  BACKGROUND_WORKER_WITHHELD_TOOL_NAMES,
+  backgroundWorkerWithheldReason,
+  evaluateToolDispatch,
+  isBackgroundSpawnWorkerRun,
+  toolNameSetOf,
+} from '../chat/tool-dispatch-policy';
 
 assert.deepEqual(resolveBackgroundAgentModelRouting({ providerId: 'openai_codex', model: 'sol', reasoningEffort: 'medium' }), {
   providerId: 'openai_codex', model: 'gpt-5.6-sol', reasoningEffort: 'medium', source: 'background_spawn.override',
@@ -115,5 +122,63 @@ assert.match(
   /browser|desktop|agent|workspace_edit|thread_ops|x_search_ops|connection_ops|get_agent_models/,
   'sanity: recon prompt must still contain the category trigger words this test guards against',
 );
+
+// 4: background workers lose tools that act on the user's live chat or start
+// more workers (observed: a small model spawned a nested "placeholder" agent it
+// could not cancel). Stripped from the surface AND refused at dispatch.
+const WITHHELD = ['set_current_model', 'switch_model', 'update_heartbeat', 'background_ops'];
+assert.deepEqual([...BACKGROUND_WORKER_WITHHELD_TOOL_NAMES].sort(), [...WITHHELD].sort());
+
+assert.equal(isBackgroundSpawnWorkerRun('background_task', 'background_bg_123'), true, 'background_ops spawn worker session');
+assert.equal(isBackgroundSpawnWorkerRun('background_agent', 'anything'), true);
+assert.equal(isBackgroundSpawnWorkerRun('interactive', 'main_chat'), false, 'main chat keeps the tools');
+assert.equal(isBackgroundSpawnWorkerRun('background_task', 'meta_coordinator_abc'), false, 'team coordinator keeps the tools');
+assert.equal(isBackgroundSpawnWorkerRun('background_task', 'webhook_abc'), false, 'webhook runs keep the tools');
+assert.equal(isBackgroundSpawnWorkerRun('team_subagent', 'team_x_agent_y'), false, 'team members keep the tools');
+assert.equal(isBackgroundSpawnWorkerRun('cron', 'cron_job_1'), false, 'scheduled jobs keep the tools');
+
+// Main chat surface (core + automation_scheduling for update_heartbeat) offers all four.
+const mainSurface = toolNameSetOf(buildTools(deps, new Set(['automation_scheduling'])));
+for (const name of WITHHELD) assert.equal(mainSurface.has(name), true, `main chat must offer ${name}`);
+// The worker strip removes exactly those; approval gates stay.
+const workerSurface = new Set([...mainSurface].filter((name) => !BACKGROUND_WORKER_WITHHELD_TOOL_NAMES.includes(name)));
+for (const name of WITHHELD) assert.equal(workerSurface.has(name), false, `worker must not see ${name}`);
+for (const name of ['ask_prometheus_questions', 'request_final_action_approval', 'write_note', 'request_tool_category']) {
+  assert.equal(workerSurface.has(name), mainSurface.has(name), `worker keeps ${name}`);
+}
+assert.equal(mainSurface.has('ask_prometheus_questions'), true);
+assert.equal(mainSurface.has('request_final_action_approval'), true);
+
+// handleChat wires the strip and the dispatch refusal to the worker predicate.
+assert.match(chatRouterSource, /const isBackgroundWorkerRun = isBackgroundSpawnWorkerRun\(executionMode, sessionId\);/);
+assert.match(chatRouterSource, /\.\.\.\(isBackgroundWorkerRun \? BACKGROUND_WORKER_WITHHELD_TOOL_NAMES : \[\]\)/);
+assert.match(chatRouterSource, /withheldReason: isBackgroundWorkerRun \? backgroundWorkerWithheldReason : undefined/);
+
+// Dispatch: a worker calling a stripped name is refused in every enforcement
+// mode, including the schema-hidden background_* aliases; other tools pass.
+const dispatch = (name: string, mode: 'enforce' | 'warn' | 'off', worker: boolean) => evaluateToolDispatch({
+  name,
+  rawArguments: '{}',
+  offered: worker ? workerSurface : mainSurface,
+  mode,
+  isKnownTool: () => true,
+  categoryOf: () => null,
+  isCategoryActive: () => true,
+  withheldReason: worker ? backgroundWorkerWithheldReason : undefined,
+});
+for (const mode of ['enforce', 'warn', 'off'] as const) {
+  for (const name of [...WITHHELD, 'background_spawn', 'background_follow_up']) {
+    const decision = dispatch(name, mode, true);
+    assert.equal(decision.ok, false, `worker dispatch of ${name} must be refused (${mode})`);
+    if (!decision.ok) {
+      assert.equal(decision.code, 'not_offered');
+      assert.match(decision.message, /not available to background workers/);
+    }
+  }
+}
+for (const name of ['bg_plan_declare', 'bg_plan_advance', 'ask_prometheus_questions', 'write_note']) {
+  assert.equal(dispatch(name, 'enforce', true).ok, true, `worker may still call ${name}`);
+}
+for (const name of WITHHELD) assert.equal(dispatch(name, 'enforce', false).ok, true, `main chat may call ${name}`);
 
 console.log('background-spawn-tool-surface regression: ok');

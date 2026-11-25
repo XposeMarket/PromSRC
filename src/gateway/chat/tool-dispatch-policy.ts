@@ -43,6 +43,47 @@ export interface ToolDispatchRequest {
   categoryOf(name: string): string | null;
   /** Whether that category is active for this run. */
   isCategoryActive(category: string): boolean;
+  /**
+   * Role restriction: returns a refusal message when this run may never call
+   * the tool. Checked before the enforcement mode, so warn/off cannot relax it.
+   */
+  withheldReason?(name: string): string | null;
+}
+
+/**
+ * Tools a background worker (background_ops spawn) does not receive: they act
+ * on the user's live chat (model choice, heartbeat) or start more workers.
+ * ask_prometheus_questions and request_final_action_approval stay available;
+ * they are the approval gates. bg_plan_declare/bg_plan_advance stay too.
+ */
+export const BACKGROUND_WORKER_WITHHELD_TOOL_NAMES: readonly string[] = [
+  'set_current_model',
+  'switch_model',
+  'update_heartbeat',
+  'background_ops',
+];
+
+// Schema-hidden legacy aliases of background_ops are still dispatchable by
+// name, so a worker is refused those as well.
+const BACKGROUND_WORKER_WITHHELD_DISPATCH = new Set<string>([
+  ...BACKGROUND_WORKER_WITHHELD_TOOL_NAMES,
+  'background_spawn', 'background_follow_up', 'background_steer', 'background_status',
+  'background_progress', 'background_wait', 'background_join',
+]);
+
+/**
+ * A run started by background_ops spawn. Workers run in `background_<id>`
+ * sessions (task-runner). executionMode 'background_task' alone is not used:
+ * team coordinators, webhooks and Telegram background runs share it.
+ */
+export function isBackgroundSpawnWorkerRun(executionMode: unknown, sessionId: unknown): boolean {
+  return executionMode === 'background_agent' || String(sessionId || '').startsWith('background_');
+}
+
+export function backgroundWorkerWithheldReason(name: string): string | null {
+  const tool = String(name || '').trim();
+  if (!BACKGROUND_WORKER_WITHHELD_DISPATCH.has(tool)) return null;
+  return `Tool not available to background workers: ${tool} was not run. A background worker cannot change the live model or the heartbeat, or start or manage other background agents. Finish the assignment with your other tools and say in your final reply if the main chat should do this.`;
 }
 
 /** Names whose arguments may legitimately arrive as a bare (non-JSON) string. */
@@ -126,6 +167,8 @@ function preview(rawArguments: unknown): string {
 
 export function evaluateToolDispatch(request: ToolDispatchRequest): ToolDispatchDecision {
   const name = String(request.name || '').trim();
+  const withheld = name ? request.withheldReason?.(name) : null;
+  if (withheld) return { ok: false, code: 'not_offered', message: withheld };
   if (request.mode === 'off') return { ok: true };
 
   let refusal: { code: ToolDispatchCode; message: string } | null = null;
