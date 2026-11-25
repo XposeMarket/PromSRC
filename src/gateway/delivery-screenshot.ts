@@ -27,7 +27,7 @@ export async function executeDeliverySendScreenshot(
 
   if (source === 'browser_new' || source === 'browser_last') {
     const shot = await browserVisionScreenshot(sessionId);
-    if (!shot?.base64) return { result: 'ERROR: No browser screenshot available. Use browser_open first, or choose source="desktop_new".', error: true };
+    if (!shot?.base64) return { result: 'ERROR: No browser screenshot available. Use browser_session(action:"open") first, or choose source="desktop_new".', error: true };
     imageBuffer = Buffer.from(shot.base64, 'base64');
     mimeType = shot.mimeType || 'image/jpeg';
   } else if (source === 'desktop_new' || source === 'desktop_last') {
@@ -67,7 +67,7 @@ export async function executeDeliverySendScreenshot(
       if (!recapture.startsWith('ERROR')) packet = getDesktopAdvisorPacket(sessionId);
     }
     if (!packet?.screenshotBase64) {
-      return { result: 'ERROR: No desktop screenshot available. Call desktop_screenshot first or use source="desktop_new".', error: true };
+      return { result: 'ERROR: No desktop screenshot available. Call desktop_screen(action:"screenshot") first or use source="desktop_new".', error: true };
     }
     imageBuffer = Buffer.from(packet.screenshotBase64, 'base64');
     mimeType = packet.screenshotMime || 'image/png';

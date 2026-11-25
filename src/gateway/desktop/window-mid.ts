@@ -203,9 +203,16 @@ export async function desktopListApps(
 
 /** desktop_list_windows — flat list of open windows in the canonical model. */
 export async function desktopListWindowsCanonical(
-  selector: { app_id?: string; process_name?: string; title?: string; filter?: string } = {},
+  selector: { app_id?: string; process_name?: string; title?: string; filter?: string; limit?: number; cursor?: number } = {},
 ): Promise<string> {
-  const states = await desktopListWindowStates();
+  return formatWindowList(await desktopListWindowStates(), selector);
+}
+
+/** Filtering, limit/cursor paging and formatting for desktopListWindowsCanonical. Exported for tests. */
+export function formatWindowList(
+  states: Awaited<ReturnType<typeof desktopListWindowStates>>,
+  selector: { app_id?: string; process_name?: string; title?: string; filter?: string; limit?: number; cursor?: number } = {},
+): string {
   let filtered = states;
   if (selector.app_id) {
     const id = String(selector.app_id).trim().toLowerCase();
@@ -226,7 +233,11 @@ export async function desktopListWindowsCanonical(
       || window.appId.toLowerCase().includes(query));
   }
   if (!filtered.length) return 'No open windows matched.';
-  const payload = filtered.map((w) => ({
+  const limit = clampInt(selector.limit, 1, 200, 50);
+  const cursor = clampInt(selector.cursor, 0, Math.max(0, filtered.length - 1), 0);
+  const shown = filtered.slice(cursor, cursor + limit);
+  const nextCursor = cursor + shown.length < filtered.length ? cursor + shown.length : null;
+  const payload = shown.map((w) => ({
     window_id: w.windowId,
     window_token: w.windowToken,
     handle: w.handle,
@@ -239,8 +250,9 @@ export async function desktopListWindowsCanonical(
     monitor_index: w.monitorIndex,
     is_active: w.isActive,
   }));
+  const more = nextCursor === null ? '' : ` More windows exist: pass cursor=${nextCursor} or narrow with filter.`;
   return [
-    `Open windows (${filtered.length}). Use window_id with desktop_get_window_state / desktop_window_click / desktop_window_type.`,
+    `Open windows (${shown.length} shown of ${filtered.length}; cursor=${cursor}; next_cursor=${nextCursor ?? 'none'}).${more} Use window_id with desktop_window(action:"state"), desktop_window(action:"click") or desktop_window(action:"type").`,
     JSON.stringify(payload, null, 2),
   ].join('\n');
 }

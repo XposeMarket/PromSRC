@@ -257,7 +257,7 @@ export function getDesktopWrapperToolDefinitions(): any[] {
             process_name: { type: 'string' },
             title: { type: 'string' },
             query: { type: 'string' },
-            limit: { type: 'number' },
+            limit: { type: 'number', description: 'Page size. list_apps: default 25, max 100. list_windows: default 50, max 200; pass cursor to page.' },
             refresh: { type: 'boolean' },
             exact: { type: 'boolean', description: 'Require an exact app name, alias, or app_id match.' },
             app: { type: 'string' },

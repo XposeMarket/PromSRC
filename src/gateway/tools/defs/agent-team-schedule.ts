@@ -889,7 +889,7 @@ export function getAgentTeamScheduleTools(): any[] {
             },
             on_match: {
               type: 'string',
-              description: 'Instruction for run_turn delivery, or an operator-readable notification label for notify_only. Supports {{watch_id}}, {{watch_label}}, {{path}}, {{task_id}}, {{job_id}}, {{status}}, {{result}}, {{observation_json}}.',
+              description: 'Required for create. Instruction for run_turn delivery, or an operator-readable notification label for notify_only. Supports {{watch_id}}, {{watch_label}}, {{path}}, {{task_id}}, {{job_id}}, {{status}}, {{result}}, {{observation_json}}.',
             },
             rationale: { type: 'string', description: 'Why this watch is being created and what the creating thread should decide when it wakes. Stored privately with the watch.' },
             action_policy: {
@@ -1090,7 +1090,7 @@ export function getAgentTeamScheduleTools(): any[] {
           required: ['action'],
           properties: {
             action: { type: 'string', description: 'One of: list, latest, get, steer, message, list_approvals, resolve_approval, resume, rerun, continue, pause, cancel, delete' },
-            task_id: { type: 'string', description: 'Task ID. Strongly recommended for steer; required for get/pause/cancel/delete; optional for resume/rerun.' },
+            task_id: { type: 'string', description: 'Task ID. Strongly recommended for steer; required for get/list_approvals/pause/cancel/delete; optional for resume/rerun.' },
             status: { type: 'string', description: 'Optional filter: queued|running|paused|stalled|needs_assistance|awaiting_user_input|failed|complete|waiting_subagent' },
             include_all_sessions: { type: 'boolean', description: 'If true, list across all sessions/channels; default false (scoped)' },
             include_scheduled: { type: 'boolean', description: 'Include compact scheduled jobs in list output. Default false.' },
@@ -1377,7 +1377,7 @@ export function getAgentTeamScheduleTools(): any[] {
             reason: { type: 'string', description: 'Reason for interrupting/pausing a target.' },
             status: { type: 'string', enum: ['active', 'paused', 'complete', 'blocked', 'failed', 'cancelled'], description: 'Filter supervision status.' },
             channel: { type: 'string', enum: ['terminal', 'telegram', 'web', 'mobile', 'discord', 'whatsapp', 'system'], description: 'Optional session list/search channel filter.' },
-            limit: { type: 'number', description: 'Maximum results.' },
+            limit: { type: 'number', description: 'Maximum results. For list_projects: chats listed per project, default 20, max 200.' },
             offset: { type: 'number', description: 'Session list offset.' },
             threads: {
               type: 'array',

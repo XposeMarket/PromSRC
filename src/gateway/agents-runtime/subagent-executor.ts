@@ -177,6 +177,7 @@ import { executeRegisteredCapabilityTool } from './capabilities/registry';
 import '../business/entity-store';
 import '../brain/brain-proposal-policy.js';
 import { normalizeChartSeriesArgs } from '../tools/core-tool-normalizers.js';
+import { backgroundWorkerToolRefusal } from '../chat/tool-dispatch-policy';
 
 export const getCreativeMotionRuntime = () => require('../creative/motion-runtime') as typeof import('../creative/motion-runtime');
 export const getCreativeAssets = () => require('../creative/assets') as typeof import('../creative/assets');
@@ -1941,6 +1942,11 @@ export async function executeTool(name: string, args: any, workspacePath: string
 }
 
 async function executeToolUntraced(name: string, args: any, workspacePath: string, deps: ExecuteToolDeps, sessionId: string = 'default'): Promise<ToolResult> {
+  // Background workers (background_ops spawn) may not change the live model or
+  // heartbeat or start more workers. Checked here so every route that executes
+  // a tool by name (direct call, composite step, tool_call) is refused alike.
+  const workerRefusal = backgroundWorkerToolRefusal(name, sessionId);
+  if (workerRefusal) return { name, args, result: workerRefusal, error: true };
   if (toolExecutionOverrideForTesting) {
     const overridden = await toolExecutionOverrideForTesting(name, args, sessionId);
     if (overridden) return overridden;

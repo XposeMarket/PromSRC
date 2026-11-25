@@ -67,11 +67,11 @@ export async function browserSnapshotInHouse(sessionId: string): Promise<string>
   const resolved = resolveSessionId(sessionId);
   const recovery = await recoverInHouseSessionMapping(resolved);
   if (recovery?.error) return recovery.error;
-  if (!getInHouseSession(resolved)) return 'ERROR: No in-house browser session. Use browser_open with target="inhouse" first.';
+  if (!getInHouseSession(resolved)) return 'ERROR: No in-house browser session. Use browser_session(action:"open", target:"inhouse") first.';
   try {
     const result: any = await callInHouseBrowser('snapshot', { sessionId: resolved });
     if (typeof result?.snapshot !== 'string' || !result.snapshot.trim()) {
-      return `ERROR: In-house browser snapshot returned no observation evidence; session=${resolved}. Retry browser_snapshot once the page is ready.`;
+      return `ERROR: In-house browser snapshot returned no observation evidence; session=${resolved}. Retry browser_observe(action:"snapshot") once the page is ready.`;
     }
     const rawSnapshot = result.snapshot.trim();
     const inHouse = upsertInHouseSession(resolved, result);
@@ -127,7 +127,7 @@ export async function browserClickInHouse(
 ): Promise<string> {
   const resolved = resolveSessionId(sessionId);
   const inHouse = getInHouseSession(resolved);
-  if (!inHouse) return 'ERROR: No in-house browser session. Use browser_open with target="inhouse" first.';
+  if (!inHouse) return 'ERROR: No in-house browser session. Use browser_session(action:"open", target:"inhouse") first.';
   const requestedSelector = typeof target === 'object' && target !== null ? String(target.selector || '').trim() : '';
   const requestedRef = typeof target === 'number'
     ? Number(target)
@@ -183,7 +183,7 @@ export async function browserFillInHouse(
 ): Promise<string> {
   const resolved = resolveSessionId(sessionId);
   const inHouse = getInHouseSession(resolved);
-  if (!inHouse) return 'ERROR: No in-house browser session. Use browser_open with target="inhouse" first.';
+  if (!inHouse) return 'ERROR: No in-house browser session. Use browser_session(action:"open", target:"inhouse") first.';
   const requestedSelector = typeof target === 'object' && target !== null ? String(target.selector || '').trim() : '';
   const requestedRef = typeof target === 'number'
     ? Number(target)
@@ -255,7 +255,7 @@ export function validatedNativeKeyOptions(options?: BrowserKeyOptions): Record<s
 export async function browserPressKeyInHouse(sessionId: string, key: string, options?: BrowserKeyOptions): Promise<string> {
   const resolved = resolveSessionId(sessionId);
   const session = getInHouseSession(resolved);
-  if (!session) return 'ERROR: No in-house browser session. Use browser_open with target="inhouse" first.';
+  if (!session) return 'ERROR: No in-house browser session. Use browser_session(action:"open", target:"inhouse") first.';
   const extra = validatedNativeKeyOptions(options);
   if (typeof extra === 'string') return `ERROR: ${extra} No input sent.`;
   try {
@@ -273,7 +273,7 @@ export async function browserPressKeyInHouse(sessionId: string, key: string, opt
 
 export async function browserTypeInHouse(sessionId: string, text: string, options?: { observe?: BrowserObserveMode }): Promise<string> {
   const resolved = resolveSessionId(sessionId);
-  if (!getInHouseSession(resolved)) return 'ERROR: No in-house browser session. Use browser_open with target="inhouse" first.';
+  if (!getInHouseSession(resolved)) return 'ERROR: No in-house browser session. Use browser_session(action:"open", target:"inhouse") first.';
   try {
     await callInHouseBrowser('input', { sessionId: resolved, action: 'text', text: String(text || '') });
     const observeMode = options?.observe || resolveBrowserObserveMode('browser_type');
@@ -288,7 +288,7 @@ export async function browserTypeInHouse(sessionId: string, text: string, option
 export async function browserRunJsInHouse(sessionId: string, code: string): Promise<string> {
   const resolved = resolveSessionId(sessionId);
   const inHouse = getInHouseSession(resolved);
-  if (!inHouse) return 'ERROR: No in-house browser session. Use browser_open with target="inhouse" first.';
+  if (!inHouse) return 'ERROR: No in-house browser session. Use browser_session(action:"open", target:"inhouse") first.';
   if (!String(code || '').trim()) return 'ERROR: code parameter is required.';
   try {
     const result = await callInHouseBrowser('run-js', { sessionId: resolved, code: buildBrowserRunJsEnvelopeSource(code) });

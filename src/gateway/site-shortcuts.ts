@@ -214,7 +214,7 @@ export function seedDefaultShortcuts(): void {
   const defaults: SiteShortcutsStore = {
     'x.com': {
       description: 'X (formerly Twitter)',
-      notes: 'Shortcuts only work when NOT focused on a text input. j/k move focus one post at a time — press once per step, then call browser_get_focused_item to confirm position before acting.',
+      notes: 'Shortcuts only work when NOT focused on a text input. j/k move focus one post at a time — press once per step, then call browser_observe(action:"focused_item") to confirm position before acting.',
       shortcuts: [
         // ── Navigation — posts ─────────────────────────────────────────────────
         { key: '?', action: 'Show keyboard shortcut help modal', context: 'global' },

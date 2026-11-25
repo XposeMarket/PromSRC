@@ -711,10 +711,10 @@ export async function desktopDiffScreenshot(sessionId: string): Promise<string> 
   const prev = history?.prevPacket;
 
   if (!current) {
-    return 'No screenshot available yet. Call desktop_screenshot first.';
+    return 'No screenshot available yet. Call desktop_screen(action:"screenshot") first.';
   }
   if (!prev) {
-    return 'Only one screenshot captured so far — no diff available. Call desktop_screenshot again to compare.';
+    return 'Only one screenshot captured so far — no diff available. Call desktop_screen(action:"screenshot") again to compare.';
   }
 
   const lines: string[] = [];

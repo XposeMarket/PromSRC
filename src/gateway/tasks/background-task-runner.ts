@@ -856,10 +856,10 @@ export class BackgroundTaskRunner {
         `the user IS already logged in to X — do NOT ask to confirm login or suggest they log in. ` +
         `Proceed directly with the task action.\n` +
         `X.COM POSTING FLOW: When posting a tweet, follow EXACTLY these steps:\n` +
-        `  1. browser_open("https://x.com")\n` +
-        `  2. Find the textbox with name "Post text" — browser_fill it.\n` +
-        `  3. The fill result shows "COMPOSER SUBMIT BUTTON: @N" — browser_click(@N) immediately.\n` +
-        `  4. After posting, call browser_close() then call step_complete. STOP.`
+        `  1. browser_session(action:"open", url:"https://x.com")\n` +
+        `  2. Find the textbox with name "Post text" — fill it with browser_act(action:"fill").\n` +
+        `  3. The fill result shows "COMPOSER SUBMIT BUTTON: @N" — browser_act(action:"click") on @N immediately.\n` +
+        `  4. After posting, call browser_session(action:"close") then call step_complete. STOP.`
       : '';
 
     // Inline plan summary for context

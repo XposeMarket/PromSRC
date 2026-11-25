@@ -456,6 +456,6 @@ export function formatNamedBrowserElementsForUrl(url: string, limit = 8): string
       lines.push(`    ${entry.name}${rootHint} -> fields: ${fieldNames || 'none'}`);
     }
   }
-  lines.push('Use saved element names with browser_click/browser_fill/browser_get_page_text, item root names with browser_extract_structured/browser_scroll_collect_v2, and saved schemas with schema_name.');
+  lines.push('Use saved element names with browser_act(action:"click"/"fill") and browser_observe(action:"page_text"), item root names with browser_extract(action:"extract_structured"/"scroll_collect_structured"), and saved schemas with schema_name.');
   return lines.join('\n');
 }

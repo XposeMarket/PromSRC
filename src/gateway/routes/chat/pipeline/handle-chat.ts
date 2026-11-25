@@ -23,7 +23,7 @@ import { presentProviderCallFailure, usageCutoffNotice } from '../../../chat/pro
 import { attemptModelDigest, buildDeterministicTurnDigest, describeTurnCutoffCause } from '../../../chat/degraded-turn-finish';
 import { fitToolDefinitionsToBudget } from '../../../tools/schema-compaction';
 import { currentTrace, recordSpan, runInTrace, withSpan } from '../../../observability/turn-trace';
-import { evaluateToolDispatch, resolveIdleRoundLimit, resolveToolSurfaceEnforcementMode, toolNameSetOf, type ToolDispatchDecision } from '../../../chat/tool-dispatch-policy';
+import { BACKGROUND_WORKER_WITHHELD_TOOL_NAMES, backgroundWorkerToolRefusal, evaluateToolDispatch, isBackgroundSpawnWorkerSession, resolveIdleRoundLimit, resolveToolSurfaceEnforcementMode, toolNameSetOf, type ToolDispatchDecision } from '../../../chat/tool-dispatch-policy';
 import { ToolPerformanceTracker } from '../../../chat/tool-performance-telemetry';
 import { formatToolCategoryProvisioningFailure, preserveActivatedToolCategoriesForTurnOverride, verifyToolCategorySurface } from '../../../tool-category-provisioning';
 import { normalizeManifestToolCategory } from '../../../../runtime/tool-category-manifest';
@@ -667,8 +667,14 @@ export async function handleChatUntraced(
   // Only the legacy recursive start_task guard remains.
   const isBackgroundOrSubagentMode = executionMode === 'background_task' || executionMode === 'proposal_execution' || executionMode === 'background_agent' || executionMode === 'cron' || executionMode === 'team_manager' || executionMode === 'team_subagent';
   const isProposalExecutionMode = executionMode === 'proposal_execution';
-  // Tools always stripped from background/subagent runs.
-  const alwaysStrip = new Set(isBackgroundOrSubagentMode ? ['start_task'] : []);
+  // Tools always stripped from background/subagent runs. Background workers
+  // (background_ops spawn) also lose tools that act on the user's live chat or
+  // start more workers; dispatch refuses them too (evaluateTurnToolDispatch).
+  const isBackgroundWorkerRun = isBackgroundSpawnWorkerSession(sessionId);
+  const alwaysStrip = new Set<string>([
+    ...(isBackgroundOrSubagentMode ? ['start_task'] : []),
+    ...(isBackgroundWorkerRun ? BACKGROUND_WORKER_WITHHELD_TOOL_NAMES : []),
+  ]);
   const guaranteedAutonomousCoreTools = new Set<string>([
     ...(isBackgroundOrSubagentMode ? ['write_note'] : []),
   ]);
@@ -746,7 +752,7 @@ export async function handleChatUntraced(
           })
         : isTelegramSessionForTools || isBackgroundOrSubagentMode
           ? allBuiltTools.filter((t: any) => !alwaysStrip.has(String(t?.function?.name || '')) && String(t?.function?.name || '') !== 'start_task')
-          : allBuiltTools.filter((t: any) => !interactiveStrip.has(String(t?.function?.name || '')));
+          : allBuiltTools.filter((t: any) => !alwaysStrip.has(String(t?.function?.name || '')) && !interactiveStrip.has(String(t?.function?.name || '')));
   };
   let loopGateToolActive = false;
   const LOOP_CONTINUE_TOOL_DEF = {
@@ -1082,6 +1088,9 @@ export async function handleChatUntraced(
         return category && runtimeCategoryIds.has(String(category)) ? String(category) : null;
       },
       isCategoryActive: (category) => getActivatedToolCategories(sessionId).has(category),
+      // Same check executeTool enforces for every execution; here it only
+      // refuses a direct call before dispatch.
+      withheldReason: (name) => backgroundWorkerToolRefusal(name, sessionId),
     });
   };
   let midWorkflowCompactionsThisTurn = 0;
@@ -2394,7 +2403,7 @@ export async function handleChatUntraced(
         browserInfo.url ? ` at ${browserInfo.url}` : ''
       }. Browser profile: ${browserInfo.profileLabel || (browserInfo.profileKind === 'user' ? 'user Chrome profile' : 'Prometheus browser profile')}.${
         browserInfo.debugPort ? ` CDP port: ${browserInfo.debugPort}.` : ''
-      } This state is scoped to session ${sessionId}; do not assume another chat has these tabs or cookies. Use browser_snapshot to see current elements, or browser_click to navigate. Do NOT call browser_open unless you need to go to a completely different site.${
+      } This state is scoped to session ${sessionId}; do not assume another chat has these tabs or cookies. Use browser_observe(action:"snapshot") to see current elements, or browser_act(action:"click") to navigate. Do NOT call browser_session(action:"open") unless you need to go to a completely different site.${
         browserInfo.mode ? ` Current browser control mode: ${browserInfo.mode}.` : ''
       }]${browserControlCtx ? `\n${browserControlCtx}` : ''}`
     : '';
@@ -2542,7 +2551,7 @@ export async function handleChatUntraced(
     ? 'Report only actionable heartbeat results. For no-op heartbeats, output exactly HEARTBEAT_OK and nothing else.'
     : 'Match the user\'s tone and pacing. Be natural, warm, and conversational. Use concise replies for quick asks, and expand with context, personality, and guidance when helpful or when the user invites depth.';
   const visualPresentationInstruction = selectPresentationInstruction({ executionMode, routingText: toolCategoryDetectionText, recentAssistantText: String([...history].reverse().find((entry) => entry?.role === 'assistant')?.content || '') });
-const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-chat tool category and editor surface, not a separate assistant runtime. Use generate_image for one-shot raster image generation and generate_video for one-shot MP4 generation. Use creative_* and hyperframes_* tools directly for editable canvas, image, video, timeline, animation, HTML Motion, HyperFrames, Remotion, captioned clip, promo video, motion export, or multi-clip workspace work. switch_creative_mode only selects or clears editor workspace state; it must not change the assistant persona, prompt contract, history, or non-creative tool availability. Normal tools such as desktop_*, browser_*, run_command, scheduling, proposals, memory, connectors, and Codex/source tools remain valid while a Creative workspace is open. Creative work must be visual-first: after meaningful edits, call creative_get_state or creative_render_snapshot before deciding the next edit. These tools render actual canvas screenshots/frames and inject them into vision context like browser/desktop screenshots. For video workspace work, prefer HTML Motion / HyperFrames / Remotion / Pretext sources and use creative_list_html_motion_templates, creative_apply_html_motion_template, creative_create_html_motion_clip, creative_read_html_motion_clip, creative_patch_html_motion_clip, creative_list_html_motion_blocks, creative_apply_hyperframes_component, and Pretext text-fit tools when they fit. Before presenting or exporting creative work, run direct visual self-review with creative_render_snapshot; for video, use sampleTimesMs or frame batches when playback inspection matters.';
+const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-chat tool category and editor surface, not a separate assistant runtime. Use generate_image for one-shot raster image generation and generate_video for one-shot MP4 generation. Use the creative wrapper tools (creative_project, creative_scene, creative_image_ops, creative_video_ops, creative_hyperframes_ops, creative_quality_ops) directly for editable canvas, image, video, timeline, animation, HTML Motion, HyperFrames, Remotion, captioned clip, promo video, motion export, or multi-clip workspace work. switch_creative_mode only selects or clears editor workspace state; it must not change the assistant persona, prompt contract, history, or non-creative tool availability. Normal tools such as desktop_*, browser_*, run_command, scheduling, proposals, memory, connectors, and Codex/source tools remain valid while a Creative workspace is open. Creative work must be visual-first: after meaningful edits, call creative_project(action:"get_state") or creative_video_ops(action:"render_snapshot") before deciding the next edit. These tools render actual canvas screenshots/frames and inject them into vision context like browser/desktop screenshots. For video workspace work, prefer HTML Motion / HyperFrames / Remotion / Pretext sources and use creative_hyperframes_ops with action list_templates, apply_template, create_clip, read_clip, patch_clip, list_blocks or apply_component, and Pretext text-fit tools when they fit. Before presenting or exporting creative work, run direct visual self-review with creative_video_ops(action:"render_snapshot"); for video, use sampleTimesMs or frame batches when playback inspection matters.';
   const hyperframesAgentRoutingInstruction = 'HyperFrames agent policy: when the user asks to create, compose, import, edit, lint, QA, materialize, or export HyperFrames video, prefer real HyperFrames sources over recreated lookalikes. Prefer first-class hyperframes_* and creative_* tools when they can create source-backed catalog clips correctly; public desktop builds bundle the HyperFrames packages but do not rely on a user-installed global Node/npm/npx. If first-class tools fail or lack catalog access, use the packaged Prometheus runtime path surfaced by tool output or settings/runtime diagnostics before falling back to ambient commands, and report exact CLI/runtime errors. Do not substitute hand-authored catalog labels, CSS mockups, or recreated components after the user asked for HyperFrames catalog/registry output. Start with hyperframes_browse_catalog or bundled catalog discovery, customize with HyperFrames/source-backed edits, then run lint/inspect/QA/export only after visual review. Use creative_list_hyperframes_components, creative_sync_hyperframes_catalog, and creative_apply_hyperframes_component only for low-level compatibility or migration work.';
   const creativeDebuggingInstruction = 'Creative debugging tools: when working in video mode, use video_render_frame, video_render_contact_sheet, video_analyze_frame, video_analyze_timeline, video_check_keyframes, video_check_caption_timing, video_check_audio_sync, video_extract_clip_frames, and video_analyze_imported_video when those names fit the job. Use creative_element_inventory for a complete layer/timeline inventory with text, timing, animation, visibility, provenance, and validation details. Use creative_frame_trace to see which elements are actually active at exact timestamps, with resolved opacity/transform/z-order/source information. Use creative_frame_diff to compare two timestamps and detect what changed, appeared, disappeared, or stayed static. Use creative_history_status, creative_undo, and creative_redo to recover from destructive resets, bad template applications, failed batch edits, or visual regressions; after undo/redo, render or inspect the scene before continuing. For image mode, use image_get_element_at_point, image_get_overlaps, image_get_bounds_summary, image_check_text_overflow, image_check_contrast, and image_detect_empty_regions when diagnosing composition/layout issues. Use creative_export_trace before or after export when you need certainty about the scene hash, render/export job, saved scene, active export, or whether stale/cached output was used. Before risky rebuilds or large experiments, call creative_checkpoint with action "save"; restore a checkpoint if the design gets worse. If a scene is contaminated by duplicated ids, offscreen debris, stale template residue, editor artifacts, hidden layers, or ghost content, call creative_purge_scene first. Only call creative_reset_scene with force=true after a checkpoint/export or when the user explicitly asked for a fresh blank scene. Do not keep patching a corrupted video timeline when purge plus inventory/trace gives a cleaner path.';
   const teachModeSystemBlock = teachModeActive
@@ -2587,11 +2596,11 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
       ].join('\n');
     }
     const visualGroundingPolicy = currentModelCapabilities.hasVision
-      ? 'Visual-first policy: for browser/desktop workflows, ground decisions in fresh snapshots/screenshots when state likely changed, the UI is ambiguous, or a risky action just ran. Vision screenshots are the highest-confidence source of current UI truth on dynamic pages. If DOM refs, assumptions, or JS probes conflict with what the page is doing, trust fresh vision/snapshot evidence and re-anchor before acting. Prefer browser_snapshot/browser_vision_screenshot and desktop_screenshot over repeated browser_run_js probing. Use browser_run_js only when visual/snapshot evidence is insufficient for a concrete action.'
-      : 'Text-first UI policy: the active model is not vision-capable. For browser/desktop workflows, ground decisions in browser_snapshot, browser_get_page_text, DOM/accessibility data, OCR/window text from desktop screenshots, metadata, and explicit tool outputs. Do not call browser_vision_screenshot, browser_vision_click, browser_vision_type, analyze_image, or analyze_video. Use browser_run_js only when text/snapshot evidence is insufficient for a concrete action.';
+      ? 'Visual-first policy: for browser/desktop workflows, ground decisions in fresh snapshots/screenshots when state likely changed, the UI is ambiguous, or a risky action just ran. Vision screenshots are the highest-confidence source of current UI truth on dynamic pages. If DOM refs, assumptions, or JS probes conflict with what the page is doing, trust fresh vision/snapshot evidence and re-anchor before acting. Prefer browser_observe(action:"snapshot"/"screenshot") and desktop_screen(action:"screenshot") over repeated browser_extract(action:"run_js") probing. Use browser_extract(action:"run_js") only when visual/snapshot evidence is insufficient for a concrete action.'
+      : 'Text-first UI policy: the active model is not vision-capable. For browser/desktop workflows, ground decisions in browser_observe(action:"snapshot"/"page_text"), DOM/accessibility data, OCR/window text from desktop screenshots, metadata, and explicit tool outputs. Do not call browser_observe(action:"screenshot"), browser_act(action:"vision_click"/"vision_type"), analyze_image, or analyze_video. Use browser_extract(action:"run_js") only when text/snapshot evidence is insufficient for a concrete action.';
     const creativeRuntimeInstruction = currentModelCapabilities.hasVision
       ? creativeRoutingInstruction
-      : 'Creative routing: Creative is a normal main-chat tool category and editor surface, not a separate assistant runtime. Use generate_image for one-shot raster image generation and generate_video for one-shot MP4 generation. Use creative_* and hyperframes_* tools directly for editable canvas, image, video, timeline, animation, HTML Motion, HyperFrames, Remotion, captioned clip, promo video, motion export, or multi-clip workspace work. switch_creative_mode only selects or clears editor workspace state; it must not change the assistant persona, prompt contract, history, or non-creative tool availability. Normal tools such as desktop_*, browser_*, run_command, scheduling, proposals, memory, connectors, and Codex/source tools remain valid while a Creative workspace is open. The active model is not vision-capable, so do not ask for direct visual self-review or image/video frame interpretation. After meaningful edits, use creative_get_state, creative_element_inventory, creative_frame_trace, creative_frame_diff, lint/layout tools, text-fit reports, export traces, and rendered artifact metadata to continue safely. You may still render snapshots or exports as artifacts, but do not rely on image payload injection for reasoning.';
+      : 'Creative routing: Creative is a normal main-chat tool category and editor surface, not a separate assistant runtime. Use generate_image for one-shot raster image generation and generate_video for one-shot MP4 generation. Use the creative wrapper tools (creative_project, creative_scene, creative_image_ops, creative_video_ops, creative_hyperframes_ops, creative_quality_ops) directly for editable canvas, image, video, timeline, animation, HTML Motion, HyperFrames, Remotion, captioned clip, promo video, motion export, or multi-clip workspace work. switch_creative_mode only selects or clears editor workspace state; it must not change the assistant persona, prompt contract, history, or non-creative tool availability. Normal tools such as desktop_*, browser_*, run_command, scheduling, proposals, memory, connectors, and Codex/source tools remain valid while a Creative workspace is open. The active model is not vision-capable, so do not ask for direct visual self-review or image/video frame interpretation. After meaningful edits, use creative_project(action:"get_state"), creative_scene(action:"element_inventory"), creative_quality_ops(action:"frame_trace"/"frame_diff"), lint/layout tools, text-fit reports, export traces, and rendered artifact metadata to continue safely. You may still render snapshots or exports as artifacts, but do not rely on image payload injection for reasoning.';
 
     // Conditional routing blocks: only inject heavy policy text when the relevant
     // surface is actually in play. Keeps the base prompt lean on ordinary turns.
@@ -4289,9 +4298,9 @@ Do not produce prose. Use the canonical thread tool now.` });
             const browserRetryReminder = liveInfoForRetry.active
               ? multiAgentActive
                 ? `\n\nCRITICAL: Browser is ALREADY OPEN at "${liveInfoForRetry.url || 'current page'}". ` +
-                  `Do NOT call browser_open. Call browser_snapshot so the secondary AI can analyze and tell you what to do next.`
+                  `Do NOT call browser_session(action:"open"). Call browser_observe(action:"snapshot") so the secondary AI can analyze and tell you what to do next.`
                 : `\n\nCRITICAL: Browser is ALREADY OPEN at "${liveInfoForRetry.url || 'current page'}". ` +
-                  `Do NOT call browser_open again. Use browser_snapshot to see the current page.`
+                  `Do NOT call browser_session(action:"open") again. Use browser_observe(action:"snapshot") to see the current page.`
               : '';
             messages.push({
               role: 'user',
@@ -4645,7 +4654,7 @@ Do not produce prose. Use the canonical thread tool now.` });
         messages.push({
           role: 'user',
           content:
-            `${preview}\nDo not stop. Call the next browser tool now and continue execution. If more feed coverage is needed, use browser_press_key with PageDown then browser_wait then browser_snapshot.`,
+            `${preview}\nDo not stop. Call the next browser tool now and continue execution. If more feed coverage is needed, use browser_act(action:"key", key:"PageDown") then browser_observe(action:"wait") then browser_observe(action:"snapshot").`,
         });
         continue;
       }
@@ -4662,7 +4671,7 @@ Do not produce prose. Use the canonical thread tool now.` });
         const preview = desktopAdvisorHintPreview ? `Advisor hint: ${desktopAdvisorHintPreview}` : '';
         messages.push({
           role: 'user',
-          content: `${preview}\nDo not stop. Call the next desktop tool now. If the UI likely changed or the outcome is ambiguous, use desktop_screenshot again.`,
+          content: `${preview}\nDo not stop. Call the next desktop tool now. If the UI likely changed or the outcome is ambiguous, use desktop_screen(action:"screenshot") again.`,
         });
         continue;
       }
@@ -5233,7 +5242,7 @@ Do not produce prose. Use the canonical thread tool now.` });
         const hasFiniteY = Number.isFinite(Number(toolArgs?.y));
         const hasFiniteElement = Number.isFinite(Number(toolArgs?.element)) && Number(toolArgs?.element) > 0;
         if ((!hasFiniteX || !hasFiniteY) && !hasFiniteElement) {
-          const blockMsg = 'Blocked desktop_click because it is an actual mouse click tool and requires either numeric x/y coordinates or element=N from a SOM screenshot. If the target point is not known yet, call desktop_screenshot(mode:"som") or desktop_window_screenshot(mode:"som") first, then retry with element and screenshot_id.';
+          const blockMsg = 'Blocked desktop_input(action:"click") because it is an actual mouse click and requires either numeric x/y coordinates or element=N from a SOM screenshot. If the target point is not known yet, call desktop_screen(action:"screenshot", mode:"som") or desktop_window(action:"screenshot", mode:"som") first, then retry with element and screenshot_id.';
           allToolResults.push(makeInstrumentedToolResult(toolName, toolArgs, blockMsg, true));
           logToolCall(workspacePath, toolName, toolArgs, blockMsg, true);
           markProgressStepStart(toolName);
@@ -5293,8 +5302,8 @@ Do not produce prose. Use the canonical thread tool now.` });
               `SCROLL BLOCKED: You scrolled ${browserScrollBeforeActCount} time(s) without filling or clicking anything.`,
               `This is the scroll-before-act loop bug. The page already shows actionable elements â€” stop scrolling and act on them.`,
               lastSnap ? `\nCurrent page snapshot (act on these @ref elements NOW):\n${lastSnap.slice(0, 2000)}` : '',
-              `\nRequired next action: find the input or button you need and call browser_fill(ref, text) or browser_click(ref) immediately.`,
-              `Do NOT call browser_press_key(PageDown), browser_scroll, or browser_snapshot. Act on the snapshot above.`,
+              `\nRequired next action: find the input or button you need and call browser_act(action:"fill", ref, text) or browser_act(action:"click", ref) immediately.`,
+              `Do NOT call browser_act(action:"key", key:"PageDown"), browser_act(action:"scroll"), or browser_observe(action:"snapshot"). Act on the snapshot above.`,
             ].filter(Boolean).join(' ');
             console.warn(`[v2] SCROLL-BEFORE-ACT BLOCKED (${browserScrollBeforeActCount}x): ${toolName} on ${pageType} page before any fill/click`);
             sendSSE('info', { message: `Scroll-before-act gate: blocked ${toolName} on non-feed page (${browserScrollBeforeActCount}/${SCROLL_BEFORE_ACT_MAX} allowed before act required).` });
@@ -5306,7 +5315,7 @@ Do not produce prose. Use the canonical thread tool now.` });
             sendSSE('tool_call', { action: toolName, args: toolArgs, stepNum: allToolResults.length });
             sendSSE('tool_result', { action: toolName, result: blockMsg.slice(0, 300), error: true, stepNum: allToolResults.length });
             messages.push({ role: 'tool', tool_name: toolName, tool_call_id: toolCallId || undefined, content: blockMsg });
-            messages.push({ role: 'user', content: `Scroll blocked. You must call browser_fill or browser_click on a @ref from the snapshot above before scrolling. Stop planning and act now.` });
+            messages.push({ role: 'user', content: `Scroll blocked. You must call browser_act with action "fill" or "click" on a @ref from the snapshot above before scrolling. Stop planning and act now.` });
             continue;
           }
         }

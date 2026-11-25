@@ -109,7 +109,7 @@ export async function resolveDesktopActionPoint(
   if (Number.isFinite(elementIndex) && elementIndex > 0) {
     const screenshotId = String(target.screenshot_id || '').trim();
     if (!screenshotId) {
-      return { ok: false, message: `${label}: element targeting requires screenshot_id from a SOM desktop_screenshot or desktop_window_screenshot.` };
+      return { ok: false, message: `${label}: element targeting requires screenshot_id from a SOM desktop_screen(action:"screenshot") or desktop_window(action:"screenshot").` };
     }
     const packetResult = getDesktopAdvisorPacketByIdInternal(sessionId, screenshotId);
     if (!packetResult.ok) return { ok: false, message: `${label}: ${packetResult.message}` };
@@ -118,7 +118,7 @@ export async function resolveDesktopActionPoint(
     if (!packetGeneration.ok) return { ok: false, message: `${label}: ${packetGeneration.message}` };
     const element = (packet.somElements || []).find((entry) => entry.index === Math.floor(elementIndex));
     if (!element) {
-      return { ok: false, message: `${label}: SOM element #${Math.floor(elementIndex)} was not found in screenshot ${screenshotId}. Capture desktop_screenshot(mode="som") or desktop_window_screenshot(mode="som") again.` };
+      return { ok: false, message: `${label}: SOM element #${Math.floor(elementIndex)} was not found in screenshot ${screenshotId}. Capture desktop_screen(action:"screenshot", mode:"som") or desktop_window(action:"screenshot", mode:"som") again.` };
     }
     if (packet.targetWindow && desktopPacketAgeMs(packet) > DESKTOP_SCREENSHOT_FRESH_MS) {
       return { ok: false, message: `${label}: ${describeFreshScreenshotRequirement(packet)}` };
@@ -187,7 +187,7 @@ export async function resolveDesktopActionPoint(
     if (!packet) {
       return {
         ok: false,
-        message: `${label}: coordinate_space="capture" requires screenshot_id from desktop_screenshot or desktop_window_screenshot.`,
+        message: `${label}: coordinate_space="capture" requires screenshot_id from desktop_screen(action:"screenshot") or desktop_window(action:"screenshot").`,
       };
     }
     if (!target.allow_broad_grounded && desktopCaptureRequiresPrecisionRecapture(packet)) {
@@ -1122,7 +1122,7 @@ export function formatSomElements(elements: DesktopSomElement[]): string {
     const name = el.name ? ` "${el.name}"` : '';
     return `#${el.index} ${el.role}${name} @ (${el.x},${el.y}) ${el.width}x${el.height}`;
   });
-  return `SOM elements (${elements.length}; click with desktop_click(element:N, screenshot_id:"...")):\n${lines.join('\n')}`;
+  return `SOM elements (${elements.length}; click with desktop_input(action:"click", element:N, screenshot_id:"...")):\n${lines.join('\n')}`;
 }
 
 
@@ -1217,12 +1217,12 @@ export async function desktopScreenshot(
   const ocrLen = ocr?.text ? ocr.text.length : 0;
 
   const noOcrHint = !ocrPreview
-    ? '\nNo OCR text available. Use desktop_screenshot (vision models see the attached image), then desktop_click / desktop_scroll / desktop_focus_window as needed. Use desktop_window_screenshot to zoom into a specific app window.'
+    ? '\nNo OCR text available. Use desktop_screen(action:"screenshot") (vision models see the attached image), then desktop_input(action:"click"/"scroll") or desktop_window(action:"focus") as needed. Use desktop_window(action:"screenshot") to zoom into a specific app window.'
     : '';
 
   const virtualLine =
     vs.width > 0
-      ? `Virtual desktop bounding box: top-left (${vs.left}, ${vs.top}), size ${vs.width}x${vs.height} (all desktop_click coords use this space).`
+      ? `Virtual desktop bounding box: top-left (${vs.left}, ${vs.top}), size ${vs.width}x${vs.height} (all desktop_input(action:"click") coords use this space).`
       : '';
 
   const captureSummary =
@@ -1234,8 +1234,8 @@ export async function desktopScreenshot(
 
   const coordHint =
     shot.captureMode === 'all'
-      ? `Coordinates: (0,0) in this image = virtual top-left (${shot.left}, ${shot.top}). For desktop_click / scroll at screenshot pixel (x,y), use coordinate_space="capture" with screenshot_id="${packet.screenshotId}".`
-      : `Coordinates: pixels in this image are relative to capture top-left (${shot.left}, ${shot.top}). For desktop_click / scroll at (x,y), use coordinate_space="capture" with screenshot_id="${packet.screenshotId}" to let the tool convert image coords automatically. If capture mode is monitor N, you can also use coordinate_space="monitor" with monitor_index=N and local monitor coordinates directly.`;
+      ? `Coordinates: (0,0) in this image = virtual top-left (${shot.left}, ${shot.top}). For desktop_input(action:"click"/"scroll") at screenshot pixel (x,y), use coordinate_space="capture" with screenshot_id="${packet.screenshotId}".`
+      : `Coordinates: pixels in this image are relative to capture top-left (${shot.left}, ${shot.top}). For desktop_input(action:"click"/"scroll") at (x,y), use coordinate_space="capture" with screenshot_id="${packet.screenshotId}" to let the tool convert image coords automatically. If capture mode is monitor N, you can also use coordinate_space="monitor" with monitor_index=N and local monitor coordinates directly.`;
 
   const activeMonLine =
     activeMonitorIndex !== null
@@ -2109,7 +2109,7 @@ export function desktopRecordMacro(name: string): string {
   _activeRecordingName = macroName;
   _recordingBuffer = [];
   _recordingStartTime = Date.now();
-  return `Recording started for macro "${macroName}". All desktop_click, desktop_type, desktop_press_key, and desktop_scroll actions will be logged. Call desktop_stop_macro() when done.`;
+  return `Recording started for macro "${macroName}". All desktop_input click, type, key and scroll actions will be logged. The recording runs until it is stopped.`;
 }
 
 

@@ -1013,7 +1013,7 @@ export async function handleDefaultTool(ctx: DefaultToolContext): Promise<Awaite
           if (action === 'list') {
             const { providerAccountVaultKey, providerOAuthVaultKey } = require('../../../providers/usage-awareness');
             const { getVault } = require('../../../security/vault');
-            const keys = new Set<string>(getVault().keys());
+            const keys = new Set<string>(getVault(getConfig().getConfigDir()).keys());
             const out: Record<string, Array<{ id: string; label: string; default: boolean; has_saved_credentials: boolean }>> = {};
             for (const pid of ['anthropic', 'openai_codex', 'openai', 'xai']) {
               const pc = cfgNow?.llm?.providers?.[pid];

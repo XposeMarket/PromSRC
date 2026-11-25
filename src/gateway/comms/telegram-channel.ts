@@ -1594,12 +1594,12 @@ export class TelegramChannel {
     })();
 
 	    try {
-	      const telegramContext = 'CONTEXT: You are responding via Telegram via a direct interactive session (not a subagent). You have FULL ACCESS to all tools including complete workspace file access (read_file, list_files, list_directory, grep, semantic_search) and can see all files in the workspace. You are running on the user\'s local Windows PC. All computer tools (run_command, browser_open, browser_snapshot, browser_click, browser_fill, browser_press_key, browser_wait, browser_close, desktop_screenshot, desktop_find_window, desktop_focus_window, desktop_click, desktop_drag, desktop_wait, desktop_type, desktop_press_key, desktop_get_clipboard, desktop_set_clipboard) are fully available and operational. Use them confidently when the user asks you to open, browse, or interact with anything on their computer.';
+	      const telegramContext = 'CONTEXT: You are responding via Telegram via a direct interactive session (not a subagent). You have FULL ACCESS to all tools including complete workspace file access (read_file, list_files, list_directory, grep, semantic_search) and can see all files in the workspace. You are running on the user\'s local Windows PC. All computer tools (run_command, browser_session, browser_observe, browser_act, browser_extract, desktop_screen, desktop_apps, desktop_window, desktop_input) are fully available and operational. Use them confidently when the user asks you to open, browse, or interact with anything on their computer.';
       const isDesktopStatusCheck =
 	        /\b(vs code|vscode|codex)\b/i.test(text)
 	        && /\b(done|finished|complete|completed|responded)\b/i.test(text);
 	      const statusContext = isDesktopStatusCheck
-	        ? 'CONTEXT: This Telegram request is a desktop status check. First action should be desktop_screenshot (then desktop advisor flow), not browser tools.'
+	        ? 'CONTEXT: This Telegram request is a desktop status check. First action should be desktop_screen(action:"screenshot") (then desktop advisor flow), not browser tools.'
 	        : '';
       const videoContext = videoAttachment
 	        ? `CONTEXT: A Telegram video attachment for this turn has already been downloaded into the workspace.\nLocal video path: ${videoAttachment.relPath}\nAbsolute path: ${videoAttachment.absPath}\nMime type: ${videoAttachment.mimeType}\nIf the user wants the clip analyzed, call analyze_video on this path before answering. Do not claim to have watched the video unless you actually ran analyze_video.`

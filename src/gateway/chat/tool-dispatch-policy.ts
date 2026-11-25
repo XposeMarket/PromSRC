@@ -43,6 +43,96 @@ export interface ToolDispatchRequest {
   categoryOf(name: string): string | null;
   /** Whether that category is active for this run. */
   isCategoryActive(category: string): boolean;
+  /**
+   * Role restriction: returns a refusal message when this run may never call
+   * the tool. Checked before the enforcement mode, so warn/off cannot relax it.
+   */
+  withheldReason?(name: string): string | null;
+}
+
+/**
+ * Tools a background worker (background_ops spawn) does not receive: they act
+ * on the user's live chat (model choice, heartbeat) or start more workers.
+ * ask_prometheus_questions and request_final_action_approval stay available;
+ * they are the approval gates. bg_plan_declare/bg_plan_advance stay too.
+ */
+export const BACKGROUND_WORKER_WITHHELD_TOOL_NAMES: readonly string[] = [
+  'set_current_model',
+  'switch_model',
+  'update_heartbeat',
+  'background_ops',
+];
+
+// Schema-hidden legacy aliases of background_ops are still dispatchable by
+// name, so a worker is refused those as well.
+const BACKGROUND_WORKER_WITHHELD_DISPATCH = new Set<string>([
+  ...BACKGROUND_WORKER_WITHHELD_TOOL_NAMES,
+  'background_spawn', 'background_follow_up', 'background_steer', 'background_status',
+  'background_progress', 'background_wait', 'background_join',
+]);
+
+// Sessions with a live round started by background_ops spawn or follow_up,
+// with the number of live rounds per session. Filled only by task-runner's
+// startBackgroundExecution, which every round passes through (first spawn,
+// follow-up, steer continuation and resume after a gateway restart), so the
+// identity is re-established in a fresh process before the round's first tool
+// call, and released when that round settles. Process memory only: nothing a
+// user configures (a webhook sessionKey, a Telegram or team session id) can add
+// to it. Held on globalThis so a second copy of this module (CJS and ESM
+// loaders in one process) still sees the same registry.
+const WORKER_SESSIONS_KEY = Symbol.for('prometheus.backgroundSpawnWorkerRounds');
+const workerRegistryHost = globalThis as typeof globalThis & { [WORKER_SESSIONS_KEY]?: Map<string, number> };
+const backgroundSpawnWorkerRounds: Map<string, number> = (workerRegistryHost[WORKER_SESSIONS_KEY] ||= new Map<string, number>());
+
+/**
+ * Mark a session as a background_ops worker for one round. Returns the release
+ * for that round; call it when the round settles. Registrations are counted,
+ * so if two rounds of one session overlap (a new round can start while the
+ * previous one is still running its cleanup), the first to settle does not
+ * release the other. Calling the release more than once has no further effect.
+ */
+export function registerBackgroundSpawnWorkerSession(sessionId: string): () => void {
+  const id = String(sessionId || '').trim();
+  if (!id) return () => {};
+  backgroundSpawnWorkerRounds.set(id, (backgroundSpawnWorkerRounds.get(id) || 0) + 1);
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    const remaining = (backgroundSpawnWorkerRounds.get(id) || 0) - 1;
+    if (remaining > 0) backgroundSpawnWorkerRounds.set(id, remaining);
+    else backgroundSpawnWorkerRounds.delete(id);
+  };
+}
+
+/**
+ * A run started by background_ops spawn or follow_up: a round of this session
+ * is live (registered at round start, not yet settled). The session name is not trusted on its
+ * own: a webhook can be configured with any session key, including one that
+ * starts with background_. executionMode is not used either: 'background_task'
+ * is shared with team coordinators, webhooks and Telegram background runs, and
+ * 'background_agent' with standalone subagents.
+ */
+export function isBackgroundSpawnWorkerSession(sessionId: unknown): boolean {
+  return (backgroundSpawnWorkerRounds.get(String(sessionId || '').trim()) || 0) > 0;
+}
+
+export function backgroundWorkerWithheldReason(name: string): string | null {
+  const tool = String(name || '').trim();
+  if (!BACKGROUND_WORKER_WITHHELD_DISPATCH.has(tool)) return null;
+  return `Tool not available to background workers: ${tool} was not run. A background worker cannot change the live model or the heartbeat, or start or manage other background agents. Finish the assignment with your other tools and say in your final reply if the main chat should do this.`;
+}
+
+/**
+ * The refusal for one tool execution in a session, or null when allowed.
+ * This is the enforcement point: executeTool (subagent-executor) calls it for
+ * every execution, so composite steps, tool_call re-entries and nested calls
+ * are covered. background_ops is refused by its own name before its action is
+ * normalized, and the legacy background_* names are refused directly. The turn
+ * loop's dispatch check reuses it only to refuse a direct call earlier.
+ */
+export function backgroundWorkerToolRefusal(name: string, sessionId: unknown): string | null {
+  return isBackgroundSpawnWorkerSession(sessionId) ? backgroundWorkerWithheldReason(name) : null;
 }
 
 /** Names whose arguments may legitimately arrive as a bare (non-JSON) string. */
@@ -126,6 +216,8 @@ function preview(rawArguments: unknown): string {
 
 export function evaluateToolDispatch(request: ToolDispatchRequest): ToolDispatchDecision {
   const name = String(request.name || '').trim();
+  const withheld = name ? request.withheldReason?.(name) : null;
+  if (withheld) return { ok: false, code: 'not_offered', message: withheld };
   if (request.mode === 'off') return { ok: true };
 
   let refusal: { code: ToolDispatchCode; message: string } | null = null;

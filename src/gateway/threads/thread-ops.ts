@@ -733,15 +733,26 @@ export async function executePrometheusThreadOps(
   // Project membership actions. They are reversible and never delete a chat or a project.
   // The hidden supervisor guard above already rejects them (they are not in hiddenAllowedActions).
   if (action === 'list_projects') {
-    return {
-      projects: listProjects().map((project) => ({
+    // limit caps the chats listed per project; sessionCount always reports the full count.
+    const perProject = Math.max(1, Math.min(200, Math.floor(Number(args?.limit)) || 20));
+    let truncated = 0;
+    const projects = listProjects().map((project) => {
+      const more = Math.max(0, project.sessions.length - perProject);
+      if (more) truncated++;
+      return {
         id: project.id,
         name: project.name,
         ...(project.workspacePath ? { workspacePath: project.workspacePath } : {}),
         ...(project.pinnedAt ? { pinnedAt: project.pinnedAt } : {}),
         sessionCount: project.sessions.length,
-        sessions: project.sessions.map((sess) => ({ id: sess.id, title: sess.title })),
-      })),
+        sessions: project.sessions.slice(0, perProject).map((sess) => ({ id: sess.id, title: sess.title })),
+        ...(more ? { moreSessions: more } : {}),
+      };
+    });
+    return {
+      projects,
+      sessionsPerProjectLimit: perProject,
+      ...(truncated ? { note: `${truncated} project(s) have more chats than shown (see moreSessions). Pass a larger limit (max 200) to list more chats per project.` } : {}),
     };
   }
 
