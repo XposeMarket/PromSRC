@@ -8,7 +8,7 @@ import {
   BACKGROUND_WORKER_WITHHELD_TOOL_NAMES,
   backgroundWorkerWithheldReason,
   evaluateToolDispatch,
-  isBackgroundSpawnWorkerRun,
+  isBackgroundSpawnWorkerSession,
   toolNameSetOf,
 } from '../chat/tool-dispatch-policy';
 
@@ -129,13 +129,22 @@ assert.match(
 const WITHHELD = ['set_current_model', 'switch_model', 'update_heartbeat', 'background_ops'];
 assert.deepEqual([...BACKGROUND_WORKER_WITHHELD_TOOL_NAMES].sort(), [...WITHHELD].sort());
 
-assert.equal(isBackgroundSpawnWorkerRun('background_task', 'background_bg_123'), true, 'background_ops spawn worker session');
-assert.equal(isBackgroundSpawnWorkerRun('background_agent', 'anything'), true);
-assert.equal(isBackgroundSpawnWorkerRun('interactive', 'main_chat'), false, 'main chat keeps the tools');
-assert.equal(isBackgroundSpawnWorkerRun('background_task', 'meta_coordinator_abc'), false, 'team coordinator keeps the tools');
-assert.equal(isBackgroundSpawnWorkerRun('background_task', 'webhook_abc'), false, 'webhook runs keep the tools');
-assert.equal(isBackgroundSpawnWorkerRun('team_subagent', 'team_x_agent_y'), false, 'team members keep the tools');
-assert.equal(isBackgroundSpawnWorkerRun('cron', 'cron_job_1'), false, 'scheduled jobs keep the tools');
+// A worker is identified only by its session: spawn and follow_up rounds run
+// in background_<conversation root id> (task-runner backgroundRuntimeSessionId).
+assert.equal(isBackgroundSpawnWorkerSession('background_bg_123'), true, 'background_ops spawn worker session');
+assert.equal(isBackgroundSpawnWorkerSession('main_chat'), false, 'main chat keeps the tools');
+assert.equal(isBackgroundSpawnWorkerSession('meta_coordinator_abc'), false, 'team coordinator keeps the tools');
+assert.equal(isBackgroundSpawnWorkerSession('webhook_abc'), false, 'webhook runs keep the tools');
+assert.equal(isBackgroundSpawnWorkerSession('team_x_agent_y'), false, 'team members keep the tools');
+assert.equal(isBackgroundSpawnWorkerSession('cron_job_1'), false, 'scheduled jobs keep the tools');
+// Standalone subagents run in executionMode background_agent (background-task-runner
+// selects it for task.subagentProfile) with a subagent_<id>_<ts> session: not a worker.
+const STANDALONE_SUBAGENT_SESSION = 'subagent_researcher_1732500000000';
+assert.equal(isBackgroundSpawnWorkerSession(STANDALONE_SUBAGENT_SESSION), false, 'standalone subagent keeps the tools');
+assert.match(taskRunnerSource, /return `background_\$\{String\(record\.conversationId \|\| record\.id \|\| ''\)\.trim\(\)\}`;/,
+  'spawn and follow-up rounds must keep running in the background_ conversation session');
+assert.match(readFileSync(path.join(repoRoot, 'src', 'gateway', 'agents-runtime', 'subagent-manager.ts'), 'utf8'), /const subagentSessionId = `subagent_/,
+  'standalone subagent sessions must not use the background_ prefix');
 
 // Main chat surface (core + automation_scheduling for update_heartbeat) offers all four.
 const mainSurface = toolNameSetOf(buildTools(deps, new Set(['automation_scheduling'])));
@@ -150,7 +159,7 @@ assert.equal(mainSurface.has('ask_prometheus_questions'), true);
 assert.equal(mainSurface.has('request_final_action_approval'), true);
 
 // handleChat wires the strip and the dispatch refusal to the worker predicate.
-assert.match(chatRouterSource, /const isBackgroundWorkerRun = isBackgroundSpawnWorkerRun\(executionMode, sessionId\);/);
+assert.match(chatRouterSource, /const isBackgroundWorkerRun = isBackgroundSpawnWorkerSession\(sessionId\);/);
 assert.match(chatRouterSource, /\.\.\.\(isBackgroundWorkerRun \? BACKGROUND_WORKER_WITHHELD_TOOL_NAMES : \[\]\)/);
 assert.match(chatRouterSource, /withheldReason: isBackgroundWorkerRun \? backgroundWorkerWithheldReason : undefined/);
 
@@ -180,5 +189,14 @@ for (const name of ['bg_plan_declare', 'bg_plan_advance', 'ask_prometheus_questi
   assert.equal(dispatch(name, 'enforce', true).ok, true, `worker may still call ${name}`);
 }
 for (const name of WITHHELD) assert.equal(dispatch(name, 'enforce', false).ok, true, `main chat may call ${name}`);
+// A standalone subagent (background_agent mode, subagent_ session) keeps all
+// four on its surface and its calls are not refused.
+const subagentIsWorker = isBackgroundSpawnWorkerSession(STANDALONE_SUBAGENT_SESSION);
+const subagentStrip = new Set(subagentIsWorker ? BACKGROUND_WORKER_WITHHELD_TOOL_NAMES : []);
+const subagentSurface = new Set([...mainSurface].filter((name) => !subagentStrip.has(name)));
+for (const name of WITHHELD) {
+  assert.equal(subagentSurface.has(name), true, `standalone subagent must keep ${name}`);
+  assert.equal(dispatch(name, 'enforce', subagentIsWorker).ok, true, `standalone subagent may call ${name}`);
+}
 
 console.log('background-spawn-tool-surface regression: ok');

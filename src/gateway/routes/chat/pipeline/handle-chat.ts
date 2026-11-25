@@ -23,7 +23,7 @@ import { presentProviderCallFailure, usageCutoffNotice } from '../../../chat/pro
 import { attemptModelDigest, buildDeterministicTurnDigest, describeTurnCutoffCause } from '../../../chat/degraded-turn-finish';
 import { fitToolDefinitionsToBudget } from '../../../tools/schema-compaction';
 import { currentTrace, recordSpan, runInTrace, withSpan } from '../../../observability/turn-trace';
-import { BACKGROUND_WORKER_WITHHELD_TOOL_NAMES, backgroundWorkerWithheldReason, evaluateToolDispatch, isBackgroundSpawnWorkerRun, resolveIdleRoundLimit, resolveToolSurfaceEnforcementMode, toolNameSetOf, type ToolDispatchDecision } from '../../../chat/tool-dispatch-policy';
+import { BACKGROUND_WORKER_WITHHELD_TOOL_NAMES, backgroundWorkerWithheldReason, evaluateToolDispatch, isBackgroundSpawnWorkerSession, resolveIdleRoundLimit, resolveToolSurfaceEnforcementMode, toolNameSetOf, type ToolDispatchDecision } from '../../../chat/tool-dispatch-policy';
 import { ToolPerformanceTracker } from '../../../chat/tool-performance-telemetry';
 import { formatToolCategoryProvisioningFailure, preserveActivatedToolCategoriesForTurnOverride, verifyToolCategorySurface } from '../../../tool-category-provisioning';
 import { normalizeManifestToolCategory } from '../../../../runtime/tool-category-manifest';
@@ -670,7 +670,7 @@ export async function handleChatUntraced(
   // Tools always stripped from background/subagent runs. Background workers
   // (background_ops spawn) also lose tools that act on the user's live chat or
   // start more workers; dispatch refuses them too (evaluateTurnToolDispatch).
-  const isBackgroundWorkerRun = isBackgroundSpawnWorkerRun(executionMode, sessionId);
+  const isBackgroundWorkerRun = isBackgroundSpawnWorkerSession(sessionId);
   const alwaysStrip = new Set<string>([
     ...(isBackgroundOrSubagentMode ? ['start_task'] : []),
     ...(isBackgroundWorkerRun ? BACKGROUND_WORKER_WITHHELD_TOOL_NAMES : []),

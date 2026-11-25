@@ -72,12 +72,14 @@ const BACKGROUND_WORKER_WITHHELD_DISPATCH = new Set<string>([
 ]);
 
 /**
- * A run started by background_ops spawn. Workers run in `background_<id>`
- * sessions (task-runner). executionMode 'background_task' alone is not used:
- * team coordinators, webhooks and Telegram background runs share it.
+ * A run started by background_ops spawn or follow_up. Only those runs use a
+ * `background_<conversation id>` session (task-runner backgroundRuntimeSessionId;
+ * follow-up rounds reuse the conversation's session). executionMode is not
+ * used: 'background_task' is shared with team coordinators, webhooks and
+ * Telegram background runs, and 'background_agent' with standalone subagents.
  */
-export function isBackgroundSpawnWorkerRun(executionMode: unknown, sessionId: unknown): boolean {
-  return executionMode === 'background_agent' || String(sessionId || '').startsWith('background_');
+export function isBackgroundSpawnWorkerSession(sessionId: unknown): boolean {
+  return String(sessionId || '').startsWith('background_');
 }
 
 export function backgroundWorkerWithheldReason(name: string): string | null {
