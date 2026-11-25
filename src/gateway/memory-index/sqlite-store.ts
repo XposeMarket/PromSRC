@@ -807,15 +807,20 @@ function makeOperationalChunks(record: OperationalRecord): Array<{ id: string; i
  * Remove the evidence record indexed from one source file (its chunks, FTS rows
  * and vector) and nothing else. The memory tool uses this to drop the stale copy
  * of a memory file it just edited; the next ordinary refresh re-adds the file
- * from disk. Never creates a database. Returns true when a record was removed.
+ * from disk. Never creates a database. Returns 'removed' when a record was
+ * removed, 'absent' when the index holds no record for this file, and
+ * 'unavailable' when the database is missing or cannot be opened (search then
+ * falls back to the JSON store, which may still hold the old text).
  */
-export function removeSqliteEvidenceSource(workspacePath: string, sourcePath: string): boolean {
-  if (!fs.existsSync(sqlitePath(workspacePath))) return false;
+export function removeSqliteEvidenceSource(workspacePath: string, sourcePath: string, options?: { caseInsensitive?: boolean }): 'removed' | 'absent' | 'unavailable' {
+  if (!fs.existsSync(sqlitePath(workspacePath))) return 'unavailable';
   const db = openDb(workspacePath);
-  if (!db) return false;
+  if (!db) return 'unavailable';
   try {
     return db.transaction(() => {
-      const ids = db.prepare("SELECT id FROM memory_records WHERE layer = 'evidence' AND source_path = ?").all(sourcePath).map((row: any) => String(row.id));
+      // caseInsensitive: the caller verified another casing of this path opens the same file.
+      const match = options?.caseInsensitive ? 'source_path = ? COLLATE NOCASE' : 'source_path = ?';
+      const ids = db.prepare(`SELECT id FROM memory_records WHERE layer = 'evidence' AND ${match}`).all(sourcePath).map((row: any) => String(row.id));
       for (const recordId of ids) {
         db.prepare('DELETE FROM memory_chunk_fts WHERE record_id = ?').run(recordId);
         db.prepare('DELETE FROM memory_fts WHERE record_id = ?').run(recordId);
@@ -823,7 +828,7 @@ export function removeSqliteEvidenceSource(workspacePath: string, sourcePath: st
         db.prepare('DELETE FROM memory_chunks WHERE record_id = ?').run(recordId);
         db.prepare('DELETE FROM memory_records WHERE id = ?').run(recordId);
       }
-      return ids.length > 0;
+      return ids.length > 0 ? 'removed' : 'absent';
     })();
   } finally {
     try { db.close(); } catch { /* best effort */ }

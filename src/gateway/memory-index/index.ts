@@ -358,9 +358,26 @@ export function scheduleMemoryIndexRefresh(workspacePath: string, options?: Memo
   scheduleMemoryIndexRefreshInWorker(workspacePath, options);
 }
 
-/** Drop the SQLite evidence record of one workspace file (see removeSqliteEvidenceSource). */
-export function forgetIndexedWorkspaceFile(workspacePath: string, absPath: string): boolean {
-  return removeSqliteEvidenceSource(workspacePath, WORKSPACE_FILE_PREFIX + rel(absPath, workspacePath));
+/**
+ * Drop the SQLite evidence record of one workspace file (see removeSqliteEvidenceSource).
+ * The indexer keys a file by the name it last listed on disk. On a
+ * case-insensitive file system a `memory.md` is opened (and, after the first
+ * atomic write, renamed) as `MEMORY.md`, so the stored key may differ from the
+ * tool's path only in case. Match case-insensitively only when another casing
+ * of this path opens this very file, so no other file can be dropped.
+ */
+export function forgetIndexedWorkspaceFile(workspacePath: string, absPath: string): 'removed' | 'absent' | 'unavailable' {
+  let caseInsensitive = false;
+  try {
+    const base = path.basename(absPath);
+    const flipped = base === base.toLowerCase() ? base.toUpperCase() : base.toLowerCase();
+    if (flipped !== base) {
+      const a = fs.statSync(absPath, { bigint: true });
+      const b = fs.statSync(path.join(path.dirname(absPath), flipped), { bigint: true });
+      caseInsensitive = a.ino === b.ino && a.dev === b.dev;
+    }
+  } catch { /* other casing does not open: exact match only */ }
+  return removeSqliteEvidenceSource(workspacePath, WORKSPACE_FILE_PREFIX + rel(absPath, workspacePath), { caseInsensitive });
 }
 function ensureDir(d: string): void { fs.mkdirSync(d, { recursive: true }); }
 function readJson<T>(p: string, fallback: T): T { try { return fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, 'utf-8')) as T : fallback; } catch { return fallback; } }

@@ -164,6 +164,24 @@ function openDb(workspacePath: string): any | null {
     db.prepare("INSERT OR REPLACE INTO recall_meta(key, value) VALUES ('index_version', ?)").run(RECALL_INDEX_VERSION);
   }
   dbByWorkspace.set(key, db);
+  // Once per index: re-read MEMORY.md and USER.md so bullets indexed before
+  // quarantined bullets were skipped stop being recall evidence. Only these two
+  // small files; bumping RECALL_INDEX_VERSION would rebuild the whole index.
+  if (!db.prepare("SELECT 1 FROM recall_meta WHERE key = 'memory_quarantine_reindexed'").get()) {
+    const ctx: InsertCtx = {
+      insertDoc: db.prepare('INSERT INTO recall_fts(body, title, source, session_id, role, ts, path) VALUES (?, ?, ?, ?, ?, ?, ?)'),
+      insertIdea: db.prepare('INSERT OR IGNORE INTO recall_ideas(hash, session_id, ts, text) VALUES (?, ?, ?, ?)'),
+    };
+    try {
+      db.transaction(() => {
+        for (const name of ['MEMORY.md', 'USER.md']) {
+          db.prepare('DELETE FROM recall_files WHERE path = ?').run(name);
+          indexFile(db, workspacePath, path.join(workspacePath, name), ctx);
+        }
+        db.prepare("INSERT OR REPLACE INTO recall_meta(key, value) VALUES ('memory_quarantine_reindexed', '1')").run();
+      })();
+    } catch { /* retried on the next open */ }
+  }
   return db;
 }
 

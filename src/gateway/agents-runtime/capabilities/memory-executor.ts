@@ -123,9 +123,10 @@ export const MEMORY_FILE_SYNC_GATE_TIMEOUT_MS = 2000;
  *    re-indexed now, in-process.
  *  - Structured SQLite index: the stale record of this file is dropped now
  *    (a few deletes under the gate) and an ordinary background refresh is
- *    queued to re-add it from disk. If the file is not in that index there
- *    is nothing stale and nothing is queued. If maintenance already holds the
- *    gate, the drop is skipped and the queued refresh converges instead.
+ *    queued to re-add it from disk. If the index holds no record for the file
+ *    there is nothing stale and nothing is queued. If the SQLite index cannot
+ *    be read, or maintenance already holds the gate, the drop is skipped and
+ *    the queued refresh converges instead.
  */
 async function syncMemoryFileIndexes(memoryPath: string): Promise<void> {
   const root = path.dirname(memoryPath);
@@ -135,7 +136,9 @@ async function syncMemoryFileIndexes(memoryPath: string): Promise<void> {
     let release: (() => void) | undefined;
     try {
       release = await acquireMemoryAccess('maintenance', { timeoutMs: MEMORY_FILE_SYNC_GATE_TIMEOUT_MS });
-      queueRefresh = forgetIndexedWorkspaceFile(root, memoryPath);
+      // Only "the index holds no record for this file" needs no refresh; an
+      // unavailable SQLite index means search reads the JSON store, which may be stale.
+      queueRefresh = forgetIndexedWorkspaceFile(root, memoryPath) !== 'absent';
     } catch { /* gate busy or SQLite unavailable: the queued refresh converges */ }
     finally { release?.(); }
   }
