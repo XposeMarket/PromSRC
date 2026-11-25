@@ -2109,7 +2109,7 @@ export function desktopRecordMacro(name: string): string {
   _activeRecordingName = macroName;
   _recordingBuffer = [];
   _recordingStartTime = Date.now();
-  return `Recording started for macro "${macroName}". All desktop_input click, type, key and scroll actions will be logged. Call desktop_macro(action:"stop") when done.`;
+  return `Recording started for macro "${macroName}". All desktop_input click, type, key and scroll actions will be logged. The recording runs until it is stopped.`;
 }
 
 

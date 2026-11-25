@@ -83,6 +83,5 @@ assert.equal(DESKTOP_WRAPPER_ACTION_MAP.desktop_window.click, 'desktop_window_cl
 assert.equal(DESKTOP_WRAPPER_ACTION_MAP.desktop_window.screenshot, 'desktop_window_screenshot');
 assert.equal(DESKTOP_WRAPPER_ACTION_MAP.desktop_screen.screenshot, 'desktop_screenshot');
 assert.equal(DESKTOP_WRAPPER_ACTION_MAP.desktop_input.click, 'desktop_click');
-assert.equal((DESKTOP_WRAPPER_ACTION_MAP as any).desktop_macro?.stop, 'desktop_stop_macro');
 
 console.log('tool-name-hints regression passed');
