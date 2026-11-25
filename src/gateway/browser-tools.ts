@@ -2389,15 +2389,43 @@ export async function getBrowserAdvisorPacket(
 }
 
 /**
+ * Limits for browser_get_page_text on both browser backends. Omitted (undefined,
+ * null or empty) uses the default: 6000 characters, 200 lines. Any positive
+ * finite number (or numeric string) is honored, floored, and capped at 50000
+ * characters / 1000 lines. Zero, negative and non-numeric values are rejected.
+ */
+export function resolveBrowserPageTextLimits(
+  options?: { maxChars?: unknown; maxLines?: unknown },
+): { maxChars: number; maxLines: number } | { error: string } {
+  const pick = (value: unknown, label: string, fallback: number, cap: number): number | string => {
+    if (value === undefined || value === null || (typeof value === 'string' && !value.trim())) return fallback;
+    const n = typeof value === 'number' ? value : (typeof value === 'string' ? Number(value.trim()) : NaN);
+    const floored = Math.floor(n);
+    if (!Number.isFinite(n) || floored < 1) {
+      return `ERROR: ${label} must be a positive number (got ${JSON.stringify(value)}). Omit it for the default (${fallback}).`;
+    }
+    return Math.min(cap, floored);
+  };
+  const maxChars = pick(options?.maxChars, 'max_chars', 6000, 50000);
+  if (typeof maxChars === 'string') return { error: maxChars };
+  const maxLines = pick(options?.maxLines, 'max_lines', 200, 1000);
+  if (typeof maxLines === 'string') return { error: maxLines };
+  return { maxChars, maxLines };
+}
+
+/**
  * Shared final step for browser_get_page_text on both browser backends: optional
- * query filter, then max_lines (default 200, max 1000) and max_chars (default
- * 6000, 200-50000). Exported for regression tests.
+ * query filter, then the empty-page fallback, then max_lines and max_chars
+ * (resolveBrowserPageTextLimits) applied to the assembled output, so the
+ * fallback text is held to the limits too. Exported for regression tests.
  */
 export function boundBrowserPageText(
   text: string,
   page: { title: string; url: string },
-  options?: { query?: string; maxChars?: number; maxLines?: number },
+  options?: { query?: string; maxChars?: unknown; maxLines?: unknown },
 ): string {
+  const limits = resolveBrowserPageTextLimits(options);
+  if ('error' in limits) return limits.error;
   let result = String(text || '').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n');
   const query = String(options?.query || '').trim().toLowerCase();
   if (query) {
@@ -2405,16 +2433,17 @@ export function boundBrowserPageText(
     const matched = lines.filter((line, index) => line.toLowerCase().includes(query) || lines[Math.max(0, index - 1)]?.toLowerCase().includes(query));
     result = [`Page: ${page.title}`, `URL: ${page.url}`, '', ...matched].join('\n');
   }
-  const maxLines = Math.max(1, Math.min(1000, Math.floor(Number(options?.maxLines || 200))));
-  const maxChars = Math.max(200, Math.min(50000, Math.floor(Number(options?.maxChars || 6000))));
-  const bounded = result.split('\n').slice(0, maxLines).join('\n').slice(0, maxChars);
-  return bounded.length > 20 ? bounded : 'No readable text found on this page.';
+  const output = result.trim().length > 20 ? result : 'No readable text found on this page.';
+  return output.split('\n').slice(0, limits.maxLines).join('\n').slice(0, limits.maxChars);
 }
 
 export async function browserGetPageText(
   sessionId: string,
-  options?: { element?: string; query?: string; maxChars?: number; maxLines?: number },
+  options?: { element?: string; query?: string; maxChars?: unknown; maxLines?: unknown },
 ): Promise<string> {
+  // Reject invalid limits before reading the page (same rule on both backends).
+  const limits = resolveBrowserPageTextLimits(options);
+  if ('error' in limits) return limits.error;
   const resolved = resolveSessionId(sessionId);
   const recovery = await recoverInHouseSessionMapping(resolved);
   if (recovery?.error) return recovery.error;

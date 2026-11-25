@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
-import { boundBrowserPageText } from './browser-tools';
+import fs from 'node:fs';
+import path from 'node:path';
+import { boundBrowserPageText, resolveBrowserPageTextLimits } from './browser-tools';
 import { formatWindowList } from './desktop/window-mid';
 
 // Regression: limits the model passes were ignored.
@@ -24,6 +26,32 @@ const filtered = boundBrowserPageText(body, page, { query: 'line 42 ' });
 assert.match(filtered, /line 42 x/);
 assert.doesNotMatch(filtered, /line 300 /, 'query filters lines');
 assert.equal(boundBrowserPageText('', page), 'No readable text found on this page.');
+
+// Small limits are honored exactly (no 200-character floor), and the empty-page
+// fallback is held to the cap too.
+assert.equal(boundBrowserPageText(body, page, { maxChars: 50 }).length, 50, 'max_chars 50 returns 50 characters');
+assert.equal(boundBrowserPageText(body, page, { maxChars: 50.9 }).length, 50, 'fractional limits are floored');
+assert.equal(boundBrowserPageText(body, page, { maxChars: '120' }).length, 120, 'numeric strings are accepted');
+assert.equal(boundBrowserPageText('', page, { maxChars: 10 }), 'No readabl', 'fallback text is capped');
+assert.equal(boundBrowserPageText(body, page, { maxChars: 10 }), 'Page: Fixt', 'a small cap does not turn real text into the fallback');
+assert.equal(boundBrowserPageText(body, page, { maxChars: 999999 }).length <= 50000, true, 'upper cap stays');
+// Zero, negative and non-numeric limits are rejected, not silently defaulted.
+for (const [label, value] of [['max_chars', 0], ['max_chars', -5], ['max_chars', 'abc'], ['max_chars', Number.NaN], ['max_chars', 0.5]] as const) {
+  const out = boundBrowserPageText(body, page, { maxChars: value });
+  assert.match(out, new RegExp(`^ERROR: ${label} must be a positive number`), `max_chars ${String(value)} is rejected`);
+}
+assert.match(boundBrowserPageText(body, page, { maxLines: 0 }), /^ERROR: max_lines must be a positive number/);
+assert.match(boundBrowserPageText(body, page, { maxLines: 'many' }), /^ERROR: max_lines must be a positive number/);
+// Omitted limits use the defaults.
+assert.deepEqual(resolveBrowserPageTextLimits({}), { maxChars: 6000, maxLines: 200 });
+assert.deepEqual(resolveBrowserPageTextLimits({ maxChars: null, maxLines: '' }), { maxChars: 6000, maxLines: 200 });
+// Both backends of browserGetPageText end in boundBrowserPageText and check the
+// limits before reading the page.
+const browserToolsSource = fs.readFileSync(path.join(__dirname, 'browser-tools.ts'), 'utf8');
+const getPageText = browserToolsSource.slice(browserToolsSource.indexOf('export async function browserGetPageText('));
+const getPageTextBody = getPageText.slice(0, getPageText.indexOf('\nexport '));
+assert.equal((getPageTextBody.match(/return boundBrowserPageText\(/g) || []).length, 2, 'in-app and Playwright branches share the bounding');
+assert.ok(getPageTextBody.indexOf('resolveBrowserPageTextLimits(options)') < getPageTextBody.indexOf('getInHouseSession(resolved)'), 'limits are validated first');
 
 const windows = Array.from({ length: 7 }, (_, i) => ({
   windowId: `w${i}`, windowToken: `t${i}`, handle: i + 1, appId: 'app', processName: 'proc.exe', pid: 100 + i,
