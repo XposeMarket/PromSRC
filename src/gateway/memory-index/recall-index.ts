@@ -18,6 +18,7 @@ import { boundRetrievalTrace, retrievalSourceId, type RetrievalTrace } from '../
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import { isPoisonMemoryFact } from './memory-recall.js';
 
 export type RecallSource = 'transcript' | 'note' | 'memory' | 'idea';
 
@@ -163,6 +164,24 @@ function openDb(workspacePath: string): any | null {
     db.prepare("INSERT OR REPLACE INTO recall_meta(key, value) VALUES ('index_version', ?)").run(RECALL_INDEX_VERSION);
   }
   dbByWorkspace.set(key, db);
+  // Once per index: re-read MEMORY.md and USER.md so bullets indexed before
+  // quarantined bullets were skipped stop being recall evidence. Only these two
+  // small files; bumping RECALL_INDEX_VERSION would rebuild the whole index.
+  if (!db.prepare("SELECT 1 FROM recall_meta WHERE key = 'memory_quarantine_reindexed'").get()) {
+    const ctx: InsertCtx = {
+      insertDoc: db.prepare('INSERT INTO recall_fts(body, title, source, session_id, role, ts, path) VALUES (?, ?, ?, ?, ?, ?, ?)'),
+      insertIdea: db.prepare('INSERT OR IGNORE INTO recall_ideas(hash, session_id, ts, text) VALUES (?, ?, ?, ?)'),
+    };
+    try {
+      db.transaction(() => {
+        for (const name of ['MEMORY.md', 'USER.md']) {
+          db.prepare('DELETE FROM recall_files WHERE path = ?').run(name);
+          indexFile(db, workspacePath, path.join(workspacePath, name), ctx);
+        }
+        db.prepare("INSERT OR REPLACE INTO recall_meta(key, value) VALUES ('memory_quarantine_reindexed', '1')").run();
+      })();
+    } catch { /* retried on the next open */ }
+  }
   return db;
 }
 
@@ -289,6 +308,8 @@ function indexMarkdownBullets(ctx: InsertCtx, rel: string, text: string, mtime: 
     if (h) { section = h[1].trim(); continue; }
     const b = /^\s*[-*]\s+(.+)$/.exec(line);
     if (!b || b[1].trim().length < 8) continue;
+    // Quarantined (instruction-like) memory bullets stay in the file but never become recall evidence.
+    if ((rel === 'MEMORY.md' || rel === 'USER.md') && (/\[memory-status:untrusted/i.test(line) || isPoisonMemoryFact(line))) continue;
     ctx.insertDoc.run(clip(b[1].trim()), `${path.basename(rel)} ${section}`.trim(), rel === 'IDEAS.md' ? 'idea' : 'memory', '', 'memory', Math.floor(mtime), rel);
   }
 }
@@ -427,6 +448,32 @@ function scheduleSlices(workspacePath: string, delayMs: number): void {
     else { try { require('./recall-embeddings').scheduleRecallEmbedding(workspacePath); } catch { /* optional */ } }
   }, Math.max(0, delayMs));
   (s.timer as any)?.unref?.();
+}
+
+/**
+ * Re-index one root memory file (MEMORY.md / USER.md) now, so a search right
+ * after a memory-tool write, update or delete sees the committed bullets.
+ * Only an existing recall index is touched; a missing one is built (this file
+ * included) by the first search.
+ */
+export function reindexRecallMemoryFile(workspacePath: string, absPath: string): boolean {
+  if (!workspacePath || !absPath || process.env.PROMETHEUS_DISABLE_RECALL_INDEX === '1') return false;
+  const abs = path.resolve(absPath);
+  if (!['MEMORY.md', 'USER.md'].includes(path.basename(abs)) || path.dirname(abs) !== path.resolve(workspacePath)) return false;
+  if (!fs.existsSync(recallIndexPath(workspacePath))) return false;
+  const db = openDb(workspacePath);
+  if (!db) return false;
+  const ctx: InsertCtx = {
+    insertDoc: db.prepare('INSERT INTO recall_fts(body, title, source, session_id, role, ts, path) VALUES (?, ?, ?, ?, ?, ?, ?)'),
+    insertIdea: db.prepare('INSERT OR IGNORE INTO recall_ideas(hash, session_id, ts, text) VALUES (?, ?, ?, ?)'),
+  };
+  db.transaction(() => {
+    // Forget the size/mtime fingerprint so the file is re-read even if both look unchanged.
+    db.prepare('DELETE FROM recall_files WHERE path = ?').run(relKey(workspacePath, abs));
+    indexFile(db, workspacePath, abs, ctx);
+  })();
+  stateFor(workspacePath).dirty.delete(abs);
+  return true;
 }
 
 /** Mark a transcript/note file as changed; it is indexed within a few seconds. */

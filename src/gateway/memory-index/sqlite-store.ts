@@ -803,6 +803,41 @@ function makeOperationalChunks(record: OperationalRecord): Array<{ id: string; i
     .map((text, index) => ({ id: `${record.id}:chunk:${index}`, index, text }));
 }
 
+/**
+ * Remove the evidence record indexed from one source file (its chunks, FTS rows
+ * and vector) and nothing else. The memory tool uses this to drop the stale copy
+ * of a memory file it just edited; the next ordinary refresh re-adds the file
+ * from disk. Never creates a database. Returns 'removed' when a record was
+ * removed, 'absent' when the index holds no record for this file, and
+ * 'unavailable' when the database is missing or cannot be opened (search then
+ * falls back to the JSON store, which may still hold the old text).
+ */
+export function removeSqliteEvidenceSource(workspacePath: string, sourcePath: string, options?: { isSameFile?: (storedSourcePath: string) => boolean }): 'removed' | 'absent' | 'unavailable' {
+  if (!fs.existsSync(sqlitePath(workspacePath))) return 'unavailable';
+  const db = openDb(workspacePath);
+  if (!db) return 'unavailable';
+  try {
+    return db.transaction(() => {
+      // Case variants of the path are candidates only; isSameFile confirms each one is this file.
+      const isSameFile = options?.isSameFile;
+      const match = isSameFile ? 'source_path = ? COLLATE NOCASE' : 'source_path = ?';
+      const ids = db.prepare(`SELECT id, source_path FROM memory_records WHERE layer = 'evidence' AND ${match}`).all(sourcePath)
+        .filter((row: any) => String(row.source_path) === sourcePath || (isSameFile ? isSameFile(String(row.source_path)) : false))
+        .map((row: any) => String(row.id));
+      for (const recordId of ids) {
+        db.prepare('DELETE FROM memory_chunk_fts WHERE record_id = ?').run(recordId);
+        db.prepare('DELETE FROM memory_fts WHERE record_id = ?').run(recordId);
+        db.prepare('DELETE FROM memory_embeddings WHERE record_id = ?').run(recordId);
+        db.prepare('DELETE FROM memory_chunks WHERE record_id = ?').run(recordId);
+        db.prepare('DELETE FROM memory_records WHERE id = ?').run(recordId);
+      }
+      return ids.length > 0 ? 'removed' : 'absent';
+    })();
+  } finally {
+    try { db.close(); } catch { /* best effort */ }
+  }
+}
+
 export function syncSqliteMemoryIndex(workspacePath: string, store: EvidenceStore): {
   ok: boolean;
   path: string;
