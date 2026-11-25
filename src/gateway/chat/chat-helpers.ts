@@ -1202,7 +1202,7 @@ export function buildVisionScreenshotMessage(
     mimeType = packet?.screenshotMime || 'image/png';
     label = 'Desktop screenshot';
     if (packet?.normalizedScreenshot && packet.coordinateScale) {
-      coordinateNote = ` This screenshot was normalized from ${packet.normalizedScreenshot.originalWidth}x${packet.normalizedScreenshot.originalHeight}; desktop_click with coordinate_space="capture" and screenshot_id="${packet.screenshotId}" automatically maps displayed-image coordinates back to real desktop coordinates.`;
+      coordinateNote = ` This screenshot was normalized from ${packet.normalizedScreenshot.originalWidth}x${packet.normalizedScreenshot.originalHeight}; desktop_input(action:"click") with coordinate_space="capture" and screenshot_id="${packet.screenshotId}" automatically maps displayed-image coordinates back to real desktop coordinates.`;
     }
   } else if (source === 'browser') {
     const cached = getLastBrowserScreenshot(sessionId);
@@ -1211,7 +1211,7 @@ export function buildVisionScreenshotMessage(
     mimeType = cached.mimeType || 'image/png';
     label = `Browser screenshot (${cached.width}x${cached.height})`;
     if (cached.normalized && cached.viewportWidth && cached.viewportHeight && cached.coordinateScale) {
-      coordinateNote = ` Coordinates selected from this displayed image are automatically scaled back to the live viewport (${cached.viewportWidth}x${cached.viewportHeight}) by browser_vision_click/browser_vision_type.`;
+      coordinateNote = ` Coordinates selected from this displayed image are automatically scaled back to the live viewport (${cached.viewportWidth}x${cached.viewportHeight}) by browser_act(action:"vision_click"/"vision_type").`;
     }
     // Consume the cached screenshot so it's not re-injected on subsequent tool calls
     clearLastBrowserScreenshot(sessionId);
@@ -1220,7 +1220,7 @@ export function buildVisionScreenshotMessage(
     mimeType = source.mimeType || 'image/png';
     label = `Browser screenshot (${source.width}x${source.height})`;
     if (source.normalized && source.viewportWidth && source.viewportHeight && source.coordinateScale) {
-      coordinateNote = ` Coordinates selected from this displayed image are automatically scaled back to the live viewport (${source.viewportWidth}x${source.viewportHeight}) by browser_vision_click/browser_vision_type.`;
+      coordinateNote = ` Coordinates selected from this displayed image are automatically scaled back to the live viewport (${source.viewportWidth}x${source.viewportHeight}) by browser_act(action:"vision_click"/"vision_type").`;
     }
   }
 

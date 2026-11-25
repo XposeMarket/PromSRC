@@ -82,7 +82,7 @@ export async function browserElementWatch(
     }
   }
   const session = sessions.get(resolved);
-  if (!session) return 'ERROR: No browser session. Use browser_open first.';
+  if (!session) return 'ERROR: No browser session. Use browser_session(action:"open") first.';
   if (!selector) return 'ERROR: selector is required.';
   const safeTimeout = Math.min(Math.max(Number(timeoutMs) || 15000, 500), 120_000);
 
@@ -137,7 +137,7 @@ export async function browserSnapshotDelta(sessionId: string): Promise<string> {
   if (recovery?.error) return recovery.error;
   if (getInHouseSession(resolved)) return browserSnapshotInHouse(resolved);
   const session = sessions.get(resolved);
-  if (!session) return 'ERROR: No browser session. Use browser_open first.';
+  if (!session) return 'ERROR: No browser session. Use browser_session(action:"open") first.';
 
   const prevSnapshot = session.lastSnapshot;
   const newSnapshot = await takeSnapshot(session.page);
@@ -177,7 +177,7 @@ export async function browserSnapshotDelta(sessionId: string): Promise<string> {
   if (prevUrl !== newUrl) parts.push(`URL: ${prevUrl} ? ${newUrl}`);
   if (added.length > 0) { parts.push('\n=== ADDED ==='); parts.push(...added.slice(0, 60)); }
   if (removed.length > 0) { parts.push('\n=== REMOVED ==='); parts.push(...removed.slice(0, 60)); }
-  if (added.length > 60 || removed.length > 60) parts.push('\n�(truncated � use browser_snapshot for full view)');
+  if (added.length > 60 || removed.length > 60) parts.push('\n�(truncated � use browser_observe(action:"snapshot") for full view)');
 
   return attachShortcutsContext(parts.join('\n'), url, sessionId);
 }

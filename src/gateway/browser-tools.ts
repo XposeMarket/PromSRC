@@ -200,7 +200,7 @@ export async function browserOpen(
   // reactor retries indefinitely � producing the 29-step loop seen in logs.
   const rawUrl = String(url ?? '').trim();
   if (!rawUrl || rawUrl === 'undefined' || rawUrl === 'null' || rawUrl === 'object') {
-    return 'ERROR: browser_open requires a valid URL string. Received: ' + JSON.stringify(url);
+    return 'ERROR: browser_session(action:"open") requires a valid URL string. Received: ' + JSON.stringify(url);
   }
 
   const resolvedSessionId = resolveSessionId(sessionId);
@@ -378,7 +378,7 @@ export async function browserSnapshot(
       }
     }
   }
-  if (!session) return 'ERROR: No browser session. Use browser_open first.';
+  if (!session) return 'ERROR: No browser session. Use browser_session(action:"open") first.';
   try {
     // Wait for the DOM to settle before snapshotting � SPAs (like x.com) may still
     // be hydrating after domcontentloaded, leaving querySelectorAll with 0 results.
@@ -594,7 +594,7 @@ export async function browserClick(
   }
   if (getInHouseSession(sessionId)) return browserClickInHouse(sessionId, target, options);
   const session = sessions.get(resolveSessionId(sessionId));
-  if (!session) return 'ERROR: No browser session. Use browser_open first.';
+  if (!session) return 'ERROR: No browser session. Use browser_session(action:"open") first.';
   const requestedElement = typeof target === 'object' && target !== null ? String(target.element || '').trim() : '';
   const requestedSelector = typeof target === 'object' && target !== null ? String(target.selector || '').trim() : '';
   const requestedRef = typeof target === 'number'
@@ -667,7 +667,7 @@ export async function browserClick(
       return buildMinimalBrowserAck(session, `Clicked saved element "${resolvedElement.entry.name}" (${el.role}: "${el.name}").`, { syncMetadata: !fastAck });
     }
     if (!Number.isFinite(requestedRef) || requestedRef <= 0) {
-      return 'ERROR: browser_click requires ref, element, or selector.';
+      return 'ERROR: browser_act(action:"click") requires ref, element, or selector.';
     }
     const cursorPoint = fastAck ? null : await resolveViewportPointFromTarget(session.page, { ref: requestedRef }, 'browser_click').catch(() => null);
     if (cursorPoint) await emitBrowserAgentCursor(sessionId, { ...cursorPoint, kind: 'click', phase: 'start' });
@@ -707,7 +707,7 @@ export async function browserFill(
   }
   if (getInHouseSession(sessionId)) return browserFillInHouse(sessionId, target, text, options);
   const session = sessions.get(resolveSessionId(sessionId));
-  if (!session) return 'ERROR: No browser session. Use browser_open first.';
+  if (!session) return 'ERROR: No browser session. Use browser_session(action:"open") first.';
   const requestedElement = typeof target === 'object' && target !== null ? String(target.element || '').trim() : '';
   const requestedSelector = typeof target === 'object' && target !== null ? String(target.selector || '').trim() : '';
   const requestedRef = typeof target === 'number'
@@ -749,7 +749,7 @@ export async function browserFill(
       resultLabel = `saved element "${resolvedElement.entry.name}"`;
     } else {
       if (!Number.isFinite(requestedRef) || requestedRef <= 0) {
-        return 'ERROR: browser_fill requires ref, element, or selector, plus text.';
+        return 'ERROR: browser_act(action:"fill") requires ref, element, or selector, plus text.';
       }
       const cursorPoint = fastAck ? null : await resolveViewportPointFromTarget(session.page, { ref: requestedRef }, 'browser_fill').catch(() => null);
       if (cursorPoint) await emitBrowserAgentCursor(sessionId, { ...cursorPoint, kind: 'fill', phase: 'start' });
@@ -936,7 +936,7 @@ export async function browserUploadFile(
     }
   }
   const session = sessions.get(resolved);
-  if (!session) return 'ERROR: No browser session. Use browser_open first.';
+  if (!session) return 'ERROR: No browser session. Use browser_session(action:"open") first.';
 
   try {
     const observeMode = options.observe || resolveBrowserObserveMode('browser_upload_file');
@@ -1057,7 +1057,7 @@ export async function browserClickAndDownload(
     }
   }
   const session = sessions.get(resolved);
-  if (!session) return 'ERROR: No browser session. Use browser_open first.';
+  if (!session) return 'ERROR: No browser session. Use browser_session(action:"open") first.';
   if (session.transport === 'extension') {
     try {
       await clickByRef(session.page, ref);
@@ -1118,7 +1118,7 @@ export async function browserPressKey(
     return 'ERROR: hold_ms, keys, sequence, and tab_id require the in-house browser target; no input sent.';
   }
   const session = sessions.get(resolveSessionId(sessionId));
-  if (!session) return 'ERROR: No browser session. Use browser_open first.';
+  if (!session) return 'ERROR: No browser session. Use browser_session(action:"open") first.';
   try {
     const observeMode = options?.observe || resolveBrowserObserveMode('browser_press_key');
     const fastAck = shouldUseFastBrowserAck(observeMode);
@@ -1163,7 +1163,7 @@ export async function browserType(
   if (recovery?.error) return recovery.error;
   if (getInHouseSession(sessionId)) return browserTypeInHouse(sessionId, text, options);
   const session = sessions.get(resolveSessionId(sessionId));
-  if (!session) return 'ERROR: No browser session. Use browser_open first.';
+  if (!session) return 'ERROR: No browser session. Use browser_session(action:"open") first.';
   try {
     const observeMode = options?.observe || resolveBrowserObserveMode('browser_type');
     const fastAck = shouldUseFastBrowserAck(observeMode);
@@ -1186,7 +1186,7 @@ export async function browserType(
     }
     return buildMinimalBrowserAck(session, `Typed ${String(text).length} chars into focused element.`, { syncMetadata: !fastAck });
   } catch (err: any) {
-    return `ERROR: browser_type failed: ${err.message}`;
+    return `ERROR: browser_act(action:"type") failed: ${err.message}`;
   }
 }
 
@@ -1206,7 +1206,7 @@ export async function browserWait(
     return `Waited ${clampedNative}ms in Prometheus in-house browser.`;
   }
   const session = sessions.get(resolveSessionId(sessionId));
-  if (!session) return 'ERROR: No browser session. Use browser_open first.';
+  if (!session) return 'ERROR: No browser session. Use browser_session(action:"open") first.';
   const clamped = Math.min(Math.max(ms || 1000, 500), 8000);
   try {
     const observeMode = options?.observe || resolveBrowserObserveMode('browser_wait');
@@ -1251,7 +1251,7 @@ export async function browserGetFocusedItem(sessionId: string): Promise<string> 
     }
   }
   const session = sessions.get(resolvedFocus);
-  if (!session) return 'ERROR: No browser session. Use browser_open first.';
+  if (!session) return 'ERROR: No browser session. Use browser_session(action:"open") first.';
   try {
     const info = await session.page.evaluate(() => {
       const doc = (globalThis as any).document;
@@ -1444,7 +1444,7 @@ export async function browserScroll(
     return summary;
   }
   const session = sessions.get(resolveSessionId(sessionId));
-  if (!session) return 'ERROR: No browser session. Use browser_open first.';
+  if (!session) return 'ERROR: No browser session. Use browser_session(action:"open") first.';
 
   const clampedMult = Math.min(Math.max(multiplier || 1.0, 0.5), 4.0);
 
@@ -1487,7 +1487,7 @@ export async function browserScroll(
       return attachShortcutsContext(
         `Scrolled ${direction} ${clampedMult}x viewport. ` +
         `Snapshot refreshed (${elementCount} elements). ` +
-        `Use browser_snapshot only if you need fresh @ref interactions.`,
+        `Use browser_observe(action:"snapshot") only if you need fresh @ref interactions.`,
         session.page.url(),
         sessionId,
       );
@@ -1585,10 +1585,10 @@ export async function browserDrag(
   } = {},
 ): Promise<string> {
   if (getInHouseSession(sessionId)) {
-    return inHouseUnsupportedToolMessage('browser_drag', 'Use browser_click / browser_fill / browser_scroll for in-house browser interactions.');
+    return inHouseUnsupportedToolMessage('browser_drag', 'Use browser_act(action:"click"/"fill"/"scroll") for in-house browser interactions.');
   }
   const session = sessions.get(resolveSessionId(sessionId));
-  if (!session) return 'ERROR: No browser session. Use browser_open first.';
+  if (!session) return 'ERROR: No browser session. Use browser_session(action:"open") first.';
 
   try {
     const observeMode = options.observe || resolveBrowserObserveMode('browser_drag');
@@ -1802,7 +1802,7 @@ async function browserScrollCollectInHouse(
 async function browserScrollCollectV2InHouse(sessionId: string, options: Record<string, any> = {}): Promise<string> {
   const resolved = resolveSessionId(sessionId);
   const inHouse = getInHouseSession(resolved);
-  if (!inHouse) return 'ERROR: No in-house browser session. Use browser_open with target="inhouse" first.';
+  if (!inHouse) return 'ERROR: No in-house browser session. Use browser_session(action:"open", target:"inhouse") first.';
   const maxScrolls = Math.min(Math.max(Number(options.max_scrolls ?? options.scrolls ?? 8) || 8, 0), 40);
   const limit = Math.min(Math.max(Number(options.limit || 50) || 50, 1), 500);
   const direction: 'down' | 'up' = String(options.direction || 'down').toLowerCase() === 'up' ? 'up' : 'down';
@@ -1914,7 +1914,7 @@ export async function browserScrollCollect(
   if (recovery?.error) return recovery.error;
   if (getInHouseSession(resolvedSessionId)) return browserScrollCollectInHouse(resolvedSessionId, options);
   const session = sessions.get(resolvedSessionId);
-  if (!session) return 'ERROR: No browser session. Use browser_open first.';
+  if (!session) return 'ERROR: No browser session. Use browser_session(action:"open") first.';
 
   const scrolls   = Math.min(Math.max(options.scrolls || 5, 1), 30);
   const direction  = options.direction || 'down';
@@ -2167,7 +2167,7 @@ export async function browserScrollCollectV2(
     return browserScrollCollectV2InHouse(resolvedSessionId, options);
   }
   const session = sessions.get(resolvedSessionId);
-  if (!session) return 'ERROR: No browser session. Use browser_open first.';
+  if (!session) return 'ERROR: No browser session. Use browser_session(action:"open") first.';
 
   const maxScrolls = Math.min(Math.max(Number(options.max_scrolls ?? options.scrolls ?? 8) || 8, 0), 40);
   const limit = Math.min(Math.max(Number(options.limit || 50) || 50, 1), 500);
@@ -2433,7 +2433,7 @@ export async function browserGetPageText(
     }
   }
   const session = sessions.get(resolved);
-  if (!session) return 'ERROR: No browser session. Use browser_open first.';
+  if (!session) return 'ERROR: No browser session. Use browser_session(action:"open") first.';
 
   try {
     const url = session.page.url();
@@ -2559,18 +2559,18 @@ export async function browserGetPageText(
     });
     if (crossOriginIframes.length > 0) {
       parts.push('');
-      parts.push('=== CROSS-ORIGIN IFRAMES (navigate to these with browser_open) ===');
+      parts.push('=== CROSS-ORIGIN IFRAMES (navigate to these with browser_session(action:"open")) ===');
       for (const f of crossOriginIframes) {
         const label = f.title || f.id || 'iframe';
         parts.push(`  ${label}: ${f.src}`);
       }
       parts.push('');
-      parts.push('TIP: Use browser_open({url: "<iframe src above>"}) to navigate directly into the embedded menu/widget.');
+      parts.push('TIP: Use browser_session({action: "open", url: "<iframe src above>"}) to navigate directly into the embedded menu/widget.');
     }
 
     return boundBrowserPageText(parts.join('\n'), { title, url }, options);
   } catch (err: any) {
-    return `ERROR: browser_get_page_text failed: ${err.message}`;
+    return `ERROR: browser_observe(action:"page_text") failed: ${err.message}`;
   }
 }
 
@@ -2593,7 +2593,7 @@ export async function browserRunJs(
   if (recovery?.error) return recovery.error;
   if (getInHouseSession(resolved)) return browserRunJsInHouse(resolved, code);
   const session = sessions.get(resolved);
-  if (!session) return 'ERROR: No browser session. Use browser_open first.';
+  if (!session) return 'ERROR: No browser session. Use browser_session(action:"open") first.';
   if (!code || !code.trim()) return 'ERROR: code parameter is required.';
   try {
     const observeMode = options?.observe || resolveBrowserObserveMode('browser_run_js');
@@ -2608,7 +2608,7 @@ export async function browserRunJs(
       return attachShortcutsContext(`${resultText}\n\nSnapshot refreshed (${parseSnapshotElementCount(snapshot)} elements):\n\n${snapshot}`, session.page.url(), sessionId);
     }
     if (compactBefore) {
-      return `${resultText}\n\n${await buildCompactBrowserObservation(session, 'browser_run_js completed.', compactBefore)}`;
+      return `${resultText}\n\n${await buildCompactBrowserObservation(session, 'browser_extract(action:"run_js") completed.', compactBefore)}`;
     }
     if (observeMode === 'screenshot') {
       await browserVisionScreenshot(sessionId).catch(() => null);
@@ -2687,7 +2687,7 @@ export async function browserRunSmokeSteps(sessionId: string, steps: any[] = [])
   if (recovery?.error) return recovery.error;
   if (getInHouseSession(resolved)) return browserRunSmokeStepsInHouse(resolved, steps);
   const session = sessions.get(resolved);
-  if (!session) return 'ERROR: No browser session. Use browser_open first.';
+  if (!session) return 'ERROR: No browser session. Use browser_session(action:"open") first.';
   const results: Array<{ index: number; action: string; ok: boolean; details: any }> = [];
   for (const [index, raw] of steps.entries()) {
     const incoming = raw && typeof raw === 'object' ? raw : {};
@@ -2800,11 +2800,11 @@ export async function browserExtractStructured(
       }
       return `${prefixLines.length ? `${prefixLines.join('\n')}\n\n` : ''}${JSON.stringify(result, null, 2)}`;
     } catch (err: any) {
-      return `ERROR: browser_extract_structured failed: ${err.message}`;
+      return `ERROR: browser_extract(action:"extract_structured") failed: ${err.message}`;
     }
   }
   const session = sessions.get(resolvedSessionId);
-  if (!session) return 'ERROR: No browser session. Use browser_open first.';
+  if (!session) return 'ERROR: No browser session. Use browser_session(action:"open") first.';
   if (!schema || typeof schema !== 'object') return 'ERROR: schema must be an object with container_selector, item_root, or schema_name plus fields.';
 
   try {
@@ -2857,7 +2857,7 @@ export async function browserExtractStructured(
 
     return `${prefixLines.length ? `${prefixLines.join('\n')}\n\n` : ''}${JSON.stringify(result, null, 2)}`;
   } catch (err: any) {
-    return `ERROR: browser_extract_structured failed: ${err.message}`;
+    return `ERROR: browser_extract(action:"extract_structured") failed: ${err.message}`;
   }
 }
 
@@ -2936,7 +2936,7 @@ export async function browserSendToTelegram(
     return 'ERROR: Telegram channel not available.';
   }
   const session = sessions.get(resolveSessionId(sessionId));
-  if (!session) return 'ERROR: No browser session. Use browser_open first.';
+  if (!session) return 'ERROR: No browser session. Use browser_session(action:"open") first.';
 
   try {
     const viewport = session.page.viewportSize() || { width: 1280, height: 720 };
@@ -3013,7 +3013,7 @@ export async function browserVisionClick(
     }
   }
   const session = sessions.get(resolvedVision);
-  if (!session) return 'ERROR: No browser session. Use browser_open first.';
+  if (!session) return 'ERROR: No browser session. Use browser_session(action:"open") first.';
   let px = Math.round(Number(x) || 0);
   let py = Math.round(Number(y) || 0);
   if (!Number.isFinite(px) || !Number.isFinite(py)) {
@@ -3088,7 +3088,7 @@ export async function browserVisionType(
     }
   }
   const session = sessions.get(resolvedVType);
-  if (!session) return 'ERROR: No browser session. Use browser_open first.';
+  if (!session) return 'ERROR: No browser session. Use browser_session(action:"open") first.';
   let px = Math.round(Number(x) || 0);
   let py = Math.round(Number(y) || 0);
   if (!Number.isFinite(px) || !Number.isFinite(py)) {
@@ -3219,7 +3219,7 @@ export async function browserHandleUserInput(
     };
   }
   const session = sessions.get(resolved);
-  if (!session) throw new Error('No browser session. Use browser_open first.');
+  if (!session) throw new Error('No browser session. Use browser_session(action:"open") first.');
   const action = String(payload?.action || '').trim().toLowerCase();
   if (!['click', 'wheel', 'key', 'text'].includes(action)) {
     throw new Error(`Unsupported browser input action "${action || 'unknown'}".`);
@@ -4271,7 +4271,7 @@ export async function saveBrowserNamedElement(
 }> {
   const resolved = resolveSessionId(sessionId);
   const session = sessions.get(resolved);
-  if (!session) throw new Error('No browser session. Use browser_open first.');
+  if (!session) throw new Error('No browser session. Use browser_session(action:"open") first.');
   const url = String(session.page.url() || payload?.url || '').trim();
   const kind = String(payload?.kind || 'element').trim().toLowerCase() === 'item_root' ? 'item_root' : 'element';
   const { site, saved } = (() => {

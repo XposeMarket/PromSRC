@@ -228,7 +228,7 @@ export async function browserInspectConsole(
     }
   }
   const session = sessions.get(resolved);
-  if (!session) return 'ERROR: No browser session. Use browser_open first.';
+  if (!session) return 'ERROR: No browser session. Use browser_session(action:"open") first.';
   const action = String(options.action || 'read').toLowerCase() === 'clear' ? 'clear' : 'read';
   const maxEntries = Math.max(1, Math.min(500, Math.floor(Number(options.maxEntries || 100))));
   attachBrowserConsoleCollector(session, session.page);
@@ -326,7 +326,7 @@ export async function browserInterceptNetwork(
     }
   }
   const session = sessions.get(resolved);
-  if (!session) return 'ERROR: No browser session. Use browser_open first.';
+  if (!session) return 'ERROR: No browser session. Use browser_session(action:"open") first.';
 
   if (session.transport === 'extension') {
     if (action === 'start') {

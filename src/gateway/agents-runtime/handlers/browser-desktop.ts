@@ -72,7 +72,7 @@ export async function handleBrowserDesktopTool(ctx: BrowserDesktopHandlerContext
             onPerformanceStage: deps.onPerformanceStage,
           }), timeoutMs, 'browser_open');
         } catch (err: any) {
-          result = `ERROR: browser_open did not finish in time: ${err?.message || err}`;
+          result = `ERROR: browser_session(action:"open") did not finish in time: ${err?.message || err}`;
         }
         await broadcastBrowserStatus('browser_open', {
           includeFrame: resolveBrowserObserveMode('browser_open', args.observe) === 'screenshot',
@@ -252,13 +252,13 @@ export async function handleBrowserDesktopTool(ctx: BrowserDesktopHandlerContext
           // "no session" so the model does not needlessly re-open the browser.
           return { name, args, result: `ERROR: Browser screenshot failed: ${err?.message || err}`, error: true };
         }
-        if (!vshot) return { name, args, result: 'ERROR: No browser session. Use browser_open first.', error: true };
+        if (!vshot) return { name, args, result: 'ERROR: No browser session. Use browser_session(action:"open") first.', error: true };
         await broadcastBrowserStatus('browser_vision_screenshot');
         // Return metadata text; chat.router injects the cached PNG as a user image
         // for vision-capable primaries right after this tool result.
         return {
           name, args,
-          result: `Viewport screenshot captured (${vshot.width}x${vshot.height}). Vision advisor will use this to identify coordinates. Call browser_vision_click(x, y) with the coordinates returned by the advisor.`,
+          result: `Viewport screenshot captured (${vshot.width}x${vshot.height}). Vision advisor will use this to identify coordinates. Call browser_act(action:"vision_click", x, y) with the coordinates returned by the advisor.`,
           error: false,
         };
       }

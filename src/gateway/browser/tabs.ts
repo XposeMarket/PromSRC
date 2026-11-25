@@ -81,7 +81,7 @@ export async function browserSetProfileTarget(
       ? `Current active session already uses ${getBrowserProfileLabel(active.profileKind)}.`
       : (activeInHouse
         ? 'Current active session already uses the Prometheus in-house browser.'
-        : (currentTarget !== nextTarget ? 'The next browser_open will create a fresh browser session for this target.' : 'No active browser session is open yet.')),
+        : (currentTarget !== nextTarget ? 'The next browser_session(action:"open") will create a fresh browser session for this target.' : 'No active browser session is open yet.')),
   ].join('\n');
 }
 
@@ -95,7 +95,7 @@ export async function browserListTabs(sessionId: string): Promise<string> {
     return formatInHouseTabs(inHouse);
   }
   const session = sessions.get(resolved);
-  if (!session) return 'ERROR: No browser session. Use browser_open first.';
+  if (!session) return 'ERROR: No browser session. Use browser_session(action:"open") first.';
   if (session.transport === 'extension') {
     const tabs = await getUserChromeRelay().request('tabs.list');
     const activeId = (session.page as UserChromePage).tabId();
@@ -114,7 +114,7 @@ export async function browserSelectTab(sessionId: string, index: number): Promis
     return `Selected Prometheus in-house browser tab [${index}].\n${formatInHouseTabs(inHouse)}`;
   }
   const session = sessions.get(resolved);
-  if (!session) return 'ERROR: No browser session. Use browser_open first.';
+  if (!session) return 'ERROR: No browser session. Use browser_session(action:"open") first.';
   if (session.transport === 'extension') {
     const tabs = await getUserChromeRelay().request('tabs.list');
     const tab = tabs[Math.max(0, Math.min(tabs.length - 1, Number(index)))];
@@ -227,7 +227,7 @@ export async function browserCloseTab(sessionId: string, index?: number): Promis
     return `Closed Prometheus in-house browser tab.\n${formatInHouseTabs(inHouse)}`;
   }
   const session = sessions.get(resolved);
-  if (!session) return 'ERROR: No browser session. Use browser_open first.';
+  if (!session) return 'ERROR: No browser session. Use browser_session(action:"open") first.';
   if (session.transport === 'extension') {
     const tabs = await getUserChromeRelay().request('tabs.list');
     const activeId = (session.page as UserChromePage).tabId();

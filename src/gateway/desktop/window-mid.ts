@@ -252,7 +252,7 @@ export function formatWindowList(
   }));
   const more = nextCursor === null ? '' : ` More windows exist: pass cursor=${nextCursor} or narrow with filter.`;
   return [
-    `Open windows (${shown.length} shown of ${filtered.length}; cursor=${cursor}; next_cursor=${nextCursor ?? 'none'}).${more} Use window_id with desktop_get_window_state / desktop_window_click / desktop_window_type.`,
+    `Open windows (${shown.length} shown of ${filtered.length}; cursor=${cursor}; next_cursor=${nextCursor ?? 'none'}).${more} Use window_id with desktop_window(action:"state"), desktop_window(action:"click") or desktop_window(action:"type").`,
     JSON.stringify(payload, null, 2),
   ].join('\n');
 }
