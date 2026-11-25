@@ -833,8 +833,8 @@ function buildSpecialistSpecs(): SpecialistSpec[] {
       buildPrompt: (url: string) => [
         `You are the Browser Funnel Audit specialist for ${url}.`,
         'Goal: browse the site like a real prospect, click through the core navigation, inspect CTA paths, and confirm usability, polish, and friction.',
-        'Use browser_open on the homepage, then browser_snapshot. Browse intentionally: header nav, primary CTA, footer links, contact/demo/signup/book/login flows if present, and one secondary content page if useful.',
-        'Use browser_click, browser_wait, browser_snapshot, browser_get_page_text, and browser_snapshot_delta as needed. Stop before external auth or payment steps.',
+        'Use browser_session(action:"open") on the homepage, then browser_observe(action:"snapshot"). Browse intentionally: header nav, primary CTA, footer links, contact/demo/signup/book/login flows if present, and one secondary content page if useful.',
+        'Use browser_act(action:"click") and browser_observe with action "wait", "snapshot", "page_text" or "snapshot_delta" as needed. Stop before external auth or payment steps.',
         'Record what worked, what was confusing, what broke, what felt polished, and what the conversion journey looked like.',
         'You are the only browser-heavy specialist. Do not spend time on search strategy beyond what is needed to understand the on-site funnel.',
         buildJsonContract('browser_funnel', 'Browser Funnel Audit'),

@@ -1074,14 +1074,14 @@ export function getDesktopAdvisorPacketByIdInternal(
   if (!entry || entry.sessionId !== sessionId) {
     return {
       ok: false,
-      message: `Unknown screenshot_id "${id}". Capture a fresh desktop_screenshot or desktop_window_screenshot first.`,
+      message: `Unknown screenshot_id "${id}". Capture a fresh desktop_screen(action:"screenshot") or desktop_window(action:"screenshot") first.`,
     };
   }
   if (Date.now() > entry.expiresAt) {
     desktopPacketIndex.delete(id);
     return {
       ok: false,
-      message: `screenshot_id "${id}" expired. Capture a fresh desktop_screenshot or desktop_window_screenshot first.`,
+      message: `screenshot_id "${id}" expired. Capture a fresh desktop_screen(action:"screenshot") or desktop_window(action:"screenshot") first.`,
     };
   }
   return { ok: true, packet: entry.packet };

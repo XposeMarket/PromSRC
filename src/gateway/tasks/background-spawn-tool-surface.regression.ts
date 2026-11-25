@@ -4,6 +4,15 @@ import path from 'node:path';
 import { buildTools } from '../tool-builder';
 import { normalizeBackgroundSpawnToolCategories, resolveBackgroundAgentModelRouting } from './task-runner';
 import { readChatRouterSource } from '../../testing/chat-router-source';
+import {
+  BACKGROUND_WORKER_WITHHELD_TOOL_NAMES,
+  backgroundWorkerToolRefusal,
+  backgroundWorkerWithheldReason,
+  evaluateToolDispatch,
+  isBackgroundSpawnWorkerSession,
+  registerBackgroundSpawnWorkerSession,
+  toolNameSetOf,
+} from '../chat/tool-dispatch-policy';
 
 assert.deepEqual(resolveBackgroundAgentModelRouting({ providerId: 'openai_codex', model: 'sol', reasoningEffort: 'medium' }), {
   providerId: 'openai_codex', model: 'gpt-5.6-sol', reasoningEffort: 'medium', source: 'background_spawn.override',
@@ -115,5 +124,137 @@ assert.match(
   /browser|desktop|agent|workspace_edit|thread_ops|x_search_ops|connection_ops|get_agent_models/,
   'sanity: recon prompt must still contain the category trigger words this test guards against',
 );
+
+// 4: background workers lose tools that act on the user's live chat or start
+// more workers (observed: a small model spawned a nested "placeholder" agent it
+// could not cancel). Stripped from the surface AND refused at dispatch.
+const WITHHELD = ['set_current_model', 'switch_model', 'update_heartbeat', 'background_ops'];
+assert.deepEqual([...BACKGROUND_WORKER_WITHHELD_TOOL_NAMES].sort(), [...WITHHELD].sort());
+
+// A worker is identified by a live round, not by its session name: every
+// spawn/follow-up/steer/resume round registers its session when it starts and
+// releases it when it settles. A webhook can be configured with any sessionKey,
+// so a background_ name that no spawn started (for example background_custom)
+// is not a worker, and neither is a worker's id once its round has settled.
+const refusedAll = (session: string) => WITHHELD.every((name) => /not available to background workers/.test(backgroundWorkerToolRefusal(name, session) || ''));
+const refusedNone = (session: string) => WITHHELD.every((name) => backgroundWorkerToolRefusal(name, session) === null);
+assert.equal(isBackgroundSpawnWorkerSession('background_custom'), false, 'configured background_custom session keeps the tools');
+assert.ok(refusedNone('background_custom'), 'background_custom may call all four tools');
+assert.equal(isBackgroundSpawnWorkerSession('background_bg_123'), false, 'unregistered background_ name is not a worker');
+const releaseRound1 = registerBackgroundSpawnWorkerSession('background_bg_123');
+assert.equal(isBackgroundSpawnWorkerSession('background_bg_123'), true, 'live background_ops spawn round is a worker');
+assert.ok(refusedAll('background_bg_123'), 'live worker round is refused all four tools');
+assert.equal(isBackgroundSpawnWorkerSession('background_custom'), false, 'registering one worker does not mark other background_ names');
+releaseRound1();
+assert.equal(isBackgroundSpawnWorkerSession('background_bg_123'), false, 'settled round releases the session');
+assert.ok(refusedNone('background_bg_123'), 'a non-worker run reusing the settled session id keeps all four tools');
+releaseRound1();
+assert.equal(isBackgroundSpawnWorkerSession('background_bg_123'), false, 'a second release is a no-op');
+// A second round on the same session (follow-up) is refused again.
+const releaseRound2 = registerBackgroundSpawnWorkerSession('background_bg_123');
+assert.ok(refusedAll('background_bg_123'), 'second round on the same session is refused again');
+// Overlapping rounds: a new round can start while the previous one is still
+// settling. The first to settle must not release the other.
+const releaseRound3 = registerBackgroundSpawnWorkerSession('background_bg_123');
+releaseRound2();
+releaseRound2();
+assert.ok(refusedAll('background_bg_123'), 'overlapping round stays a worker after the other round settles (double release included)');
+releaseRound3();
+assert.ok(refusedNone('background_bg_123'), 'all overlapping rounds settled: session released');
+// Follow-up after a gateway restart: this process starts with an empty
+// registry, and the follow-up round's start registers the conversation session
+// again before its first tool call.
+const FOLLOW_UP_SESSION = 'background_bg_conv_after_restart';
+assert.equal(isBackgroundSpawnWorkerSession(FOLLOW_UP_SESSION), false, 'fresh process: not yet registered');
+const releaseFollowUp = registerBackgroundSpawnWorkerSession(FOLLOW_UP_SESSION);
+assert.equal(isBackgroundSpawnWorkerSession(FOLLOW_UP_SESSION), true, 'follow-up round start registers the worker again');
+assert.match(backgroundWorkerToolRefusal('background_ops', FOLLOW_UP_SESSION) || '', /not available to background workers/, 'follow-up worker is refused');
+releaseFollowUp();
+// Registration lives where every worker round starts, before the round's
+// async body, and the release is in the promise's finally, which runs whether
+// the round completed, failed, was cancelled or threw. Every round path
+// (recover after restart, spawn, follow-up, steer continuation) goes through it.
+assert.match(taskRunnerSource, /function startBackgroundExecution\([^)]*\)[^{]*\{[\s\S]{0,400}?const releaseWorkerSession = registerBackgroundSpawnWorkerSession\(backgroundRuntimeSessionId\(record\)\);\s*(?:\/\/[^\n]*\n\s*)*const execution = \(async \(\) => \{/,
+  'startBackgroundExecution must register the worker session before the round runs');
+assert.match(taskRunnerSource, /return execution\.finally\(\(\) => \{[\s\S]{0,200}?releaseWorkerSession\(\);/,
+  'startBackgroundExecution must release the worker session when the round settles');
+for (const fn of ['recoverBackgroundExecutions', 'backgroundSpawn', 'backgroundFollowUp', 'backgroundSteer']) {
+  const start = taskRunnerSource.indexOf(`export function ${fn}(`);
+  assert.ok(start >= 0, `${fn} exists`);
+  const next = taskRunnerSource.indexOf('\nexport function ', start + 10);
+  assert.match(taskRunnerSource.slice(start, next < 0 ? undefined : next), /startBackgroundExecution\(/, `${fn} must start its round through startBackgroundExecution`);
+}
+assert.equal((taskRunnerSource.match(/handleChat\(/g) || []).length, 1, 'the only worker handleChat call is inside startBackgroundExecution');
+assert.equal(isBackgroundSpawnWorkerSession('main_chat'), false, 'main chat keeps the tools');
+assert.equal(isBackgroundSpawnWorkerSession('meta_coordinator_abc'), false, 'team coordinator keeps the tools');
+assert.equal(isBackgroundSpawnWorkerSession('webhook_abc'), false, 'webhook runs keep the tools');
+assert.equal(isBackgroundSpawnWorkerSession('team_x_agent_y'), false, 'team members keep the tools');
+assert.equal(isBackgroundSpawnWorkerSession('cron_job_1'), false, 'scheduled jobs keep the tools');
+// Standalone subagents run in executionMode background_agent (background-task-runner
+// selects it for task.subagentProfile) with a subagent_<id>_<ts> session: not a worker.
+const STANDALONE_SUBAGENT_SESSION = 'subagent_researcher_1732500000000';
+assert.equal(isBackgroundSpawnWorkerSession(STANDALONE_SUBAGENT_SESSION), false, 'standalone subagent keeps the tools');
+assert.match(taskRunnerSource, /return `background_\$\{String\(record\.conversationId \|\| record\.id \|\| ''\)\.trim\(\)\}`;/,
+  'spawn and follow-up rounds must keep running in the background_ conversation session');
+assert.match(readFileSync(path.join(repoRoot, 'src', 'gateway', 'agents-runtime', 'subagent-manager.ts'), 'utf8'), /const subagentSessionId = `subagent_/,
+  'standalone subagent sessions must not use the background_ prefix');
+
+// Main chat surface (core + automation_scheduling for update_heartbeat) offers all four.
+const mainSurface = toolNameSetOf(buildTools(deps, new Set(['automation_scheduling'])));
+for (const name of WITHHELD) assert.equal(mainSurface.has(name), true, `main chat must offer ${name}`);
+// The worker strip removes exactly those; approval gates stay.
+const workerSurface = new Set([...mainSurface].filter((name) => !BACKGROUND_WORKER_WITHHELD_TOOL_NAMES.includes(name)));
+for (const name of WITHHELD) assert.equal(workerSurface.has(name), false, `worker must not see ${name}`);
+for (const name of ['ask_prometheus_questions', 'request_final_action_approval', 'write_note', 'request_tool_category']) {
+  assert.equal(workerSurface.has(name), mainSurface.has(name), `worker keeps ${name}`);
+}
+assert.equal(mainSurface.has('ask_prometheus_questions'), true);
+assert.equal(mainSurface.has('request_final_action_approval'), true);
+
+// handleChat wires the strip and the dispatch refusal to the worker predicate.
+assert.match(chatRouterSource, /const isBackgroundWorkerRun = isBackgroundSpawnWorkerSession\(sessionId\);/);
+assert.match(chatRouterSource, /\.\.\.\(isBackgroundWorkerRun \? BACKGROUND_WORKER_WITHHELD_TOOL_NAMES : \[\]\)/);
+assert.match(chatRouterSource, /withheldReason: \(name\) => backgroundWorkerToolRefusal\(name, sessionId\)/);
+// executeTool enforces the same check for every execution (composites, tool_call).
+assert.match(
+  readFileSync(path.join(repoRoot, 'src', 'gateway', 'agents-runtime', 'subagent-executor.ts'), 'utf8'),
+  /const workerRefusal = backgroundWorkerToolRefusal\(name, sessionId\);\s+if \(workerRefusal\) return/,
+);
+
+// Dispatch: a worker calling a stripped name is refused in every enforcement
+// mode, including the schema-hidden background_* aliases; other tools pass.
+const dispatch = (name: string, mode: 'enforce' | 'warn' | 'off', worker: boolean) => evaluateToolDispatch({
+  name,
+  rawArguments: '{}',
+  offered: worker ? workerSurface : mainSurface,
+  mode,
+  isKnownTool: () => true,
+  categoryOf: () => null,
+  isCategoryActive: () => true,
+  withheldReason: worker ? backgroundWorkerWithheldReason : undefined,
+});
+for (const mode of ['enforce', 'warn', 'off'] as const) {
+  for (const name of [...WITHHELD, 'background_spawn', 'background_follow_up']) {
+    const decision = dispatch(name, mode, true);
+    assert.equal(decision.ok, false, `worker dispatch of ${name} must be refused (${mode})`);
+    if (!decision.ok) {
+      assert.equal(decision.code, 'not_offered');
+      assert.match(decision.message, /not available to background workers/);
+    }
+  }
+}
+for (const name of ['bg_plan_declare', 'bg_plan_advance', 'ask_prometheus_questions', 'write_note']) {
+  assert.equal(dispatch(name, 'enforce', true).ok, true, `worker may still call ${name}`);
+}
+for (const name of WITHHELD) assert.equal(dispatch(name, 'enforce', false).ok, true, `main chat may call ${name}`);
+// A standalone subagent (background_agent mode, subagent_ session) keeps all
+// four on its surface and its calls are not refused.
+const subagentIsWorker = isBackgroundSpawnWorkerSession(STANDALONE_SUBAGENT_SESSION);
+const subagentStrip = new Set(subagentIsWorker ? BACKGROUND_WORKER_WITHHELD_TOOL_NAMES : []);
+const subagentSurface = new Set([...mainSurface].filter((name) => !subagentStrip.has(name)));
+for (const name of WITHHELD) {
+  assert.equal(subagentSurface.has(name), true, `standalone subagent must keep ${name}`);
+  assert.equal(dispatch(name, 'enforce', subagentIsWorker).ok, true, `standalone subagent may call ${name}`);
+}
 
 console.log('background-spawn-tool-surface regression: ok');

@@ -252,7 +252,7 @@ router.post('/api/settings/search', (req, res) => {
 // GET /api/credentials/status — list which vault keys are currently stored (names only, no values)
 router.get('/api/credentials/status', (_req, res) => {
   try {
-    const vault = getVault();
+    const vault = getVault(getConfig().getConfigDir());
     res.json({ success: true, keys: vault.keys() });
   } catch (err: any) {
     res.json({ success: false, keys: [], error: err.message });
@@ -341,7 +341,7 @@ function migrateAccountSecretsToVault(llm: any): any {
   if (!llm || typeof llm !== 'object') return llm;
   const out = JSON.parse(JSON.stringify(llm));
   const providers = out.providers && typeof out.providers === 'object' ? out.providers : {};
-  const vault = getVault();
+  const vault = getVault(getConfig().getConfigDir());
   for (const providerId of Object.keys(providers)) {
     const accounts = providers[providerId]?.accounts;
     if (!accounts || typeof accounts !== 'object' || Array.isArray(accounts)) continue;
@@ -2351,7 +2351,7 @@ router.post('/api/settings/provider-accounts/remove', (req, res) => {
       console.warn(`[settings] account remove: token clear failed for ${providerId}/${accountId}: ${err?.message || err}`);
     }
     try {
-      getVault().delete(providerAccountVaultKey(providerId, accountId), 'settings:account-remove');
+      getVault(getConfig().getConfigDir()).delete(providerAccountVaultKey(providerId, accountId), 'settings:account-remove');
     } catch (err: any) {
       credentialsCleared = false;
       console.warn(`[settings] account remove: vault key delete failed for ${providerId}/${accountId}: ${err?.message || err}`);
@@ -2359,7 +2359,7 @@ router.post('/api/settings/provider-accounts/remove', (req, res) => {
     // Legacy credentials that only the removed "default" account used.
     if (plan.legacyCredentials.providerApiKey) {
       try {
-        getVault().delete(`llm.${providerId}.api_key`, 'settings:account-remove-legacy');
+        getVault(getConfig().getConfigDir()).delete(`llm.${providerId}.api_key`, 'settings:account-remove-legacy');
       } catch (err: any) {
         credentialsCleared = false;
         console.warn(`[settings] account remove: legacy provider key delete failed for ${providerId}: ${err?.message || err}`);

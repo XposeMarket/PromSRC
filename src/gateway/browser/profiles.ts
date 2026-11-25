@@ -189,7 +189,7 @@ export async function connectOrLaunchPersistentChrome(
       throw new Error(
         `Chrome debug port ${debugPort} is responding but Playwright could not attach within 5s. ` +
         `This usually means the existing ${getBrowserProfileLabel(profileKind)} process is wedged. ` +
-        `Close Chrome for profile ${profileDir} or restart the browser target, then try browser_open again. ` +
+        `Close Chrome for profile ${profileDir} or restart the browser target, then try browser_session(action:"open") again. ` +
         `Details: ${message.split('\n')[0] || message}`
       );
       }
@@ -343,7 +343,7 @@ export async function getOrCreateSessionUncoalesced(
     profileKind: targetKind,
   });
   if (metadata.ownerType === 'main' && targetKind === 'inhouse') {
-    throw new Error('The current browser target is Prometheus in-house browser. Use browser_open with target="prometheus" to switch back to regular Chrome/CDP.');
+    throw new Error('The current browser target is Prometheus in-house browser. Use browser_session(action:"open", target:"prometheus") to switch back to regular Chrome/CDP.');
   }
 
   // Personal Chrome is not and must never become a CDP launch target. The

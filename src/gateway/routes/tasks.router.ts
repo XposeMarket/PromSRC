@@ -949,7 +949,7 @@ router.post('/api/bg-tasks/:id/error-response', async (req: any, res: any) => {
       `CRITICAL INSTRUCTION (from user — error response):`,
       `The user has manually completed the CAPTCHA or challenge.`,
       `The page should now be accessible. Continue from where you left off.`,
-      `Take a fresh browser_snapshot() to see the current page state before proceeding.`,
+      `Take a fresh browser_observe(action:"snapshot") to see the current page state before proceeding.`,
     ].join('\n');
 
   } else if (action === 'retry_now' || action === 'retry_delay') {
@@ -992,7 +992,7 @@ router.post('/api/bg-tasks/:id/error-response', async (req: any, res: any) => {
       `CRITICAL INSTRUCTION (from user — error response):`,
       `User action: ${action}`,
       inputs ? `Additional context: ${JSON.stringify(inputs)}` : '',
-      `Proceed accordingly. If unsure, take a fresh browser_snapshot() and reassess.`,
+      `Proceed accordingly. If unsure, take a fresh browser_observe(action:"snapshot") and reassess.`,
     ].filter(Boolean).join('\n');
   }
 

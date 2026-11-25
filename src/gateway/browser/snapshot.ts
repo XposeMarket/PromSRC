@@ -262,7 +262,7 @@ export async function takeSnapshot(page: PwPage, maxElements: number = 100): Pro
     if (snapshotData?.modalOpen) {
       const label = snapshotData.modalLabel ? ` ("${snapshotData.modalLabel}")` : '';
       return snapshotText
-        + `\n\n[MODAL OPEN]${label} A dialog/modal is blocking the page. The ${elements.length} elements above are ONLY the controls inside this modal. Background page elements are NOT accessible until the modal is closed. To dismiss: look for a Close button or press Escape with browser_press_key({"key":"Escape"}).`;
+        + `\n\n[MODAL OPEN]${label} A dialog/modal is blocking the page. The ${elements.length} elements above are ONLY the controls inside this modal. Background page elements are NOT accessible until the modal is closed. To dismiss: look for a Close button or press Escape with browser_act({"action":"key","key":"Escape"}).`;
     }
 
     // Login wall detection � append an explicit action hint so the agent doesn't loop.
@@ -365,11 +365,11 @@ export async function takeSnapshot(page: PwPage, maxElements: number = 100): Pro
 
         const extras: string[] = [];
         if (sameOriginElements.length > 0) {
-          extras.push(`\n[SAME-ORIGIN FRAME ELEMENTS � interactable via normal browser_click/browser_fill]\n${sameOriginElements.join('\n')}`);
+          extras.push(`\n[SAME-ORIGIN FRAME ELEMENTS � interactable via normal browser_act(action:"click"/"fill")]\n${sameOriginElements.join('\n')}`);
         }
         if (crossOrigin.length > 0) {
           const lines = crossOrigin.map(f => `  - ${f.name || f.id || 'iframe'} ? ${f.src.slice(0, 200)}`).join('\n');
-          extras.push(`\n[CROSS-ORIGIN IFRAMES � content cannot be read directly; navigate with browser_open]\n${lines}`);
+          extras.push(`\n[CROSS-ORIGIN IFRAMES � content cannot be read directly; navigate with browser_session(action:"open")]\n${lines}`);
         }
         if (extras.length > 0) {
           return snapshotText + extras.join('');

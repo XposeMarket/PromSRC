@@ -107,7 +107,7 @@ export function isAgentOwnedBrowserSession(metadata: BrowserSessionMetadata): bo
 // Clear, actionable message for tools not yet ported to the in-house browser, so
 // the agent gets guidance instead of a misleading "No browser session" error.
 export function inHouseUnsupportedToolMessage(tool: string, alternative: string): string {
-  return `NOTE: ${tool} is not yet available in the Prometheus in-house browser. ${alternative} (Or switch this session to the regular Chrome lane with browser_open target="prometheus".)`;
+  return `NOTE: ${tool} is not yet available in the Prometheus in-house browser. ${alternative} (Or switch this session to the regular Chrome lane with browser_session(action:"open", target:"prometheus").)`;
 }
 
 export function normalizeChromeProfileDirectory(value: unknown): string {

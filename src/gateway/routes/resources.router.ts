@@ -245,7 +245,7 @@ router.post('/api/sessions/:sessionId/resources/browser/current', async (req, re
     const browserSessionId = String(req.body?.browserSessionId || 'default');
     const info = getBrowserSessionInfo(browserSessionId);
     if (!info.active || !info.url) throw new Error('No active Browser page is available to save.');
-    const text = await browserGetPageText(browserSessionId, { maxChars: 60_000 });
+    const text = await browserGetPageText(browserSessionId, { maxChars: 60_000, maxLines: 1000 });
     if (!text || /^ERROR:/i.test(text)) throw new Error(text || 'The current Browser page has no readable text.');
     const result = storeForThread(sessionId).captureBrowserPage({
       threadId: sessionId,

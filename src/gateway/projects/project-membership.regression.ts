@@ -96,6 +96,19 @@ async function main(): Promise<void> {
     const epsilonRow = listed.projects.find((p: any) => p.id === unique.id);
     assert.equal(epsilonRow.sessionCount, 1);
     assert.deepEqual(epsilonRow.sessions.map((s: any) => s.id), ['chat_ops']);
+    assert.equal(listed.note, undefined, 'no truncation note when every chat is listed');
+
+    // list_projects honors limit (chats per project) and says when more exist.
+    const crowded = storeApi.createProject('Crowded Zeta');
+    for (const id of ['chat_z1', 'chat_z2', 'chat_z3']) { seed(id); storeApi.attachSessionToProject(crowded.id, id); }
+    const limited = await run({ action: 'list_projects', limit: 2 });
+    const crowdedRow = limited.projects.find((p: any) => p.id === crowded.id);
+    assert.equal(crowdedRow.sessionCount, 3, 'sessionCount keeps the full count');
+    assert.equal(crowdedRow.sessions.length, 2, 'limit caps chats listed per project');
+    assert.equal(crowdedRow.moreSessions, 1);
+    assert.match(String(limited.note), /more chats than shown/);
+    for (const id of ['chat_z1', 'chat_z2', 'chat_z3']) storeApi.detachSessionFromProject(crowded.id, id);
+    storeApi.deleteProject(crowded.id);
 
     const removed = await run({ action: 'remove_from_project', session_id: 'chat_ops' });
     assert.deepEqual(removed, { removed: true, sessionId: 'chat_ops', projectId: unique.id });
