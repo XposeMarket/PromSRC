@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { boundBrowserPageText, resolveBrowserPageTextLimits } from './browser-tools';
+import { boundBrowserPageText, capBrowserPageText, resolveBrowserPageTextLimits } from './browser-tools';
 import { formatWindowList } from './desktop/window-mid';
 
 // Regression: limits the model passes were ignored.
@@ -51,6 +51,42 @@ const browserToolsSource = fs.readFileSync(path.join(__dirname, 'browser-tools.t
 const getPageText = browserToolsSource.slice(browserToolsSource.indexOf('export async function browserGetPageText('));
 const getPageTextBody = getPageText.slice(0, getPageText.indexOf('\nexport '));
 assert.equal((getPageTextBody.match(/return boundBrowserPageText\(/g) || []).length, 2, 'in-app and Playwright branches share the bounding');
+// Named saved element (Playwright): element details plus site shortcut context
+// are capped too. Shape mirrors the assembled named-element output.
+const namedElementOutput = [
+  'Named Element: results', 'Page: Fixture', 'URL: https://example.test/', 'Selector: #results', 'Tag: div', '',
+  `=== ELEMENT TEXT ===\n${'r'.repeat(1200)}`, `\n=== HTML SNIPPET ===\n<div id="results">${'h'.repeat(700)}</div>`,
+  '', '[Site shortcuts]', ...Array.from({ length: 40 }, (_, i) => `shortcut ${i}`),
+].join('\n');
+const namedLimits = resolveBrowserPageTextLimits({ maxChars: 50 });
+assert.ok(!('error' in namedLimits));
+if (!('error' in namedLimits)) {
+  assert.equal(capBrowserPageText(namedElementOutput, namedLimits), namedElementOutput.slice(0, 50), 'named-element max_chars 50 returns 50 characters');
+}
+const namedLineLimits = resolveBrowserPageTextLimits({ maxLines: 3 });
+if (!('error' in namedLineLimits)) {
+  assert.equal(capBrowserPageText(namedElementOutput, namedLineLimits), 'Named Element: results\nPage: Fixture\nURL: https://example.test/', 'named-element max_lines is honored');
+}
+assert.match(getPageTextBody, /return capBrowserPageText\(attachShortcutsContext\(lines\.join\('\\n'\), url, sessionId\), limits\);/, 'named-element result is capped after the shortcut context is attached');
+// Every return of page content in browserGetPageText is bounded. The only
+// unbounded returns are error messages.
+let checkedReturns = 0;
+for (const line of getPageTextBody.split('\n')) {
+  const m = line.match(/(?:^\s*|^\s*if \(.*\) )return (.*)$/);
+  if (!m) continue;
+  const expr = m[1];
+  // Returns inside page.evaluate / filter callbacks produce raw values that the
+  // function then assembles and bounds; they are not results of browserGetPageText.
+  if (/^(''|\(clone\.|Array\.from\(|fHost !== pHost|true;|el \?)/.test(expr) || line.includes('document.querySelector(')) continue;
+  checkedReturns++;
+  const ok = /^(boundBrowserPageText|capBrowserPageText)\(/.test(expr)
+    || /^limits\.error;|^recovery\.error;/.test(expr)
+    || /^`ERROR:|^'ERROR:/.test(expr)
+    || /^attachShortcutsContext\($/.test(expr); // unresolved-element error, checked below
+  assert.ok(ok, `browserGetPageText return is bounded or an error: ${line.trim()}`);
+}
+assert.ok(checkedReturns >= 8, 'return scan saw the function body');
+assert.match(getPageTextBody, /return attachShortcutsContext\(\s*`ERROR: Could not resolve a saved browser element/, 'the only unwrapped attachShortcutsContext return is the unresolved-element error');
 assert.ok(getPageTextBody.indexOf('resolveBrowserPageTextLimits(options)') < getPageTextBody.indexOf('getInHouseSession(resolved)'), 'limits are validated first');
 
 const windows = Array.from({ length: 7 }, (_, i) => ({

@@ -2434,7 +2434,16 @@ export function boundBrowserPageText(
     result = [`Page: ${page.title}`, `URL: ${page.url}`, '', ...matched].join('\n');
   }
   const output = result.trim().length > 20 ? result : 'No readable text found on this page.';
-  return output.split('\n').slice(0, limits.maxLines).join('\n').slice(0, limits.maxChars);
+  return capBrowserPageText(output, limits);
+}
+
+/**
+ * max_lines then max_chars on assembled page_text output. Used by
+ * boundBrowserPageText and by the named-element result, whose output (element
+ * details plus site shortcut context) is not query-filtered.
+ */
+export function capBrowserPageText(text: string, limits: { maxChars: number; maxLines: number }): string {
+  return String(text || '').split('\n').slice(0, limits.maxLines).join('\n').slice(0, limits.maxChars);
 }
 
 export async function browserGetPageText(
@@ -2508,7 +2517,7 @@ export async function browserGetPageText(
       if (details?.text) lines.push(`=== ELEMENT TEXT ===\n${details.text}`);
       else if (resolvedElement.text || resolvedElement.entry.text) lines.push(`=== ELEMENT TEXT ===\n${resolvedElement.text || resolvedElement.entry.text}`);
       if (details?.htmlSnippet) lines.push(`\n=== HTML SNIPPET ===\n${details.htmlSnippet}`);
-      return attachShortcutsContext(lines.join('\n'), url, sessionId);
+      return capBrowserPageText(attachShortcutsContext(lines.join('\n'), url, sessionId), limits);
     }
 
     // 1. Main document visible text
