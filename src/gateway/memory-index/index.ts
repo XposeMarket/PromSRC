@@ -363,21 +363,24 @@ export function scheduleMemoryIndexRefresh(workspacePath: string, options?: Memo
  * The indexer keys a file by the name it last listed on disk. On a
  * case-insensitive file system a `memory.md` is opened (and, after the first
  * atomic write, renamed) as `MEMORY.md`, so the stored key may differ from the
- * tool's path only in case. Match case-insensitively only when another casing
- * of this path opens this very file, so no other file can be dropped.
+ * tool's path only in case. Each stored key that differs only in case is
+ * dropped only if its path opens this very file (same device and inode).
+ * A key whose path does not open at all is kept: on a case-insensitive file
+ * system the renamed `memory.md` still opens (as `MEMORY.md`) and passes the
+ * inode check, so a case variant that cannot be opened can only be a different
+ * file on a case-sensitive file system.
  */
 export function forgetIndexedWorkspaceFile(workspacePath: string, absPath: string): 'removed' | 'absent' | 'unavailable' {
-  let caseInsensitive = false;
-  try {
-    const base = path.basename(absPath);
-    const flipped = base === base.toLowerCase() ? base.toUpperCase() : base.toLowerCase();
-    if (flipped !== base) {
-      const a = fs.statSync(absPath, { bigint: true });
-      const b = fs.statSync(path.join(path.dirname(absPath), flipped), { bigint: true });
-      caseInsensitive = a.ino === b.ino && a.dev === b.dev;
-    }
-  } catch { /* other casing does not open: exact match only */ }
-  return removeSqliteEvidenceSource(workspacePath, WORKSPACE_FILE_PREFIX + rel(absPath, workspacePath), { caseInsensitive });
+  let target: fs.BigIntStats | null = null;
+  try { target = fs.statSync(absPath, { bigint: true }); } catch { /* exact match only */ }
+  const isSameFile = target ? (storedSourcePath: string): boolean => {
+    if (!storedSourcePath.startsWith(WORKSPACE_FILE_PREFIX)) return false;
+    try {
+      const s = fs.statSync(path.join(workspacePath, storedSourcePath.slice(WORKSPACE_FILE_PREFIX.length)), { bigint: true });
+      return s.ino === target!.ino && s.dev === target!.dev;
+    } catch { return false; }
+  } : undefined;
+  return removeSqliteEvidenceSource(workspacePath, WORKSPACE_FILE_PREFIX + rel(absPath, workspacePath), { isSameFile });
 }
 function ensureDir(d: string): void { fs.mkdirSync(d, { recursive: true }); }
 function readJson<T>(p: string, fallback: T): T { try { return fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, 'utf-8')) as T : fallback; } catch { return fallback; } }

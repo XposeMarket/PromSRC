@@ -812,15 +812,18 @@ function makeOperationalChunks(record: OperationalRecord): Array<{ id: string; i
  * 'unavailable' when the database is missing or cannot be opened (search then
  * falls back to the JSON store, which may still hold the old text).
  */
-export function removeSqliteEvidenceSource(workspacePath: string, sourcePath: string, options?: { caseInsensitive?: boolean }): 'removed' | 'absent' | 'unavailable' {
+export function removeSqliteEvidenceSource(workspacePath: string, sourcePath: string, options?: { isSameFile?: (storedSourcePath: string) => boolean }): 'removed' | 'absent' | 'unavailable' {
   if (!fs.existsSync(sqlitePath(workspacePath))) return 'unavailable';
   const db = openDb(workspacePath);
   if (!db) return 'unavailable';
   try {
     return db.transaction(() => {
-      // caseInsensitive: the caller verified another casing of this path opens the same file.
-      const match = options?.caseInsensitive ? 'source_path = ? COLLATE NOCASE' : 'source_path = ?';
-      const ids = db.prepare(`SELECT id FROM memory_records WHERE layer = 'evidence' AND ${match}`).all(sourcePath).map((row: any) => String(row.id));
+      // Case variants of the path are candidates only; isSameFile confirms each one is this file.
+      const isSameFile = options?.isSameFile;
+      const match = isSameFile ? 'source_path = ? COLLATE NOCASE' : 'source_path = ?';
+      const ids = db.prepare(`SELECT id, source_path FROM memory_records WHERE layer = 'evidence' AND ${match}`).all(sourcePath)
+        .filter((row: any) => String(row.source_path) === sourcePath || (isSameFile ? isSameFile(String(row.source_path)) : false))
+        .map((row: any) => String(row.id));
       for (const recordId of ids) {
         db.prepare('DELETE FROM memory_chunk_fts WHERE record_id = ?').run(recordId);
         db.prepare('DELETE FROM memory_fts WHERE record_id = ?').run(recordId);

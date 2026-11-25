@@ -188,6 +188,38 @@ async function main(): Promise<void> {
   assert.match(oldRecall(), /board games/, 'ordinary bullets stay recallable after the upgrade re-read');
   recallIndex.closeRecallIndex(wsOld);
 
+  // 9) Case variants are dropped only when they are this very file. Fixture:
+  //    memory.md is another name for MEMORY.md (same inode) and Memory.md is a
+  //    distinct file, all three indexed. Dropping MEMORY.md's record must keep
+  //    Memory.md's. memory.md is a hard link: the indexer lists only regular
+  //    files (Dirent.isFile), so a symlink would never be indexed, and a hard
+  //    link is the same file by device and inode, which is what the check uses.
+  const wsCase = path.join(tmpRoot, 'ws-case-sensitive');
+  fs.mkdirSync(wsCase);
+  if (process.platform === 'win32') {
+    try { (await import('node:child_process')).execFileSync('fsutil', ['file', 'setCaseSensitiveInfo', wsCase, 'enable'], { stdio: 'ignore' }); } catch { /* checked below */ }
+  }
+  fs.writeFileSync(path.join(wsCase, 'MEMORY.md'), '# MEMORY.md\n\n---\n\n## boats\n- Owns a kayak named drevolith [2026-01-01]\n', 'utf8');
+  let caseSkip = fs.existsSync(path.join(wsCase, 'memory.md')) ? 'case-insensitive file system' : '';
+  if (!caseSkip) {
+    try { fs.linkSync(path.join(wsCase, 'MEMORY.md'), path.join(wsCase, 'memory.md')); } catch (err: any) { caseSkip = `cannot link memory.md (${err?.code || err})`; }
+  }
+  if (caseSkip) {
+    console.log(`${caseSkip}: same-file case variant case skipped`);
+  } else {
+    fs.mkdirSync(path.join(wsCase, 'audit', 'chats', 'transcripts'), { recursive: true });
+    fs.writeFileSync(path.join(wsCase, 'Memory.md'), '# Memory.md\n\n---\n\n## boats\n- Owns a canoe named sprindlewick [2026-01-01]\n', 'utf8');
+    fs.writeFileSync(path.join(wsCase, 'audit', 'chats', 'transcripts', 's1.jsonl'), `${JSON.stringify({ role: 'user', content: 'unrelated chat about gardening tomatoes', timestamp: 1 })}\n`, 'utf8');
+    idx.refreshMemoryIndexFromAudit(wsCase, { force: true, minIntervalMs: 0, maxChangedFiles: 500, syncSqlite: true });
+    const names = (query: string) => structuredHits(wsCase, query).map((hit) => path.posix.basename(String(hit.sourcePath || ''))).sort();
+    assert.deepEqual(names('drevolith kayak').filter((n) => /^memory\.md$/i.test(n)), ['MEMORY.md', 'memory.md'], 'fixture: both names of the edited file are indexed');
+    assert.deepEqual(names('sprindlewick canoe'), ['Memory.md'], 'fixture: the distinct file is indexed');
+    assert.equal(idx.forgetIndexedWorkspaceFile(wsCase, path.join(wsCase, 'MEMORY.md')), 'removed');
+    assert.deepEqual(names('drevolith kayak').filter((n) => /^memory\.md$/i.test(n)), [], 'both names of the edited file are dropped');
+    assert.deepEqual(names('sprindlewick canoe'), ['Memory.md'], 'the record of a distinct file differing only in case is kept');
+    console.log('same-file case variant case ran');
+  }
+
   await idx.shutdownMemoryIndexRefreshWorker();
   console.log('memory-write-latency regression: PASS');
 }
