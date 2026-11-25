@@ -24,8 +24,11 @@ async function main(): Promise<void> {
   const deadline = setTimeout(() => { console.error('provider accounts vault fixture timed out'); process.exit(1); }, 30_000);
   try {
     const { executeTool } = require('../subagent-executor') as typeof import('../subagent-executor');
-    const deps = { executionPolicy: { mode: 'goal_autonomous', approvalMode: 'never' } } as any;
-    const run = (args: any) => executeTool('provider_accounts', args, workspace, deps, 'provider-accounts-vault-fixture');
+    type Deps = import('../subagent-executor').ExecuteToolDeps;
+    const executionPolicy: NonNullable<Deps['executionPolicy']> = { mode: 'goal_autonomous', approvalMode: 'never' };
+    // The provider_accounts list path reads only the execution policy from deps.
+    const deps = { executionPolicy } as Deps;
+    const run = (args: Record<string, unknown>) => executeTool('provider_accounts', args, workspace, deps, 'provider-accounts-vault-fixture');
 
     const first = await run({ action: 'list' });
     assert.equal(first.error, false, first.result);
