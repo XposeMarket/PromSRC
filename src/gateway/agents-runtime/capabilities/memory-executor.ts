@@ -742,7 +742,7 @@ export const memoryCapabilityExecutor: CapabilityExecutor = {
         { const commitErr = commitMemoryFile(memoryPath, next, archived); if (commitErr) return { name, args, result: `memory_delete failed; ${filename} unchanged: ${commitErr}`, error: true }; }
         if (filename === 'MEMORY.md') invalidateMemoryAtomSnapshot(path.dirname(memoryPath));
         await syncMemoryFileIndexes(memoryPath);
-        return { name, args, result: `Deleted from ${filename} ${label}. Removed from the refreshed retrieval index.`, error: false };
+        return { name, args, result: `Deleted from ${filename} ${label}.`, error: false };
       }
 
       case 'memory_read': {
