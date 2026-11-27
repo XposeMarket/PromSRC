@@ -1392,7 +1392,7 @@ export async function handleAgentsTool(ctx: handleAgentsToolContext): Promise<Aw
             const teamId = String(args.team_id || args.teamId || '').trim();
             if (!teamId) return { name, args, result: 'team_manage(delete) requires team_id', error: true };
             if (args.confirm !== true) {
-              return { name, args, result: 'team_manage(delete) requires confirm=true because this permanently deletes the managed team, team workspace files, and member agents by default.', error: true };
+              return { name, args, result: 'team_manage(delete) requires confirm=true because this permanently deletes the managed team, its manager agent, team workspace files, and member agents by default (delete_agents:false keeps the members).', error: true };
             }
             const result = deleteTeamCompletely({
               teamId,
