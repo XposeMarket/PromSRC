@@ -9,7 +9,9 @@ const {openConnectionPhoneHandoff} = require('../dist/connections/oauth-phone-ha
   await assert.rejects(()=>openConnectionPhoneHandoff({...attempt,...patch},open),/OAUTH_HANDOFF_UNAVAILABLE/);
  }
  await assert.rejects(()=>openConnectionPhoneHandoff(undefined,open),/OAUTH_HANDOFF_UNAVAILABLE/);
- assert.equal(count,1);
+ // Remote MCP sign-in (e.g. Robinhood) also returns to a local gateway callback, so the same handoff applies.
+ assert.deepEqual(await openConnectionPhoneHandoff({...attempt,plan:{strategy:{adapter:'mcp-oauth'}}},open),{sessionId:'connection_oauth_conn_attempt_test',site:'X'});
+ assert.equal(count,2);
  await assert.rejects(()=>openConnectionPhoneHandoff(attempt,async()=> 'ERROR: unavailable'),/OAUTH_HANDOFF_BROWSER_UNAVAILABLE/);
  console.log('PASS phone OAuth handoff: bound URL/session, approved pending connector only, expiry, system-browser, invalid URLs, terminal/cancel, bridge failure.');
 })().catch(e=>{console.error(e);process.exitCode=1});

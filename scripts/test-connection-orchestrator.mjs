@@ -74,7 +74,58 @@ try {
   const plannedAlias = await aliasOrchestrator.plan(aliasAttempt.id);
   assert.equal(plannedAlias.state, 'awaiting_approval');
   assert.equal(plannedAlias.serviceName, 'Robinhood Trading MCP');
-  console.log('PASS: durable connection orchestration, plugin contract, conservative exposure, and Robinhood plan');
+  // Pending polls must not strand the setup sheet: the sign-in action survives "not yet" answers.
+  {
+    const { McpOAuthConnectionAdapter } = await import('../dist/connections/adapters/mcp-oauth.js');
+    const pollAdapters = new ConnectionAdapterRegistry();
+    let flows = 0; let authState = 'pending';
+    pollAdapters.register(new McpOAuthConnectionAdapter({
+      startOAuth: async () => ({ authorizationUrl: `https://auth.example.test/authorize?state=flow${++flows}` }),
+      oauthStatus: async () => (flows === 0 ? { state: 'error', error: 'no flow' } : { state: authState }),
+      connectServer: async () => ({ ok: true, tools: ['get_holdings', 'place_order'] }),
+    }));
+    const pollPlans = { resolve: async ({ serviceId, requestedCapabilities }) => ({ id: 'plan-poll', serviceId, serviceName: 'Poll Fixture', pluginId: 'poll-plugin', strategy: { id: 'poll-mcp-oauth', adapter: 'mcp-oauth', capabilities: requestedCapabilities, readOnly: true, configuration: { desktopRequired: true } }, requestedCapabilities, summary: 'Pending poll plan.', createdAt: new Date().toISOString() }) };
+    const poll = new ConnectionOrchestrator({ attempts, connections, adapters: pollAdapters, activity, plans: pollPlans, broadcast: () => {} });
+    const pending = poll.create({ serviceId: 'poll-fixture', requestedCapabilities: [], readOnly: true });
+    await poll.plan(pending.id);
+    const started = await poll.connect(pending.id, { approved: true });
+    assert.equal(started.state, 'awaiting_oauth');
+    assert.equal(started.requiredUserAction.authorizationUrl, 'https://auth.example.test/authorize?state=flow1');
+    assert.equal(started.requiredUserAction.desktopRequired, true);
+    const progressBefore = started.progress.length;
+    let polled;
+    for (let i = 0; i < 3; i++) polled = await poll.continue(pending.id);
+    assert.equal(polled.state, 'awaiting_oauth');
+    assert.deepEqual(polled.requiredUserAction, started.requiredUserAction, 'a pending poll must keep the sign-in action');
+    assert.equal(polled.progress.length, progressBefore, 'unchanged polls must not append progress');
+    assert.equal(flows, 1, 'a pending poll must not restart the OAuth flow');
+    // An attempt stranded by an older build (action already cleared) gets a fresh flow on the next poll.
+    attempts.update(pending.id, { requiredUserAction: undefined });
+    const rebuilt = await poll.continue(pending.id);
+    assert.equal(rebuilt.state, 'awaiting_oauth');
+    assert.equal(rebuilt.requiredUserAction.authorizationUrl, 'https://auth.example.test/authorize?state=flow2');
+    // Completion still moves forward and clears the action.
+    authState = 'connected';
+    const done = await poll.continue(pending.id);
+    assert.equal(done.state, 'verifying');
+    assert.equal(done.requiredUserAction, undefined);
+    assert.deepEqual(connections.get(done.connectionId).exposedTools, ['get_holdings']);
+    // An adapter that reports a bare pending state (device code, browser and CLI login do) keeps its action too.
+    const bareAdapters = new ConnectionAdapterRegistry();
+    bareAdapters.register({ id: 'bare', kind: 'device-code', displayName: 'Bare pending', supports: () => true,
+      connect: async () => ({ state: 'awaiting_device_code', userAction: { type: 'device-code', label: 'Enter code', userCode: 'ABCD-1234', verificationUri: 'https://device.example.test/activate' } }),
+      continue: async () => ({ state: 'awaiting_device_code' }) });
+    const barePlans = { resolve: async ({ serviceId, requestedCapabilities }) => ({ id: 'plan-bare', serviceId, serviceName: 'Bare Fixture', pluginId: 'bare-plugin', strategy: { id: 'bare-device', adapter: 'bare', capabilities: requestedCapabilities, readOnly: true }, requestedCapabilities, summary: 'Bare pending plan.', createdAt: new Date().toISOString() }) };
+    const bare = new ConnectionOrchestrator({ attempts, connections, adapters: bareAdapters, activity, plans: barePlans, broadcast: () => {} });
+    const bareAttempt = bare.create({ serviceId: 'bare-fixture', requestedCapabilities: [], readOnly: true });
+    await bare.plan(bareAttempt.id);
+    const bareStarted = await bare.connect(bareAttempt.id, { approved: true });
+    assert.equal(bareStarted.requiredUserAction.userCode, 'ABCD-1234');
+    const barePolled = await bare.continue(bareAttempt.id);
+    assert.equal(barePolled.state, 'awaiting_device_code');
+    assert.equal(barePolled.requiredUserAction.userCode, 'ABCD-1234', 'a bare pending result must keep the existing action');
+  }
+  console.log('PASS: durable connection orchestration, plugin contract, conservative exposure, Robinhood plan, and pending polls keep the sign-in action');
 } finally {
   fs.rmSync(dir, { recursive: true, force: true });
 }

@@ -305,7 +305,15 @@ export class ConnectionOrchestrator {
       connectionId = record.id;
     }
     const state = result.userAction ? (result.state || this.userActionState(result.userAction.type)) : (result.state || 'verifying');
-    const next = this.options.attempts.update(attempt.id, { state, requiredUserAction: result.userAction, connectionId, metadata: { ...(attempt.metadata || {}), ...(result.configuration || {}) } });
+    // A pending poll that stays in the same awaiting_* step reports no new action. Keep the one the user is
+    // acting on (sign-in link, device code, login prompt): replacing it with nothing left the setup sheet on
+    // "Preparing connection…" with no way forward (mcp-oauth, device-code, browser and CLI login).
+    const samePendingStep = state === current.state && state.startsWith('awaiting_');
+    const requiredUserAction = result.userAction ?? (samePendingStep ? current.requiredUserAction : undefined);
+    // Nothing changed: no store write and no progress entry for every 2-second poll.
+    if (samePendingStep && !result.connection && !result.configuration && connectionId === current.connectionId
+      && JSON.stringify(requiredUserAction ?? null) === JSON.stringify(current.requiredUserAction ?? null)) return current;
+    const next = this.options.attempts.update(attempt.id, { state, requiredUserAction, connectionId, metadata: { ...(attempt.metadata || {}), ...(result.configuration || {}) } });
     this.options.attempts.addProgress(next.id, { state, message: result.userAction ? `User action required: ${result.userAction.label}` : 'Connection adapter completed.' });
     this.emitAttempt(next.id);
     return this.requireAttempt(next.id);

@@ -99,7 +99,8 @@ export async function openConnectFlow(fetchJson, target, options = {}) {
     if (action?.type === 'oauth' && attempt.state === 'awaiting_oauth') {
       const phone = window.matchMedia('(max-width: 767px)').matches;
       const phoneHandoff = action.desktopRequired && phone && !action.preferSystemBrowser;
-      text('p', phoneHandoff ? 'Your app credentials are saved. Authorize your account here using the secure browser. No computer needed.' : action.desktopRequired && phone ? `${title()} only returns sign-in to your computer, so finish this on the PC: open Prometheus there and tap Reconnect, or ask Prom to open it in Chrome on the PC. This sheet updates by itself once you allow access.` : 'Continue to the provider to sign in and choose access.', 'sa-muted');
+      const remoteMcp = attempt.plan?.strategy?.adapter === 'mcp-oauth';
+      text('p', phoneHandoff ? (remoteMcp ? `${title()} sign-in needs a desktop browser. Authorize here: this opens the secure browser on your PC and shows it on this phone, so you can sign in without going to the computer.` : 'Your app credentials are saved. Authorize your account here using the secure browser. No computer needed.') : action.desktopRequired && phone ? `${title()} only returns sign-in to your computer, so finish this on the PC: open Prometheus there and tap Reconnect, or ask Prom to open it in Chrome on the PC. This sheet updates by itself once you allow access.` : 'Continue to the provider to sign in and choose access.', 'sa-muted');
       if (phoneHandoff) button(`Authorize ${title()} on this phone`, openPhoneOAuth, true);
       else if (!(action.desktopRequired && phone)) button(`Sign in with ${title()}`, () => openOAuth(action), true);
       button('Check sign-in', () => act('continue'));
@@ -114,7 +115,7 @@ export async function openConnectFlow(fetchJson, target, options = {}) {
       text('p', 'This plugin needs additional setup. No credentials were sent to chat.', 'sa-muted');
       if (attempt.error?.code === 'DISCOVERY_FAILED') text('p', 'Its installed definition does not provide a supported connection method. Check this plugin’s setup instructions.', 'sa-muted');
       else if (attempt.error) showError(attempt.error);
-      if (attempt.plan?.strategy?.adapter === 'connector-oauth') button('Restart authorization', async () => { await act('cancel'); resumeAttemptId = undefined; return start(); }, true);
+      if (['connector-oauth', 'mcp-oauth'].includes(attempt.plan?.strategy?.adapter)) button('Restart authorization', async () => { await act('cancel'); resumeAttemptId = undefined; return start(); }, true);
     } else if (action) {
       text('p', action.instructions || action.completionHint || action.label || 'Complete the plugin’s setup.', 'sa-muted');
       button('Check setup', () => act('continue'), true);

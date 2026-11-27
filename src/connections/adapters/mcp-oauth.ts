@@ -28,7 +28,13 @@ export class McpOAuthConnectionAdapter implements ConnectionAdapter {
   }
   async continue(context: ConnectionAdapterContext): Promise<ConnectionAdapterResult> {
     const auth = await this.host.oauthStatus(context);
-    if (auth.state === 'pending') return { state: 'awaiting_oauth' };
+    if (auth.state === 'pending') {
+      // Pending polls keep the sign-in action the user is acting on. An attempt that already lost it
+      // (older builds cleared it on the first poll) gets a fresh flow, not a sheet with no sign-in button.
+      const action = context.attempt.requiredUserAction;
+      if (action?.type === 'oauth' && action.authorizationUrl) return { state: 'awaiting_oauth', userAction: action };
+      return this.connect(context);
+    }
     if (auth.state === 'error') return { state: 'reauth_required', error: { code: 'MCP_OAUTH_FAILED', message: auth.error || 'MCP authorization failed.', retryable: true, phase: 'awaiting_oauth' } };
     context.emitProgress?.('OAuth complete; connecting to the MCP server.');
     return this.completeConnection(context);
