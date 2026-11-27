@@ -169,10 +169,13 @@ try {
     assert.equal(attempts.get(gapAttempt.id).error, undefined);
     // Sign-in window: the action carries the flow's expiry, a refresh as the user begins issues a fresh link and
     // window, and a flow that ran out of time fails with its own code instead of a generic failure.
-    let winFlows = 0; let winStatus = { state: 'pending' };
+    let winFlows = 0; let winStatus = { state: 'pending' }; let winOffline = false;
     const winAdapters = new ConnectionAdapterRegistry();
     winAdapters.register(new McpOAuthConnectionAdapter({
-      startOAuth: async () => ({ authorizationUrl: `https://auth.example.test/authorize?state=win${++winFlows}`, expiresAt: new Date(Date.now() + 30 * 60_000).toISOString() }),
+      startOAuth: async () => {
+        if (winOffline) throw new Error('OAuth discovery failed: offline');
+        return { authorizationUrl: `https://auth.example.test/authorize?state=win${++winFlows}`, expiresAt: new Date(Date.now() + 30 * 60_000).toISOString() };
+      },
       oauthStatus: async () => (winFlows === 0 ? { state: 'error', error: 'no flow' } : winStatus),
       connectServer: async () => ({ ok: true, tools: [] }),
     }));
@@ -191,6 +194,7 @@ try {
     assert.equal(refreshed.requiredUserAction.authorizationUrl, 'https://auth.example.test/authorize?state=win2', 'refresh must issue a fresh sign-in link');
     assert.equal(refreshed.requiredUserAction.desktopRequired, true);
     assert.equal(winFlows, 2);
+    assert.equal((await win.continue(winAttempt.id)).requiredUserAction.authorizationUrl, 'https://auth.example.test/authorize?state=win2', 'a poll after the refresh must keep the refreshed link');
     winStatus = { state: 'error', error: 'authorization timed out', expired: true };
     const expired = await win.continue(winAttempt.id);
     assert.equal(expired.state, 'failed');
@@ -208,6 +212,30 @@ try {
     const bareRefreshed = await bare.refreshUserAction(bareAttempt.id);
     assert.equal(bareRefreshed.state, 'awaiting_device_code');
     assert.equal(bareRefreshed.requiredUserAction.userCode, 'ABCD-1234');
+    // Sign-in completes between the sheet's last poll and the handoff tap: the refresh moves the attempt forward
+    // with no sign-in action. The handoff route answers "no handoff" with this attempt instead of an error.
+    winStatus = { state: 'pending' };
+    const doneEarly = win.create({ serviceId: 'window-done-fixture', requestedCapabilities: [], readOnly: true });
+    await win.plan(doneEarly.id);
+    assert.equal((await win.connect(doneEarly.id, { approved: true })).state, 'awaiting_oauth');
+    winStatus = { state: 'connected' };
+    const flowsBeforeDone = winFlows;
+    const doneAtRefresh = await win.refreshUserAction(doneEarly.id);
+    assert.equal(doneAtRefresh.state, 'verifying', 'a sign-in that already finished must move forward, not restart');
+    assert.equal(doneAtRefresh.requiredUserAction, undefined);
+    assert.ok(doneAtRefresh.connectionId);
+    assert.equal(winFlows, flowsBeforeDone, 'a finished sign-in must not start another flow');
+    // The refresh cannot reach the provider: the old flow is already gone, so the attempt records the failure.
+    winStatus = { state: 'pending' };
+    // A separate service: create() resumes an unfinished attempt for the same service, and doneEarly is still verifying.
+    const offline = win.create({ serviceId: 'window-offline-fixture', requestedCapabilities: [], readOnly: true });
+    await win.plan(offline.id);
+    assert.equal((await win.connect(offline.id, { approved: true })).state, 'awaiting_oauth');
+    winOffline = true;
+    const offlineRefresh = await win.refreshUserAction(offline.id);
+    assert.equal(offlineRefresh.state, 'failed');
+    assert.equal(offlineRefresh.error.code, 'CONNECTION_CONTINUE_FAILED');
+    assert.equal(offlineRefresh.error.retryable, true);
   }
   console.log('PASS: durable connection orchestration, plugin contract, conservative exposure, Robinhood plan, pending polls keep the sign-in action and activity, and overlapping polls are serialized');
 } finally {

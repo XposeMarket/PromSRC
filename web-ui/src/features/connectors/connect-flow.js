@@ -65,8 +65,14 @@ export async function openConnectFlow(fetchJson, target, options = {}) {
     await act('continue');
     if (closed || attempt.state !== 'awaiting_oauth') return;
     clearTimeout(timer);
-    const handoff = await postJson(fetchJson, `/api/connection-attempts/${encodeURIComponent(attempt.id)}/oauth-handoff`, {});
+    let handoff;
+    // A refused handoff must not leave a stale sign-in button with polling stopped: reload the attempt, then report.
+    try { handoff = await postJson(fetchJson, `/api/connection-attempts/${encodeURIComponent(attempt.id)}/oauth-handoff`, {}); }
+    catch (error) { await refresh().catch(() => {}); throw error; }
     if (closed) return;
+    // The server re-issues the sign-in link as the handoff opens; it may also find sign-in already finished.
+    if (handoff.attempt) attempt = handoff.attempt;
+    if (!handoff.sessionId) { await render(); options.onChanged?.(); return; }
     handoffOpen = true; root.style.display = 'none';
     handoffViewer = openMobileLoginHandoff('', handoff.sessionId, title(), { fetchJson, onClose: () => {
       handoffViewer = null; handoffOpen = false;

@@ -99,8 +99,12 @@ router.post('/api/connection-attempts/:id/oauth-handoff', (req, res, next) => {
   try {
     const { openConnectionPhoneHandoff } = await import('../../connections/oauth-phone-handoff');
     // The sign-in window starts when the link is issued. Issue a fresh one as the user begins, not the one from approval time.
-    const handoff = await openConnectionPhoneHandoff(await getConnectionRuntime().orchestrator.refreshUserAction(req.params.id));
-    res.set('Cache-Control', 'no-store').json({ success: true, ...handoff });
+    const attempt = await getConnectionRuntime().orchestrator.refreshUserAction(req.params.id);
+    // Sign-in finished, or the refresh failed, between the sheet's last poll and this tap: there is nothing to hand off.
+    // Answer with the attempt so the sheet shows its real state instead of an error over a stale sign-in button.
+    if (attempt.state !== 'awaiting_oauth') { res.set('Cache-Control', 'no-store').json({ success: true, handoff: false, attempt }); return; }
+    const handoff = await openConnectionPhoneHandoff(attempt);
+    res.set('Cache-Control', 'no-store').json({ success: true, handoff: true, ...handoff, attempt });
   } catch { res.status(409).json({ success: false, error: 'OAUTH_HANDOFF_UNAVAILABLE' }); }
 });
 
