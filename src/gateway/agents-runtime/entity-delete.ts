@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { getConfig } from '../../config/config';
-import { normalizeAgentsForSave, sanitizeAgentId } from '../agents/agent-normalize';
+import { sanitizeAgentId } from '../agents/agent-normalize';
 import {
   deleteManagedTeam,
   getManagedTeam,
@@ -113,8 +113,13 @@ function deleteTeamManagerAgent(
   if ((team.subagentIds || []).some((id) => sanitizeAgentId(id) === managerId)) return none;
 
   const agents = (getConfig().getConfig() as any).agents;
-  const record = (Array.isArray(agents) ? agents : []).find((agent: any) => sanitizeAgentId(agent?.id) === managerId);
-  if (!record) return none;
+  // deleteAgentCompletely() removes EVERY record whose sanitized id matches, so the
+  // ownership check below is only valid when exactly one record can match. Two
+  // records that collide after sanitizing (legacy raw ids such as differing case)
+  // are ambiguous: leave both.
+  const matches = (Array.isArray(agents) ? agents : []).filter((agent: any) => sanitizeAgentId(agent?.id) === managerId);
+  if (matches.length !== 1) return none;
+  const record = matches[0];
 
   // ensureManagedTeamManagerAgent() stamps both fields on every manager record.
   // A record without that link back to this team is left for a human to judge.
@@ -198,8 +203,12 @@ export function deleteAgentCompletely(input: {
     return { success: false, agentId, removedPaths: [], deletedScheduledJobs: 0, affectedTeams: [], error: `Agent "${agentId}" not found` };
   }
 
+  // Write the surviving records back exactly as stored. This used to pass them
+  // through normalizeAgentsForSave(), which rebuilds each record from a fixed field
+  // list and so silently dropped settings it does not know (reasoning_effort,
+  // cronSchedule, voice, ...) from every OTHER agent whenever one agent was deleted.
   const nextAgents = explicitAgents.filter((agent: any) => sanitizeAgentId(agent.id) !== agentId);
-  cm.updateConfig({ agents: normalizeAgentsForSave(nextAgents) } as any);
+  cm.updateConfig({ agents: nextAgents } as any);
   const membership = input.updateTeamMembership === false
     ? { affectedTeams: [] as DeleteAgentResult['affectedTeams'], removedPaths: [] as string[], deletedScheduledJobs: 0 }
     : removeAgentFromTeams(agentId, input.broadcastTeamEvent, input.cronScheduler);
