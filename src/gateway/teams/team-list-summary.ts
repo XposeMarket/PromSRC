@@ -77,7 +77,7 @@ export function summarizeTeamControlResult(
  * returned team (both UIs refetch), so do not ship megabytes of chat back for
  * a button tap. Every other field of the result is passed through unchanged.
  */
-export function summarizeTeamControlResponse<T extends { team?: any }>(out: T, liveStartedAt = 0): T {
+export function summarizeTeamControlResponse<T extends Record<string, any>>(out: T, liveStartedAt = 0): T {
   if (!out || !out.team || typeof out.team !== 'object') return out;
   return { ...out, team: summarizeTeamForList(out.team, liveStartedAt) };
 }
