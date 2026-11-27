@@ -10,6 +10,8 @@ import { CONNECTION_STATE_TRANSITIONS } from './schema';
 
 /** Adapters whose only proof of access is a stored credential; disconnecting them deletes it. */
 const CREDENTIAL_ADAPTERS = new Set(['api-key', 'setup-token']);
+/** How often an unchanged pending poll refreshes the attempt's updatedAt (its only store write). */
+const PENDING_POLL_TOUCH_MS = 60_000;
 import type {
   ConnectionAdapterResult, ConnectionAttempt, ConnectionPlan, ConnectionRecord,
   ConnectionDiscoveryResult, ConnectionStrategy, ConnectionVerificationResult,
@@ -32,6 +34,7 @@ export interface ConnectionOrchestratorOptions {
 
 export class ConnectionOrchestrator {
   private connectInFlight = new Map<string, Promise<ConnectionAttempt>>();
+  private continueTail = new Map<string, Promise<void>>();
   constructor(private readonly options: ConnectionOrchestratorOptions) {}
 
   create(input: { serviceId: string; serviceName?: string; requestedCapabilities?: string[]; readOnly?: boolean; metadata?: Record<string, unknown> }): ConnectionAttempt {
@@ -163,7 +166,21 @@ export class ConnectionOrchestrator {
     }
   }
 
-  async continue(id: string, input?: Record<string, unknown>): Promise<ConnectionAttempt> {
+  /**
+   * Continuations for one attempt run one at a time, each against the stored result of the one before.
+   * Setup sheets poll every ~2 seconds and an agent check can land mid-poll; an overlapping continuation
+   * that read adapter state while another was replacing it (e.g. restarting a sign-in flow) failed the attempt.
+   */
+  continue(id: string, input?: Record<string, unknown>): Promise<ConnectionAttempt> {
+    const prior = this.continueTail.get(id) ?? Promise.resolve();
+    const task = prior.then(() => this.continueOnce(id, input));
+    const tail = task.then(() => undefined, () => undefined);
+    this.continueTail.set(id, tail);
+    void tail.then(() => { if (this.continueTail.get(id) === tail) this.continueTail.delete(id); });
+    return task;
+  }
+
+  private async continueOnce(id: string, input?: Record<string, unknown>): Promise<ConnectionAttempt> {
     const attempt = this.requireAttempt(id);
     // Continue is progress, not consent. Only the owner-gated connect route approves.
     if (['awaiting_approval', 'cancelled', 'connected', 'failed'].includes(attempt.state)) return attempt;
@@ -310,9 +327,12 @@ export class ConnectionOrchestrator {
     // "Preparing connection…" with no way forward (mcp-oauth, device-code, browser and CLI login).
     const samePendingStep = state === current.state && state.startsWith('awaiting_');
     const requiredUserAction = result.userAction ?? (samePendingStep ? current.requiredUserAction : undefined);
-    // Nothing changed: no store write and no progress entry for every 2-second poll.
+    // Nothing changed: no progress entry for every 2-second poll. A successful poll is still activity, and
+    // ConnectionStartService abandons attempts whose updatedAt is 15+ minutes old, so refresh it at most once a minute.
     if (samePendingStep && !result.connection && !result.configuration && connectionId === current.connectionId
-      && JSON.stringify(requiredUserAction ?? null) === JSON.stringify(current.requiredUserAction ?? null)) return current;
+      && JSON.stringify(requiredUserAction ?? null) === JSON.stringify(current.requiredUserAction ?? null)) {
+      return Date.now() - Date.parse(current.updatedAt) > PENDING_POLL_TOUCH_MS ? this.options.attempts.update(attempt.id, {}) : current;
+    }
     const next = this.options.attempts.update(attempt.id, { state, requiredUserAction, connectionId, metadata: { ...(attempt.metadata || {}), ...(result.configuration || {}) } });
     this.options.attempts.addProgress(next.id, { state, message: result.userAction ? `User action required: ${result.userAction.label}` : 'Connection adapter completed.' });
     this.emitAttempt(next.id);

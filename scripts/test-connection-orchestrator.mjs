@@ -124,8 +124,51 @@ try {
     const barePolled = await bare.continue(bareAttempt.id);
     assert.equal(barePolled.state, 'awaiting_device_code');
     assert.equal(barePolled.requiredUserAction.userCode, 'ABCD-1234', 'a bare pending result must keep the existing action');
+    // A poll is activity: the 15-minute idle rule reads updatedAt. Recently touched attempts are not rewritten,
+    // attempts last touched over a minute ago are refreshed, and neither adds a progress entry.
+    const recentPoll = await bare.continue(bareAttempt.id);
+    assert.equal(recentPoll.updatedAt, barePolled.updatedAt, 'an unchanged poll must not rewrite a recently touched attempt');
+    attempts.data.attempts[bareAttempt.id].updatedAt = new Date(Date.now() - 16 * 60_000).toISOString();
+    const agedPoll = await bare.continue(bareAttempt.id);
+    assert(Date.now() - Date.parse(agedPoll.updatedAt) < 5_000, 'a successful poll must refresh updatedAt so the idle rule sees activity');
+    assert.equal(agedPoll.progress.length, barePolled.progress.length, 'refreshing activity must not append progress');
+    assert.equal(agedPoll.requiredUserAction.userCode, 'ABCD-1234');
+    // Overlapping polls: the real host drops the old sign-in flow before the replacement exists. A second
+    // poll landing in that gap used to read "no flow", fail the attempt, and break the first poll's result.
+    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    let gapFlows = 0; let inGap = false; let hold = false; let release = () => {};
+    const gapAdapters = new ConnectionAdapterRegistry();
+    gapAdapters.register(new McpOAuthConnectionAdapter({
+      startOAuth: async () => {
+        inGap = true;
+        if (hold) await new Promise((resolve) => { release = resolve; });
+        inGap = false;
+        return { authorizationUrl: `https://auth.example.test/authorize?state=gap${++gapFlows}` };
+      },
+      oauthStatus: async () => (inGap || gapFlows === 0 ? { state: 'error', error: 'no flow' } : { state: 'pending' }),
+      connectServer: async () => ({ ok: true, tools: [] }),
+    }));
+    const gapPlans = { resolve: async ({ serviceId, requestedCapabilities }) => ({ id: 'plan-gap', serviceId, serviceName: 'Gap Fixture', pluginId: 'gap-plugin', strategy: { id: 'gap-mcp-oauth', adapter: 'mcp-oauth', capabilities: requestedCapabilities, readOnly: true }, requestedCapabilities, summary: 'Overlapping poll plan.', createdAt: new Date().toISOString() }) };
+    const gap = new ConnectionOrchestrator({ attempts, connections, adapters: gapAdapters, activity, plans: gapPlans, broadcast: () => {} });
+    const gapAttempt = gap.create({ serviceId: 'gap-fixture', requestedCapabilities: [], readOnly: true });
+    await gap.plan(gapAttempt.id);
+    assert.equal((await gap.connect(gapAttempt.id, { approved: true })).state, 'awaiting_oauth');
+    attempts.update(gapAttempt.id, { requiredUserAction: undefined });
+    hold = true;
+    const firstPoll = gap.continue(gapAttempt.id);
+    await sleep(10);
+    assert.equal(inGap, true, 'fixture: the first poll must be replacing the flow when the second arrives');
+    const secondPoll = gap.continue(gapAttempt.id, {});
+    await sleep(10);
+    release();
+    const [firstResult, secondResult] = await Promise.all([firstPoll, secondPoll]);
+    assert.equal(firstResult.state, 'awaiting_oauth');
+    assert.equal(secondResult.state, 'awaiting_oauth', 'an overlapping poll must not fail the attempt');
+    assert.equal(secondResult.requiredUserAction.authorizationUrl, 'https://auth.example.test/authorize?state=gap2');
+    assert.equal(gapFlows, 2, 'overlapping polls must start one replacement flow, not one each');
+    assert.equal(attempts.get(gapAttempt.id).error, undefined);
   }
-  console.log('PASS: durable connection orchestration, plugin contract, conservative exposure, Robinhood plan, and pending polls keep the sign-in action');
+  console.log('PASS: durable connection orchestration, plugin contract, conservative exposure, Robinhood plan, pending polls keep the sign-in action and activity, and overlapping polls are serialized');
 } finally {
   fs.rmSync(dir, { recursive: true, force: true });
 }
