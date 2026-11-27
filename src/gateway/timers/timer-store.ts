@@ -105,13 +105,15 @@ function normalizeTimer(raw: any): MainChatTimer | null {
 function isTimerRunningInLiveProcess(timer: MainChatTimer, probe: TimerOwnerProbe): boolean {
   const ownerPid = Number(timer.ownerPid);
   if (!Number.isInteger(ownerPid) || ownerPid <= 0) return false;
-  if (ownerPid === probe.pid) {
-    // Same pid with a different start time: this process reused a dead owner's pid.
-    return !timer.ownerStartedAt || timer.ownerStartedAt === probe.startedAt;
-  }
+  // Same pid with a recorded start time is decisive: an exact match is this
+  // process (never recover, uncapped); a mismatch means this process reused a
+  // dead owner's pid.
+  if (ownerPid === probe.pid && timer.ownerStartedAt) return timer.ownerStartedAt === probe.startedAt;
+  // Everything else is unproven (another pid, or this pid with no start time
+  // recorded), so it is bounded by the age cap.
   const firedAtMs = new Date(timer.firedAt || timer.updatedAt).getTime();
   if (Number.isFinite(firedAtMs) && probe.nowMs - firedAtMs > OWNED_RUNNING_TIMER_MAX_MS) return false;
-  return probe.isPidAlive(ownerPid);
+  return ownerPid === probe.pid || probe.isPidAlive(ownerPid);
 }
 
 export function recoverStrandedMainChatTimers(

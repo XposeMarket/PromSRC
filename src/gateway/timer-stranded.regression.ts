@@ -5,6 +5,12 @@ import os from 'node:os';
 import path from 'node:path';
 
 // Isolated data dir so the store-level cases never touch the real timers.json.
+// These three select or relocate the canonical storage layout and would win
+// over PROMETHEUS_DATA_DIR (src/runtime/storage-layout.ts), so drop any inherited
+// value before an application module is imported.
+delete process.env.PROMETHEUS_RUNTIME_DIR;
+delete process.env.PROMETHEUS_STORAGE_LAYOUT;
+delete process.env.PROMETHEUS_APP_DATA_DIR;
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'prom-timer-stranded-'));
 process.env.PROMETHEUS_DATA_DIR = tempRoot;
 process.env.PROMETHEUS_WORKSPACE_DIR = path.join(tempRoot, 'workspace');
@@ -79,6 +85,19 @@ async function main(): Promise<void> {
   assert.equal(recoverStrandedMainChatTimers(mine, bootAt, probe), false);
   assert.equal(mine[0].status, 'running');
 
+  // 5b) This pid but no recorded start time (partial record): unproven, so it is
+  //     kept only inside the age cap and recovered past it.
+  const noStart = [running('no-start', { ownerPid: 1000 })];
+  assert.equal(recoverStrandedMainChatTimers(noStart, bootAt, probe), false);
+  assert.equal(noStart[0].status, 'running');
+  const noStartPastCap = [running('no-start-past-cap', { ownerPid: 1000 })];
+  const capEnd = Date.parse(firedAt) + OWNED_RUNNING_TIMER_MAX_MS;
+  assert.equal(recoverStrandedMainChatTimers(noStartPastCap, capEnd + 2, { ...probe, nowMs: capEnd + 1 }), true);
+  assert.equal(noStartPastCap[0].status, 'due_waiting');
+  // The exact-owner exemption is not capped.
+  const minePastCap = [running('mine-past-cap', { ownerPid: 1000, ownerStartedAt: probe.startedAt })];
+  assert.equal(recoverStrandedMainChatTimers(minePastCap, capEnd + 2, { ...probe, nowMs: capEnd + 1 }), false);
+
   // 6) Age backstop for a pid reused by an unrelated live process.
   const firedMs = Date.parse(firedAt);
   const atCap = [running('at-cap', { ownerPid: 2222 })];
@@ -120,8 +139,13 @@ async function main(): Promise<void> {
   assert.equal(store.claimMainChatTimerForRun('timer_missing'), null);
 
   // 7c) The incident: fired before this process started by another process that is still alive.
+  let spawnError: Error | null = null;
   child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
-  await waitUntil(() => Number(child?.pid) > 0 && isAlive(Number(child?.pid)), 10_000, 'the stand-in gateway process to start');
+  child.once('error', (err) => { spawnError = err; });
+  await waitUntil(() => {
+    if (spawnError) throw spawnError;
+    return Number(child?.pid) > 0 && isAlive(Number(child?.pid));
+  }, 10_000, 'the stand-in gateway process to start');
   const otherPid = Number(child.pid);
   const anHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
   rewriteOnDisk(created.id, (timer) => {
@@ -135,10 +159,10 @@ async function main(): Promise<void> {
   assert.equal(store.getDueMainChatTimers().some((timer) => timer.id === created.id), false, 'and it is not offered to the runner again');
 
   // 7d) That process dies: the next store read recovers the timer.
-  const exited = new Promise<void>((resolve) => child?.once('exit', () => resolve()));
+  let childExited = false;
+  child.once('exit', () => { childExited = true; });
   child.kill();
-  await exited;
-  await waitUntil(() => !isAlive(otherPid), 10_000, 'the stand-in gateway process to exit');
+  await waitUntil(() => childExited && !isAlive(otherPid), 10_000, 'the stand-in gateway process to exit');
   const recovered = find(created.id);
   assert.equal(recovered?.status, 'due_waiting');
   assert.equal(recovered?.ownerPid, undefined);
