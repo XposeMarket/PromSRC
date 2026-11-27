@@ -114,6 +114,7 @@ export async function openConnectFlow(fetchJson, target, options = {}) {
     } else if (attempt.state === 'failed' || attempt.state === 'research_required' || attempt.state === 'reauth_required') {
       text('p', 'This plugin needs additional setup. No credentials were sent to chat.', 'sa-muted');
       if (attempt.error?.code === 'DISCOVERY_FAILED') text('p', 'Its installed definition does not provide a supported connection method. Check this plugin’s setup instructions.', 'sa-muted');
+      else if (attempt.error?.code === 'MCP_OAUTH_EXPIRED') text('p', 'Sign-in was not finished in time, so that sign-in link expired. Nothing was connected. Tap Restart authorization for a fresh one: you get 30 minutes from the moment you tap Authorize.', 'sa-err');
       else if (attempt.error) showError(attempt.error);
       if (['connector-oauth', 'mcp-oauth'].includes(attempt.plan?.strategy?.adapter)) button('Restart authorization', async () => { await act('cancel'); resumeAttemptId = undefined; return start(); }, true);
     } else if (action) {

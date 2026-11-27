@@ -171,9 +171,28 @@ export class ConnectionOrchestrator {
    * Setup sheets poll every ~2 seconds and an agent check can land mid-poll; an overlapping continuation
    * that read adapter state while another was replacing it (e.g. restarting a sign-in flow) failed the attempt.
    */
-  continue(id: string, input?: Record<string, unknown>): Promise<ConnectionAttempt> {
+  continue(id: string, input?: Record<string, unknown>): Promise<ConnectionAttempt> { return this.enqueue(id, () => this.continueOnce(id, input)); }
+
+  /**
+   * Re-issue the pending user action right before the user starts it. A sign-in link's time window begins when the
+   * link is issued, which used to be at approval: a phone sign-in started minutes later ran out mid-login.
+   * Queued with continuations because it replaces adapter state. Adapters without the hook keep their action.
+   */
+  refreshUserAction(id: string): Promise<ConnectionAttempt> { return this.enqueue(id, () => this.refreshOnce(id)); }
+
+  private async refreshOnce(id: string): Promise<ConnectionAttempt> {
+    const attempt = this.requireAttempt(id);
+    // Refresh is not consent and not recovery: only an approved attempt already waiting on its user action qualifies.
+    if (!attempt.plan || !attempt.requiredUserAction || attempt.state === 'awaiting_approval' || !attempt.state.startsWith('awaiting_')) return attempt;
+    const adapter = this.options.adapters.resolve(attempt.plan.strategy);
+    if (!adapter.refreshUserAction) return attempt;
+    try { return this.applyResult(attempt, await adapter.refreshUserAction(this.context(attempt)), adapter.id); }
+    catch (error: any) { return this.fail(attempt, 'CONNECTION_CONTINUE_FAILED', String(error?.message || error), true); }
+  }
+
+  private enqueue(id: string, run: () => Promise<ConnectionAttempt>): Promise<ConnectionAttempt> {
     const prior = this.continueTail.get(id) ?? Promise.resolve();
-    const task = prior.then(() => this.continueOnce(id, input));
+    const task = prior.then(run);
     const tail = task.then(() => undefined, () => undefined);
     this.continueTail.set(id, tail);
     void tail.then(() => { if (this.continueTail.get(id) === tail) this.continueTail.delete(id); });

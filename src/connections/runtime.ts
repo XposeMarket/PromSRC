@@ -101,7 +101,7 @@ export function getConnectionRuntime() {
       const { startMcpOAuthFlow } = await import('../gateway/mcp-oauth.js');
       const result = await startMcpOAuthFlow(id, cfg.url, mcp.getOAuthHint(id)?.wwwAuthenticate, strategy.authentication?.scopes?.join(' '), { openBrowser: false });
       if (result.status === 'error' || !result.authorizeUrl) throw new Error(result.error || 'OAuth did not return an authorization URL.');
-      return { authorizationUrl: result.authorizeUrl, scopes: strategy.authentication?.scopes, discoveryVersion: 2 };
+      return { authorizationUrl: result.authorizeUrl, scopes: strategy.authentication?.scopes, discoveryVersion: 2, expiresAt: result.expiresAt ? new Date(result.expiresAt).toISOString() : undefined };
     },
     oauthStatus: async (context) => {
       const { getMcpOAuthFlowStatus } = await import('../gateway/mcp-oauth.js');
@@ -109,7 +109,7 @@ export function getConnectionRuntime() {
       if (!result) return { state: 'error', error: 'The OAuth session is not active. Restart authorization to create a fresh verified flow.' };
       if (result.status === 'pending') return { state: 'pending' };
       if (result.status === 'connected') return { state: 'connected' };
-      return { state: 'error', error: result.error || 'OAuth authorization failed.' };
+      return { state: 'error', error: result.error || 'OAuth authorization failed.', expired: result.expired === true };
     },
     connectServer: async (context) => {
       const id = mcpServerId(context);

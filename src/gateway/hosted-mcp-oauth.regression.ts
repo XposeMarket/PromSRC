@@ -41,6 +41,9 @@ async function main(): Promise<void> {
     assert.deepEqual(getMcpOAuthRedirectUris(), ['http://127.0.0.1:19847/mcp-oauth/callback', redirectUri]);
     const started = await startMcpOAuthFlow(id, 'https://mcp.vercel.com', undefined, undefined, { callback: 'public', openBrowser: false });
     assert.equal(started.status, 'pending', started.error);
+    // A person signing in with 2FA on another device needs the window; five minutes expired mid sign-in.
+    assert.ok(started.expiresAt! - Date.now() > 25 * 60_000, 'a pending flow reports its expiry and stays open long enough for a real sign-in');
+    assert.equal(getMcpOAuthFlowStatus(id)?.expired, undefined);
     const authorize = new URL(started.authorizeUrl!);
     assert.equal(authorize.searchParams.get('redirect_uri'), redirectUri);
     assert.deepEqual(registrations, [getMcpOAuthRedirectUris()]);

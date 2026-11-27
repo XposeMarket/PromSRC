@@ -98,7 +98,8 @@ router.post('/api/connection-attempts/:id/oauth-handoff', (req, res, next) => {
 }, async (req, res) => {
   try {
     const { openConnectionPhoneHandoff } = await import('../../connections/oauth-phone-handoff');
-    const handoff = await openConnectionPhoneHandoff(getConnectionRuntime().orchestrator.getAttempt(req.params.id));
+    // The sign-in window starts when the link is issued. Issue a fresh one as the user begins, not the one from approval time.
+    const handoff = await openConnectionPhoneHandoff(await getConnectionRuntime().orchestrator.refreshUserAction(req.params.id));
     res.set('Cache-Control', 'no-store').json({ success: true, ...handoff });
   } catch { res.status(409).json({ success: false, error: 'OAUTH_HANDOFF_UNAVAILABLE' }); }
 });

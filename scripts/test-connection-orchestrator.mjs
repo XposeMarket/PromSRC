@@ -167,6 +167,47 @@ try {
     assert.equal(secondResult.requiredUserAction.authorizationUrl, 'https://auth.example.test/authorize?state=gap2');
     assert.equal(gapFlows, 2, 'overlapping polls must start one replacement flow, not one each');
     assert.equal(attempts.get(gapAttempt.id).error, undefined);
+    // Sign-in window: the action carries the flow's expiry, a refresh as the user begins issues a fresh link and
+    // window, and a flow that ran out of time fails with its own code instead of a generic failure.
+    let winFlows = 0; let winStatus = { state: 'pending' };
+    const winAdapters = new ConnectionAdapterRegistry();
+    winAdapters.register(new McpOAuthConnectionAdapter({
+      startOAuth: async () => ({ authorizationUrl: `https://auth.example.test/authorize?state=win${++winFlows}`, expiresAt: new Date(Date.now() + 30 * 60_000).toISOString() }),
+      oauthStatus: async () => (winFlows === 0 ? { state: 'error', error: 'no flow' } : winStatus),
+      connectServer: async () => ({ ok: true, tools: [] }),
+    }));
+    const winPlans = { resolve: async ({ serviceId, requestedCapabilities }) => ({ id: 'plan-win', serviceId, serviceName: 'Window Fixture', pluginId: 'win-plugin', strategy: { id: 'win-mcp-oauth', adapter: 'mcp-oauth', capabilities: requestedCapabilities, readOnly: true, configuration: { desktopRequired: true } }, requestedCapabilities, summary: 'Sign-in window plan.', createdAt: new Date().toISOString() }) };
+    const win = new ConnectionOrchestrator({ attempts, connections, adapters: winAdapters, activity, plans: winPlans, broadcast: () => {} });
+    const winAttempt = win.create({ serviceId: 'window-fixture', requestedCapabilities: [], readOnly: true });
+    await win.plan(winAttempt.id);
+    assert.equal((await win.refreshUserAction(winAttempt.id)).state, 'awaiting_approval', 'refresh must never approve or start an unapproved attempt');
+    assert.equal(winFlows, 0);
+    const winStarted = await win.connect(winAttempt.id, { approved: true });
+    assert(Date.parse(winStarted.requiredUserAction.expiresAt) > Date.now() + 25 * 60_000, 'the sign-in action must carry the flow expiry');
+    const winPolled = await win.continue(winAttempt.id);
+    assert.equal(winPolled.requiredUserAction.authorizationUrl, 'https://auth.example.test/authorize?state=win1', 'a poll must not refresh the link');
+    const refreshed = await win.refreshUserAction(winAttempt.id);
+    assert.equal(refreshed.state, 'awaiting_oauth');
+    assert.equal(refreshed.requiredUserAction.authorizationUrl, 'https://auth.example.test/authorize?state=win2', 'refresh must issue a fresh sign-in link');
+    assert.equal(refreshed.requiredUserAction.desktopRequired, true);
+    assert.equal(winFlows, 2);
+    winStatus = { state: 'error', error: 'authorization timed out', expired: true };
+    const expired = await win.continue(winAttempt.id);
+    assert.equal(expired.state, 'failed');
+    assert.equal(expired.error.code, 'MCP_OAUTH_EXPIRED', 'an expired sign-in window must be reported as expired');
+    assert.equal((await win.refreshUserAction(winAttempt.id)).state, 'failed', 'refresh must not reopen a failed attempt');
+    assert.equal(winFlows, 2);
+    winStatus = { state: 'error', error: 'Provider authorization error (access_denied)' };
+    const deniedAttempt = win.create({ serviceId: 'window-fixture', requestedCapabilities: [], readOnly: true });
+    await win.plan(deniedAttempt.id);
+    winFlows = 0;
+    const deniedStart = await win.connect(deniedAttempt.id, { approved: true });
+    assert.equal(deniedStart.state, 'awaiting_oauth');
+    assert.equal((await win.continue(deniedAttempt.id)).error.code, 'MCP_OAUTH_FAILED', 'a provider failure keeps the generic code');
+    // An adapter with no refresh hook keeps the action it has.
+    const bareRefreshed = await bare.refreshUserAction(bareAttempt.id);
+    assert.equal(bareRefreshed.state, 'awaiting_device_code');
+    assert.equal(bareRefreshed.requiredUserAction.userCode, 'ABCD-1234');
   }
   console.log('PASS: durable connection orchestration, plugin contract, conservative exposure, Robinhood plan, pending polls keep the sign-in action and activity, and overlapping polls are serialized');
 } finally {

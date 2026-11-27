@@ -25,7 +25,10 @@ import { getVault } from '../security/vault.js';
 const REDIRECT_PORT = 19847;
 const REDIRECT_PATH = '/mcp-oauth/callback';
 const REDIRECT_URI = `http://127.0.0.1:${REDIRECT_PORT}${REDIRECT_PATH}`;
-const FLOW_TIMEOUT_MS = 5 * 60 * 1000;
+// How long a pending sign-in accepts its callback. Five minutes was too short for a person signing in on a second
+// device with 2FA and first-time account onboarding (Robinhood through the phone handoff, 2026-11-27): the flow
+// expired mid sign-in and closed the callback listener. State is unguessable and PKCE-bound, so a longer window is safe.
+const FLOW_TIMEOUT_MS = 30 * 60 * 1000;
 
 interface AuthServerMetadata {
   issuer?: string;
@@ -68,6 +71,8 @@ interface ActiveFlow {
   processing?: boolean;
   error?: string;
   startedAt: number;
+  /** Set when the pending window ran out, so callers can report "expired" instead of a generic failure. */
+  expired?: boolean;
   authorizeUrl: string;
 }
 
@@ -447,17 +452,19 @@ export async function getValidMcpAccessToken(serverId: string): Promise<string |
 
 // ─── flow ──────────────────────────────────────────────────────────────────────
 export interface StartFlowResult {
+  /** Epoch ms after which a pending flow no longer accepts its callback. */
+  expiresAt?: number;
   status: FlowStatus;
   authorizeUrl?: string;
   error?: string;
 }
 
-export function getMcpOAuthFlowStatus(serverId: string): { status: FlowStatus; error?: string; authorizeUrl?: string } | null {
+export function getMcpOAuthFlowStatus(serverId: string): { status: FlowStatus; error?: string; authorizeUrl?: string; expired?: boolean } | null {
   const flow = activeFlows.get(serverId);
   if (!flow) {
     return hasMcpOAuthTokens(serverId) ? { status: 'connected' } : null;
   }
-  return { status: flow.status, error: flow.error, authorizeUrl: flow.authorizeUrl };
+  return { status: flow.status, error: flow.error, authorizeUrl: flow.authorizeUrl, ...(flow.expired ? { expired: true } : {}) };
 }
 
 /** Complete either a loopback or public gateway callback, matched solely by unpredictable state. */
@@ -567,11 +574,11 @@ export async function startMcpOAuthFlow(serverId: string, serverUrl: string, www
   setTimeout(() => {
     const current = activeFlows.get(serverId);
     if (current === flow && flow.status === 'pending' && !flow.processing) {
-      flow.status = 'error'; flow.error = 'authorization timed out';
+      flow.status = 'error'; flow.error = 'authorization timed out'; flow.expired = true;
       try { flow.server?.close(); } catch {}
     }
   }, FLOW_TIMEOUT_MS).unref?.();
 
   if (options?.openBrowser !== false && options?.callback !== 'public') openBrowser(flow.authorizeUrl);
-  return { status: 'pending', authorizeUrl: flow.authorizeUrl };
+  return { status: 'pending', authorizeUrl: flow.authorizeUrl, expiresAt: flow.startedAt + FLOW_TIMEOUT_MS };
 }

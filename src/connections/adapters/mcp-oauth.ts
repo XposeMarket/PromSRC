@@ -3,7 +3,7 @@ import type { ConnectionAdapter, ConnectionAdapterContext, ConnectionAdapterResu
 
 export interface McpOAuthHost {
   startOAuth(context: ConnectionAdapterContext, strategy: ConnectionStrategy): Promise<{ authorizationUrl: string; expiresAt?: string; scopes?: string[]; discoveryVersion?: number }>;
-  oauthStatus(context: ConnectionAdapterContext): Promise<{ state: 'pending' | 'connected' | 'error'; error?: string }>;
+  oauthStatus(context: ConnectionAdapterContext): Promise<{ state: 'pending' | 'connected' | 'error'; error?: string; expired?: boolean }>;
   connectServer(context: ConnectionAdapterContext): Promise<{ ok: boolean; tools?: string[]; configuration?: Record<string, unknown>; error?: string }>;
   disconnectServer?(context: ConnectionAdapterContext, connection: ConnectionRecord): Promise<void>;
   revokeOAuth?(context: ConnectionAdapterContext): Promise<void>;
@@ -35,10 +35,14 @@ export class McpOAuthConnectionAdapter implements ConnectionAdapter {
       if (action?.type === 'oauth' && action.authorizationUrl) return { state: 'awaiting_oauth', userAction: action };
       return this.connect(context);
     }
+    // An expired window is the user's sign-in running out of time, not a provider failure: its own code lets the sheet say so.
+    if (auth.state === 'error' && auth.expired) return { state: 'reauth_required', error: { code: 'MCP_OAUTH_EXPIRED', message: 'Sign-in was not finished before the sign-in window closed. Restart authorization for a fresh window.', retryable: true, phase: 'awaiting_oauth' } };
     if (auth.state === 'error') return { state: 'reauth_required', error: { code: 'MCP_OAUTH_FAILED', message: auth.error || 'MCP authorization failed.', retryable: true, phase: 'awaiting_oauth' } };
     context.emitProgress?.('OAuth complete; connecting to the MCP server.');
     return this.completeConnection(context);
   }
+  /** A fresh sign-in link and a full time window, issued as the user begins instead of at approval. Replaces the pending flow. */
+  async refreshUserAction(context: ConnectionAdapterContext): Promise<ConnectionAdapterResult> { return this.connect(context); }
   private async completeConnection(context: ConnectionAdapterContext): Promise<ConnectionAdapterResult> {
     const connected = await this.host.connectServer(context);
     if (!connected.ok) return { state: 'degraded', error: { code: 'MCP_CONNECT_FAILED', message: connected.error || 'MCP server connection failed.', retryable: true, phase: 'registering' } };
