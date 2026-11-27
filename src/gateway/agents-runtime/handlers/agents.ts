@@ -5,6 +5,7 @@ import { appendSubagentChatMessage, getSubagentChatHistory } from './../subagent
 import { getResourceStore } from './../../resources/resource-store';
 import { listManagedTeams, createManagedTeam, getManagedTeam, saveManagedTeam, appendTeamChat, updateTeamMemberState, createTeamDispatchRecord, findActiveTeamDispatch, updateTeamDispatchRecord, getOrCreateTeamDirectThread, enqueueTeamDirectThreadUserMessage } from './../../teams/managed-teams';
 import { deleteAgentCompletely, deleteTeamCompletely } from './../entity-delete';
+import { summarizeTeamControlResult } from './../../teams/team-list-summary';
 import { triggerManagerReview, handleManagerConversation, verifySubagentResult } from './../../teams/team-manager-runner';
 import { runTeamMemberDirectTurn, scheduleTeamMemberDirectWake } from './../../teams/team-member-room';
 import { routeTeamEvent } from './../../teams/team-event-router';
@@ -1904,16 +1905,19 @@ export async function handleAgentsTool(ctx: handleAgentsToolContext): Promise<Aw
             const teamId = String(args.team_id || '').trim();
             if (!teamId) return { name, args, result: 'team_manage(pause) requires team_id', error: true };
             deps.bindTeamNotificationTargetFromSession(teamId, sessionId, 'team_manage:pause');
+            const wasPaused = getManagedTeam(teamId)?.manager?.paused === true;
             const out = deps.pauseManagedTeamInternal(teamId, args.reason ? String(args.reason) : undefined);
-            return { name, args, result: JSON.stringify(out, null, 2), error: out.success !== true };
+            // Never serialize `out.team`: it carries the full team chat and run history (megabytes).
+            return { name, args, result: JSON.stringify(summarizeTeamControlResult('pause', out, wasPaused), null, 2), error: out?.success !== true };
           }
 
           if (action === 'resume') {
             const teamId = String(args.team_id || '').trim();
             if (!teamId) return { name, args, result: 'team_manage(resume) requires team_id', error: true };
             deps.bindTeamNotificationTargetFromSession(teamId, sessionId, 'team_manage:resume');
+            const wasPaused = getManagedTeam(teamId)?.manager?.paused === true;
             const out = deps.resumeManagedTeamInternal(teamId);
-            return { name, args, result: JSON.stringify(out, null, 2), error: out.success !== true };
+            return { name, args, result: JSON.stringify(summarizeTeamControlResult('resume', out, wasPaused), null, 2), error: out?.success !== true };
           }
 
           // ── run_round: trigger a collaborative round (Phase B teams) ───────
