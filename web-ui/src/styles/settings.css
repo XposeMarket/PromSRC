@@ -3533,7 +3533,7 @@
 }
 
 /* accounts */
-#settings-modal .sk-acct { grid-template-columns: 34px minmax(0, 1fr) 190px auto; }
+#settings-modal .sk-acct { grid-template-columns: 34px minmax(0, 1fr) 236px auto; }
 #settings-modal .sk-logo-tile {
   display: grid; place-items: center; width: 34px; height: 34px; border-radius: 9px;
   border: 1px solid var(--line); background: var(--sk-field); color: var(--text);
@@ -3544,6 +3544,15 @@
 #settings-modal .sk-use b { color: var(--text); font-weight: 600; }
 #settings-modal .sk-bar { height: 5px; margin-top: 6px; overflow: hidden; border-radius: 99px; background: color-mix(in srgb, var(--text) 12%, var(--panel-2)); }
 #settings-modal .sk-bar i { display: block; height: 100%; border-radius: 99px; background: var(--brand); }
+/* one line per limit window (5-hour, Weekly, ...) */
+#settings-modal .sk-wins { display: grid; gap: 9px; }
+#settings-modal .sk-win-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+#settings-modal .sk-win-head span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#settings-modal .sk-win-head b { flex: none; }
+#settings-modal .sk-win .sk-bar { margin-top: 4px; }
+#settings-modal .sk-win.warn .sk-bar i { background: var(--warn); }
+#settings-modal .sk-win.crit .sk-bar i { background: var(--err); }
+#settings-modal .sk-win.crit .sk-win-head b { color: var(--err); }
 #settings-modal .sk-strip { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12px; }
 #settings-modal .sk-strip .sk-logo { color: var(--muted); }
 #settings-modal .sk-strip .sk-logo path { fill: currentColor; }

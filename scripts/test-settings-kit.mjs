@@ -58,7 +58,20 @@ const fx = {
   '/api/settings/agent-model-default-templates': { success: true, templates: [] },
   '/api/brain/status': { thought: { enabled: false }, dream: { enabled: false }, cleanup: { enabled: false } },
   '/api/settings/session': { session: { mainChatGoals: {}, contextProfile: { providerId: 'anthropic', model: 'claude-retired-main', standardContextWindowTokens: 200000, maxContextWindowTokens: 1000000, contextWindowTokens: 200000, contextSelectionMode: 'standard' }, contextBudget: {} } },
-  '/api/usage/limits': { success: true, providers: [] },
+  '/api/usage/limits': { success: true, providers: [
+    { provider: 'anthropic', account_id: 'default', label: 'Claude', usage_scope: 'provider', source: 'live', tokens: {}, windows: [
+      { label: '5-hour', used_percent: 31, reset_at: new Date(Date.now() + 2 * 3600e3).toISOString() },
+      { label: 'Weekly', used_percent: 56, reset_at: new Date(Date.now() + 3 * 86400e3).toISOString() },
+      { label: 'Weekly · Opus', used_percent: 93, reset_at: new Date(Date.now() + 3 * 86400e3).toISOString() },
+    ] },
+    { provider: 'openai_codex', account_id: 'default', label: 'ChatGPT', usage_scope: 'provider', source: 'live', tokens: {}, windows: [
+      { label: '5-hour', used_percent: 12, reset_at: new Date(Date.now() + 3600e3).toISOString() },
+      { label: 'Weekly', used_percent: 40, reset_at: new Date(Date.now() + 5 * 86400e3).toISOString() },
+    ] },
+    { provider: 'openai_codex', account_id: 'default', label: 'OpenAI · Codex Spark', usage_scope: 'model', source: 'live', tokens: {}, windows: [
+      { label: '5-hour', used_percent: 99, reset_at: null },
+    ] },
+  ] },
   '/api/auth/openai/status': { connected: true },
   '/api/auth/anthropic/status': { connected: true },
 };
@@ -99,7 +112,16 @@ try {
     footerHidden: getComputedStyle(document.querySelector('#settings-modal .settings-page-footer')).display === 'none',
     barHidden: document.getElementById('settings-savebar')?.hidden !== false,
     storeHidden: document.getElementById('settings-models-store')?.hidden === true,
+    claudeWindows: Array.from(document.querySelectorAll('#settings-models-v2 .sk-acct[data-provider="anthropic"] .sk-win')).map((el) => [el.dataset.window, el.querySelector('b')?.textContent, el.className]),
+    codexWindows: Array.from(document.querySelectorAll('#settings-models-v2 .sk-acct[data-provider="openai_codex"] .sk-win')).map((el) => [el.dataset.window, el.querySelector('b')?.textContent]),
+    claudeFiveHourText: document.querySelector('#settings-models-v2 .sk-acct[data-provider="anthropic"] .sk-win[data-window="5-hour"] .sk-win-head span')?.textContent || '',
   }));
+  // Every limit window gets its own labelled line: a short window is never folded into the weekly one.
+  assert.deepEqual(view.claudeWindows.map((w) => w.slice(0, 2)), [['5-hour', '69% left'], ['Weekly', '44% left'], ['Weekly · Opus', '7% left']]);
+  assert.match(view.claudeWindows[2][2], /\bcrit\b/, 'a nearly used-up window is marked');
+  assert.doesNotMatch(view.claudeWindows[0][2], /\b(?:crit|warn)\b/);
+  assert.match(view.claudeFiveHourText, /^5-hour · resets in /, 'each window shows its own reset');
+  assert.deepEqual(view.codexWindows, [['5-hour', '88% left'], ['Weekly', '60% left']], 'per-model meters (Codex Spark) are not mixed into the account row');
   assert.equal(view.accounts, 2, 'one row per connected provider');
   assert.match(view.unavailable, /claude-retired-3/);
   assert.match(view.unavailable, /unavailable/);

@@ -173,17 +173,30 @@ function reasoningChoices(provider, model, select) {
   return values.map((value) => ({ value, label: value ? formatReasoningSelectorLabel(value, provider, model) : 'Default' }));
 }
 
+/**
+ * Every limit window the provider reports for the account its row stands for (for example
+ * Claude's 5-hour, Weekly and Weekly · Opus), in the provider's own order. The row shows the
+ * default account, else the first account with limit data. Per-model entries (Codex Spark)
+ * are a different meter and are left to the Hub's usage cards.
+ */
+function usageWindows(provider) {
+  const entries = ((deps?.getUsage?.() || {})[provider] || []).filter((entry) => entry && entry.usage_scope !== 'model');
+  const windowsOf = (entry) => (Array.isArray(entry.windows) ? entry.windows : [])
+    .map((w) => ({ label: String(w?.label || 'Limit'), used: Number(w?.used_percent), reset: w?.reset_at || null }))
+    .filter((w) => Number.isFinite(w.used));
+  const hasData = (entry) => windowsOf(entry).length > 0 || entry.budget?.limit_tokens > 0;
+  const defaultId = String(deps?.getLlm?.()?.providers?.[provider]?.defaultAccountId || '');
+  const entry = entries.find((item) => defaultId && String(item.account_id || '') === defaultId && hasData(item)) || entries.find(hasData);
+  if (!entry) return [];
+  const windows = windowsOf(entry);
+  if (windows.length) return windows;
+  return [{ label: 'Monthly budget', used: Number(entry.budget.used_percent) || 0, reset: null }];
+}
+
+/** The tightest window: the one number shown where there is only room for one (the model picker). */
 function usageFor(provider) {
-  const entries = (deps?.getUsage?.() || {})[provider] || [];
-  let best = null;
-  for (const entry of entries) {
-    for (const w of Array.isArray(entry.windows) ? entry.windows : []) {
-      const used = Number(w.used_percent);
-      if (Number.isFinite(used) && (!best || used > best.used)) best = { used, reset: w.reset_at, label: w.label };
-    }
-    if (!best && entry.budget?.limit_tokens > 0) best = { used: Number(entry.budget.used_percent) || 0, reset: null, label: 'Monthly budget' };
-  }
-  return best;
+  const windows = usageWindows(provider);
+  return windows.length ? windows.reduce((a, b) => (b.used > a.used ? b : a)) : null;
 }
 
 function resetText(iso) {
@@ -228,11 +241,15 @@ function accountDesc(provider) {
 }
 
 function accountUsage(provider) {
-  const u = usageFor(provider);
-  if (u) {
-    const left = Math.max(0, Math.min(100, Math.round(100 - u.used)));
-    const reset = resetText(u.reset);
-    return `<div class="sk-use"><b>${left}% left</b>${reset ? ` · ${esc(reset)}` : ''}<div class="sk-bar"><i style="width:${left}%"></i></div></div>`;
+  const windows = usageWindows(provider);
+  if (windows.length) {
+    // One labelled line per window, so a short window (5-hour) is never hidden behind a long one (weekly).
+    return `<div class="sk-use sk-wins">${windows.map((w) => {
+      const left = Math.max(0, Math.min(100, Math.round(100 - w.used)));
+      const reset = resetText(w.reset);
+      const tone = left <= 10 ? ' crit' : left <= 25 ? ' warn' : '';
+      return `<div class="sk-win${tone}" data-window="${esc(w.label)}"><div class="sk-win-head"><span>${esc(w.label)}${reset ? ` · ${esc(reset)}` : ''}</span><b>${left}% left</b></div><div class="sk-bar"><i style="width:${left}%"></i></div></div>`;
+    }).join('')}</div>`;
   }
   if (LOCAL_PROVIDERS.has(provider)) return '<div class="sk-use">No usage limits</div>';
   const subscription = /Signed in/.test(accountDesc(provider));
