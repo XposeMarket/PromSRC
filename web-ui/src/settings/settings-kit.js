@@ -323,8 +323,10 @@ export function closeSheets() {
  * when the chosen model supports them.
  *
  * opts: { anchor, groups:[{provider,name,note,logo,models:[{id,label,unavailable}]}],
- *   value:{provider,model}, same:{label,note}|null, footer:(value)=>({reasoning:{options:[{value,label}],value}|null, fast:{supported,checked}|null}),
- *   onPick(value), onReasoning(v), onFast(bool), onClose() }
+ *   value:{provider,model}, same:{label,note}|null, footer:(value)=>({account:{options:[{value,label}],value}|null,
+ *   reasoning:{options:[{value,label}],value}|null, fast:{supported,checked}|null}),
+ *   onPick(value), onAccount(v), onReasoning(v), onFast(bool), onClose() }
+ * The Account choice shows only when the slot's provider has more than one account.
  */
 export function openModelPicker(opts = {}) {
   closeModelPicker();
@@ -366,6 +368,13 @@ export function openModelPicker(opts = {}) {
   const renderFoot = () => {
     const f = typeof opts.footer === 'function' ? opts.footer(current) : null;
     const bits = [];
+    if (f?.account?.options?.length > 1) {
+      const acct = f.account;
+      const control = acct.options.length <= 3
+        ? skSegmented({ name: 'pop-account', options: acct.options, value: acct.value, label: 'Account' })
+        : `<select class="sk-select" data-pop-account aria-label="Account">${acct.options.map((o) => `<option value="${esc(o.value)}"${String(o.value) === String(acct.value) ? ' selected' : ''}>${esc(o.label)}</option>`).join('')}</select>`;
+      bits.push(`<div class="sk-pop-f"><div>Account<small>Which sign-in this job uses</small></div>${control}</div>`);
+    }
     if (f?.reasoning?.options?.length) {
       bits.push(`<div class="sk-pop-f"><div>Reasoning<small>Higher thinks longer before answering</small></div>${skSegmented({ name: 'pop-reasoning', options: f.reasoning.options, value: f.reasoning.value, label: 'Reasoning' })}</div>`);
     }
@@ -387,7 +396,14 @@ export function openModelPicker(opts = {}) {
   renderFoot();
   wireKit(pop);
   list.addEventListener('click', (event) => pick(event.target.closest('.sk-opt')));
-  foot.addEventListener('sk-seg', (event) => opts.onReasoning?.(event.detail.value));
+  foot.addEventListener('sk-seg', (event) => {
+    const group = event.target.closest?.('[data-seg]')?.getAttribute('data-seg');
+    if (group === 'pop-account') opts.onAccount?.(event.detail.value);
+    else opts.onReasoning?.(event.detail.value);
+  });
+  foot.addEventListener('change', (event) => {
+    if (event.target.matches?.('[data-pop-account]')) opts.onAccount?.(event.target.value);
+  });
   foot.addEventListener('sk-switch', (event) => opts.onFast?.(!!event.detail.checked));
   input.addEventListener('input', () => { query = input.value; renderList(); });
   pop.addEventListener('keydown', (event) => {
@@ -511,7 +527,7 @@ export function createSaveBar(host) {
       saveBtn.disabled = busy;
       discardBtn.disabled = busy;
       saveBtn.textContent = busy ? label : 'Save';
-      bar.dataset.state = busy ? 'saving' : bar.dataset.state;
+      bar.dataset.state = busy ? 'saving' : (bar.dataset.state === 'saving' ? 'dirty' : bar.dataset.state);
     },
     error(message) {
       bar.hidden = false;

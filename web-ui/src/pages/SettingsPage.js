@@ -832,7 +832,10 @@ async function refreshHeartbeatSummary() {
   }
 }
 
-async function saveHeartbeatSettings() {
+// throwOnError: the page save bar needs the real outcome. These save functions
+// still show their own message; with throwOnError they also rethrow so the bar
+// keeps the edits and does not say "Saved".
+async function saveHeartbeatSettings({ throwOnError = false } = {}) {
   const statusEl = document.getElementById('settings-hb-status');
   const enabledEl = document.getElementById('settings-hb-enabled');
   const intervalEl = document.getElementById('settings-hb-interval');
@@ -865,9 +868,12 @@ async function saveHeartbeatSettings() {
     loadSubagentHeartbeatList().catch(() => {});
     if (statusEl) statusEl.textContent = 'Saved.';
     addProcessEntry('final', 'Heartbeat settings saved.');
+    return data;
   } catch (err) {
     if (statusEl) statusEl.textContent = `Save failed: ${err.message}`;
     addProcessEntry('error', `Heartbeat settings save failed: ${err.message}`);
+    if (throwOnError) throw err;
+    return null;
   }
 }
 
@@ -1806,8 +1812,13 @@ function renderProviderSelectors() {
     const emptyState = credentialedProviders.length
       ? ''
       : '<option value="" disabled>No connected model providers</option>';
-    select.innerHTML = `<option value="">- ${escHtml(placeholder)} -</option>${providerOptions}${emptyState}`;
-    if (current && credentialedProviders.some(provider => provider.id === current)) select.value = current;
+    // A saved choice whose provider is no longer connected stays selected (shown
+    // as unavailable on the page) so saving never silently erases it.
+    const keepSaved = current && !credentialedProviders.some(provider => provider.id === current)
+      ? `<option value="${escHtml(current)}">${escHtml(providers.find(provider => provider.id === current)?.name || current)} (not connected)</option>`
+      : '';
+    select.innerHTML = `<option value="">- ${escHtml(placeholder)} -</option>${providerOptions}${keepSaved}${emptyState}`;
+    if (current) select.value = current;
   });
 }
 
@@ -4849,8 +4860,23 @@ function getSelectedChannelType() {
   return String(document.getElementById('settings-channel-select')?.value || 'telegram');
 }
 
+let channelShownType = '';
 function onChannelTypeChange() {
-  const ch = getSelectedChannelType();
+  let ch = getSelectedChannelType();
+  // Save posts only the app that is shown, so switching apps with unsaved
+  // edits would leave them unsaved while the bar said "Saved". Ask for Save or
+  // Discard first and keep the current app on screen.
+  const pending = SETTINGS_PAGE_CONTROLLERS.channels?.changes?.() || [];
+  if (channelShownType && ch !== channelShownType && pending.length) {
+    const select = document.getElementById('settings-channel-select');
+    if (select) select.value = channelShownType;
+    ch = channelShownType;
+    const name = { telegram: 'Telegram', discord: 'Discord', whatsapp: 'WhatsApp' }[ch] || ch;
+    updateSettingsSaveBar();
+    settingsSaveBar?.error(`Save or discard your ${name} changes before switching apps.`);
+    return;
+  }
+  channelShownType = ch;
   const formMap = {
     telegram: 'channel-form-telegram',
     discord: 'channel-form-discord',
@@ -4877,8 +4903,8 @@ function onChannelTypeChange() {
   applyCompletionNotificationFields(channelsStatusCache?.[ch] || null);
 }
 
-async function saveSelectedChannelSettings() {
-  await saveChannelSettings(getSelectedChannelType());
+async function saveSelectedChannelSettings(options = {}) {
+  return saveChannelSettings(getSelectedChannelType(), options);
 }
 
 async function testSelectedChannel() {
@@ -4952,7 +4978,7 @@ async function loadChannelsStatus() {
   });
 }
 
-async function saveChannelSettings(channel) {
+async function saveChannelSettings(channel, { throwOnError = false } = {}) {
   const payload = readChannelPayload(channel);
   try {
     const data = await api('/api/channels/config', {
@@ -4960,16 +4986,16 @@ async function saveChannelSettings(channel) {
       headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ channels: { [channel]: payload } }),
     });
-    if (data?.success) {
-      addProcessEntry('final', `${channel} settings saved.`);
-      channelsStatusLoaded = false;
-      _markSettingsCacheBusted('settings-channels');
-      await loadChannelsStatus();
-    } else {
-      alert('Save failed: ' + (data?.error || 'unknown error'));
-    }
+    if (!data?.success) throw new Error(data?.error || 'unknown error');
+    addProcessEntry('final', `${channel} settings saved.`);
+    channelsStatusLoaded = false;
+    _markSettingsCacheBusted('settings-channels');
+    await loadChannelsStatus();
+    return data;
   } catch (err) {
+    if (throwOnError) throw err;
     alert('Save failed: ' + err.message);
+    return null;
   }
 }
 
@@ -5154,6 +5180,9 @@ function settingsTabLabel(tab) {
   return String(tab || 'settings').replace(/-/g, ' ').replace(/^./, c => c.toUpperCase());
 }
 
+/** Returned (not thrown) when the user cancels a confirmation: nothing was sent. */
+const SETTINGS_SAVE_CANCELLED = Object.freeze({ cancelled: true });
+
 async function saveSettings(options = {}) {
   // stayOpen: called by the page save bar. It keeps Settings open and lets the
   // bar show the error instead of the old footer. The request bodies are the same.
@@ -5172,7 +5201,7 @@ async function saveSettings(options = {}) {
       const activationMode = await askAutoSettleActivationMode();
       if (!activationMode) {
         resetBtn();
-        return;
+        return SETTINGS_SAVE_CANCELLED;
       }
       bulkPayload.session.autoSettle.activationMode = activationMode;
     }
@@ -5183,6 +5212,7 @@ async function saveSettings(options = {}) {
         method: 'POST',
         body: JSON.stringify(bulkPayload),
       });
+      if (saveResponse?.success === false) throw new Error(saveResponse.error || 'Settings were not saved.');
       savedAnything = true;
     }
     if (activeTab === 'models') {
@@ -5196,13 +5226,13 @@ async function saveSettings(options = {}) {
         window.applyReasoningPrefsFromProviderConfig(bulkPayload.llm, window._llmSettingsCache?.provider || bulkPayload.llm.provider);
       }
     } else if (activeTab === 'heartbeat' && typeof saveHeartbeatSettings === 'function') {
-      await saveHeartbeatSettings();
+      await saveHeartbeatSettings({ throwOnError: true });
       savedAnything = true;
     } else if (activeTab === 'channels' && typeof saveSelectedChannelSettings === 'function') {
-      await saveSelectedChannelSettings();
+      await saveSelectedChannelSettings({ throwOnError: true });
       savedAnything = true;
     } else if (activeTab === 'pairing' && typeof _saveRemoteAccess === 'function') {
-      await _saveRemoteAccess();
+      await _saveRemoteAccess({ throwOnError: true });
       savedAnything = true;
     }
     if (activeTab === 'system') {
@@ -5422,25 +5452,35 @@ function generateWebhookToken() {
   }
 }
 
-async function saveWebhookSettings() {
+async function saveWebhookSettings({ throwOnError = false } = {}) {
   const enabled = document.getElementById('wh-enabled')?.checked ?? false;
   const rawToken = document.getElementById('wh-token')?.value?.trim() || '';
   const hookPath = document.getElementById('wh-path')?.value?.trim() || '/hooks';
+  let r;
   try {
-    const r = await api('/api/settings/hooks', {
+    r = await api('/api/settings/hooks', {
       method: 'POST',
       body: JSON.stringify({ enabled, token: rawToken, path: hookPath }),
     });
-    if (r.success) {
-      _markSettingsCacheBusted('settings-webhooks');
-      await loadWebhookSettings();
-      showIntegMsg('? Webhook settings saved — restart gateway to apply', '#166534', '#f0fdf4');
-    } else {
-      showIntegMsg('Error: ' + (r.error || 'Unknown error'), '#991b1b', '#fef2f2');
-    }
   } catch(e) {
     showIntegMsg('Save failed: ' + e.message, '#991b1b', '#fef2f2');
+    if (throwOnError) throw e;
+    return null;
   }
+  if (!r?.success) {
+    showIntegMsg('Error: ' + (r?.error || 'Unknown error'), '#991b1b', '#fef2f2');
+    if (throwOnError) throw new Error(r?.error || 'Webhook settings were not saved.');
+    return null;
+  }
+  try {
+    _markSettingsCacheBusted('settings-webhooks');
+    await loadWebhookSettings();
+    showIntegMsg('? Webhook settings saved — restart gateway to apply', '#166534', '#f0fdf4');
+  } catch(e) {
+    // Saved on the gateway; only the refresh after it failed.
+    showIntegMsg('Saved. Reload failed: ' + e.message, '#991b1b', '#fef2f2');
+  }
+  return r;
 }
 
 async function testWebhookEndpoint() {
@@ -5840,7 +5880,7 @@ const SETTINGS_PAGE_CONTROLLERS = {
   appearance: { changes: () => [] },
   // Only the webhook fields; the MCP server form keeps its own "Save server".
   integrations: createFieldPageController('settings-panel-integrations', {
-    save: () => saveWebhookSettings(),
+    save: () => saveWebhookSettings({ throwOnError: true }),
     reload: () => loadWebhookSettings(),
   }),
 };
@@ -5917,10 +5957,15 @@ function createFieldPageController(panelId, { reload = null, save = null, labels
       tracker.track(keyOf(el), labelFor(el), originals.get(keyOf(el)), valueOf(el));
       updateSettingsSaveBar();
     },
+    // Resets and reloads only after a confirmed save. A failed save throws (the
+    // bar keeps the edits and shows the error); a cancelled confirmation
+    // returns { cancelled } and leaves everything exactly as it was.
     async save() {
-      await (save ? save() : saveSettings({ stayOpen: true }));
+      const outcome = await (save ? save() : saveSettings({ stayOpen: true }));
+      if (outcome?.cancelled) return outcome;
       reset();
       await reload?.();
+      return outcome;
     },
     async discard() {
       for (const [key, value] of originals) {
@@ -5955,15 +6000,19 @@ function ensureSettingsSaveBar() {
       const controller = SETTINGS_PAGE_CONTROLLERS[getActiveSettingsTab()];
       if (!controller) return;
       settingsSaveBar.busy(true);
+      let outcome = null;
       try {
-        await controller.save();
-        settingsSaveBar.busy(false);
-        updateSettingsSaveBar();
-        showToast('Saved', `${settingsTabLabel(getActiveSettingsTab())} settings saved.`, 'success', 2500);
+        outcome = await controller.save();
       } catch (err) {
         settingsSaveBar.busy(false);
-        settingsSaveBar.error(err?.message || 'Save failed. Try again.');
+        updateSettingsSaveBar();
+        settingsSaveBar.error(`Not saved. ${err?.message || 'Try again.'}`);
+        return;
       }
+      settingsSaveBar.busy(false);
+      updateSettingsSaveBar();
+      if (outcome?.cancelled) return;
+      showToast('Saved', `${settingsTabLabel(getActiveSettingsTab())} settings saved.`, 'success', 2500);
     },
     discard: async () => {
       const controller = SETTINGS_PAGE_CONTROLLERS[getActiveSettingsTab()];
@@ -5984,7 +6033,18 @@ function updateSettingsSaveBar() {
   const controller = SETTINGS_PAGE_CONTROLLERS[getActiveSettingsTab()];
   const labels = controller ? controller.changes() : [];
   if (!labels.length) { bar.hide(); return; }
+  const wasHidden = bar.el.hidden;
   bar.show(labels, controller.note?.() || '');
+  // The page has room below its last row while the bar shows; if the control
+  // just changed sits under the bar, move it clear.
+  if (wasHidden) {
+    const main = bar.el.parentElement;
+    const active = document.activeElement;
+    if (main && active && main.contains(active) && !bar.el.contains(active)) {
+      const overlap = active.getBoundingClientRect().bottom - (bar.el.getBoundingClientRect().top - 12);
+      if (overlap > 0) main.scrollTop += overlap;
+    }
+  }
 }
 
 async function reloadModelsStore() {
@@ -6619,6 +6679,7 @@ async function persistAgentModelDefaultsFromForm({ showStatus = true } = {}) {
   const status = document.getElementById('amd-status');
   try {
     const data = await api('/api/settings/agent-model-defaults', { method: 'POST', body: JSON.stringify({ ...payload, reasoning, accounts, speed, voiceAgent }) });
+    if (data?.success === false) throw new Error(data.error || 'Model choices were not saved.');
     if (showStatus && status) {
       status.style.color = 'var(--ok)';
       setSettingsStatus(status, 'success', 'Saved');
@@ -7134,6 +7195,9 @@ async function pairingAdminApi(path, opts = {}) {
   } catch (err) {
     const raw = String(err?.message || err || '');
     if (/API 403|Trusted desktop pairing authority required/i.test(raw)) {
+      // The credential row is folded under Advanced; open it when it is needed.
+      const fold = document.querySelector('#settings-panel-pairing [data-fold="pairing-admin"]');
+      if (fold && fold.getAttribute('aria-expanded') !== 'true') fold.click();
       throw new Error(
         'Pairing admin blocked on this browser session. A standalone browser may manage pairing without a credential only on a loopback-bound gateway. For a LAN/wildcard gateway, enter the configured PROMETHEUS_PAIRING_ADMIN_TOKEN in the Pairing panel or open the desktop app.'
       );
@@ -7283,7 +7347,7 @@ async function loadRemoteAccessSettings() {
   }
 }
 
-async function _saveRemoteAccess() {
+async function _saveRemoteAccess({ throwOnError = false } = {}) {
   const enabledEl = document.getElementById('pairing-remote-enabled');
   const modeEl    = document.getElementById('pairing-remote-mode');
   const urlEl     = document.getElementById('pairing-remote-url');
@@ -7301,9 +7365,12 @@ async function _saveRemoteAccess() {
     if (msg) msg.innerHTML = `<span style="color:#15803d">Saved. Generate a new QR to use the ${r.remoteAccess?.enabled ? 'public' : 'local'} URL.</span>`;
     refreshPairingQR().catch(() => {});
     showToast?.('Remote access updated', '', 'success');
+    return r;
   } catch (err) {
     if (msg) msg.innerHTML = `<span style="color:#f87171">${escHtml(err.message || 'Save failed')}</span>`;
+    if (throwOnError) throw err;
     showToast?.('Save failed', String(err.message || err), 'error');
+    return null;
   }
 }
 
@@ -7477,7 +7544,7 @@ async function refreshPairingQR() {
             <div style="font-size:11px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;">Gateway address</div>
             <div style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;color:var(--text);background:color-mix(in srgb, var(--text) 4%, transparent);border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:8px;padding:8px 9px;word-break:break-all;">${escHtml(pairingOrigin || 'Unavailable')}</div>
             <div style="font-size:12px;color:var(--muted);line-height:1.45;">Scan the QR from Safari, or open this gateway address on the phone first and enter the pair code. You can also paste the full pairing link.</div>
-            ${renderSettingsIconButton('copy', 'Copy code', 'id="pairing-copy-code-btn"')}
+            <button type="button" class="sk-btn sk-copy-code" id="pairing-copy-code-btn">Copy code</button>
           </div>
         </div>`;
       const copyCode = document.getElementById('pairing-copy-code-btn');

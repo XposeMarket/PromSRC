@@ -93,7 +93,7 @@ function connectedProviders() {
 /** The store controls behind one slot. */
 function slotIO(kind, key) {
   if (kind === 'amd') {
-    return { prov: $(`amd-${key}-prov`), model: $(`amd-${key}-model`), reasoning: $(`amd-${key}-reasoning`), speed: $(`amd-${key}-speed`) };
+    return { prov: $(`amd-${key}-prov`), model: $(`amd-${key}-model`), reasoning: $(`amd-${key}-reasoning`), speed: $(`amd-${key}-speed`), account: $(`amd-${key}-account`) };
   }
   if (kind === 'goal') return { prov: $(`goal-${key}-prov`), model: $(`goal-${key}-model`), reasoning: $(`goal-${key}-reasoning`), speed: null };
   if (kind === 'brain') return { prov: $(`brain-${key}-prov`), model: $(`brain-${key}-model`), reasoning: $(`brain-${key}-reasoning`), speed: null };
@@ -107,7 +107,23 @@ function readSlot(kind, key) {
     model: String(io.model?.value || '').trim(),
     reasoning: String(io.reasoning?.value || '').trim(),
     speed: io.speed ? (io.speed.value === 'fast' ? 'fast' : 'standard') : '',
+    account: String(io.account?.value || '').trim(),
   };
+}
+
+/** The slot's existing account choice (store select amd-*-account), offered only when its provider has more than one account. */
+function accountChoices(kind, key) {
+  const select = slotIO(kind, key).account;
+  if (!select || select.options.length < 2) return null;
+  return {
+    options: Array.from(select.options).map((option) => ({ value: option.value, label: option.textContent.trim() || option.value })),
+    value: select.value,
+  };
+}
+
+function accountLabel(kind, key) {
+  const choices = accountChoices(kind, key);
+  return choices ? (choices.options.find((option) => option.value === choices.value)?.label || '') : '';
 }
 
 function ensureOption(select, value, label = value) {
@@ -124,6 +140,11 @@ function ensureOption(select, value, label = value) {
 function mainChat() {
   const amd = readSlot('amd', 'main-chat');
   if (amd.provider && amd.model) return { source: 'amd', ...amd };
+  return liveRoute();
+}
+
+/** The provider's own model (what Main chat uses with no main_chat default saved). */
+function liveRoute() {
   const llm = deps?.getLlm?.() || {};
   const provider = String(llm.provider || '').trim();
   const control = provider ? deps.providerModelControl(provider) : null;
@@ -247,7 +268,7 @@ function renderAccounts() {
   return skSection({ title: 'Accounts' }) + skCard(rows + addRow, { cls: 'sk-accounts' });
 }
 
-function pickTrigger({ id, provider, model, inherit = 'Same as main chat', label = '' }) {
+function pickTrigger({ id, provider, model, inherit = 'Same as main chat', label = '', sub = '' }) {
   const list = provider ? modelCache.get(provider)?.list || null : null;
   const { state, reason } = modelSlotState({ provider, model, connected: connectedProviders(), available: list });
   const chev = skIcon('down', 'sk-ico sk-chev');
@@ -257,7 +278,10 @@ function pickTrigger({ id, provider, model, inherit = 'Same as main chat', label
     const why = reason === 'not-connected' ? `${providerName(provider)} is not connected` : `${providerName(provider)} no longer lists this model`;
     return `<button type="button" class="sk-pick unavail" data-pick="${esc(id)}" ${aria} title="${esc(`${why}. Saved as ${provider}/${model}; it is kept until you choose another model.`)}">${providerLogo(provider, 14)}<span class="sk-stack"><span class="m">${esc(model)}</span><small>${reason === 'not-connected' ? 'unavailable · not connected' : 'unavailable'}</small></span>${chev}</button>`;
   }
-  return `<button type="button" class="sk-pick" data-pick="${esc(id)}" ${aria} title="${esc(`${provider}/${model}`)}">${providerLogo(provider, 14)}<span class="m">${esc(modelLabel(provider, model))}</span>${chev}</button>`;
+  const name = sub
+    ? `<span class="sk-stack"><span class="m">${esc(modelLabel(provider, model))}</span><small>${esc(sub)}</small></span>`
+    : `<span class="m">${esc(modelLabel(provider, model))}</span>`;
+  return `<button type="button" class="sk-pick" data-pick="${esc(id)}" ${aria} title="${esc(`${provider}/${model}`)}">${providerLogo(provider, 14)}${name}${chev}</button>`;
 }
 
 function reasonSelect(id, slot, select, label) {
@@ -288,7 +312,7 @@ function slotRow(def, { inset = false } = {}) {
   if (def.kind === 'brain-only') return `<div class="sk-row sk-job">${who}<span></span><span></span></div>`;
   const slot = readSlot(def.kind, def.key);
   const io = slotIO(def.kind, def.key);
-  return `<div class="sk-row sk-job${inset ? ' inset' : ''}">${who}${pickTrigger({ id, provider: slot.provider, model: slot.model, inherit: def.inherit || 'Same as main chat', label: def.label })}${reasonSelect(id, slot, io.reasoning, def.label)}</div>`;
+  return `<div class="sk-row sk-job${inset ? ' inset' : ''}">${who}${pickTrigger({ id, provider: slot.provider, model: slot.model, inherit: def.inherit || 'Same as main chat', label: def.label, sub: def.kind === 'amd' ? accountLabel(def.kind, def.key) : '' })}${reasonSelect(id, slot, io.reasoning, def.label)}</div>`;
 }
 
 function fmtTokens(n) {
@@ -344,7 +368,7 @@ function renderMain() {
   const speedEl = main.source === 'amd' ? $('amd-main-chat-speed') : main.speedEl;
   const fast = !!speedEl && !!p && !!m && supportsFastSpeed(p, m);
   const modelControl = p && m
-    ? pickTrigger({ id: 'main', provider: p, model: m, label: 'Main chat' })
+    ? pickTrigger({ id: 'main', provider: p, model: m, label: 'Main chat', sub: main.source === 'amd' ? accountLabel('amd', 'main-chat') : 'Provider default' })
     : `<button type="button" class="sk-pick same" data-pick="main" aria-haspopup="dialog" aria-label="Main chat model"><span class="m">Choose a model</span>${skIcon('down', 'sk-ico sk-chev')}</button>`;
   const rows = [
     skRow({ label: 'Model', control: `<div class="sk-main-pick">${modelControl}</div>` }),
@@ -380,11 +404,23 @@ export function render() {
   const scroller = root.closest('.settings-page-main');
   const top = scroller ? scroller.scrollTop : 0;
   const focusKey = document.activeElement?.closest?.('#settings-models-v2') ? (document.activeElement.getAttribute('data-pick') || '') : '';
-  const empty = !setUpProviders().length;
+  // Nothing connected: a fresh install shows only the connect-a-model state;
+  // an install with saved model choices keeps showing them (as unavailable).
+  const showRows = setUpProviders().length > 0 || hasSavedModels();
   root.innerHTML = '<p class="sk-lede">Choose what Prometheus runs on. Anything you don\'t set here uses your main chat model.</p>'
-    + renderAccounts() + (empty ? '' : renderMain() + renderJobs());
+    + renderAccounts() + (showRows ? renderMain() + renderJobs() : '');
   if (scroller) scroller.scrollTop = top;
   if (focusKey) root.querySelector(`[data-pick="${CSS.escape(focusKey)}"]`)?.focus({ preventScroll: true });
+}
+
+/** Any saved model choice on this page (not counting the built-in local default). */
+export function hasSavedModels() {
+  const defs = [{ kind: 'amd', key: 'main-chat' }, ...JOBS.filter((def) => def.kind === 'amd'), ...ROLES, ...SYSTEM.filter((def) => def.kind !== 'brain-only')];
+  if (defs.some((def) => { const slot = readSlot(def.kind, def.key); return !!(slot.provider && slot.model); })) return true;
+  if (String($('amd-voice-agent-provider')?.value || '').trim()) return true;
+  const llm = deps?.getLlm?.() || {};
+  const provider = String(llm.provider || '').trim();
+  return !!provider && !LOCAL_PROVIDERS.has(provider) && !!String(llm.providers?.[provider]?.model || '').trim();
 }
 
 function queueRender() {
@@ -466,6 +502,14 @@ function writeReasoning(def, value) {
   trackSlot(def, before);
 }
 
+function writeAccount(def, value) {
+  const io = slotIO(def.kind, def.key);
+  if (!io.account) return;
+  const before = readSlot(def.kind, def.key);
+  io.account.value = value;
+  trackSlot(def, before);
+}
+
 function writeFast(def, on) {
   if (def.key === 'main-chat' && mainChat().source === 'live') return writeLive({ speed: on ? 'fast' : 'standard' });
   const io = slotIO(def.kind, def.key);
@@ -494,7 +538,9 @@ function pickerFooter(def) {
     const select = def.key === 'main-chat' && slot.source === 'live' ? null : io.reasoning;
     const choices = reasoningChoices(slot.provider, slot.model, select);
     const speedEl = def.key === 'main-chat' && slot.source === 'live' ? slot.speedEl : io.speed;
+    const live = def.key === 'main-chat' && slot.source === 'live';
     return {
+      account: !live && def.kind === 'amd' ? accountChoices(def.kind, def.key) : null,
       reasoning: choices.length > 1 ? { options: choices, value: choices.some((c) => c.value === slot.reasoning) ? slot.reasoning : '' } : null,
       fast: speedEl ? { supported: supportsFastSpeed(slot.provider, slot.model), checked: slot.speed === 'fast' } : null,
     };
@@ -505,7 +551,14 @@ function openPicker(id, anchor) {
   const def = defFor(id);
   const value = def.key === 'main-chat' ? mainChat() : readSlot(def.kind, def.key);
   let same = null;
-  if (def.key !== 'main-chat') {
+  let current = { provider: value.provider, model: value.model };
+  if (def.key === 'main-chat') {
+    // Clearing the Main chat choice (old "same as main agent") falls back to the
+    // model chosen under the provider itself.
+    const live = liveRoute();
+    same = { label: 'Provider default', note: live.provider && live.model ? `${modelLabel(live.provider, live.model)} · ${providerName(live.provider)}` : 'The model set for your provider' };
+    if (value.source === 'live') current = { provider: '', model: '' };
+  } else {
     if (def.inherit === 'Same as New agents') {
       const na = readSlot('amd', 'subagent');
       same = { label: 'Same as New agents', note: na.provider && na.model ? modelLabel(na.provider, na.model) : mainChatLabel() };
@@ -517,12 +570,13 @@ function openPicker(id, anchor) {
     anchor,
     title: `${def.label} model`,
     groups,
-    value: { provider: value.provider, model: value.model },
+    value: current,
     same,
     footer: pickerFooter(def),
     onPick: (next) => { writeSlot(def, next).then(() => render()); },
     onReasoning: (v) => { writeReasoning(def, v); queueRender(); },
     onFast: (on) => { writeFast(def, on); queueRender(); },
+    onAccount: (v) => { writeAccount(def, v); queueRender(); },
   });
   for (const group of groups) if (!modelCache.get(group.provider)?.list) loadModels(group.provider);
 }
@@ -746,9 +800,16 @@ export async function saveModelsPage() {
     throw new Error('Tick the usage note under Memory per chat, then save.');
   }
   if (ctxChanged) {
-    await deps.api('/api/settings/context-window', { method: 'POST', body: JSON.stringify(contextSaveBody(ctx.profile, ctx.mode, ctxTokens(ctx.mode), ctx.ack)) });
+    const result = await deps.api('/api/settings/context-window', { method: 'POST', body: JSON.stringify(contextSaveBody(ctx.profile, ctx.mode, ctxTokens(ctx.mode), ctx.ack)) });
+    if (result?.success === false) throw new Error(result.error || 'Memory per chat was not saved.');
+    // Saved: a later failure below must not resend it or report it as unsaved.
+    tracker.forget('ctx');
+    ctx.loaded = { mode: ctx.mode, tokens: ctxTokens(ctx.mode) };
   }
-  if (other) await deps.saveSettings({ stayOpen: true });
+  if (other) {
+    const outcome = await deps.saveSettings({ stayOpen: true });
+    if (outcome?.cancelled) return outcome;
+  }
   tracker.clear();
   fieldOriginals.clear();
   await reloadAll();
