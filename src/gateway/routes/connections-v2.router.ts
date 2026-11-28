@@ -9,6 +9,8 @@ import { beginAddAccount, cancelAddAccount, getConnectorAccountsView, makeDefaul
 import { pluginCredentialState } from '../../security/plugin-credential-state';
 import { requireProtectedOwner, secureInputTransportAllowed } from './secure-access.router';
 import { PAIRED_PLUGIN_DISCONNECT_ADAPTERS, pluginSetupSurfaceState, requirePluginDisconnect, requirePluginSetup, requirePluginSetupAdapter } from './plugin-setup-access';
+// Static: the handoff module now keeps per-attempt state, so it must be one instance (stateful-import guard).
+import { openConnectionPhoneHandoff } from '../../connections/oauth-phone-handoff';
 
 export const router = Router();
 // N1: the redaction wrapper is scoped to connection routes only (router is mounted at '/').
@@ -97,7 +99,6 @@ router.post('/api/connection-attempts/:id/oauth-handoff', (req, res, next) => {
   requirePluginSetupAdapter(req, res, next, adapter);
 }, async (req, res) => {
   try {
-    const { openConnectionPhoneHandoff } = await import('../../connections/oauth-phone-handoff');
     // The sign-in window starts when the link is issued. Issue a fresh one as the user begins, not the one from approval time.
     const attempt = await getConnectionRuntime().orchestrator.refreshUserAction(req.params.id);
     // Sign-in finished, or the refresh failed, between the sheet's last poll and this tap: there is nothing to hand off.
