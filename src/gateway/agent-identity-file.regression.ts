@@ -122,17 +122,20 @@ async function main() {
   const first = buildAgentIdentity({ id: 'agent_a', explicitName: 'Tally', description: 'counts signups' });
   const second = buildAgentIdentity({ id: 'agent_a', explicitName: 'Tally', description: 'counts signups', identity: first });
   const third = buildAgentIdentity({ id: 'agent_a', explicitName: 'Tally', description: 'counts signups', identity: second });
-  assert.deepEqual(third.personality.avoid, first.personality.avoid, 'avoid list is stable across refreshes');
-  assert.equal(new Set(third.personality.quirks).size, third.personality.quirks.length, 'quirks hold no duplicates after refreshes');
-  assert.equal(third.personality.quirks.length, second.personality.quirks.length, 'quirks stop growing after the first refresh');
+  const quirksOf = (identity: { personality?: { quirks?: string[] } }) => identity.personality?.quirks || [];
+  assert.deepEqual(third.personality?.avoid, first.personality?.avoid, 'avoid list is stable across refreshes');
+  assert.ok((first.personality?.avoid || []).length > 0, 'avoid list is present');
+  assert.equal(new Set(quirksOf(third)).size, quirksOf(third).length, 'quirks hold no duplicates after refreshes');
+  assert.equal(quirksOf(third).length, quirksOf(second).length, 'quirks stop growing after the first refresh');
 
   const renamed = buildAgentIdentity({
     id: 'agent_a',
     explicitName: 'Tally',
     description: 'counts signups',
-    identity: { ...first, displayName: 'Tally', voiceGuidelines: first.voiceGuidelines.replace('You are Tally', 'You are Kepler') },
+    identity: { ...first, displayName: 'Tally', voiceGuidelines: String(first.voiceGuidelines || '').replace('You are Tally', 'You are Kepler') },
   });
-  assert.ok(isGeneratedVoiceGuidance(renamed.voiceGuidelines) && renamed.voiceGuidelines.startsWith('You are Tally'), 'generated voice guidance follows the current name');
+  assert.ok(String(first.voiceGuidelines || '').startsWith('You are Tally'), 'fixture starts from the generated default');
+  assert.ok(isGeneratedVoiceGuidance(renamed.voiceGuidelines) && String(renamed.voiceGuidelines || '').startsWith('You are Tally'), 'generated voice guidance follows the current name');
   const custom = buildAgentIdentity({ id: 'agent_a', explicitName: 'Tally', identity: { ...first, voiceGuidelines: 'Write like a night-shift accountant.' } });
   assert.equal(custom.voiceGuidelines, 'Write like a night-shift accountant.', 'voice guidance a user wrote is preserved');
 
