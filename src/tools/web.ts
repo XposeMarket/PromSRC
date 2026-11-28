@@ -13,6 +13,15 @@ import { getConfig } from '../config/config.js';
 import { isUsableProductArtifactItem } from '../gateway/rich-artifacts.js';
 import { fetchPublicUrl } from './outbound-url-guard.js';
 import {
+  type PagePreviewMetadata, htmlDecodeLite, amazonAsinFromUrl, parseHtmlAttributes, extractMetaTag,
+  DESKTOP_PREVIEW_UA, AMAZON_MOBILE_UA, amazonMobileProductUrl, upscaleAmazonImageUrl, isBotWallHtml,
+  extractAmazonProductFields, readResponseTextWithBudget,
+} from './product-page-parsing.js';
+export {
+  type PagePreviewMetadata, amazonMobileProductUrl, upscaleAmazonImageUrl, isBotWallHtml,
+  extractAmazonProductFields, readResponseTextWithBudget,
+} from './product-page-parsing.js';
+import {
   createFxLookup, fxTweetMediaHints, fxTweetQuoteHasMedia, fxTweetToPayload, hasXMediaHints,
   isLikelyTruncatedXText, stripTrailingXLinks, type FxLookup,
 } from './x-fx-recovery.js';
@@ -2683,19 +2692,6 @@ const MERCHANT_DOMAINS: Record<string, string> = {
   'lowes.com': 'lowes.com',
 };
 
-function htmlDecodeLite(input: string): string {
-  return String(input || '')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&#39;/g, "'")
-    .replace(/&quot;/g, '"')
-    .replace(/&#x27;/g, "'")
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
 function merchantDomain(input: unknown): string {
   const value = String(input || '').trim().toLowerCase();
   if (!value) return '';
@@ -2756,14 +2752,16 @@ function looksLikeProductTitle(title: string): boolean {
 }
 
 function cleanProductTitle(title: string): string {
-  return stripProductSearchNoise(title)
+  const amazonTitle = /^\s*Amazon\.com\s*:/i.test(String(title || ''));
+  const cleaned = stripProductSearchNoise(title)
     .replace(/^\s*(?:Amazon\.com|Walmart\.com|Target|Best Buy|eBay)\s*:\s*/i, '')
     .replace(/\s*[-|]\s*(?:Amazon\.com|Walmart\.com|Target|Best Buy|eBay|The Home Depot|Lowe'?s).*$/i, '')
     .replace(/\s*\$[0-9][0-9,]*(?:\.[0-9]{2})?.*$/i, '')
     .replace(/\s+(?:reviews?|ratings?|stars?).*$/i, '')
     .replace(/\s+(?:Mechanical Keyboards?|Wireless Keyboards?)\s*-\s*Amazon\.com.*$/i, '')
-    .trim()
-    .slice(0, 110);
+    .trim();
+  // Amazon page titles end with " : <Category>" ("... Hyperkin : Video Games").
+  return (amazonTitle ? cleaned.replace(/\s+:\s+[A-Z][A-Za-z&,' -]{2,40}$/, '') : cleaned).slice(0, 110);
 }
 
 const PRODUCT_QUERY_STOPWORDS = new Set([
@@ -2906,10 +2904,6 @@ export function validateXFetchPayload(payload: XFetchPayload, url: string): stri
   return null;
 }
 
-function amazonAsinFromUrl(url: string): string | undefined {
-  return String(url || '').match(/\/(?:dp|gp\/product)\/([A-Z0-9]{10})(?:[/?#]|$)/i)?.[1]?.toUpperCase();
-}
-
 function isWeakProductCandidate(item: SearchResultItem, title: string, price?: string): boolean {
   const url = String(item.url || '').toLowerCase();
   const text = `${item.title || ''} ${item.snippet || ''}`.toLowerCase();
@@ -2974,49 +2968,8 @@ function normalizeProductCandidate(item: SearchResultItem, index: number, query:
   };
 }
 
-export type PagePreviewMetadata = {
-  url: string;
-  canonicalUrl?: string;
-  title?: string;
-  description?: string;
-  publisher?: string;
-  publishedAt?: string;
-  imageUrl?: string;
-  iconUrl?: string;
-  price?: string;
-  rating?: number;
-  reviews?: number;
-  reviewCount?: number;
-  availability?: string;
-  seller?: string;
-  sku?: string;
-};
-
 const PAGE_PREVIEW_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const pagePreviewCache = new Map<string, { at: number; meta: PagePreviewMetadata }>();
-
-function parseHtmlAttributes(tag: string): Record<string, string> {
-  const attrs: Record<string, string> = {};
-  const attrRe = /([^\s=/>]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g;
-  let match: RegExpExecArray | null;
-  while ((match = attrRe.exec(String(tag || ''))) !== null) {
-    const name = String(match[1] || '').toLowerCase();
-    if (!name || name.startsWith('<')) continue;
-    attrs[name] = htmlDecodeLite(match[2] ?? match[3] ?? match[4] ?? '');
-  }
-  return attrs;
-}
-
-function extractMetaTag(html: string, property: string): string | undefined {
-  const wanted = String(property || '').toLowerCase();
-  for (const tag of String(html || '').match(/<meta\b[^>]*>/gi) || []) {
-    const attrs = parseHtmlAttributes(tag);
-    if (String(attrs.property || attrs.name || attrs.itemprop || '').toLowerCase() !== wanted) continue;
-    const value = htmlDecodeLite(attrs.content || attrs.value || '');
-    if (value) return value;
-  }
-  return undefined;
-}
 
 function extractLinkTag(html: string, rel: string): string | undefined {
   const wanted = String(rel || '').toLowerCase();
@@ -3083,6 +3036,7 @@ function extractHtmlImageCandidates(html: string, pageUrl: string): string[] {
       } catch {}
     }
     add(attrs['data-old-hires'], 104, attrs);
+    add(attrs['data-a-hires'], 104, attrs);
     add(attrs['data-zoom-hires'], 103, attrs);
     add(pickLargestSrcset(attrs.srcset || attrs['data-srcset'] || ''), 80, attrs);
     add(attrs['data-src'] || attrs['data-lazy-src'] || attrs['data-original'] || attrs.src, 62, attrs);
@@ -3297,7 +3251,7 @@ function normalizeProductImageUrl(imageUrl: string, productUrl: string): string 
   const raw = String(imageUrl || '').trim();
   if (!raw || /^data:/i.test(raw)) return '';
   try {
-    return new URL(raw, productUrl).href;
+    return upscaleAmazonImageUrl(new URL(raw, productUrl).href);
   } catch {
     return raw;
   }
@@ -3362,6 +3316,41 @@ async function downloadProductImage(product: ShoppingProductResult, index: numbe
   });
 }
 
+/**
+ * Preview metadata from fetched page HTML (possibly partial). Amazon pages take
+ * image and price ONLY from Amazon's own product fields: a generic "largest
+ * image / first $ / first N out of 5" pick on a half-loaded Amazon page lands
+ * on unrelated or sponsored items, and a placeholder beats a wrong product photo.
+ */
+export function buildPagePreviewFromHtml(html: string, opts: { url: string; finalUrl: string; amazon: boolean }): PagePreviewMetadata {
+  const { url, finalUrl, amazon: isAmazon } = opts;
+  const meta = extractPagePreviewMetadataFromHtml(html, finalUrl);
+  const productJsonLd = parseJsonLdProductMetadata(html);
+  const amazon = isAmazon ? extractAmazonProductFields(html) : {};
+  const priceAmount = extractMetaTag(html, 'product:price:amount');
+  const priceCurrency = extractMetaTag(html, 'product:price:currency') || 'USD';
+  const fallbackRating = isAmazon ? {} as ReturnType<typeof fallbackProductPageRating> : fallbackProductPageRating(html);
+  return {
+    ...meta,
+    url,
+    canonicalUrl: isAmazon ? url : (meta.canonicalUrl || finalUrl),
+    imageUrl: isAmazon
+      ? absoluteHttpUrl(amazon.imageUrl, finalUrl)
+      : absoluteHttpUrl(productJsonLd.imageUrl || meta.imageUrl, finalUrl),
+    price: isAmazon
+      ? amazon.price
+      : productJsonLd.price
+        || (priceAmount ? `${priceCurrency === 'USD' ? '$' : `${priceCurrency} `}${priceAmount}` : undefined)
+        || fallbackProductPagePrice(html),
+    rating: productJsonLd.rating || fallbackRating.rating,
+    reviews: productJsonLd.reviews || fallbackRating.reviews,
+    reviewCount: productJsonLd.reviewCount || fallbackRating.reviewCount,
+    availability: amazon.availability || productJsonLd.availability,
+    seller: productJsonLd.seller,
+    sku: productJsonLd.sku,
+  };
+}
+
 export async function fetchPagePreviewMetadata(url: string, timeoutMs = 2500): Promise<PagePreviewMetadata> {
   const normalizedUrl = String(url || '').trim();
   const cached = pagePreviewCache.get(normalizedUrl);
@@ -3369,39 +3358,31 @@ export async function fetchPagePreviewMetadata(url: string, timeoutMs = 2500): P
   const empty: PagePreviewMetadata = { url: normalizedUrl };
   if (!/^https?:\/\//i.test(normalizedUrl) || !isTinyFishFetchEligible(normalizedUrl)) return empty;
   try {
-    const res = await fetchPublicUrl(normalizedUrl, {
+    const budgetMs = Math.max(500, Math.min(10_000, timeoutMs));
+    const deadlineAt = Date.now() + budgetMs;
+    const amazonMobileUrl = amazonMobileProductUrl(normalizedUrl);
+    const res = await fetchPublicUrl(amazonMobileUrl || normalizedUrl, {
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36 Prometheus/1.0',
+        'User-Agent': amazonMobileUrl ? AMAZON_MOBILE_UA : DESKTOP_PREVIEW_UA,
         'Accept': 'text/html,application/xhtml+xml,application/json;q=0.8,*/*;q=0.5',
         'Accept-Language': 'en-US,en;q=0.9',
       },
-      signal: AbortSignal.timeout(Math.max(500, Math.min(10_000, timeoutMs))),
+      // Slightly past the read deadline so a slow body is cut by our reader
+      // (which keeps the partial HTML) rather than by the abort.
+      signal: AbortSignal.timeout(budgetMs + 500),
     });
     const contentType = String(res.headers.get('content-type') || '');
-    if (!res.ok || (contentType && !/html|text/i.test(contentType))) return empty;
-    const html = (await res.text()).slice(0, 1_500_000);
-    const finalUrl = res.url || normalizedUrl;
-    const meta = extractPagePreviewMetadataFromHtml(html, finalUrl);
-    const productJsonLd = parseJsonLdProductMetadata(html);
-    const priceAmount = extractMetaTag(html, 'product:price:amount');
-    const priceCurrency = extractMetaTag(html, 'product:price:currency') || 'USD';
-    const fallbackRating = fallbackProductPageRating(html);
-    const enriched: PagePreviewMetadata = {
-      ...meta,
-      url: normalizedUrl,
-      canonicalUrl: meta.canonicalUrl || finalUrl,
-      imageUrl: absoluteHttpUrl(productJsonLd.imageUrl || meta.imageUrl, finalUrl),
-      price: productJsonLd.price
-        || (priceAmount ? `${priceCurrency === 'USD' ? '$' : `${priceCurrency} `}${priceAmount}` : undefined)
-        || fallbackProductPagePrice(html),
-      rating: productJsonLd.rating || fallbackRating.rating,
-      reviews: productJsonLd.reviews || fallbackRating.reviews,
-      reviewCount: productJsonLd.reviewCount || fallbackRating.reviewCount,
-      availability: productJsonLd.availability,
-      seller: productJsonLd.seller,
-      sku: productJsonLd.sku,
-    };
-    pagePreviewCache.set(normalizedUrl, { at: Date.now(), meta: enriched });
+    if (!res.ok || (contentType && !/html|text/i.test(contentType))) {
+      res.body?.cancel().catch(() => {});
+      return empty;
+    }
+    const { text: html, complete } = await readResponseTextWithBudget(res, { maxChars: 1_500_000, deadlineAt });
+    if (!html || isBotWallHtml(html)) return empty;
+    const finalUrl = amazonMobileUrl ? normalizedUrl : (res.url || normalizedUrl);
+    const enriched = buildPagePreviewFromHtml(html, { url: normalizedUrl, finalUrl, amazon: !!amazonMobileUrl });
+    // A page cut off before its image arrived is retried next time instead of
+    // pinning "no image" for six hours.
+    if (complete || enriched.imageUrl) pagePreviewCache.set(normalizedUrl, { at: Date.now(), meta: enriched });
     return enriched;
   } catch {
     return empty;
@@ -3426,7 +3407,9 @@ async function fetchProductMetadata(url: string, timeoutMs: number): Promise<Par
     sku: preview.sku,
   };
   const compact = Object.fromEntries(Object.entries(meta).filter(([, value]) => value != null && String(value).trim())) as Partial<ShoppingProductResult>;
-  productMetadataCache.set(url, { at: Date.now(), meta: compact });
+  // Empty results (bot wall, timeout, network error) are not cached, so the
+  // next card for this product gets a fresh attempt.
+  if (compact.imageUrl || compact.price || compact.title) productMetadataCache.set(url, { at: Date.now(), meta: compact });
   return compact;
 }
 
@@ -3572,6 +3555,25 @@ export async function enrichProductArtifactItems(
   });
 }
 
+const SHOPPING_SEARCH_BUDGET_MS = 25_000;
+
+/** Resolve with `fallback` once `ms` elapses; the original promise keeps running unobserved. */
+export async function raceDeadline<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise.catch(() => fallback),
+      new Promise<T>((resolve) => {
+        // Not unref'd: if the work hangs, this timer is what keeps a CLI/test
+        // process alive long enough to return the fallback. Cleared in finally.
+        timer = setTimeout(() => resolve(fallback), Math.max(0, ms));
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 export async function executeShoppingSearchProducts(args: {
   query: string;
   merchant?: string;
@@ -3591,14 +3593,22 @@ export async function executeShoppingSearchProducts(args: {
     : undefined) as SearchProviderOption | undefined;
   const includeMetadata = args?.include_metadata !== false;
   const includeImages = args?.include_images !== false;
-  const metadataTimeoutMs = Math.max(500, Math.min(5000, Math.floor(Number(args?.metadata_timeout_ms || 1800))));
+  const metadataTimeoutMs = Math.max(500, Math.min(5000, Math.floor(Number(args?.metadata_timeout_ms || 2500))));
   const imageTimeoutMs = Math.max(500, Math.min(4000, Math.floor(Number(args?.image_timeout_ms || 1600))));
   const searchQuery = buildProductSearchQuery(query, args?.merchant);
   const cacheKey = JSON.stringify({ searchQuery, maxResults, provider, includeMetadata, includeImages, metadataTimeoutMs, imageTimeoutMs });
   const cached = productSearchCache.get(cacheKey);
   if (cached && Date.now() - cached.at < PRODUCT_SEARCH_CACHE_TTL_MS) return cached.result;
 
-  const search = await executeWebSearch({ query: searchQuery, max_results: Math.min(10, Math.max(5, maxResults)), provider });
+  // One hard ceiling for the whole tool. Every stage is individually bounded,
+  // but a chain of slow providers plus page/image fetches must still return in
+  // seconds, never leave the chat "waiting for shopping search" for minutes.
+  const deadlineAt = Date.now() + SHOPPING_SEARCH_BUDGET_MS;
+  const search = await raceDeadline(
+    executeWebSearch({ query: searchQuery, max_results: Math.min(10, Math.max(5, maxResults)), provider }),
+    Math.max(1000, deadlineAt - Date.now() - 4000),
+    { success: false, error: `Product search timed out after ${Math.round((SHOPPING_SEARCH_BUDGET_MS - 4000) / 1000)}s waiting for the search provider.` } as ToolResult,
+  );
   if (!search.success || !Array.isArray(search.data?.results)) {
     return { success: false, error: search.error || 'Product search failed', stdout: search.stdout };
   }
@@ -3617,7 +3627,9 @@ export async function executeShoppingSearchProducts(args: {
     .slice(0, maxResults);
 
   if (includeMetadata && products.length) {
-    await mapWithConcurrency(products.slice(0, Math.min(products.length, 8)), 4, async (product, index) => {
+    // Products are updated in place, so a stage cut short by the deadline
+    // still keeps every product that finished.
+    await raceDeadline(mapWithConcurrency(products.slice(0, Math.min(products.length, 8)), 4, async (product, index) => {
       const meta = await fetchProductMetadata(product.productUrl, metadataTimeoutMs);
       const nextTitle = looksLikeProductTitle(meta.title || '') ? meta.title || product.title : product.title;
       const nextDescription = meta.description || product.description;
@@ -3640,7 +3652,7 @@ export async function executeShoppingSearchProducts(args: {
         sku: meta.sku || product.sku,
         confidence: Math.min(1, Number(((product.confidence || 0.5) + (meta.imageUrl ? 0.08 : 0) + (meta.price && !product.price ? 0.06 : 0)).toFixed(2))),
       };
-    });
+    }), Math.max(0, deadlineAt - Date.now() - 1500), undefined);
   }
 
   const relevantProducts = products
@@ -3661,7 +3673,7 @@ export async function executeShoppingSearchProducts(args: {
   }
 
   if (includeImages && usableProducts.length) {
-    await mapWithConcurrency(usableProducts.slice(0, Math.min(usableProducts.length, maxResults)), 4, async (product, index) => {
+    await raceDeadline(mapWithConcurrency(usableProducts.slice(0, Math.min(usableProducts.length, maxResults)), 4, async (product, index) => {
       if (product.imagePath || !product.imageUrl) return;
       const imagePath = await downloadProductImage(product, index, imageTimeoutMs);
       if (imagePath) {
@@ -3671,23 +3683,26 @@ export async function executeShoppingSearchProducts(args: {
           confidence: Math.min(1, Number(((product.confidence || 0.5) + 0.05).toFixed(2))),
         };
       }
-    });
+    }), Math.max(0, deadlineAt - Date.now()), undefined);
   }
 
+  // Snapshot: a download that lands after the deadline must not mutate the
+  // already-returned (and cached) result.
+  const finalProducts = usableProducts.map((product) => ({ ...product }));
   const carousel = {
     title: args?.merchant ? `${query} on ${merchantFromUrl(`https://${merchantDomain(args.merchant)}`) || args.merchant}` : query,
     source: 'shopping_search_products',
-    items: usableProducts,
+    items: finalProducts,
   };
   const stdout = [
-    `Found ${usableProducts.length} product candidate${usableProducts.length === 1 ? '' : 's'} for "${query}" using existing web search (${String(search.data?.provider || provider)}).`,
+    `Found ${finalProducts.length} product candidate${finalProducts.length === 1 ? '' : 's'} for "${query}" using existing web search (${String(search.data?.provider || provider)}).`,
     'No shopping API key was used.',
     '',
-    JSON.stringify({ query, searchQuery, source: carousel.source, items: usableProducts }, null, 2),
+    JSON.stringify({ query, searchQuery, source: carousel.source, items: finalProducts }, null, 2),
   ].join('\n');
   const result = {
     success: true,
-    data: { query, searchQuery, provider: search.data?.provider || provider, products: usableProducts },
+    data: { query, searchQuery, provider: search.data?.provider || provider, products: finalProducts },
     stdout,
     extra: { productCarousel: carousel },
   } as ToolResult;
@@ -3708,7 +3723,7 @@ export const shoppingSearchProductsTool = {
     provider: 'string (optional, default preferred provider from Settings) - One of multi, tinyfish, tavily, google, brave, ddg, xai',
     include_metadata: 'boolean (optional, default true) - Fetch top result pages briefly for Open Graph images/titles/prices',
     include_images: 'boolean (optional, default true) - Download discovered product images into downloads/product-carousel and set imagePath',
-    metadata_timeout_ms: 'number (optional, default 1800, max 5000) - Per-page metadata fetch timeout',
+    metadata_timeout_ms: 'number (optional, default 2500, max 5000) - Per-page metadata fetch timeout',
     image_timeout_ms: 'number (optional, default 1600, max 4000) - Per-image download timeout',
   },
   jsonSchema: {
@@ -3721,7 +3736,7 @@ export const shoppingSearchProductsTool = {
       provider: { type: 'string', enum: ['multi', 'tinyfish', 'tavily', 'google', 'brave', 'ddg', 'xai'], description: 'Optional provider selector. Defaults to the preferred provider from Settings; use multi for wide discovery.' },
       include_metadata: { type: 'boolean', description: 'Default true. Briefly fetch top pages for Open Graph images/titles/prices without browser automation.' },
       include_images: { type: 'boolean', description: 'Default true. Briefly download discovered product images to downloads/product-carousel and set imagePath for stable carousel rendering.' },
-      metadata_timeout_ms: { type: 'number', description: 'Per-page metadata fetch timeout. Default 1800, max 5000.' },
+      metadata_timeout_ms: { type: 'number', description: 'Per-page metadata fetch timeout. Default 2500, max 5000.' },
       image_timeout_ms: { type: 'number', description: 'Per-image download timeout. Default 1600, max 4000.' },
     },
     additionalProperties: false,
