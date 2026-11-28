@@ -127,6 +127,23 @@ async function main() {
   ].join('\n');
   assert.equal(stripLegacyGeneratedAgentPromptLines(fenced), fenced, 'nothing inside a fenced block is touched');
 
+  const legacySentence = 'You are a standalone one-off subagent, not a member of a managed team.';
+  // A longer fence is not closed by a shorter one inside it.
+  const nestedLength = ['````md', '```', legacySentence, '```', legacySentence, '````', 'After.'].join('\n');
+  assert.equal(stripLegacyGeneratedAgentPromptLines(nestedLength), nestedLength, 'a four-backtick fence is not closed by three backticks');
+  // A tilde fence is not closed by backticks, and a closing fence cannot carry text.
+  const mixedDelimiters = ['~~~', '```', legacySentence, '~~~ not a close', legacySentence, '~~~', 'After.'].join('\n');
+  assert.equal(stripLegacyGeneratedAgentPromptLines(mixedDelimiters), mixedDelimiters, 'a tilde fence only closes on a bare tilde fence');
+  // An unclosed fence protects the rest of the file.
+  const unclosed = ['```', legacySentence, '## Configuration', '- Max steps: 20', '- Timeout: 300000ms', '- Model override: (use default)'].join('\n');
+  assert.equal(stripLegacyGeneratedAgentPromptLines(unclosed), unclosed, 'an unclosed fence protects to the end of the file');
+  // Four spaces of indent is an indented code line, not a fence, so it opens nothing.
+  const indented = ['Intro.', '    ```', legacySentence, 'Outro.'].join('\n');
+  assert.equal(stripLegacyGeneratedAgentPromptLines(indented), ['Intro.', '    ```', 'Outro.'].join('\n') + '\n', 'a four-space indented marker does not open a fence');
+  // After a properly closed fence the filter works again.
+  const afterFence = ['```', legacySentence, '```', legacySentence, 'Kept.'].join('\n');
+  assert.equal(stripLegacyGeneratedAgentPromptLines(afterFence), ['```', legacySentence, '```', 'Kept.'].join('\n') + '\n', 'filtering resumes after the fence closes');
+
   const constraintsWithBody = '## Constraints (DO NOT VIOLATE)\n\n- Never delete records.\n\n## Forbidden Tools\n- shell\n';
   assert.equal(stripLegacyGeneratedAgentPromptLines(constraintsWithBody), constraintsWithBody, 'sections with real content are kept');
 

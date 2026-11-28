@@ -155,7 +155,7 @@ export function stripLegacyGeneratedAgentPromptLines(content: string): string {
   const out: string[] = [];
   let changed = false;
   let inPersonality = false;
-  let inFence = false;
+  let fence: { char: string; length: number } | null = null;
   let seenBullets = new Set<string>();
 
   const nextContentIndex = (from: number): number => {
@@ -168,13 +168,25 @@ export function stripLegacyGeneratedAgentPromptLines(content: string): string {
     const line = lines[i];
     const trimmed = line.trim();
 
-    // Fenced examples are the user's content, whatever they look like.
-    if (/^(?:```|~~~)/.test(trimmed)) {
-      inFence = !inFence;
+    // Fenced examples are the user's content, whatever they look like. Fences follow the
+    // Markdown rules: at most three spaces of indent, three or more backticks or tildes, and a
+    // closing fence of the same character, at least as long, with nothing after it. A fence
+    // that is never closed protects everything to the end of the file.
+    const fenceMatch = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    if (fence) {
+      if (
+        fenceMatch
+        && fenceMatch[1][0] === fence.char
+        && fenceMatch[1].length >= fence.length
+        && fenceMatch[2].trim() === ''
+      ) {
+        fence = null;
+      }
       out.push(line);
       continue;
     }
-    if (inFence) {
+    if (fenceMatch && !(fenceMatch[1][0] === '`' && fenceMatch[2].includes('`'))) {
+      fence = { char: fenceMatch[1][0], length: fenceMatch[1].length };
       out.push(line);
       continue;
     }
