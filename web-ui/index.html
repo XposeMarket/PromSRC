@@ -3819,21 +3819,27 @@
         <section class="settings-section">
           <div class="settings-section-heading">
             <h2>Onboarding</h2>
-            <span class="settings-help" tabindex="0" aria-label="Onboarding technical details" data-settings-help="Replay opens the tutorial, Dev test runs the onboarding flow without writes, and Redo clears onboarding state before starting again.">?</span>
+            <span class="settings-help" tabindex="0" aria-label="Onboarding technical details" data-settings-help="Replay opens the tutorial and Redo clears onboarding state before starting again.">?</span>
           </div>
-          <div class="settings-section-panel settings-onboarding-panel">
+          <div class="settings-section-panel settings-onboarding-panel" data-sk-instant>
             <div class="settings-onboarding-copy">
               <div id="settings-onboarding-status" class="settings-row-status"></div>
             </div>
             <div class="settings-row-actions">
-              <button class="btn btn-sm" onclick="replayOnboardingTutorial()" style="background:var(--brand);color:#fff;border:none">Replay tutorial</button>
-              <button class="btn btn-sm" onclick="runOnboardingDevTest()" style="background:transparent;color:var(--text);border:1px solid color-mix(in srgb, var(--text) 12%, transparent)">Dev test</button>
-              <button class="btn btn-sm" onclick="redoOnboardingFromSettings()" style="background:transparent;color:#f87171;border:none">Redo onboarding...</button>
+              <button class="sk-btn ghost danger" type="button" onclick="redoOnboardingFromSettings()">Redo onboarding…</button>
+              <button class="sk-btn" type="button" onclick="replayOnboardingTutorial()">Replay tutorial</button>
+            </div>
+          </div>
+          <!-- Developer-only tools stay available but folded away from everyday settings. -->
+          <div class="settings-section-panel sk-dev-panel" data-sk-instant>
+            <button type="button" class="sk-row sk-fold" data-fold="system-dev" aria-expanded="false" aria-controls="sk-fold-system-dev"><span class="sk-who"><span class="sk-copy"><span class="sk-name">Developer</span><span class="sk-desc">Tools for testing Prometheus itself</span></span></span><svg class="sk-ico sk-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>
+            <div class="sk-sub" id="sk-fold-system-dev" data-fold-body="system-dev" hidden>
+              <div class="sk-row"><div class="sk-who"><div class="sk-copy"><div class="sk-name">Onboarding dry run</div><div class="sk-desc">Runs the onboarding flow without saving anything</div></div></div><div class="sk-ctl"><button class="sk-btn" type="button" onclick="runOnboardingDevTest()">Dev test</button></div></div>
             </div>
           </div>
         </section>
 
-        <section class="settings-section settings-updates-section">
+        <section class="settings-section settings-updates-section" data-sk-instant>
           <div class="settings-section-heading">
             <h2>Updates</h2>
             <span class="settings-help" tabindex="0" aria-label="Update technical details" data-settings-help="Installed public builds check the Prometheus release feed. Downloads and installation always require explicit confirmation after Prometheus drains durable writes and creates a protected user-state backup.">?</span>
@@ -3870,7 +3876,7 @@
         </section>
 
 
-        <section id="settings-external-import" class="settings-section settings-external-import-section">
+        <section id="settings-external-import" class="settings-section settings-external-import-section" data-sk-instant>
           <!-- Agents & imports (stage 1). Rendered by web-ui/src/settings/agents-imports.js;
                the same module renders the mobile settings section. -->
           <div id="settings-agents-imports" class="settings-agents-imports"></div>
@@ -4033,54 +4039,48 @@
         </section>
       </div>
 
-	    <div id="settings-panel-heartbeat" style="display:none;padding:14px 16px">
-	      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
-	        <div style="border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:12px;padding:12px;background:color-mix(in srgb, var(--text) 4%, transparent)">
-	          <div class="right-section-title" style="margin-bottom:8px">Main Agent Heartbeat</div>
-	          <div style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:12px">
-	            <span style="flex:1">Enable periodic heartbeat runs</span>
-	            <button id="settings-hb-enabled" class="appearance-switch is-on" type="button" role="switch" aria-checked="true" aria-label="Enable periodic heartbeat runs" onclick="toggleHeartbeatSetting('settings-hb-enabled')"><span class="appearance-switch-thumb"></span></button>
-	          </div>
-	          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
-	            <div>
-	              <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:5px">Interval (minutes)</label>
-	              <input id="settings-hb-interval" type="number" min="1" max="1440" value="30" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:8px;font-size:13px;box-sizing:border-box" />
-	            </div>
-	            <div>
-	              <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:5px">Model Override</label>
-	              <input id="settings-hb-model" type="text" placeholder="blank = default" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box" />
-	            </div>
-	          </div>
-	          <div style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:10px">
-	            <span style="flex:1">Review all teams after each heartbeat run</span>
-	            <button id="settings-hb-review-teams" class="appearance-switch" type="button" role="switch" aria-checked="false" aria-label="Review all teams after each heartbeat run" onclick="toggleHeartbeatSetting('settings-hb-review-teams')"><span class="appearance-switch-thumb"></span></button>
-	          </div>
-	          <div id="settings-hb-path" style="font-size:11px;color:var(--muted);padding:8px 10px;background:var(--panel-2);border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:8px;word-break:break-all">HEARTBEAT.md path: -</div>
-	          <div style="display:flex;gap:8px;margin-top:12px">
-	            <button class="btn btn-sm" onclick="saveHeartbeatSettings()">Save Heartbeat</button>
-	            <button class="btn btn-sm" style="background:transparent;border:1px solid color-mix(in srgb, var(--text) 12%, transparent);color:var(--text)" onclick="loadHeartbeatSettings(true)">Reload</button>
-	          </div>
-	          <div id="settings-hb-status" style="font-size:11px;color:var(--muted);margin-top:8px"></div>
-	        </div>
-	        <div style="border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:12px;padding:12px;background:color-mix(in srgb, var(--text) 4%, transparent);display:flex;flex-direction:column;gap:8px">
-	          <div class="right-section-title">HEARTBEAT.md Instructions</div>
-	          <div id="settings-hb-editor-wrap" style="border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;overflow:hidden;min-height:240px"></div>
-	          <div style="font-size:11px;color:var(--muted);line-height:1.6">
-	            Persisted to <code style="background:var(--bg-soft);padding:1px 4px;border-radius:4px">HEARTBEAT.md</code> in the main workspace. Run on each heartbeat tick.
-	          </div>
-	        </div>
-	      </div>
-		      <!-- Subagent schedules now live in Scheduled Tasks -->
-		      <div style="border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:12px;padding:12px;background:color-mix(in srgb, var(--text) 4%, transparent)">
-		        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
-		          <div class="right-section-title">Subagent Schedules</div>
-		        </div>
-		        <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Each agent can keep its own HEARTBEAT.md and timer. Scheduled Tasks remain separate for explicit cron jobs.</div>
-		        <div id="hb-agent-list" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px">
-		          <div style="color:var(--muted);font-size:12px">Loading agent heartbeats...</div>
-		        </div>
-	      </div>
-	    </div>
+	    <div id="settings-panel-heartbeat" class="sk-page sk-page-legacy" style="display:none;padding:14px 16px">
+      <p class="sk-lede">Heartbeat wakes Prometheus on a timer so it can check on things without you asking.</p>
+      <div class="sk-sec"><h2>Main agent</h2></div>
+      <div class="sk-card">
+        <div class="sk-row">
+          <div class="sk-who"><div class="sk-copy"><div class="sk-name">Run on a timer</div><div class="sk-desc">Prometheus reads its heartbeat instructions and acts on them</div></div></div>
+          <div class="sk-ctl"><button id="settings-hb-enabled" class="appearance-switch is-on" type="button" role="switch" aria-checked="true" aria-label="Enable periodic heartbeat runs" onclick="toggleHeartbeatSetting('settings-hb-enabled')"><span class="appearance-switch-thumb"></span></button></div>
+        </div>
+        <div class="sk-row">
+          <div class="sk-who"><div class="sk-copy"><label class="sk-name" for="settings-hb-interval">Every</label><div class="sk-desc">Minutes between runs (1 to 1,440)</div></div></div>
+          <div class="sk-ctl"><input id="settings-hb-interval" class="sk-input sk-num" type="number" min="1" max="1440" value="30" /></div>
+        </div>
+        <div class="sk-row">
+          <div class="sk-who"><div class="sk-copy"><div class="sk-name">Review teams after each run</div><div class="sk-desc">Also checks on every team</div></div></div>
+          <div class="sk-ctl"><button id="settings-hb-review-teams" class="appearance-switch" type="button" role="switch" aria-checked="false" aria-label="Review all teams after each heartbeat run" onclick="toggleHeartbeatSetting('settings-hb-review-teams')"><span class="appearance-switch-thumb"></span></button></div>
+        </div>
+        <button type="button" class="sk-row sk-fold" data-fold="hb-more" aria-expanded="false" aria-controls="sk-fold-hb-more"><span class="sk-who"><span class="sk-copy"><span class="sk-name">Model and file</span><span class="sk-desc">A different model for heartbeat runs, and where the instructions live</span></span></span><svg class="sk-ico sk-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>
+        <div class="sk-sub" id="sk-fold-hb-more" data-fold-body="hb-more" hidden>
+          <div class="sk-row sk-row-stack">
+            <div class="sk-who"><div class="sk-copy"><label class="sk-name" for="settings-hb-model">Model</label><div class="sk-desc">Leave empty to use the main chat model</div></div></div>
+            <div class="sk-ctl"><input id="settings-hb-model" class="sk-input sk-grow sk-mono" type="text" placeholder="Same as main chat" /></div>
+          </div>
+          <div id="settings-hb-path" class="sk-note sk-mono">HEARTBEAT.md path: -</div>
+        </div>
+        <div class="sk-row" data-sk-instant>
+          <div id="settings-hb-status" class="sk-desc"></div>
+          <div class="sk-ctl"><button class="sk-btn ghost" type="button" onclick="loadHeartbeatSettings(true)">Reload from disk</button></div>
+        </div>
+      </div>
+
+      <div class="sk-sec"><h2>Instructions</h2><span class="sk-hint">What Prometheus does on each run</span></div>
+      <div class="sk-card sk-editor-card">
+        <div id="settings-hb-editor-wrap" class="sk-editor-wrap"></div>
+      </div>
+
+      <div class="sk-sec"><h2>Agent schedules</h2><span class="sk-hint">Each agent can have its own instructions and timer</span></div>
+      <div class="sk-card sk-pad" data-sk-instant>
+        <div id="hb-agent-list" class="sk-hb-agents">
+          <div class="sk-muted">Loading agent heartbeats…</div>
+        </div>
+      </div>
+    </div>
 
     <div id="settings-panel-search" class="settings-search-page" style="display:none;padding:14px 16px">
       <section class="settings-section settings-search-provider-section">
@@ -4102,7 +4102,7 @@
         </div>
       </section>
 
-      <section class="settings-section settings-browser-section">
+      <section class="settings-section settings-browser-section" data-sk-instant>
         <div class="settings-section-heading">
           <h2>Browser</h2>
           <span class="settings-help" tabindex="0" aria-label="Browser technical details" data-settings-help="How Prometheus's own browser signs in to sites: which profile it uses, importing Chrome profiles, and copying Chrome sign-ins.">?</span>
@@ -4158,7 +4158,7 @@
           <h2>Search provider keys</h2>
           <span class="settings-help" tabindex="0" aria-label="Search provider keys technical details" data-settings-help="Values are loaded from the existing search settings endpoint. Stored key values remain masked; enter a new value only when replacing one.">?</span>
         </div>
-        <div class="settings-search-filter">
+        <div class="settings-search-filter" data-sk-instant>
           <input id="cred-search-filter" type="search" placeholder="Search providers (e.g. Exa, Google, free)" aria-label="Search providers" oninput="filterSearchProviderRows(this.value)" autocomplete="off" />
           <span id="cred-search-filter-empty" class="settings-search-filter-empty" hidden>No providers match.</span>
         </div>

@@ -3901,3 +3901,12 @@ body:is(.electron-win32, .electron-linux):not(.pm-mobile-active) #settings-modal
 @media (max-width: 760px) {
   #settings-modal .sk-choice-row { grid-template-columns: minmax(0, 1fr) auto; }
 }
+#settings-modal .sk-editor-card { overflow: hidden; }
+#settings-modal .sk-editor-wrap { min-height: 240px; }
+#settings-modal .sk-editor-wrap .CodeMirror { background: transparent; color: var(--text); }
+#settings-modal .sk-hb-agents { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; }
+/* Bring the earlier section-style pages (General, Search, Agents, Shortcuts,
+   Appearance) to the same column width as the rebuilt pages. */
+#settings-modal .settings-page-main > :is(#settings-panel-system, #settings-panel-search, #settings-panel-agents, #settings-panel-shortcuts) { max-width: 820px; }
+#settings-modal .sk-dev-panel { margin-top: 10px; padding: 0 !important; overflow: hidden; }
+#settings-modal .sk-dev-panel .sk-fold { border-top: 0; }

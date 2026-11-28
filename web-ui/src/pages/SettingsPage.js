@@ -754,6 +754,9 @@ function ensureHeartbeatEditor() {
     theme: 'default',
   });
   window.heartbeatEditor.setSize('100%', 340);
+  window.heartbeatEditor.on('change', (_cm, change) => {
+    if (change?.origin && change.origin !== 'setValue') SETTINGS_PAGE_CONTROLLERS.heartbeat?.mark?.('hb-instructions', 'Instructions');
+  });
   setTimeout(() => { if (window.heartbeatEditor) window.heartbeatEditor.refresh(); }, 200);
 }
 
@@ -5816,9 +5819,24 @@ const SETTINGS_PAGE_CONTROLLERS = {
   channels: createFieldPageController('settings-panel-channels', {
     reload: () => loadChannelsStatus(),
   }),
+  heartbeat: createFieldPageController('settings-panel-heartbeat', {
+    reload: () => loadHeartbeatSettings(true),
+  }),
+  search: createFieldPageController('settings-panel-search', {
+    reload: () => loadCredFields(),
+  }),
+  system: createFieldPageController('settings-panel-system', {
+    reload: () => loadAutoSettleSettings(),
+    labels: { 'settings-busy-composer-mode': 'Messages while Prom is working', 'settings-auto-settle-after': 'Auto-settle', 'settings-auto-settle-custom-date': 'Auto-settle date' },
+  }),
   security: createFieldPageController('settings-panel-security', {
     reload: () => loadSecuritySettings(),
   }),
+  // Pages whose settings all apply instantly or through their own editors
+  // (agent editor, shortcut list, theme picker): no page save bar, and the old
+  // footer Save (which saved nothing there) is hidden.
+  agents: { changes: () => [] },
+  shortcuts: { changes: () => [] },
   // Only the webhook fields; the MCP server form keeps its own "Save server".
   integrations: createFieldPageController('settings-panel-integrations', {
     save: () => saveWebhookSettings(),
@@ -5839,15 +5857,21 @@ function createFieldPageController(panelId, { reload = null, save = null, labels
   let wired = false;
   // Radio groups are tracked by group name with the chosen value.
   const keyOf = (el) => (el.type === 'radio' ? `radio:${el.name}` : el.id);
+  const isSwitchButton = (el) => el?.tagName === 'BUTTON' && el.getAttribute('role') === 'switch' && !!el.id;
   const valueOf = (el) => {
+    if (isSwitchButton(el)) return el.getAttribute('aria-checked') === 'true';
     if (el.type === 'checkbox') return el.checked;
     if (el.type === 'radio') return document.querySelector(`input[type="radio"][name="${CSS.escape(el.name)}"]:checked`)?.value ?? '';
     return el.value;
   };
-  const tracked = (el) => !!(el?.id || el?.name) && /^(INPUT|SELECT|TEXTAREA)$/.test(el.tagName) && el.type !== 'file' && !el.closest('[data-sk-instant]');
+  const tracked = (el) => !!(el?.id || el?.name) && (/^(INPUT|SELECT|TEXTAREA)$/.test(el.tagName) || isSwitchButton(el)) && el.type !== 'file' && !el.closest('[data-sk-instant]');
   const labelFor = (el) => labels[el.id]
     || el.closest('[data-sk-label]')?.getAttribute('data-sk-label')
     || el.closest('.sk-row')?.querySelector('.sk-name')?.textContent?.trim()
+    || (() => {
+      const row = el.closest('.settings-row, .settings-credential-row, .settings-search-row');
+      return (row?.querySelector('label > span:first-child') || row?.querySelector('label, .settings-row-label'))?.textContent?.trim();
+    })()
     || el.getAttribute('aria-label')
     || 'Setting';
   const remember = (event) => {
@@ -5873,6 +5897,16 @@ function createFieldPageController(panelId, { reload = null, save = null, labels
       panel.addEventListener('keydown', remember, true);
       panel.addEventListener('input', changed, true);
       panel.addEventListener('change', changed, true);
+      // Switch buttons (role=switch) flip in their own onclick; read them after it ran.
+      panel.addEventListener('click', (event) => {
+        const el = event.target.closest?.('button[role="switch"][id]');
+        if (el && panel.contains(el)) changed({ target: el, isTrusted: event.isTrusted });
+      });
+    },
+    /** Mark a change that has no form field (e.g. a code editor). */
+    mark(key, label) {
+      tracker.track(key, label, 'saved', 'edited');
+      updateSettingsSaveBar();
     },
     changes: () => tracker.labels(),
     /** Record a change made by code on the user's behalf (e.g. "Use this address"). */
@@ -5889,6 +5923,11 @@ function createFieldPageController(panelId, { reload = null, save = null, labels
     },
     async discard() {
       for (const [key, value] of originals) {
+        const node = document.getElementById(key);
+        if (node && isSwitchButton(node)) {
+          if (valueOf(node) !== !!value) node.click();
+          continue;
+        }
         if (key.startsWith('radio:')) {
           const radio = document.querySelector(`input[type="radio"][name="${CSS.escape(key.slice(6))}"][value="${CSS.escape(String(value))}"]`);
           if (radio) radio.checked = true;
