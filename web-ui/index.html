@@ -5354,21 +5354,6 @@
     <div id="settings-panel-pairing" class="sk-page sk-page-legacy" style="display:none;padding:14px 16px">
       <p class="sk-lede">Use Prometheus from your phone. Pair it once with a QR code; you approve every new device here.</p>
 
-      <div id="pairing-browser-admin">
-        <div class="sk-sec"><h2>Pairing credential</h2></div>
-        <div class="sk-card">
-          <div class="sk-row sk-row-stack" data-sk-instant>
-            <div class="sk-who"><div class="sk-copy"><div class="sk-name">Admin credential</div>
-              <div class="sk-desc">Needed when Prometheus was started by hand on your network. Paste the value set as <code>PROMETHEUS_PAIRING_ADMIN_TOKEN</code>. It stays in this tab only and is never put in a QR code or link.</div></div></div>
-            <div class="sk-ctl">
-              <input id="pairing-browser-admin-token" class="sk-input sk-grow" type="password" autocomplete="off" spellcheck="false" placeholder="Pairing admin credential" aria-label="Pairing admin credential" />
-              <button id="pairing-browser-admin-apply" class="sk-btn" type="button">Use for this tab</button>
-            </div>
-          </div>
-          <div id="pairing-browser-admin-status" class="sk-note">The desktop app uses its own protected credential automatically.</div>
-        </div>
-      </div>
-
       <div class="sk-sec"><h2>Pair a phone</h2></div>
       <div class="sk-card sk-pair-card">
         <div id="pairing-lan-disabled" class="sk-note sk-note-warn" style="display:none">Local network pairing is off. Turn on "Pair over Wi-Fi" below to make a local pairing QR code.</div>
@@ -5448,6 +5433,28 @@
           </div>
           <div class="sk-note">One-time setup: install Tailscale from tailscale.com and sign in, then turn on Tailscale Funnel above.
             <span style="display:none"><span id="pairing-ts-funnel-cmd">tailscale funnel 18789</span></span></div>
+        </div>
+      </div>
+
+      <!-- Browser-only admin credential (hidden in the desktop app, which has its own). Folded: rarely needed. -->
+      <div id="pairing-browser-admin">
+        <div class="sk-sec"><h2>Advanced</h2></div>
+        <div class="sk-card">
+          <button type="button" class="sk-row sk-fold" data-fold="pairing-admin" aria-expanded="false" aria-controls="sk-fold-pairing-admin">
+            <span class="sk-who"><span class="sk-copy"><span class="sk-name">Pairing credential</span><span class="sk-desc">Only needed when Prometheus was started by hand on your network</span></span></span>
+            <svg class="sk-ico sk-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+          </button>
+          <div class="sk-sub" id="sk-fold-pairing-admin" data-fold-body="pairing-admin" hidden>
+            <div class="sk-row sk-row-stack" data-sk-instant>
+              <div class="sk-who"><div class="sk-copy"><div class="sk-name">Admin credential</div>
+                <div class="sk-desc">Paste the value set as <code>PROMETHEUS_PAIRING_ADMIN_TOKEN</code>. It stays in this tab only and is never put in a QR code or link.</div></div></div>
+              <div class="sk-ctl">
+                <input id="pairing-browser-admin-token" class="sk-input sk-grow" type="password" autocomplete="off" spellcheck="false" placeholder="Pairing admin credential" aria-label="Pairing admin credential" />
+                <button id="pairing-browser-admin-apply" class="sk-btn" type="button">Use for this tab</button>
+              </div>
+            </div>
+            <div id="pairing-browser-admin-status" class="sk-note">The desktop app uses its own protected credential automatically.</div>
+          </div>
         </div>
       </div>
     </div>

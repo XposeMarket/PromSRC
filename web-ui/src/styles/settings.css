@@ -3910,3 +3910,26 @@ body:is(.electron-win32, .electron-linux):not(.pm-mobile-active) #settings-modal
 #settings-modal .settings-page-main > :is(#settings-panel-system, #settings-panel-search, #settings-panel-agents, #settings-panel-shortcuts, #settings-panel-appearance) { max-width: 820px; }
 #settings-modal .sk-dev-panel { margin-top: 10px; padding: 0 !important; overflow: hidden; }
 #settings-modal .sk-dev-panel .sk-fold { border-top: 0; }
+
+/* Review round 1 */
+/* A plain sub-line under a model name (account, "Provider default") is quiet; only unavailable is warned. */
+#settings-modal .sk-pick:not(.unavail) .sk-stack small { color: var(--muted); font-weight: 500; }
+/* Section heading's right-side control (Preset) ends exactly on the card edge. */
+#settings-modal .sk-sec h2 { min-width: 0; }
+#settings-modal .sk-sec > .sk-preset { flex: none; margin-left: auto; max-width: 100%; }
+#settings-modal .sk-preset span { box-sizing: border-box; margin: 0; }
+/* Channel status sits on the row, not in an old highlight box (base.css dark-theme rule). */
+:root[data-theme] #settings-modal #tg-status-bar.sk-status,
+#settings-modal #tg-status-bar.sk-status { background: transparent !important; border: 0 !important; padding: 0 !important; box-shadow: none !important; }
+/* Pairing: Copy code is a normal quiet button under the help text. */
+#settings-modal .sk-copy-code { align-self: flex-start; }
+/* Security > Saved access: secure-access buttons in the kit's button style. */
+#settings-modal #settings-panel-security .sa-btn {
+  min-height: 32px; padding: 6px 13px; border: 1px solid var(--line-strong); border-radius: 8px;
+  background: transparent; color: var(--text); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+}
+#settings-modal #settings-panel-security .sa-btn:hover { background: color-mix(in srgb, var(--text) 6%, transparent); }
+#settings-modal #settings-panel-security .sa-btn.sa-sm { min-height: 28px; padding: 4px 10px; font-size: 12.5px; }
+#settings-modal #settings-panel-security .sa-btn.sa-pri { width: auto; flex: none; }
+#settings-modal #settings-panel-security .sa-btn[disabled] { opacity: .55; cursor: default; }
+@media (max-width: 760px) { #settings-modal #settings-panel-security .sa-btn { min-height: 44px; } }
