@@ -24,7 +24,7 @@ import { finishLiveRuntime, registerLiveRuntime, updateLiveRuntimeCheckpoint } f
 import { _activeAgentSessions, resolveTeamExecutionRoot, resolveTeamAgentAllowedWorkPaths, type RunAgentResult } from './team-dispatch-runtime';
 import { runWithWorkspace } from '../../tools/workspace-context';
 import { setActivatedToolCategories } from '../session';
-import { readAgentPromptFile } from '../../agents/agent-prompt-file.js';
+import { readAgentPromptFile, stripLegacyGeneratedAgentPromptLines } from '../../agents/agent-prompt-file.js';
 import { setRuntimeActorContext } from '../runtime-actor.js';
 import { resolveAgentToolFilter } from '../agents-runtime/agent-tool-policy';
 import { appendBackgroundSseTrace } from '../tasks/background-agent-trace';
@@ -580,7 +580,9 @@ function readTeamMemberRoleBlock(teamId: string, agentId: string, agentName: str
   try {
     const globalWorkspace = String(agent?.workspace || ensureAgentWorkspace(agent) || '').trim();
     const identityWorkspace = ensureTeamAgentIdentity(teamId, agentId, globalWorkspace || undefined);
-    const raw = String(readAgentPromptFile(identityWorkspace, { migrateLegacy: true })?.content || '').trim();
+    // Older identity files say the agent is a standalone one-off subagent. Under this header
+    // that is exactly wrong, so the generated legacy lines are dropped before injection.
+    const raw = stripLegacyGeneratedAgentPromptLines(String(readAgentPromptFile(identityWorkspace, { migrateLegacy: true })?.content || '')).trim();
     if (!raw) return '';
     return `[YOUR ROLE ON THIS TEAM — ${agentName}]\n${raw}`;
   } catch {

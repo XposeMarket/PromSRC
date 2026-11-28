@@ -124,3 +124,133 @@ export function writeAgentPromptFile(workspacePath: string, content: string): st
   fs.writeFileSync(filePath, String(content || ''), 'utf-8');
   return filePath;
 }
+
+const LEGACY_STANDALONE_SENTENCE = 'You are a standalone one-off subagent, not a member of a managed team.';
+const LEGACY_EDIT_NOTE = '**Note:** Edit this file to modify the subagent. Changes take effect on next call.';
+// The generated block was always exactly these three lines, in this order.
+const LEGACY_CONFIG_BLOCK = [/^- Max steps: \d+$/, /^- Timeout: \d+ms$/, /^- Model override: .+$/];
+
+/**
+ * Removes lines that older builds generated into AGENT.md and that are false or empty when
+ * the file is read into a run:
+ *  - "You are a standalone one-off subagent, not a member of a managed team." (written for
+ *    every agent, including team members)
+ *  - the "## Configuration" block of Max steps / Timeout / Model override (nothing enforces
+ *    the first two, so agents were told limits that do not exist)
+ *  - the user-facing "Edit this file" note
+ *  - generated sections with nothing in them, and repeated bullets inside the generated
+ *    personality section
+ *
+ * Read-time only: the file on disk is never rewritten, so hand edits are safe. Only whole
+ * lines that match the generated text exactly are dropped, and the Configuration block only
+ * when it is the complete three-line generated block. Text a user wrote that merely mentions
+ * timeouts, teams or configuration is kept, a partial or edited Configuration section is
+ * kept, nothing inside a fenced code block is touched, and a file with no generated legacy
+ * lines is returned unchanged.
+ */
+export function stripLegacyGeneratedAgentPromptLines(content: string): string {
+  const source = String(content || '');
+  if (!source) return source;
+  const lines = source.split(/\r?\n/);
+  const out: string[] = [];
+  let changed = false;
+  let inPersonality = false;
+  let fence: { char: string; length: number } | null = null;
+  let seenBullets = new Set<string>();
+
+  const nextContentIndex = (from: number): number => {
+    let j = from;
+    while (j < lines.length && lines[j].trim() === '') j++;
+    return j;
+  };
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trim();
+
+    // Fenced examples are the user's content, whatever they look like. Fences follow the
+    // Markdown rules: at most three spaces of indent, three or more backticks or tildes, and a
+    // closing fence of the same character, at least as long, with nothing after it. A fence
+    // that is never closed protects everything to the end of the file.
+    const fenceMatch = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    if (fence) {
+      if (
+        fenceMatch
+        && fenceMatch[1][0] === fence.char
+        && fenceMatch[1].length >= fence.length
+        && /^[ \t]*$/.test(fenceMatch[2])
+      ) {
+        fence = null;
+      }
+      out.push(line);
+      continue;
+    }
+    if (fenceMatch && !(fenceMatch[1][0] === '`' && fenceMatch[2].includes('`'))) {
+      fence = { char: fenceMatch[1][0], length: fenceMatch[1].length };
+      out.push(line);
+      continue;
+    }
+
+    if (/^## /.test(trimmed)) {
+      inPersonality = trimmed === '## Personality And Voice';
+      seenBullets = new Set<string>();
+    }
+
+    if (trimmed === LEGACY_STANDALONE_SENTENCE || trimmed === LEGACY_EDIT_NOTE) {
+      changed = true;
+      continue;
+    }
+
+    // A rule line that only introduced the edit note.
+    if (trimmed === '---' && lines[nextContentIndex(i + 1)]?.trim() === LEGACY_EDIT_NOTE) {
+      changed = true;
+      continue;
+    }
+
+    if (trimmed === '## Configuration') {
+      const isGeneratedBlock = LEGACY_CONFIG_BLOCK.every((pattern, k) => pattern.test(String(lines[i + 1 + k] ?? '').trim()));
+      const j = i + 1 + LEGACY_CONFIG_BLOCK.length;
+      // Followed by nothing, or only by the generated note / another heading: anything else
+      // means someone added to the section, so it stays.
+      const after = nextContentIndex(j);
+      const endsCleanly = after >= lines.length || /^(?:## |---$)/.test(lines[after].trim());
+      if (isGeneratedBlock && endsCleanly) {
+        changed = true;
+        i = j - 1;
+        continue;
+      }
+    }
+
+    // Generated headings whose body is empty or a placeholder.
+    if (trimmed === '## Constraints (DO NOT VIOLATE)') {
+      const j = nextContentIndex(i + 1);
+      if (j >= lines.length || /^## /.test(lines[j].trim())) {
+        changed = true;
+        continue;
+      }
+    }
+    if (trimmed === '## Forbidden Tools' || trimmed === '## Base Preset Role') {
+      const placeholder = trimmed === '## Forbidden Tools' ? '(none)' : '(not recorded)';
+      const j = nextContentIndex(i + 1);
+      const after = nextContentIndex(j + 1);
+      if (lines[j]?.trim() === placeholder && (after >= lines.length || /^(?:## |---$)/.test(lines[after].trim()))) {
+        changed = true;
+        i = j;
+        continue;
+      }
+    }
+
+    if (inPersonality && trimmed.startsWith('- ')) {
+      if (seenBullets.has(trimmed)) {
+        changed = true;
+        continue;
+      }
+      seenBullets.add(trimmed);
+    }
+
+    out.push(line);
+  }
+
+  if (!changed) return source;
+  return out.join('\n').replace(/\n{3,}/g, '\n\n').replace(/\s+$/, '') + '\n';
+}
