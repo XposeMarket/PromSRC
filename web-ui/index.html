@@ -4941,141 +4941,88 @@
       </div><!-- /#settings-models-store -->
 	</div>
 
-	    <div id="settings-panel-channels" style="display:none;padding:14px 16px">
-      <div style="display:grid;grid-template-columns:1.2fr 1fr;gap:14px">
-        <div style="border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:12px;padding:12px;background:color-mix(in srgb, var(--text) 4%, transparent)">
-          <div class="right-section-title" style="margin-bottom:8px">Channel Connection</div>
-          <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px">Channel</label>
-          <select id="settings-channel-select" class="settings-input" onchange="onChannelTypeChange()" style="margin-bottom:10px">
+	    <div id="settings-panel-channels" class="sk-page sk-page-legacy" style="display:none;padding:14px 16px">
+      <p class="sk-lede">Talk to Prometheus from a chat app you already use. Connect one channel at a time.</p>
+      <div class="sk-sec"><h2>Channel</h2></div>
+      <div class="sk-card">
+        <div class="sk-row" data-sk-instant>
+          <div class="sk-who"><div class="sk-copy"><label class="sk-name" for="settings-channel-select">App</label>
+            <div class="sk-desc sk-status-row">
+              <span id="tg-status-bar" class="sk-status"><i id="tg-status-dot" class="sk-status-dot"></i><span id="tg-status-text">Not configured</span></span>
+              <span id="dc-status-bar" class="sk-status" style="display:none"><i id="dc-status-dot" class="sk-status-dot"></i><span id="dc-status-text">Not configured</span></span>
+              <span id="wa-status-bar" class="sk-status" style="display:none"><i id="wa-status-dot" class="sk-status-dot"></i><span id="wa-status-text">Not configured</span></span>
+            </div></div></div>
+          <div class="sk-ctl"><select id="settings-channel-select" class="sk-select sk-w-md" onchange="onChannelTypeChange()">
             <option value="telegram">Telegram</option>
             <option value="discord">Discord</option>
             <option value="whatsapp">WhatsApp</option>
-          </select>
+          </select></div>
+        </div>
+      </div>
 
-          <div id="tg-status-bar" style="display:flex;align-items:center;gap:8px;margin-bottom:10px;padding:8px 10px;border-radius:8px;background:color-mix(in srgb, var(--text) 4%, transparent);font-size:12px">
-            <div id="tg-status-dot" style="width:8px;height:8px;border-radius:50%;background:#ccc;flex-shrink:0"></div>
-            <span id="tg-status-text" style="color:var(--muted)">Not configured</span>
-          </div>
-          <div id="dc-status-bar" style="display:none;align-items:center;gap:8px;margin-bottom:10px;padding:8px 10px;border-radius:8px;background:color-mix(in srgb, var(--text) 4%, transparent);font-size:12px">
-            <div id="dc-status-dot" style="width:8px;height:8px;border-radius:50%;background:#ccc;flex-shrink:0"></div>
-            <span id="dc-status-text" style="color:var(--muted)">Not configured</span>
-          </div>
-          <div id="wa-status-bar" style="display:none;align-items:center;gap:8px;margin-bottom:10px;padding:8px 10px;border-radius:8px;background:color-mix(in srgb, var(--text) 4%, transparent);font-size:12px">
-            <div id="wa-status-dot" style="width:8px;height:8px;border-radius:50%;background:#ccc;flex-shrink:0"></div>
-            <span id="wa-status-text" style="color:var(--muted)">Not configured</span>
-          </div>
-
-          <div id="channel-form-telegram">
-            <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px">Bot Token</label>
-            <input id="settings-tg-token" type="password" placeholder="123456:ABC-DEF1234..." style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box" />
-            <label style="display:block;font-size:12px;color:var(--muted);margin:10px 0 6px">Your Telegram User ID(s)</label>
-            <input id="settings-tg-userid" type="text" placeholder="e.g. 123456789, 987654321" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box" />
-            <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin:10px 0 0;cursor:pointer">
-              <input type="checkbox" id="settings-tg-enabled" />
-              Enable Telegram channel
-            </label>
-          </div>
-
-          <div id="channel-form-discord" style="display:none">
-            <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px">Bot Token</label>
-            <input id="settings-dc-token" type="password" placeholder="Discord bot token" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box" />
-            <label style="display:block;font-size:12px;color:var(--muted);margin:8px 0 6px">Application ID (optional)</label>
-            <input id="settings-dc-appid" type="text" placeholder="Discord app ID" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box" />
-            <label style="display:block;font-size:12px;color:var(--muted);margin:8px 0 6px">Guild ID (optional)</label>
-            <input id="settings-dc-guildid" type="text" placeholder="Server ID" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box" />
-            <label style="display:block;font-size:12px;color:var(--muted);margin:8px 0 6px">Channel ID (for send-test)</label>
-            <input id="settings-dc-channelid" type="text" placeholder="Channel ID" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box" />
-            <label style="display:block;font-size:12px;color:var(--muted);margin:8px 0 6px">Webhook URL (optional)</label>
-            <input id="settings-dc-webhook" type="password" placeholder="https://discord.com/api/webhooks/..." style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box" />
-            <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin:10px 0 0;cursor:pointer">
-              <input type="checkbox" id="settings-dc-enabled" />
-              Enable Discord channel
-            </label>
-          </div>
-
-          <div id="channel-form-whatsapp" style="display:none">
-            <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px">Access Token</label>
-            <input id="settings-wa-token" type="password" placeholder="Meta access token" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box" />
-            <label style="display:block;font-size:12px;color:var(--muted);margin:8px 0 6px">Phone Number ID</label>
-            <input id="settings-wa-phoneid" type="text" placeholder="WhatsApp phone number ID" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box" />
-            <label style="display:block;font-size:12px;color:var(--muted);margin:8px 0 6px">Business Account ID (optional)</label>
-            <input id="settings-wa-baid" type="text" placeholder="WABA ID" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box" />
-            <label style="display:block;font-size:12px;color:var(--muted);margin:8px 0 6px">Webhook Verify Token (optional)</label>
-            <input id="settings-wa-verify" type="password" placeholder="Verify token" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box" />
-            <label style="display:block;font-size:12px;color:var(--muted);margin:8px 0 6px">Webhook Secret (optional)</label>
-            <input id="settings-wa-secret" type="password" placeholder="Webhook secret" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box" />
-            <label style="display:block;font-size:12px;color:var(--muted);margin:8px 0 6px">Test Recipient (E.164)</label>
-            <input id="settings-wa-recipient" type="text" placeholder="15551234567" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box" />
-            <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin:10px 0 0;cursor:pointer">
-              <input type="checkbox" id="settings-wa-enabled" />
-              Enable WhatsApp channel
-            </label>
-          </div>
-
-          <div id="channel-notification-settings" style="border-top:1px solid var(--line);margin-top:12px;padding-top:12px">
-            <div class="right-section-title" style="margin-bottom:8px">Response Complete Notifications</div>
-            <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin:0 0 8px;cursor:pointer">
-              <input type="checkbox" id="settings-ch-notify-enabled" />
-              Enable completion alerts
-            </label>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
-              <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text);cursor:pointer">
-                <input type="checkbox" id="settings-ch-notify-mobile" />
-                Mobile
-              </label>
-              <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text);cursor:pointer">
-                <input type="checkbox" id="settings-ch-notify-desktop" />
-                Desktop
-              </label>
-            </div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
-              <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text);cursor:pointer">
-                <input type="checkbox" id="settings-ch-notify-summary" />
-                Summary
-              </label>
-              <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text);cursor:pointer">
-                <input type="checkbox" id="settings-ch-notify-link" />
-                Chat link
-              </label>
-            </div>
-            <label style="display:block;font-size:12px;color:var(--muted);margin:8px 0 6px">Summary max characters</label>
-            <input id="settings-ch-notify-maxchars" type="number" min="80" max="1200" step="20" placeholder="420" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box" />
-          </div>
-
-          <div style="display:flex;gap:8px;margin-top:12px">
-            <button class="btn btn-sm" id="channel-test-btn" onclick="testSelectedChannel()" style="background:transparent;border:1px solid color-mix(in srgb, var(--text) 12%, transparent);color:var(--text)">Test</button>
-            <button class="btn btn-sm" onclick="saveSelectedChannelSettings()" style="background:var(--brand);color:#fff;border:1px solid var(--brand)">Save</button>
-            <button class="btn btn-sm" id="channel-send-test-btn" onclick="sendSelectedChannelTest()" style="background:transparent;border:1px solid color-mix(in srgb, var(--text) 12%, transparent);color:var(--text)">Send Test</button>
+      <div class="sk-sec"><h2>Connection</h2><span class="sk-hint">Keys stay on this computer</span></div>
+      <div class="sk-card">
+        <div id="channel-form-telegram">
+          <div class="sk-row"><div class="sk-who"><div class="sk-copy"><label class="sk-name" for="settings-tg-enabled">Use Telegram</label><div class="sk-desc">Messages from the people below reach Prometheus</div></div></div><div class="sk-ctl"><input type="checkbox" class="sk-toggle" id="settings-tg-enabled" /></div></div>
+          <div class="sk-row sk-row-stack"><div class="sk-who"><div class="sk-copy"><label class="sk-name" for="settings-tg-token">Bot token</label><div class="sk-desc">From @BotFather</div></div></div><div class="sk-ctl"><input id="settings-tg-token" class="sk-input sk-grow sk-mono" type="password" placeholder="123456:ABC-DEF1234..." autocomplete="off" /></div></div>
+          <div class="sk-row sk-row-stack"><div class="sk-who"><div class="sk-copy"><label class="sk-name" for="settings-tg-userid">Allowed people</label><div class="sk-desc">Telegram user IDs, separated by commas</div></div></div><div class="sk-ctl"><input id="settings-tg-userid" class="sk-input sk-grow sk-mono" type="text" placeholder="e.g. 123456789, 987654321" /></div></div>
+        </div>
+        <div id="channel-form-discord" style="display:none">
+          <div class="sk-row"><div class="sk-who"><div class="sk-copy"><label class="sk-name" for="settings-dc-enabled">Use Discord</label><div class="sk-desc">Your bot answers in the servers it is invited to</div></div></div><div class="sk-ctl"><input type="checkbox" class="sk-toggle" id="settings-dc-enabled" /></div></div>
+          <div class="sk-row sk-row-stack"><div class="sk-who"><div class="sk-copy"><label class="sk-name" for="settings-dc-token">Bot token</label><div class="sk-desc">From the Discord Developer Portal</div></div></div><div class="sk-ctl"><input id="settings-dc-token" class="sk-input sk-grow sk-mono" type="password" placeholder="Discord bot token" autocomplete="off" /></div></div>
+          <div class="sk-row sk-row-stack"><div class="sk-who"><div class="sk-copy"><label class="sk-name" for="settings-dc-channelid">Test channel ID</label><div class="sk-desc">Where "Send test" posts</div></div></div><div class="sk-ctl"><input id="settings-dc-channelid" class="sk-input sk-grow sk-mono" type="text" placeholder="Channel ID" /></div></div>
+          <button type="button" class="sk-row sk-fold" data-fold="dc-more" aria-expanded="false" aria-controls="sk-fold-dc-more"><span class="sk-who"><span class="sk-copy"><span class="sk-name">More Discord options</span><span class="sk-desc">Application ID, server ID, webhook</span></span></span><svg class="sk-ico sk-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>
+          <div class="sk-sub" id="sk-fold-dc-more" data-fold-body="dc-more" hidden>
+            <div class="sk-row sk-row-stack"><div class="sk-who"><div class="sk-copy"><label class="sk-name" for="settings-dc-appid">Application ID</label><div class="sk-desc">Optional</div></div></div><div class="sk-ctl"><input id="settings-dc-appid" class="sk-input sk-grow sk-mono" type="text" placeholder="Discord app ID" /></div></div>
+            <div class="sk-row sk-row-stack"><div class="sk-who"><div class="sk-copy"><label class="sk-name" for="settings-dc-guildid">Server ID</label><div class="sk-desc">Optional</div></div></div><div class="sk-ctl"><input id="settings-dc-guildid" class="sk-input sk-grow sk-mono" type="text" placeholder="Server ID" /></div></div>
+            <div class="sk-row sk-row-stack"><div class="sk-who"><div class="sk-copy"><label class="sk-name" for="settings-dc-webhook">Webhook address</label><div class="sk-desc">Optional</div></div></div><div class="sk-ctl"><input id="settings-dc-webhook" class="sk-input sk-grow sk-mono" type="password" placeholder="https://discord.com/api/webhooks/..." autocomplete="off" /></div></div>
           </div>
         </div>
-
-        <div style="border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:12px;padding:12px;background:color-mix(in srgb, var(--text) 4%, transparent)">
-          <div class="right-section-title" style="margin-bottom:8px">Instructions</div>
-          <div id="channel-guide-telegram" style="font-size:12px;color:var(--muted);line-height:1.8">
-            <b>Telegram Setup</b><br>
-            1. Create a bot via <a href="https://t.me/BotFather" target="_blank" style="color:var(--brand)">@BotFather</a>.<br>
-            2. Copy the bot token into this panel.<br>
-            3. Get your user ID(s) from <a href="https://t.me/userinfobot" target="_blank" style="color:var(--brand)">@userinfobot</a>.<br>
-            4. Add allowed IDs, then click <b>Test</b> and <b>Save</b>.<br>
-            5. Use <b>Send Test</b> to verify delivery.
-          </div>
-          <div id="channel-guide-discord" style="display:none;font-size:12px;color:var(--muted);line-height:1.8">
-            <b>Discord Setup</b><br>
-            1. Create an app + bot in Discord Developer Portal.<br>
-            2. Enable required intents (including Message Content if needed).<br>
-            3. Invite bot to your server with message permissions.<br>
-            4. Paste bot token; optionally add app/guild/channel IDs.<br>
-            5. Click <b>Test</b>, then <b>Save</b>, then <b>Send Test</b>.
-          </div>
-          <div id="channel-guide-whatsapp" style="display:none;font-size:12px;color:var(--muted);line-height:1.8">
-            <b>WhatsApp Cloud API Setup</b><br>
-            1. In Meta Developer dashboard, open WhatsApp Cloud API.<br>
-            2. Copy access token and phone number ID into this panel.<br>
-            3. Configure webhook verify token/secret (if using inbound webhooks).<br>
-            4. Add a test recipient number in E.164 format.<br>
-            5. Click <b>Test</b>, <b>Save</b>, then <b>Send Test</b>.
+        <div id="channel-form-whatsapp" style="display:none">
+          <div class="sk-row"><div class="sk-who"><div class="sk-copy"><label class="sk-name" for="settings-wa-enabled">Use WhatsApp</label><div class="sk-desc">Through the WhatsApp Cloud API from Meta</div></div></div><div class="sk-ctl"><input type="checkbox" class="sk-toggle" id="settings-wa-enabled" /></div></div>
+          <div class="sk-row sk-row-stack"><div class="sk-who"><div class="sk-copy"><label class="sk-name" for="settings-wa-token">Access token</label><div class="sk-desc">From the Meta developer dashboard</div></div></div><div class="sk-ctl"><input id="settings-wa-token" class="sk-input sk-grow sk-mono" type="password" placeholder="Meta access token" autocomplete="off" /></div></div>
+          <div class="sk-row sk-row-stack"><div class="sk-who"><div class="sk-copy"><label class="sk-name" for="settings-wa-phoneid">Phone number ID</label><div class="sk-desc">The WhatsApp number Prometheus sends from</div></div></div><div class="sk-ctl"><input id="settings-wa-phoneid" class="sk-input sk-grow sk-mono" type="text" placeholder="WhatsApp phone number ID" /></div></div>
+          <div class="sk-row sk-row-stack"><div class="sk-who"><div class="sk-copy"><label class="sk-name" for="settings-wa-recipient">Test recipient</label><div class="sk-desc">Number with country code, digits only</div></div></div><div class="sk-ctl"><input id="settings-wa-recipient" class="sk-input sk-grow sk-mono" type="text" placeholder="15551234567" /></div></div>
+          <button type="button" class="sk-row sk-fold" data-fold="wa-more" aria-expanded="false" aria-controls="sk-fold-wa-more"><span class="sk-who"><span class="sk-copy"><span class="sk-name">More WhatsApp options</span><span class="sk-desc">Business account, incoming message webhook</span></span></span><svg class="sk-ico sk-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>
+          <div class="sk-sub" id="sk-fold-wa-more" data-fold-body="wa-more" hidden>
+            <div class="sk-row sk-row-stack"><div class="sk-who"><div class="sk-copy"><label class="sk-name" for="settings-wa-baid">Business account ID</label><div class="sk-desc">Optional</div></div></div><div class="sk-ctl"><input id="settings-wa-baid" class="sk-input sk-grow sk-mono" type="text" placeholder="WABA ID" /></div></div>
+            <div class="sk-row sk-row-stack"><div class="sk-who"><div class="sk-copy"><label class="sk-name" for="settings-wa-verify">Webhook verify token</label><div class="sk-desc">Optional, for incoming messages</div></div></div><div class="sk-ctl"><input id="settings-wa-verify" class="sk-input sk-grow sk-mono" type="password" placeholder="Verify token" autocomplete="off" /></div></div>
+            <div class="sk-row sk-row-stack"><div class="sk-who"><div class="sk-copy"><label class="sk-name" for="settings-wa-secret">Webhook secret</label><div class="sk-desc">Optional, for incoming messages</div></div></div><div class="sk-ctl"><input id="settings-wa-secret" class="sk-input sk-grow sk-mono" type="password" placeholder="Webhook secret" autocomplete="off" /></div></div>
           </div>
         </div>
+        <div class="sk-row" data-sk-instant>
+          <div class="sk-who"><div class="sk-copy"><div class="sk-name">Check it works</div><div class="sk-desc">Test checks the connection. Send test posts a short message.</div></div></div>
+          <div class="sk-ctl">
+            <button class="sk-btn" type="button" id="channel-test-btn" onclick="testSelectedChannel()">Test</button>
+            <button class="sk-btn" type="button" id="channel-send-test-btn" onclick="sendSelectedChannelTest()">Send test</button>
+          </div>
+        </div>
+        <button type="button" class="sk-row sk-fold" data-fold="channel-guide" aria-expanded="false" aria-controls="sk-fold-channel-guide"><span class="sk-who"><span class="sk-copy"><span class="sk-name">How to set it up</span><span class="sk-desc">Step by step for the selected app</span></span></span><svg class="sk-ico sk-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>
+        <div class="sk-sub sk-guide" id="sk-fold-channel-guide" data-fold-body="channel-guide" hidden>
+          <div id="channel-guide-telegram">
+            <ol><li>Create a bot with <a href="https://t.me/BotFather" target="_blank" rel="noopener">@BotFather</a> and copy its token here.</li>
+            <li>Get your user ID from <a href="https://t.me/userinfobot" target="_blank" rel="noopener">@userinfobot</a> and add it to Allowed people.</li>
+            <li>Turn on Use Telegram, press Test, then Save.</li><li>Press Send test to check delivery.</li></ol>
+          </div>
+          <div id="channel-guide-discord" style="display:none">
+            <ol><li>Create an app and a bot in the Discord Developer Portal.</li><li>Turn on the intents it needs (Message Content if it should read messages).</li>
+            <li>Invite the bot to your server with permission to send messages.</li><li>Paste the bot token, press Test, then Save, then Send test.</li></ol>
+          </div>
+          <div id="channel-guide-whatsapp" style="display:none">
+            <ol><li>In the Meta developer dashboard, open WhatsApp Cloud API.</li><li>Copy the access token and phone number ID here.</li>
+            <li>Set the webhook verify token and secret if you want incoming messages.</li><li>Add a test recipient, press Test, Save, then Send test.</li></ol>
+          </div>
+        </div>
+      </div>
+
+      <div class="sk-sec" id="channel-notification-settings"><h2>When a reply finishes</h2></div>
+      <div class="sk-card">
+        <div class="sk-row"><div class="sk-who"><div class="sk-copy"><label class="sk-name" for="settings-ch-notify-enabled">Send an alert</label><div class="sk-desc">Tells you when Prometheus finishes a long reply</div></div></div><div class="sk-ctl"><input type="checkbox" class="sk-toggle" id="settings-ch-notify-enabled" /></div></div>
+        <div class="sk-row"><div class="sk-who"><div class="sk-copy"><label class="sk-name" for="settings-ch-notify-mobile">On your phone</label><div class="sk-desc">Through the connected channel</div></div></div><div class="sk-ctl"><input type="checkbox" class="sk-toggle" id="settings-ch-notify-mobile" /></div></div>
+        <div class="sk-row"><div class="sk-who"><div class="sk-copy"><label class="sk-name" for="settings-ch-notify-desktop">On this computer</label><div class="sk-desc">A desktop notification</div></div></div><div class="sk-ctl"><input type="checkbox" class="sk-toggle" id="settings-ch-notify-desktop" /></div></div>
+        <div class="sk-row"><div class="sk-who"><div class="sk-copy"><label class="sk-name" for="settings-ch-notify-summary">Include a summary</label><div class="sk-desc">A short version of the reply</div></div></div><div class="sk-ctl"><input type="checkbox" class="sk-toggle" id="settings-ch-notify-summary" /></div></div>
+        <div class="sk-row"><div class="sk-who"><div class="sk-copy"><label class="sk-name" for="settings-ch-notify-link">Include a chat link</label><div class="sk-desc">Opens the chat in Prometheus</div></div></div><div class="sk-ctl"><input type="checkbox" class="sk-toggle" id="settings-ch-notify-link" /></div></div>
+        <div class="sk-row"><div class="sk-who"><div class="sk-copy"><label class="sk-name" for="settings-ch-notify-maxchars">Summary length</label><div class="sk-desc">Most characters in the summary (80 to 1,200)</div></div></div><div class="sk-ctl"><input id="settings-ch-notify-maxchars" class="sk-input sk-num" type="number" min="80" max="1200" step="20" placeholder="420" /></div></div>
       </div>
     </div>
 
@@ -5273,158 +5220,86 @@
       </section>
     </div>
 
-    <div id="settings-panel-integrations" style="display:none;padding:14px 16px">
-      <!-- Sub-tab row -->
-      <div style="display:flex;gap:8px;margin-bottom:14px">
-        <button id="itab-webhooks" onclick="setIntegTab('webhooks')" style="padding:5px 14px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;border:0;background:color-mix(in srgb, var(--text) 10%, transparent);color:var(--text)">Webhooks</button>
-        <button id="itab-mcp" onclick="setIntegTab('mcp')" style="padding:5px 14px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;border:0;background:transparent;color:var(--muted)">MCP Servers</button>
+    <div id="settings-panel-integrations" class="sk-page sk-page-legacy" style="display:none;padding:14px 16px">
+      <p class="sk-lede">Let other apps start work in Prometheus, and give Prometheus extra tools.</p>
+      <div class="sk-seg sk-tabs" role="tablist" aria-label="Integrations">
+        <button id="itab-webhooks" class="sk-seg-btn on" type="button" role="tab" onclick="setIntegTab('webhooks')">Webhooks</button>
+        <button id="itab-mcp" class="sk-seg-btn" type="button" role="tab" onclick="setIntegTab('mcp')">MCP servers</button>
       </div>
 
-      <!-- WEBHOOKS PANEL ----------------------------------------------- -->
+      <!-- WEBHOOKS -->
       <div id="itab-panel-webhooks">
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
-          <!-- Left: config -->
-          <div style="border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:12px;padding:14px;background:color-mix(in srgb, var(--text) 4%, transparent)">
-            <div class="right-section-title" style="margin-bottom:10px">Webhook Endpoint</div>
-
-            <div id="wh-status-bar" style="display:flex;align-items:center;gap:8px;margin-bottom:12px;padding:8px 10px;border-radius:8px;background:color-mix(in srgb, var(--text) 4%, transparent);font-size:12px">
-              <div id="wh-status-dot" style="width:8px;height:8px;border-radius:50%;background:#ccc;flex-shrink:0"></div>
-              <span id="wh-status-text" style="color:var(--muted)">Not configured</span>
-            </div>
-
-            <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:10px;cursor:pointer">
-              <input type="checkbox" id="wh-enabled" />
-              Enable webhook endpoint
-            </label>
-
-            <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:4px">Secret Token</label>
-            <div style="display:flex;gap:6px;margin-bottom:10px">
-              <input id="wh-token" type="password" placeholder="Paste or generate a secret token" style="flex:1;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:8px;padding:7px 10px;font-size:12px;font-family:'IBM Plex Mono',monospace" />
-              <button onclick="generateWebhookToken()" style="padding:6px 10px;border:1px solid color-mix(in srgb, var(--text) 12%, transparent);border-radius:8px;background:transparent;font-size:11px;cursor:pointer;white-space:nowrap;color:var(--text)">Generate</button>
-            </div>
-
-            <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:4px">URL Path Prefix</label>
-            <input id="wh-path" type="text" value="/hooks" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:8px;padding:7px 10px;font-size:12px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box;margin-bottom:12px" />
-
-            <div id="wh-url-display" style="display:none;background:color-mix(in srgb, var(--brand) 14%, transparent);border:1px solid color-mix(in srgb, var(--brand) 30%, transparent);border-radius:8px;padding:8px 10px;font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--brand);margin-bottom:12px;word-break:break-all"></div>
-
-            <div style="display:flex;gap:8px">
-              <button onclick="saveWebhookSettings()" style="padding:6px 14px;background:var(--brand);color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer">Save</button>
-              <button onclick="testWebhookEndpoint()" style="padding:6px 14px;background:transparent;color:var(--text);border:1px solid color-mix(in srgb, var(--text) 12%, transparent);border-radius:8px;font-size:12px;cursor:pointer">Test</button>
-              <button onclick="copyWebhookCurl()" style="padding:6px 14px;background:transparent;color:var(--text);border:1px solid color-mix(in srgb, var(--text) 12%, transparent);border-radius:8px;font-size:12px;cursor:pointer">Copy cURL</button>
-            </div>
+        <div class="sk-sec"><h2>Webhook</h2><span class="sk-hint">Other apps can call Prometheus with a secret</span></div>
+        <div class="sk-card">
+          <div class="sk-row">
+            <div class="sk-who"><div class="sk-copy"><label class="sk-name" for="wh-enabled">Accept webhooks</label>
+              <div class="sk-desc"><span id="wh-status-bar" class="sk-status"><i id="wh-status-dot" class="sk-status-dot"></i><span id="wh-status-text">Not configured</span></span></div></div></div>
+            <div class="sk-ctl"><input type="checkbox" class="sk-toggle" id="wh-enabled" /></div>
           </div>
-
-          <!-- Right: guide -->
-          <div style="border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:12px;padding:14px;background:color-mix(in srgb, var(--text) 4%, transparent)">
-            <div class="right-section-title" style="margin-bottom:8px">Setup Guide</div>
-            <div style="font-size:12px;color:var(--muted);line-height:1.85">
-              <b>1. Enable + set a token</b> — any secret string you choose.<br>
-              <b>2. Save</b> and restart the gateway to activate.<br>
-              <b>3. Access from the internet?</b> Use
-              <a href="https://tailscale.com" target="_blank" style="color:var(--brand)">Tailscale</a> (recommended),
-              <a href="https://ngrok.com" target="_blank" style="color:var(--brand)">ngrok</a>, or
-              <a href="https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/" target="_blank" style="color:var(--brand)">Cloudflare Tunnel</a>.
-              <br><br>
-              <b>Endpoints:</b><br>
-              <code style="background:color-mix(in srgb, var(--text) 4%, transparent);padding:2px 5px;border-radius:4px">POST /hooks/agent</code> — full AI run<br>
-              <code style="background:color-mix(in srgb, var(--text) 4%, transparent);padding:2px 5px;border-radius:4px">POST /hooks/wake</code> — lightweight nudge<br>
-              <code style="background:color-mix(in srgb, var(--text) 4%, transparent);padding:2px 5px;border-radius:4px">GET /hooks/status</code> — health check<br><br>
-              <b>Auth:</b> Send token as<br>
-              <code style="background:color-mix(in srgb, var(--text) 4%, transparent);padding:2px 5px;border-radius:4px">Authorization: Bearer &lt;token&gt;</code><br>
-              or <code style="background:color-mix(in srgb, var(--text) 4%, transparent);padding:2px 5px;border-radius:4px">x-prometheus-token: &lt;token&gt;</code><br><br>
-              Works with: GitHub Actions, Stripe, Vercel, n8n, IFTTT, Home Assistant, or any script.
-            </div>
+          <div class="sk-row sk-row-stack">
+            <div class="sk-who"><div class="sk-copy"><label class="sk-name" for="wh-token">Secret</label><div class="sk-desc">Callers must send this. Any long random text works.</div></div></div>
+            <div class="sk-ctl"><input id="wh-token" class="sk-input sk-grow sk-mono" type="password" placeholder="Paste or generate a secret" autocomplete="off" /><button class="sk-btn" type="button" onclick="generateWebhookToken()">Generate</button></div>
+          </div>
+          <div class="sk-row sk-row-stack">
+            <div class="sk-who"><div class="sk-copy"><label class="sk-name" for="wh-path">Address path</label><div class="sk-desc">Where webhooks arrive on this computer</div></div></div>
+            <div class="sk-ctl"><input id="wh-path" class="sk-input sk-grow sk-mono" type="text" value="/hooks" /></div>
+          </div>
+          <div id="wh-url-display" class="sk-note sk-mono" style="display:none"></div>
+          <div class="sk-row" data-sk-instant>
+            <div class="sk-who"><div class="sk-copy"><div class="sk-name">Check it works</div><div class="sk-desc">Changes apply after Prometheus restarts.</div></div></div>
+            <div class="sk-ctl"><button class="sk-btn ghost" type="button" onclick="copyWebhookCurl()">Copy example</button><button class="sk-btn" type="button" onclick="testWebhookEndpoint()">Test</button></div>
+          </div>
+          <button type="button" class="sk-row sk-fold" data-fold="wh-guide" aria-expanded="false" aria-controls="sk-fold-wh-guide"><span class="sk-who"><span class="sk-copy"><span class="sk-name">How to use it</span><span class="sk-desc">Addresses, how to send the secret, reaching it from the internet</span></span></span><svg class="sk-ico sk-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>
+          <div class="sk-sub sk-guide" id="sk-fold-wh-guide" data-fold-body="wh-guide" hidden>
+            <ol>
+              <li>Turn on Accept webhooks, set a secret and save. Restart Prometheus to start listening.</li>
+              <li>From outside your network, use <a href="https://tailscale.com" target="_blank" rel="noopener">Tailscale</a>, <a href="https://ngrok.com" target="_blank" rel="noopener">ngrok</a> or <a href="https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/" target="_blank" rel="noopener">Cloudflare Tunnel</a>.</li>
+              <li>Addresses: <code>POST /hooks/agent</code> runs a full task, <code>POST /hooks/wake</code> sends a light nudge, <code>GET /hooks/status</code> checks health.</li>
+              <li>Send the secret as <code>Authorization: Bearer &lt;secret&gt;</code> or <code>x-prometheus-token: &lt;secret&gt;</code>.</li>
+            </ol>
+            <p>Works with GitHub Actions, Stripe, Vercel, n8n, IFTTT, Home Assistant or any script.</p>
           </div>
         </div>
       </div>
 
-      <!-- MCP PANEL ---------------------------------------------------- -->
-      <div id="itab-panel-mcp" style="display:none">
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
-          <!-- Left: server list + add form -->
-          <div>
-            <div style="border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:12px;padding:14px;background:color-mix(in srgb, var(--text) 4%, transparent);margin-bottom:12px">
-              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
-                <div class="right-section-title">MCP Servers</div>
-                <button onclick="showMCPAddForm()" style="padding:4px 10px;border:1px solid var(--brand);border-radius:6px;background:transparent;color:var(--brand);font-size:11px;font-weight:600;cursor:pointer">+ Add Server</button>
-              </div>
-              <div id="mcp-server-list" style="font-size:12px;color:var(--muted)">Loading...</div>
+      <!-- MCP -->
+      <div id="itab-panel-mcp" style="display:none" data-sk-instant>
+        <div class="sk-sec"><h2>MCP servers</h2><button type="button" class="sk-btn" onclick="showMCPAddForm()">Add server</button></div>
+        <div class="sk-card">
+          <div id="mcp-server-list" class="sk-mcp-list">Loading…</div>
+        </div>
+
+        <div id="mcp-add-form" style="display:none">
+          <div class="sk-sec"><h2 id="mcp-form-title">Add MCP Server</h2></div>
+          <div class="sk-card">
+            <div class="sk-row sk-row-stack"><div class="sk-who"><div class="sk-copy"><label class="sk-name" for="mcp-f-name">Name</label><div class="sk-desc">What you will see in Prometheus</div></div></div><div class="sk-ctl"><input id="mcp-f-name" class="sk-input sk-grow" type="text" placeholder="e.g. Filesystem" /></div></div>
+            <div class="sk-row sk-row-stack"><div class="sk-who"><div class="sk-copy"><label class="sk-name" for="mcp-f-id">Short ID</label><div class="sk-desc">Letters, numbers and dashes, no spaces</div></div></div><div class="sk-ctl"><input id="mcp-f-id" class="sk-input sk-grow sk-mono" type="text" placeholder="e.g. filesystem" /></div></div>
+            <div class="sk-row"><div class="sk-who"><div class="sk-copy"><label class="sk-name" for="mcp-f-transport">Runs</label><div class="sk-desc">On this computer, or at a web address</div></div></div><div class="sk-ctl"><select id="mcp-f-transport" class="sk-select sk-w-md" onchange="onMCPTransportChange()">
+              <option value="stdio">On this computer (stdio)</option>
+              <option value="sse">At a web address (HTTP/SSE)</option>
+            </select></div></div>
+            <div id="mcp-stdio-fields">
+              <div class="sk-row sk-row-stack"><div class="sk-who"><div class="sk-copy"><label class="sk-name" for="mcp-f-command">Command</label><div class="sk-desc">The program that starts the server</div></div></div><div class="sk-ctl"><input id="mcp-f-command" class="sk-input sk-grow sk-mono" type="text" placeholder="e.g. npx" /></div></div>
+              <div class="sk-row sk-row-stack"><div class="sk-who"><div class="sk-copy"><label class="sk-name" for="mcp-f-args">Arguments</label><div class="sk-desc">One per line</div></div></div><div class="sk-ctl"><textarea id="mcp-f-args" class="sk-input sk-grow sk-mono" rows="3" placeholder="-y&#10;@modelcontextprotocol/server-filesystem&#10;C:\Users\you\Documents"></textarea></div></div>
+              <div class="sk-row sk-row-stack"><div class="sk-who"><div class="sk-copy"><label class="sk-name" for="mcp-f-env">Environment</label><div class="sk-desc">KEY=VALUE, one per line</div></div></div><div class="sk-ctl"><textarea id="mcp-f-env" class="sk-input sk-grow sk-mono" rows="2" placeholder="GITHUB_PERSONAL_ACCESS_TOKEN=ghp_xxx"></textarea></div></div>
             </div>
-
-            <!-- Add/Edit form (hidden by default) -->
-            <div id="mcp-add-form" style="display:none;border:1px solid color-mix(in srgb, var(--brand) 30%, transparent);border-radius:12px;padding:14px;background:color-mix(in srgb, var(--brand) 6%, transparent)">
-              <div class="right-section-title" style="margin-bottom:10px" id="mcp-form-title">Add MCP Server</div>
-
-              <label style="display:block;font-size:11px;color:var(--muted);margin-bottom:3px">ID <span style="color:#888">(letters/numbers/dash, no spaces)</span></label>
-              <input id="mcp-f-id" type="text" placeholder="e.g. filesystem" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:7px;padding:6px 9px;font-size:12px;box-sizing:border-box;margin-bottom:8px" />
-
-              <label style="display:block;font-size:11px;color:var(--muted);margin-bottom:3px">Display Name</label>
-              <input id="mcp-f-name" type="text" placeholder="e.g. Filesystem" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:7px;padding:6px 9px;font-size:12px;box-sizing:border-box;margin-bottom:8px" />
-
-              <label style="display:block;font-size:11px;color:var(--muted);margin-bottom:3px">Transport</label>
-              <select id="mcp-f-transport" onchange="onMCPTransportChange()" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:7px;padding:6px 9px;font-size:12px;box-sizing:border-box;margin-bottom:8px">
-                <option value="stdio">stdio (local process)</option>
-                <option value="sse">HTTP/SSE (remote)</option>
-              </select>
-
-              <!-- stdio fields -->
-              <div id="mcp-stdio-fields">
-                <label style="display:block;font-size:11px;color:var(--muted);margin-bottom:3px">Command</label>
-                <input id="mcp-f-command" type="text" placeholder="e.g. npx" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:7px;padding:6px 9px;font-size:12px;box-sizing:border-box;margin-bottom:8px" />
-
-                <label style="display:block;font-size:11px;color:var(--muted);margin-bottom:3px">Arguments <span style="color:#888">(one per line)</span></label>
-                <textarea id="mcp-f-args" placeholder="-y&#10;@modelcontextprotocol/server-filesystem&#10;C:\Users\you\Documents" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:7px;padding:6px 9px;font-size:12px;box-sizing:border-box;height:64px;resize:vertical;font-family:'IBM Plex Mono',monospace;margin-bottom:8px"></textarea>
-
-                <label style="display:block;font-size:11px;color:var(--muted);margin-bottom:3px">Environment Variables <span style="color:#888">(KEY=VALUE, one per line)</span></label>
-                <textarea id="mcp-f-env" placeholder="GITHUB_PERSONAL_ACCESS_TOKEN=ghp_xxx" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:7px;padding:6px 9px;font-size:12px;box-sizing:border-box;height:52px;resize:vertical;font-family:'IBM Plex Mono',monospace;margin-bottom:8px"></textarea>
-              </div>
-
-              <!-- SSE fields -->
-              <div id="mcp-sse-fields" style="display:none">
-                <label style="display:block;font-size:11px;color:var(--muted);margin-bottom:3px">Server URL</label>
-                <input id="mcp-f-url" type="text" placeholder="https://mcp.example.com/sse" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:7px;padding:6px 9px;font-size:12px;box-sizing:border-box;margin-bottom:8px" />
-
-                <label style="display:block;font-size:11px;color:var(--muted);margin-bottom:3px">Headers <span style="color:#888">(KEY: value, one per line)</span></label>
-                <textarea id="mcp-f-headers" placeholder="Authorization: Bearer token123" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:7px;padding:6px 9px;font-size:12px;box-sizing:border-box;height:52px;resize:vertical;font-family:'IBM Plex Mono',monospace;margin-bottom:8px"></textarea>
-              </div>
-
-              <label style="display:flex;align-items:center;gap:7px;font-size:12px;margin-bottom:10px;cursor:pointer">
-                <input type="checkbox" id="mcp-f-enabled" checked />
-                Enable on startup
-              </label>
-
-              <div style="display:flex;gap:8px">
-                <button onclick="saveMCPServer()" style="padding:6px 14px;background:var(--brand);color:#fff;border:none;border-radius:7px;font-size:12px;font-weight:600;cursor:pointer">Save</button>
-                <button onclick="hideMCPAddForm()" style="padding:6px 14px;background:transparent;color:var(--muted);border:1px solid color-mix(in srgb, var(--text) 12%, transparent);border-radius:7px;font-size:12px;cursor:pointer">Cancel</button>
-              </div>
-              <div id="mcp-form-msg" style="margin-top:8px;font-size:11px;color:var(--muted)"></div>
+            <div id="mcp-sse-fields" style="display:none">
+              <div class="sk-row sk-row-stack"><div class="sk-who"><div class="sk-copy"><label class="sk-name" for="mcp-f-url">Server address</label><div class="sk-desc">The server's HTTPS address</div></div></div><div class="sk-ctl"><input id="mcp-f-url" class="sk-input sk-grow sk-mono" type="text" placeholder="https://mcp.example.com/sse" /></div></div>
+              <div class="sk-row sk-row-stack"><div class="sk-who"><div class="sk-copy"><label class="sk-name" for="mcp-f-headers">Headers</label><div class="sk-desc">KEY: value, one per line</div></div></div><div class="sk-ctl"><textarea id="mcp-f-headers" class="sk-input sk-grow sk-mono" rows="2" placeholder="Authorization: Bearer token123"></textarea></div></div>
             </div>
+            <div class="sk-row"><div class="sk-who"><div class="sk-copy"><label class="sk-name" for="mcp-f-enabled">Start with Prometheus</label><div class="sk-desc">Connect when Prometheus starts</div></div></div><div class="sk-ctl"><input type="checkbox" class="sk-toggle" id="mcp-f-enabled" checked /></div></div>
+            <div class="sk-row"><div id="mcp-form-msg" class="sk-desc"></div><div class="sk-ctl"><button class="sk-btn ghost" type="button" onclick="hideMCPAddForm()">Cancel</button><button class="sk-btn primary" type="button" onclick="saveMCPServer()">Save server</button></div></div>
           </div>
+        </div>
 
-          <!-- Right: info + popular servers -->
-          <div>
-            <div style="border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:12px;padding:14px;background:color-mix(in srgb, var(--text) 4%, transparent);margin-bottom:12px">
-              <div class="right-section-title" style="margin-bottom:8px">What is MCP?</div>
-              <div style="font-size:12px;color:var(--muted);line-height:1.85">
-                <b>Model Context Protocol</b> (by Anthropic) is a standard that lets AI connect to external tools and data sources.<br><br>
-                Each MCP server exposes a set of <b>tools</b> — Prometheus discovers them automatically when you connect.
-                The AI can then call them during tasks, just like its built-in tools.<br><br>
-                Servers run <b>locally as child processes</b> (stdio) or connect to <b>remote HTTP endpoints</b> (SSE).
-                No data leaves your machine unless the tool itself calls an external API.
-              </div>
-            </div>
-
-            <div style="border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:12px;padding:14px;background:color-mix(in srgb, var(--text) 4%, transparent)">
-              <div class="right-section-title" style="margin-bottom:8px">Popular Servers</div>
-              <div style="font-size:12px;color:var(--muted);line-height:1">
-                <div id="mcp-preset-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:6px"><div style="color:var(--muted)">Loading registry presets…</div></div>
-                <div style="margin-top:8px;font-size:11px">
-                  <a href="https://github.com/modelcontextprotocol/servers" target="_blank" style="color:var(--brand)">Browse all official servers ?</a>
-                </div>
-              </div>
-            </div>
-          </div>
+        <div class="sk-sec"><h2>Popular servers</h2><a class="sk-link" href="https://github.com/modelcontextprotocol/servers" target="_blank" rel="noopener">Browse all</a></div>
+        <div class="sk-card sk-pad">
+          <div id="mcp-preset-grid" class="sk-preset-grid"><div class="sk-muted">Loading registry presets…</div></div>
+        </div>
+        <button type="button" class="sk-row sk-fold sk-fold-solo" data-fold="mcp-about" aria-expanded="false" aria-controls="sk-fold-mcp-about"><span class="sk-who"><span class="sk-copy"><span class="sk-name">What is MCP?</span><span class="sk-desc">A standard way to plug tools into AI</span></span></span><svg class="sk-ico sk-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>
+        <div class="sk-sub sk-guide" id="sk-fold-mcp-about" data-fold-body="mcp-about" hidden>
+          <p>The Model Context Protocol lets AI connect to outside tools and data. Each server offers a set of tools; Prometheus finds them when it connects and can use them during tasks like its own tools.</p>
+          <p>Servers run on this computer or at a web address. Nothing leaves your computer unless a tool itself calls an outside service.</p>
         </div>
       </div>
     </div>

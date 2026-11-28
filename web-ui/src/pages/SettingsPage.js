@@ -5327,9 +5327,8 @@ function setIntegTab(tab) {
     const btn = document.getElementById('itab-' + t);
     const panel = document.getElementById('itab-panel-' + t);
     if (btn) {
-      btn.style.background = t === tab ? 'color-mix(in srgb, var(--text) 10%, transparent)' : 'transparent';
-      btn.style.color = t === tab ? 'var(--text)' : 'var(--muted)';
-      btn.style.border = '0';
+      btn.classList.toggle('on', t === tab);
+      btn.setAttribute('aria-selected', t === tab ? 'true' : 'false');
     }
     if (panel) panel.style.display = t === tab ? 'block' : 'none';
   });
@@ -5413,7 +5412,11 @@ function generateWebhookToken() {
   crypto.getRandomValues(arr);
   const token = Array.from(arr).map(b => b.toString(16).padStart(2,'0')).join('');
   const inp = document.getElementById('wh-token');
-  if (inp) { inp.value = token; inp.type = 'text'; setTimeout(() => { inp.type = 'password'; }, 4000); }
+  if (inp) {
+    const before = inp.value;
+    inp.value = token; inp.type = 'text'; setTimeout(() => { inp.type = 'password'; }, 4000);
+    SETTINGS_PAGE_CONTROLLERS.integrations?.note?.(inp, before);
+  }
 }
 
 async function saveWebhookSettings() {
@@ -5809,6 +5812,14 @@ const SETTINGS_PAGE_CONTROLLERS = {
   models: { changes: modelsChanges, note: modelsSaveNote, save: saveModelsPage, discard: discardModelsPage },
   pairing: createFieldPageController('settings-panel-pairing', {
     reload: () => loadRemoteAccessSettings(),
+  }),
+  channels: createFieldPageController('settings-panel-channels', {
+    reload: () => loadChannelsStatus(),
+  }),
+  // Only the webhook fields; the MCP server form keeps its own "Save server".
+  integrations: createFieldPageController('settings-panel-integrations', {
+    save: () => saveWebhookSettings(),
+    reload: () => loadWebhookSettings(),
   }),
 };
 

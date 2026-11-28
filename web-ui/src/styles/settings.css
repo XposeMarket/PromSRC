@@ -3863,3 +3863,26 @@ body:is(.electron-win32, .electron-linux):not(.pm-mobile-active) #settings-modal
   #settings-modal input[type="checkbox"].sk-toggle { width: 44px !important; height: 26px !important; min-width: 44px; }
 }
 #settings-modal .sk-qr-wrap svg { max-width: 260px; margin: 0 auto; }
+#settings-modal .sk-status-row { display: block; }
+#settings-modal .sk-status { display: inline-flex; align-items: center; gap: 6px; }
+#settings-modal .sk-status-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex: none; }
+#settings-modal .sk-guide { padding: 4px 16px 12px; color: var(--muted); font-size: 12.5px; line-height: 1.6; }
+#settings-modal .sk-guide ol { margin: 8px 0; padding-left: 20px; }
+#settings-modal .sk-guide li { margin: 3px 0; }
+#settings-modal .sk-guide p { margin: 8px 0; }
+#settings-modal .sk-guide a, #settings-modal .sk-link { color: var(--brand); text-decoration: none; font-size: 12.5px; }
+#settings-modal .sk-guide a:hover, #settings-modal .sk-link:hover { text-decoration: underline; }
+#settings-modal .sk-guide code { font-family: var(--theme-font-mono, ui-monospace, monospace); font-size: 11.5px; padding: 1px 4px; border-radius: 4px; background: var(--sk-field); color: var(--text); }
+#settings-modal .sk-tabs { margin: 14px 0 4px; }
+#settings-modal .sk-pad { padding: 12px; }
+#settings-modal .sk-preset-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }
+#settings-modal .sk-num { width: 110px; }
+#settings-modal .sk-fold-solo { margin-top: 18px; border: 1px solid var(--line); border-radius: 12px; }
+#settings-modal .sk-fold-solo.open { border-radius: 12px 12px 0 0; }
+#settings-modal .sk-fold-solo + .sk-sub { border: 1px solid var(--line); border-top: 0; border-radius: 0 0 12px 12px; }
+#settings-modal .sk-mcp-list { padding: 4px 0; color: var(--muted); font-size: 13px; }
+#settings-modal .sk-mcp-list:not(:has(> *)) { padding: 14px 16px; }
+#settings-modal textarea.sk-input { resize: vertical; line-height: 1.45; }
+#settings-modal .sk-ctl > .sk-grow + .sk-btn { flex: none; }
+#settings-modal .sk-mcp-list > div { margin: 0 !important; border: 0 !important; border-top: 1px solid var(--line) !important; border-radius: 0 !important; background: transparent !important; padding: 12px 16px !important; }
+#settings-modal .sk-mcp-list > div:first-child { border-top: 0 !important; }
