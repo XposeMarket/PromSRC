@@ -65,8 +65,14 @@ export async function openConnectFlow(fetchJson, target, options = {}) {
     await act('continue');
     if (closed || attempt.state !== 'awaiting_oauth') return;
     clearTimeout(timer);
-    const handoff = await postJson(fetchJson, `/api/connection-attempts/${encodeURIComponent(attempt.id)}/oauth-handoff`, {});
+    let handoff;
+    // A refused handoff must not leave a stale sign-in button with polling stopped: reload the attempt, then report.
+    try { handoff = await postJson(fetchJson, `/api/connection-attempts/${encodeURIComponent(attempt.id)}/oauth-handoff`, {}); }
+    catch (error) { await refresh().catch(() => {}); throw error; }
     if (closed) return;
+    // The server re-issues the sign-in link as the handoff opens; it may also find sign-in already finished.
+    if (handoff.attempt) attempt = handoff.attempt;
+    if (!handoff.sessionId) { await render(); options.onChanged?.(); return; }
     handoffOpen = true; root.style.display = 'none';
     handoffViewer = openMobileLoginHandoff('', handoff.sessionId, title(), { fetchJson, onClose: () => {
       handoffViewer = null; handoffOpen = false;
@@ -99,7 +105,8 @@ export async function openConnectFlow(fetchJson, target, options = {}) {
     if (action?.type === 'oauth' && attempt.state === 'awaiting_oauth') {
       const phone = window.matchMedia('(max-width: 767px)').matches;
       const phoneHandoff = action.desktopRequired && phone && !action.preferSystemBrowser;
-      text('p', phoneHandoff ? 'Your app credentials are saved. Authorize your account here using the secure browser. No computer needed.' : action.desktopRequired && phone ? `${title()} only returns sign-in to your computer, so finish this on the PC: open Prometheus there and tap Reconnect, or ask Prom to open it in Chrome on the PC. This sheet updates by itself once you allow access.` : 'Continue to the provider to sign in and choose access.', 'sa-muted');
+      const remoteMcp = attempt.plan?.strategy?.adapter === 'mcp-oauth';
+      text('p', phoneHandoff ? (remoteMcp ? `${title()} sign-in needs a desktop browser. Authorize here: this opens the secure browser on your PC and shows it on this phone, so you can sign in without going to the computer.` : 'Your app credentials are saved. Authorize your account here using the secure browser. No computer needed.') : action.desktopRequired && phone ? `${title()} only returns sign-in to your computer, so finish this on the PC: open Prometheus there and tap Reconnect, or ask Prom to open it in Chrome on the PC. This sheet updates by itself once you allow access.` : 'Continue to the provider to sign in and choose access.', 'sa-muted');
       if (phoneHandoff) button(`Authorize ${title()} on this phone`, openPhoneOAuth, true);
       else if (!(action.desktopRequired && phone)) button(`Sign in with ${title()}`, () => openOAuth(action), true);
       button('Check sign-in', () => act('continue'));
@@ -113,8 +120,9 @@ export async function openConnectFlow(fetchJson, target, options = {}) {
     } else if (attempt.state === 'failed' || attempt.state === 'research_required' || attempt.state === 'reauth_required') {
       text('p', 'This plugin needs additional setup. No credentials were sent to chat.', 'sa-muted');
       if (attempt.error?.code === 'DISCOVERY_FAILED') text('p', 'Its installed definition does not provide a supported connection method. Check this plugin’s setup instructions.', 'sa-muted');
+      else if (attempt.error?.code === 'MCP_OAUTH_EXPIRED') text('p', 'Sign-in was not finished in time, so that sign-in link expired. Nothing was connected. Tap Restart authorization for a fresh one: you get 30 minutes from the moment you tap Authorize.', 'sa-err');
       else if (attempt.error) showError(attempt.error);
-      if (attempt.plan?.strategy?.adapter === 'connector-oauth') button('Restart authorization', async () => { await act('cancel'); resumeAttemptId = undefined; return start(); }, true);
+      if (['connector-oauth', 'mcp-oauth'].includes(attempt.plan?.strategy?.adapter)) button('Restart authorization', async () => { await act('cancel'); resumeAttemptId = undefined; return start(); }, true);
     } else if (action) {
       text('p', action.instructions || action.completionHint || action.label || 'Complete the plugin’s setup.', 'sa-muted');
       button('Check setup', () => act('continue'), true);
