@@ -1992,7 +1992,9 @@ body:not(.pm-mobile-active) .chat-input-area.canonical-secondary-desktop-compose
   }
 
   body:not(.pm-mobile-active):not(.side-chat-split-active).right-canvas-open #chat-view {
-    --chat-content-inline-gutter: clamp(48px, 6cqw, 72px);
+    /* Column-relative (cqw = #chat-view) with a small floor: a docked Canvas can
+       leave a ~400px column, and fixed 48px floors squeezed the composer. */
+    --chat-content-inline-gutter: clamp(16px, 5cqw, 72px);
     --chat-column-width: min(var(--chat-content-max-width), calc(100% - var(--chat-content-inline-gutter) - var(--chat-content-inline-gutter) - var(--chat-surface-gutter) - var(--chat-surface-gutter)));
   }
 
@@ -3824,7 +3826,9 @@ body:not(.pm-mobile-active):not(.side-chat-split-active) #chat-view {
 }
 
 body:not(.pm-mobile-active):not(.side-chat-split-active).right-canvas-open #chat-view {
-  --chat-surface-gutter: clamp(24px, 2.8vw, 44px);
+  /* Sized from the chat column (cqw), not the window (vw): with Canvas docked
+     the column can be a third of the window, so vw-based gutters ate it. */
+  --chat-surface-gutter: clamp(12px, 3cqw, 44px);
   --chat-column-width: min(800px, calc(100% - 40px - var(--chat-surface-gutter) - var(--chat-surface-gutter)));
 }
 
@@ -5445,8 +5449,18 @@ body:not(.pm-mobile-active) :is(
   }
 
   body:not(.pm-mobile-active):not(.side-chat-split-active).right-canvas-open #chat-view {
-    --chat-content-inline-gutter: clamp(48px, 6cqw, 72px) !important;
+    --chat-content-inline-gutter: clamp(16px, 5cqw, 72px) !important;
     --chat-column-width: min(var(--chat-content-max-width), calc(100% - var(--chat-content-inline-gutter) - var(--chat-content-inline-gutter) - var(--chat-surface-gutter) - var(--chat-surface-gutter))) !important;
+  }
+
+  /* New-chat landing: the composer sits on the recessed "Directed chat" shelf
+     (min(708px, 100% - 72px), components.css). Keep it 12px wider than that
+     shelf at every column width, Canvas open or not, instead of inheriting the
+     conversation gutters that made it narrower than the shelf and wrapped the
+     placeholder. Defined as the column variable so the agent caption line
+     (external-agents.css) stays aligned with the composer's left edge. */
+  body:not(.pm-mobile-active):not(.side-chat-split-active) #chat-view.chat-empty:not(.desktop-voice-mode) {
+    --chat-column-width: min(720px, calc(100% - 60px)) !important;
   }
 
   body:not(.pm-mobile-active) :is(.live-turn-segment, .live-turn-tool-group, .tool-activity-entry, .live-turn-tool, .live-turn-think, .live-turn-preamble, .live-turn-result, .live-turn-error) {
