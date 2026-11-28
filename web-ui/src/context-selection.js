@@ -16,6 +16,20 @@ export function renderContextSelection(profile, budget, prefix = 'context-choice
     <button id="${prefix}-save" type="button" style="margin-top:10px;background:transparent;color:inherit">Save</button><div id="${prefix}-status" role="status" style="font-size:12px;margin-top:6px"></div>
   </section>`;
 }
+/** Pure view of a context profile (shared by the Models page and this legacy form). */
+export function contextChoices(profile) {
+  const p = profile || {};
+  const standard = p.standardContextWindowTokens || p.contextWindowTokens || 0;
+  const maximum = p.maxContextWindowTokens || p.contextWindowTokens || 0;
+  const selected = p.contextWindowTokens || standard;
+  const mode = p.contextSelectionMode === 'custom' && selected === 500000 ? '500k' : ['standard','maximum','custom'].includes(p.contextSelectionMode) ? p.contextSelectionMode : 'standard';
+  const choices = [...new Set([32000,64000,128000,256000,500000,1000000,standard,maximum,selected])].filter(n => n >= 1024 && n <= maximum).sort((a,b) => a-b);
+  return { standard, maximum, selected, mode, choices, has500k: maximum >= 500000 && standard !== 500000 && maximum !== 500000 };
+}
+/** The exact body wireContextSelection posts to /api/settings/context-window. */
+export function contextSaveBody(profile, mode, tokens, ack) {
+  return {providerId:profile.providerId,model:profile.model,accountId:profile.contextAccountId,mode:mode==='500k'?'custom':mode,tokens:Number(tokens),extendedAcknowledged:!!ack};
+}
 export function wireContextSelection(root, profile, save, refresh, prefix = 'context-choice') {
   const find = suffix => root.querySelector(`#${prefix}-${suffix}`);
   const mode = find('mode'), tokens = find('tokens'), ack = find('ack'), button = find('save'), status = find('status');

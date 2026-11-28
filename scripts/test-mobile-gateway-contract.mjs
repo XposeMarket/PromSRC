@@ -155,7 +155,8 @@ function assertContractFiles() {
   assert.match(css, /\.pm-drawer-gateway-filter\s*\{[\s\S]*?margin: 0 0 8px;/, 'gateway filter spacing must stay compact');
   assert.match(css, /:root\[data-theme\] body\.pm-mobile-active \.pm-drawer-brand\s*\{[^}]*?min-height: 46px;[^}]*?margin: 0 94px 8px 0;/, 'shared drawer brand spacing must stay compact in light and dark themes');
   assert.match(css, /body\.pm-mobile-active \.pm-drawer-gateway-pill\.is-active[\s\S]*?color: #111 !important;/, 'active gateway pill text must stay readable on its white background');
-  assert.match(index, /Gateway Connections · Pair a phone/);
+  // The desktop pairing page tells phone users where to scan from.
+  assert.match(index, /id="settings-panel-pairing"[\s\S]{0,400}Gateway Connections page[\s\S]{0,200}<h2>Pair a phone<\/h2>/);
   assert.match(index, /vendor\/jsqr\/jsQR\.js/);
   assert.doesNotMatch(index, /class="status-pill gateway-status-pill"/);
   assert.doesNotMatch(index, /id="gateway-status-pill"/);

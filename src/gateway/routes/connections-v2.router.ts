@@ -9,6 +9,8 @@ import { beginAddAccount, cancelAddAccount, getConnectorAccountsView, makeDefaul
 import { pluginCredentialState } from '../../security/plugin-credential-state';
 import { requireProtectedOwner, secureInputTransportAllowed } from './secure-access.router';
 import { PAIRED_PLUGIN_DISCONNECT_ADAPTERS, pluginSetupSurfaceState, requirePluginDisconnect, requirePluginSetup, requirePluginSetupAdapter } from './plugin-setup-access';
+// Static: the handoff module now keeps per-attempt state, so it must be one instance (stateful-import guard).
+import { openConnectionPhoneHandoff } from '../../connections/oauth-phone-handoff';
 
 export const router = Router();
 // N1: the redaction wrapper is scoped to connection routes only (router is mounted at '/').
@@ -97,9 +99,13 @@ router.post('/api/connection-attempts/:id/oauth-handoff', (req, res, next) => {
   requirePluginSetupAdapter(req, res, next, adapter);
 }, async (req, res) => {
   try {
-    const { openConnectionPhoneHandoff } = await import('../../connections/oauth-phone-handoff');
-    const handoff = await openConnectionPhoneHandoff(getConnectionRuntime().orchestrator.getAttempt(req.params.id));
-    res.set('Cache-Control', 'no-store').json({ success: true, ...handoff });
+    // The sign-in window starts when the link is issued. Issue a fresh one as the user begins, not the one from approval time.
+    const attempt = await getConnectionRuntime().orchestrator.refreshUserAction(req.params.id);
+    // Sign-in finished, or the refresh failed, between the sheet's last poll and this tap: there is nothing to hand off.
+    // Answer with the attempt so the sheet shows its real state instead of an error over a stale sign-in button.
+    if (attempt.state !== 'awaiting_oauth') { res.set('Cache-Control', 'no-store').json({ success: true, handoff: false, attempt }); return; }
+    const handoff = await openConnectionPhoneHandoff(attempt);
+    res.set('Cache-Control', 'no-store').json({ success: true, handoff: true, ...handoff, attempt });
   } catch { res.status(409).json({ success: false, error: 'OAUTH_HANDOFF_UNAVAILABLE' }); }
 });
 

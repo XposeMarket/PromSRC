@@ -410,6 +410,8 @@ export interface ConnectionAdapter {
   prepare?(context: ConnectionAdapterContext): Promise<ConnectionAdapterResult>;
   connect(context: ConnectionAdapterContext): Promise<ConnectionAdapterResult>;
   continue?(context: ConnectionAdapterContext, input?: Record<string, unknown>): Promise<ConnectionAdapterResult>;
+  /** Re-issue the pending user action (e.g. a sign-in link whose time window started at approval) as the user begins it. Never approves. */
+  refreshUserAction?(context: ConnectionAdapterContext): Promise<ConnectionAdapterResult>;
   verify?(context: ConnectionAdapterContext, connection: ConnectionRecord): Promise<ConnectionVerificationResult[]>;
   repair?(context: ConnectionAdapterContext, connection: ConnectionRecord): Promise<ConnectionAdapterResult>;
   disconnect?(context: ConnectionAdapterContext, connection: ConnectionRecord): Promise<void>;
