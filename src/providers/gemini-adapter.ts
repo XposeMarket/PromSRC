@@ -16,6 +16,11 @@ const GEMINI_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/openai
 // Stable/current text models exposed through the OpenAI-compatible surface.
 // Live model discovery remains authoritative; this list is only the fallback.
 export const GEMINI_MODELS = [
+  'gemini-4-neon',
+  'gemini-4-carbon',
+  'gemini-4-hydrogen',
+  'gemini-4-argon',
+  'gemini-3.8-flash',
   'gemini-3.7-flash',
   'gemini-3.6-flash',
   'gemini-3.5-flash',
