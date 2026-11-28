@@ -17,8 +17,12 @@ import { normalizeScheduleSpec } from '../../scheduling/schedule-pattern';
 import {
   cancelMainChatTimer,
   createMainChatTimer,
+  getMainChatTimerMode,
   listMainChatTimers,
+  parseMainChatTimerModeArg,
   updateMainChatTimer,
+  withMainChatTimerMode,
+  MAIN_CHAT_TIMER_MODE_ERROR as TIMER_MODE_ERROR,
 } from '../../timers/timer-store';
 import {
   cancelInternalWatch,
@@ -320,6 +324,9 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
             patch.label = label || (patch.instruction || existing.instruction).slice(0, 60) || 'Timer';
           }
 
+          const modeArg = parseMainChatTimerModeArg(args.mode);
+          if (modeArg === null) return { name, args, result: TIMER_MODE_ERROR, error: true };
+          if (modeArg) patch.delivery = withMainChatTimerMode(existing.delivery, modeArg);
           const hasDelay = args.delay_seconds !== undefined || args.delaySeconds !== undefined;
           const hasDueAt = args.due_at !== undefined || args.dueAt !== undefined;
           if (hasDelay || hasDueAt) {
@@ -351,7 +358,7 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
           }
 
           if (Object.keys(patch).length === 0) {
-            return { name, args, result: `timer(${action}) needs at least one of instruction/prompt, label, delay_seconds, or due_at`, error: true };
+            return { name, args, result: `timer(${action}) needs at least one of instruction/prompt, label, mode, delay_seconds, or due_at`, error: true };
           }
           const updated = updateMainChatTimer(timerId, patch);
           if (!updated) return { name, args, result: `Timer not found: ${timerId}`, error: true };
@@ -372,6 +379,8 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
         if (action === 'create') {
           const instruction = String(args.instruction || args.prompt || '').trim();
           if (!instruction) return { name, args, result: 'timer(create) requires instruction', error: true };
+          const createMode = parseMainChatTimerModeArg(args.mode);
+          if (createMode === null) return { name, args, result: TIMER_MODE_ERROR, error: true };
 
           const now = Date.now();
           const delaySecondsRaw = Number(args.delay_seconds ?? args.delaySeconds);
@@ -398,6 +407,7 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
             sessionId: timerOwnerSession || sessionId,
             instruction,
             fromGoalTurn: true,
+            delivery: createMode === 'notify' ? withMainChatTimerMode(undefined, 'notify') : undefined,
             dueAt,
             label: String(args.label || '').trim() || undefined,
           });
@@ -409,7 +419,9 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
               success: true,
               action: 'create',
               timer,
-              message: `Timer created for ${new Date(timer.dueAt).toLocaleString()}.`,
+              message: getMainChatTimerMode(timer) === 'notify'
+                ? `Reminder set for ${new Date(timer.dueAt).toLocaleString()}. It posts in this chat and pushes to devices without a model call.`
+                : `Timer created for ${new Date(timer.dueAt).toLocaleString()}.`,
             }, null, 2),
             error: false,
           };

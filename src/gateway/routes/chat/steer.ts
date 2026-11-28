@@ -54,7 +54,27 @@ import type { MainChatStreamState } from '../../chat/main-chat-stream-store';
 
 
 
-export function applyChatSteer(body: Record<string, any>, getMainChatStream: (sessionId: string) => MainChatStreamState | null) {
+/**
+ * Gateway-internal steer options. Never read from an HTTP body: a client must
+ * not be able to give its steer another producer's provenance.
+ */
+export interface ChatSteerInternalOptions {
+  kind?: RuntimeSteerEvent['kind'];
+  contextSummary?: string;
+  channel?: 'web' | 'mobile' | 'system';
+  channelLabel?: string;
+  workflowLabel?: string;
+  /** Default true. False keeps the text away from pending approval/question/secure-access waits. */
+  notifyWaiters?: boolean;
+  /** Skip runtimes mirrored from a draining gateway (their reads happen in another process). */
+  localRuntimeOnly?: boolean;
+}
+
+export function applyChatSteer(
+  body: Record<string, any>,
+  getMainChatStream: (sessionId: string) => MainChatStreamState | null,
+  internal: ChatSteerInternalOptions = {},
+) {
   try {
     const sessionId = assertSafeStorageId(String(body.sessionId || 'default').trim() || 'default', 'session id');
     if (isCompactCommand(body.message || body.text) || manualCompactions.has(sessionId)) return { status: 409, body: { ok: false, success: false, error: COMPACT_BUSY } };
@@ -83,6 +103,7 @@ export function applyChatSteer(body: Record<string, any>, getMainChatStream: (se
         isSteerableChatRuntimeKind(runtime.kind)
         && String(runtime.sessionId || '') === sessionId
         && (!expectedRuntimeId || runtime.id === expectedRuntimeId)
+        && (internal.localRuntimeOnly !== true || !(Number(runtime.remoteHostPid || 0) > 0))
       ))
       .sort((a, b) => Number(b.startedAt || 0) - Number(a.startedAt || 0))[0] || null;
     if (!activeRuntime?.id) {
@@ -95,6 +116,8 @@ export function applyChatSteer(body: Record<string, any>, getMainChatStream: (se
       clientRequestId: String(body.clientRequestId || '').trim() || undefined,
       attachments: steerAttachments,
       attachmentPreviews: steerAttachmentPreviews,
+      ...(internal.kind ? { kind: internal.kind } : {}),
+      ...(internal.contextSummary ? { contextSummary: internal.contextSummary } : {}),
     });
     if (!steer.ok || !steer.event) {
       return { status: 409, body: { ok: false, success: false, error: steer.error || 'Could not queue steer event.' } };
@@ -144,9 +167,9 @@ export function applyChatSteer(body: Record<string, any>, getMainChatStream: (se
         messageId: `chat-steer:${steer.event.id}`,
         steerEventId: steer.event.id,
         clientSteerId: clientSteerId || undefined,
-        channel: mobileQueueSteer ? 'mobile' : 'web', channelLabel: 'steer',
+        channel: internal.channel || (mobileQueueSteer ? 'mobile' : 'web'), channelLabel: internal.channelLabel || 'steer',
         workflowGroupId: groupId,
-        workflowPart: 'interruption', workflowLabel: 'Message sent as steer',
+        workflowPart: 'interruption', workflowLabel: internal.workflowLabel || 'Message sent as steer',
         workflowBoundarySeq: boundarySeq,
         workflowStreamId: boundaryStreamId,
         ...(steerAttachments.length ? { attachments: steerAttachments } : {}),
@@ -167,7 +190,7 @@ export function applyChatSteer(body: Record<string, any>, getMainChatStream: (se
     });
 
     // Wake up any tool Promise waiting for a dev-source-edit approval for this session
-    try {
+    if (internal.notifyWaiters !== false) try {
       const approvalQueue = getApprovalQueue();
       const pendingApprovals = approvalQueue.listPending()
         .filter((a) => a.sessionId === sessionId && a.approvalKind === 'dev_source_edit');
@@ -176,7 +199,7 @@ export function applyChatSteer(body: Record<string, any>, getMainChatStream: (se
       }
     } catch { /* best effort */ }
 
-    try {
+    if (internal.notifyWaiters !== false) try {
       const questionQueue = getPrometheusQuestionQueue();
       const pendingQuestions = questionQueue.listPending()
         .filter((q) => q.sessionId === sessionId);
@@ -185,7 +208,9 @@ export function applyChatSteer(body: Record<string, any>, getMainChatStream: (se
       }
     } catch { /* best effort */ }
 
-    try { notifySecureAccessSteer(sessionId, message); } catch { /* best effort */ }
+    if (internal.notifyWaiters !== false) {
+      try { notifySecureAccessSteer(sessionId, message); } catch { /* best effort */ }
+    }
 
     broadcastWS({
       type: 'chat_steer',

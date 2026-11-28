@@ -87,7 +87,7 @@ import { separateThinkingFromContent, sanitizeFinalReply, stripExplicitThinkTags
 import { handleTaskControlAction } from '../../../tasks/task-router';
 import { makeBroadcastForTask } from '../.././tasks.router';
 import { sanitizeAgentId, normalizeAgentsForSave } from '../../../agents/agent-normalize';
-import { markLiveRuntimeProgress, consumePendingRuntimeSteersForSession, type RuntimeSteerEvent } from '../../../live-runtime-registry';
+import { markLiveRuntimeProgress, consumePendingRuntimeSteersForSession, markRuntimeSteersDelivered, type RuntimeSteerEvent } from '../../../live-runtime-registry';
 import { pauseManagedTeamInternal, resumeManagedTeamInternal, buildTeamDispatchContext, runTeamAgentViaChat } from '../.././teams.router';
 import { addCanvasFile } from '../.././canvas-state';
 import { getMCPManager } from '../../../mcp-manager';
@@ -3550,9 +3550,13 @@ Do not produce prose. Use the canonical thread tool now.` });
     messages.push({ role: 'user', content: `${steerText}${nonVisionNotice}` });
   };
 
+  // Steers taken from the inbox but not yet carried by a provider call that
+  // returned. Acknowledged after the next successful model response.
+  const undeliveredChatSteers: RuntimeSteerEvent[] = [];
   const injectPendingChatSteers = async (): Promise<number> => {
     const steers = consumePendingRuntimeSteersForSession(sessionId, 16);
     if (!steers.length) return 0;
+    undeliveredChatSteers.push(...steers);
     for (const steer of steers) {
       if (steer.kind === 'background_agent_result' && steer.backgroundAgentId) {
         if (backgroundResultInjectedIds.has(steer.backgroundAgentId)) {
@@ -3605,6 +3609,8 @@ Do not produce prose. Use the canonical thread tool now.` });
           ? `Background agent ${steer.backgroundAgentId || ''} completed; result injected into the current run.`.trim()
           : steer.kind === 'internal_watch_result'
             ? `Internal watch ${steer.internalWatchId || ''} ${steer.internalWatchKind || 'completed'}; result injected into the current run.`.trim()
+          : steer.kind === 'timer_fired'
+            ? 'Timer fired; added to the current run.'
           : `Steer applied: ${steer.message.slice(0, 120)}`,
       });
     }
@@ -4178,6 +4184,11 @@ Do not produce prose. Use the canonical thread tool now.` });
               .map((fn: any) => ({ name: String(fn.name), description: String(fn.description || ''), parameters: fn.parameters })),
             executeTool: async (toolName: string, toolArgs: Record<string, unknown>) => {
               const toolCallId = `chatgpt_bridge_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+              // Bridge tools run while the provider call is still pending. A tool
+              // call proves the model received this request, including any steers
+              // in it, so acknowledge them now: a later Stop or provider error must
+              // not re-run a timer whose work already started here.
+              if (undeliveredChatSteers.length) markRuntimeSteersDelivered(undeliveredChatSteers.splice(0));
               // Bridge calls skip the provider tool_calls path, so apply the same
               // dispatch policy here: no un-offered, unknown or allowlist-breaking tool runs.
               const bridgeDecision = evaluateTurnToolDispatch(toolName, toolArgs);
@@ -4359,6 +4370,11 @@ Do not produce prose. Use the canonical thread tool now.` });
 	          }
 	        }
 	      }
+
+      // The model has now received every steer injected before this call.
+      if (!abortSignal?.aborted && undeliveredChatSteers.length) {
+        markRuntimeSteersDelivered(undeliveredChatSteers.splice(0));
+      }
 
       const explicitThink = stripExplicitThinkTags(response?.content || '');
       if (explicitThink.thinking) {

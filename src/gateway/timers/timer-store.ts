@@ -8,6 +8,37 @@ import { isPidAlive } from '../runtime/recovery-claims';
 
 export type MainChatTimerStatus = 'pending' | 'due_waiting' | 'running' | 'completed' | 'cancelled' | 'failed';
 
+/**
+ * `run` (default): the instruction becomes a model turn, or is folded into the
+ * turn already running in its chat. `notify`: a plain reminder, posted in the
+ * chat and pushed to devices with no model call. Stored as `delivery.mode`, so
+ * the saved timer shape is unchanged and older builds read it as `run`.
+ */
+export type MainChatTimerMode = 'run' | 'notify';
+
+export function getMainChatTimerMode(timer: Pick<MainChatTimer, 'delivery'> | null | undefined): MainChatTimerMode {
+  return String(timer?.delivery?.mode || '').trim().toLowerCase() === 'notify' ? 'notify' : 'run';
+}
+
+export const MAIN_CHAT_TIMER_MODE_ERROR = 'timer mode must be "run" (Prometheus acts on it) or "notify" (plain reminder, no model call).';
+
+/** Tool arg -> mode. undefined = not given; null = invalid value. */
+export function parseMainChatTimerModeArg(raw: unknown): MainChatTimerMode | null | undefined {
+  if (raw === undefined || raw === null || String(raw).trim() === '') return undefined;
+  const value = String(raw).trim().toLowerCase();
+  if (value === 'run' || value === 'turn' || value === 'task') return 'run';
+  if (value === 'notify' || value === 'reminder' || value === 'remind') return 'notify';
+  return null;
+}
+
+/** The delivery record to store for a mode, preserving other delivery keys. */
+export function withMainChatTimerMode(delivery: Record<string, any> | undefined, mode: MainChatTimerMode): Record<string, any> | undefined {
+  const next: Record<string, any> = { ...(delivery || {}) };
+  if (mode === 'notify') next.mode = 'notify';
+  else delete next.mode;
+  return Object.keys(next).length ? next : undefined;
+}
+
 export interface MainChatTimer {
   id: string;
   sessionId: string;

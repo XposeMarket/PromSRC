@@ -830,7 +830,7 @@ export function getAgentTeamScheduleTools(): any[] {
 	      type: 'function',
 	      function: {
 	        name: 'timer',
-	        description: 'Create, list, update/reschedule or cancel one-off main-chat timers; a timer fires later as a user-like message in its chat ("check this in 5 minutes", "move it to 8pm", "cancel that timer"). Main chat only; not for recurring automation.',
+	        description: 'Create, list, update/reschedule or cancel one-off main-chat timers ("check this in 5 minutes", "remind me at 8pm", "cancel that timer"). mode "run" (default) acts on the instruction when it fires: as a new turn, or folded into the turn already running in that chat. mode "notify" is a plain reminder: it posts the text in the chat and pushes to devices with no model call. Main chat only; not for recurring automation.',
 	        parameters: {
 	          type: 'object',
 	          required: ['action'],
@@ -841,6 +841,7 @@ export function getAgentTeamScheduleTools(): any[] {
 	            delay_seconds: { type: 'number', description: 'For create/update/reschedule: relative delay in seconds from now. Minimum 5 seconds.' },
 	            due_at: { type: 'string', description: 'For create/update/reschedule: ISO timestamp when the timer should fire. Use instead of delay_seconds when the user gives a specific date/time.' },
 	            label: { type: 'string', description: 'Optional short label for the timer. For update, replaces the existing label.' },
+	            mode: { type: 'string', enum: ['run', 'notify'], description: 'For create/update. run (default): Prometheus does the instruction when it fires (checks, tools, follow-up work). notify: plain reminder that needs no thinking or tools ("remind me to call mom at 8"); the instruction text is posted as the reminder, so write it for the user.' },
 	            timer_id: { type: 'string', description: 'Required for update/modify/reschedule/cancel.' },
 	            all_sessions: { type: 'boolean', description: 'For list/update/cancel: if true, view or manage timers across all main-chat sessions instead of only this chat.' },
 	            session_id: { type: 'string', description: 'For list/update/cancel: manage timers for a specific chat session. Defaults to the current session unless all_sessions=true.' },

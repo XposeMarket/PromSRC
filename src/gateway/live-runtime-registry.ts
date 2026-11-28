@@ -110,7 +110,7 @@ export interface RuntimeSteerEvent {
   source?: string;
   createdAt: number;
   clientRequestId?: string;
-  kind?: 'correction' | 'question' | 'status' | 'constraint' | 'cancel' | 'pause' | 'continue' | 'clarification' | 'background_agent_result' | 'internal_watch_result' | 'unknown';
+  kind?: 'correction' | 'question' | 'status' | 'constraint' | 'cancel' | 'pause' | 'continue' | 'clarification' | 'background_agent_result' | 'internal_watch_result' | 'timer_fired' | 'unknown';
   requiresWorkerResponse?: boolean;
   backgroundAgentId?: string;
   backgroundAgentState?: 'completed' | 'failed';
@@ -1208,6 +1208,30 @@ export function addPendingRuntimeSteer(
   };
   persistRuntime(toSnapshot(record), 'steer_queued', { steerId: event.id, source: event.source });
   return { ok: true, runtime: toSnapshot(record), event };
+}
+
+type RuntimeSteersDeliveredListener = (events: RuntimeSteerEvent[]) => void;
+const steersDeliveredListeners = new Set<RuntimeSteersDeliveredListener>();
+
+/**
+ * Observe steer events that reached the model: the chat turn calls
+ * markRuntimeSteersDelivered after a provider request containing them returned.
+ * Dequeuing alone is not delivery (a turn can drain steers and then stop before
+ * any model call). Producers that must not lose an event (timers) use this.
+ * Returns unsubscribe.
+ */
+export function onRuntimeSteersDelivered(listener: RuntimeSteersDeliveredListener): () => void {
+  steersDeliveredListeners.add(listener);
+  return () => { steersDeliveredListeners.delete(listener); };
+}
+
+export function markRuntimeSteersDelivered(events: RuntimeSteerEvent[]): void {
+  if (!events.length) return;
+  for (const listener of steersDeliveredListeners) {
+    try { listener(events); } catch (err: any) {
+      console.warn(`[live-runtime] steer-delivered listener failed: ${String(err?.message || err)}`);
+    }
+  }
 }
 
 export function consumePendingRuntimeSteersForSession(sessionId: string, limit = 4): RuntimeSteerEvent[] {

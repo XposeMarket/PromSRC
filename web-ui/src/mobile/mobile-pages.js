@@ -302,6 +302,16 @@ if (!window.__pmMobileCompletionToastBridgeInstalled) {
       route: _mobileCompletionRoute(msg),
     });
   });
+  // Reminder timers post without a model turn, so nothing streams: say it here.
+  wsEventBus.on('timer_done', (msg = {}) => {
+    if (String(msg.delivery || '') !== 'notify') return;
+    _showMobileCompletionToast({
+      key: `timer:${msg.timerId || msg.timer?.id || ''}`,
+      title: 'Reminder',
+      summary: msg.timer?.instruction || msg.result || 'Reminder',
+      route: _mobileCompletionRoute(msg),
+    });
+  });
   wsEventBus.on('session_notification', (msg = {}) => {
     if (!['schedule', 'hot_restart', 'dev_apply'].includes(String(msg.source || ''))) return;
     _showMobileCompletionToast({
