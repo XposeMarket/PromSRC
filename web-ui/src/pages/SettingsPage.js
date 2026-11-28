@@ -30,6 +30,8 @@ import { formatModelDisplayName, relabelModelSelect } from '../model-display.js'
 import { mountProviderAccountsList } from '../settings/provider-accounts-list.js';
 import { initSettingsMobileNav, showMobileSettingsPage } from '../settings/settings-mobile-nav.js';
 import { mountAgentsImports } from '../settings/agents-imports.js';
+import { createSaveBar } from '../settings/settings-kit.js';
+import { mountModelsPage, refreshModelsPage, modelsChanges, modelsSaveNote, saveModelsPage, discardModelsPage } from '../settings/models-page.js';
 
 // SettingsPage is an ES module, so an unqualified `addProcessEntry` lookup
 // does not fall through to the legacy global in Safari. Keep the existing
@@ -67,6 +69,7 @@ const SETTINGS_ICON_PATHS = {
   zap: '<path d="M13 2 3 14h7l-1 8 10-12h-7l1-8Z"></path>',
   send: '<path d="M22 2 11 13"></path><path d="M22 2 15 22l-4-9-9-4 20-7Z"></path>',
   moon: '<path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8Z"></path>',
+  mic: '<rect x="9" y="3" width="6" height="11" rx="3"></rect><path d="M5 11a7 7 0 0 0 14 0"></path><path d="M12 18v3"></path>',
   palette: '<path d="M12 3a9 9 0 1 0 0 18h1.2a1.8 1.8 0 0 0 1.3-3.05 1.8 1.8 0 0 1 1.28-3.07H18A3 3 0 0 0 21 12C21 7.03 16.97 3 12 3Z"></path><circle cx="7.5" cy="10" r=".8" fill="currentColor" stroke="none"></circle><circle cx="10" cy="7" r=".8" fill="currentColor" stroke="none"></circle><circle cx="14" cy="7" r=".8" fill="currentColor" stroke="none"></circle><circle cx="16.5" cy="10" r=".8" fill="currentColor" stroke="none"></circle>',
 };
 
@@ -575,8 +578,15 @@ function setSettingsTab(tab) {
     window.settingsLegacyMigrationNotice = true;
     tab = 'system';
   }
+  const previousTab = window.settingsTab;
   window.settingsTab = tab;
   ensureVoiceSettingsTab();
+  // A newly opened section starts at its top, not at the previous section's scroll offset.
+  if (previousTab !== tab) {
+    const main = document.querySelector('#settings-modal .settings-page-main');
+    if (main) main.scrollTop = 0;
+  }
+  document.getElementById('settings-modal')?.classList.toggle('sk-rebuilt', Object.prototype.hasOwnProperty.call(SETTINGS_PAGE_CONTROLLERS, tab));
   // A programmatic tab switch (command palette, "open Models" links) while a
   // phone is showing the Settings home list must reveal that section.
   if (document.getElementById('settings-modal')?.classList.contains('smh-home')) showMobileSettingsPage();
@@ -622,7 +632,10 @@ function setSettingsTab(tab) {
           else if (window.heartbeatEditor) window.heartbeatEditor.refresh();
         }
         if (t === 'channels') pendingLoads.push(loadChannelsStatus());
-        if (t === 'models') pendingLoads.push(loadModelSettings());
+        if (t === 'models') {
+          mountModelsPage(panel, modelsPageDeps());
+          pendingLoads.push(loadModelSettings());
+        }
         if (t === 'voice') pendingLoads.push(loadVoiceSettings());
         if (t === 'agents') pendingLoads.push(loadAgentsTab());
         if (t === 'integrations') pendingLoads.push(loadIntegrationsTab());
@@ -649,6 +662,7 @@ function setSettingsTab(tab) {
   if (pendingLoads.length) {
     Promise.allSettled(pendingLoads).catch(() => {});
   }
+  updateSettingsSaveBar();
   if (tab === 'system' && window.settingsLegacyMigrationNotice) {
     window.settingsLegacyMigrationNotice = false;
     setTimeout(() => {
@@ -668,7 +682,8 @@ function ensureVoiceSettingsTab() {
   tab.id = 'settings-tab-voice';
   tab.className = modelTab?.className || 'settings-tab';
   tab.type = 'button';
-  tab.textContent = 'Voice';
+  tab.dataset.settingsSearch = 'voice talk speak realtime microphone';
+  tab.innerHTML = `<span class="settings-nav-icon" data-settings-nav-icon="mic" aria-hidden="true">${renderSettingsIcon('mic', 15)}</span><span>Voice</span>`;
   tab.addEventListener('click', () => setSettingsTab('voice'));
   if (modelTab?.parentElement) modelTab.parentElement.insertBefore(tab, modelTab.nextSibling);
   const panel = document.createElement('div');
@@ -1644,7 +1659,13 @@ function setProviderModelOptions(providerId, models) {
   if (control.tagName === 'SELECT') {
     control.innerHTML = unique.map(m => `<option value="${escHtml(m)}">${escHtml(formatModelDisplayName(m, providerId))}</option>`).join('');
     if (current && unique.includes(current)) control.value = current;
-    else control.value = unique[0];
+    else if (current) {
+      // Never swap a saved model for the first listed one; keep it (shown as unavailable).
+      ensureSelectOption(control, current);
+      const kept = Array.from(control.options).find((option) => option.value === current);
+      if (kept) kept.dataset.injected = 'saved';
+      control.value = current;
+    } else control.value = unique[0];
   } else if (!current) {
     control.value = unique[0];
   }
@@ -1653,7 +1674,7 @@ function setProviderModelOptions(providerId, models) {
 function getProviderModelsFromUI(providerId) {
   const control = getProviderModelControl(providerId);
   const controlModels = control?.tagName === 'SELECT'
-    ? Array.from(control.options || []).map(o => o.value).filter(Boolean)
+    ? Array.from(control.options || []).filter(o => o.dataset?.injected !== 'saved').map(o => o.value).filter(Boolean)
     : (control?.value ? [String(control.value).trim()] : []);
   return uniqueStrings([...getProviderStaticModels(providerId), ...controlModels]);
 }
@@ -1862,9 +1883,11 @@ function ensureProviderAccountsContainer() {
   if (!host) {
     host = document.createElement('div');
     host.id = 'settings-provider-accounts';
+    // The accounts list lives in the hidden Models store; the Manage sheet borrows it.
+    const store = document.getElementById('settings-models-store') || panel;
     const usage = document.getElementById('settings-models-usage');
-    if (usage?.parentElement === panel) panel.insertBefore(host, usage.nextSibling);
-    else panel.insertBefore(host, panel.firstChild);
+    if (usage?.parentElement === store) store.insertBefore(host, usage.nextSibling);
+    else store.insertBefore(host, store.firstChild);
   }
   return host;
 }
@@ -2051,6 +2074,17 @@ async function loadModelSettings() {
       { const s = document.getElementById('settings-perplexity-effort'); if (s) s.value = pc.perplexity?.reasoning_effort || ''; }
       v('settings-gemini-key',        pc.gemini?.api_key);
       if (pc.gemini?.model) { const s = document.getElementById('settings-gemini-model'); if (s) s.value = pc.gemini.model; }
+      // A saved model the static list no longer offers stays selected (shown as
+      // "unavailable" on the Models page) instead of silently falling back on save.
+      for (const [providerId, selectId] of [['openai', 'settings-openai-model'], ['openai_codex', 'settings-codex-model'], ['anthropic', 'settings-anthropic-model'], ['perplexity', 'settings-perplexity-model'], ['gemini', 'settings-gemini-model']]) {
+        const saved = String(pc[providerId]?.model || '').trim();
+        const select = document.getElementById(selectId);
+        if (!saved || !select || getSelectOptionValues(select).includes(saved)) continue;
+        ensureSelectOption(select, saved);
+        const option = Array.from(select.options).find((item) => item.value === saved);
+        if (option) option.dataset.injected = 'saved';
+        select.value = saved;
+      }
 
       if (pc.anthropic) {
         const chk = document.getElementById('settings-anthropic-extended-thinking');
@@ -2082,11 +2116,12 @@ async function loadModelSettings() {
       window.syncProviderReasoningControls?.('anthropic');
       syncProviderStateSummary(prov);
 
-      Promise.allSettled([
+      modelsDeferredLoad = Promise.allSettled([
         loadAgentModelDefaults(),
         loadBrainModelConfig(),
         loadSessionCompactionSettings(),
-      ]).then(() => { renderModelsUsage(); }).catch(() => {});
+      ]).then(() => { refreshModelsPage(); renderModelsUsage(); }).catch(() => {});
+      refreshModelsPage();
       scheduleModelStatusRefresh(prov);
     } catch (e) {
       console.warn('loadModelSettings apply failed:', e);
@@ -2202,6 +2237,8 @@ async function refreshModelsUsage() {
   // A connected account may be used by a per-chat model route even when it
   // is absent from the global main/agent defaults shown in this form.
   if (freshness) freshness.textContent = '';
+  window._modelsUsageById = byId;
+  refreshModelsPage();
   const inUse = collectInUseProviders().filter(id => !MODELS_USAGE_LOCAL.has(id));
   const visibleIds = [...new Set([...inUse, ...Object.keys(byId)])];
   grid.dataset.usageLoaded = 'true';
@@ -2254,6 +2291,7 @@ async function loadSessionCompactionSettings() {
     if (wordsEl) wordsEl.value = String(Number(s.rollingCompactionSummaryMaxWords) || 900);
     if (modelEl) modelEl.value = String(s.rollingCompactionModel || '');
     await applyGoalRoutingToForm('compactor', s?.mainChatGoals?.compactionModel || '', s?.mainChatGoals?.compactionReasoning || '');
+    window._contextSelection = s.contextProfile ? { profile: s.contextProfile, budget: s.contextBudget || {} } : null;
     const contextWrap = document.getElementById('settings-context-budget-summary');
     if (contextWrap) {
       contextWrap.innerHTML = renderContextSelection(s.contextProfile, s.contextBudget, 'desktop-context');
@@ -5112,9 +5150,12 @@ function settingsTabLabel(tab) {
   return String(tab || 'settings').replace(/-/g, ' ').replace(/^./, c => c.toUpperCase());
 }
 
-async function saveSettings() {
+async function saveSettings(options = {}) {
+  // stayOpen: called by the page save bar. It keeps Settings open and lets the
+  // bar show the error instead of the old footer. The request bodies are the same.
+  const stayOpen = options?.stayOpen === true;
   const btn = document.getElementById('settings-save-btn');
-  if (btn?.disabled) return; // prevent double-submit
+  if (btn?.disabled && !stayOpen) return; // prevent double-submit
   setSettingsSaveFeedback('saving', 'Saving…');
 
   const resetBtn = () => setSettingsSaveFeedback();
@@ -5196,11 +5237,19 @@ async function saveSettings() {
     if (activeTab === 'security' && securityStatus) setSettingsStatus(securityStatus, 'success', 'Saved');
     updateQuickModeUI();
     addProcessEntry('final', `${settingsTabLabel(activeTab)} settings saved.`);
+    if (stayOpen) {
+      resetBtn();
+      return;
+    }
     setSettingsSaveFeedback('saved', 'Saved ✓');
     await waitForSettingsSaveFeedback();
     closeSettings();
   } catch (err) {
     addProcessEntry('error', `Failed to save settings: ${err.message}`);
+    if (stayOpen) {
+      resetBtn();
+      throw err;
+    }
     setSettingsSaveFeedback('error', 'Try again');
     setTimeout(resetBtn, 1800);
   } finally {
@@ -5725,7 +5774,19 @@ const AMD_SLOTS = {
   // Switch model tiers
   'switch-model-low':       'switch_model_low',
   'switch-model-medium':    'switch_model_medium',
+  // "New agents": the generic subagent default the backend already resolves.
+  'subagent':               'subagent',
 };
+
+// The subagent slot is sent only when it was saved before or the user set it,
+// so a page that never touched it sends the same body as before the rebuild.
+let amdSubagentLoadedValue = '';
+function amdSlotEntries() {
+  return Object.entries(AMD_SLOTS).filter(([slotId]) => {
+    if (slotId !== 'subagent') return true;
+    return !!amdSubagentLoadedValue || !!String(document.getElementById('amd-subagent-prov')?.value || '').trim();
+  });
+}
 
 const AMD_STATIC_MODELS = {
   openai:       ['gpt-6.2-astra', 'gpt-6.2-sol', 'gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-pro', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5-pro', 'gpt-5', 'gpt-5-mini', 'gpt-5-nano', 'gpt-5-chat-latest', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
@@ -5739,6 +5800,122 @@ const AMD_TEMPLATE_CACHE_KEY = 'prometheus_agent_model_default_templates_v1';
 let amdTemplatesCache = [];
 let amdActiveTemplateId = '';
 let amdDefaultTemplateId = '';
+
+// ─── Rebuilt pages: one save bar per page ─────────────────────────────────
+// Each rebuilt page reports its unsaved changes; the bar at the bottom of the
+// settings column saves or discards them through that page's existing code.
+const SETTINGS_PAGE_CONTROLLERS = {
+  models: { changes: modelsChanges, note: modelsSaveNote, save: saveModelsPage, discard: discardModelsPage },
+};
+let settingsSaveBar = null;
+let modelsDeferredLoad = null;
+
+function ensureSettingsSaveBar() {
+  if (settingsSaveBar) return settingsSaveBar;
+  const main = document.querySelector('#settings-modal .settings-page-main');
+  settingsSaveBar = createSaveBar(main);
+  settingsSaveBar?.bind({
+    save: async () => {
+      const controller = SETTINGS_PAGE_CONTROLLERS[getActiveSettingsTab()];
+      if (!controller) return;
+      settingsSaveBar.busy(true);
+      try {
+        await controller.save();
+        settingsSaveBar.busy(false);
+        updateSettingsSaveBar();
+        showToast('Saved', `${settingsTabLabel(getActiveSettingsTab())} settings saved.`, 'success', 2500);
+      } catch (err) {
+        settingsSaveBar.busy(false);
+        settingsSaveBar.error(err?.message || 'Save failed. Try again.');
+      }
+    },
+    discard: async () => {
+      const controller = SETTINGS_PAGE_CONTROLLERS[getActiveSettingsTab()];
+      if (!controller) return;
+      settingsSaveBar.busy(true, 'Discarding…');
+      try { await controller.discard(); } finally {
+        settingsSaveBar.busy(false);
+        updateSettingsSaveBar();
+      }
+    },
+  });
+  return settingsSaveBar;
+}
+
+function updateSettingsSaveBar() {
+  const bar = ensureSettingsSaveBar();
+  if (!bar) return;
+  const controller = SETTINGS_PAGE_CONTROLLERS[getActiveSettingsTab()];
+  const labels = controller ? controller.changes() : [];
+  if (!labels.length) { bar.hide(); return; }
+  bar.show(labels, controller.note?.() || '');
+}
+
+async function reloadModelsStore() {
+  await loadModelSettings();
+  await (modelsDeferredLoad || Promise.resolve());
+}
+
+function setTemplateFormValue(id, name) {
+  const select = document.getElementById('amd-template-select');
+  const nameInput = document.getElementById('amd-template-name');
+  if (select) {
+    if (id && !Array.from(select.options).some((option) => option.value === id)) renderAgentModelDefaultTemplates();
+    select.value = id || '';
+  }
+  if (nameInput && name !== undefined) nameInput.value = name;
+}
+
+const LIVE_EFFORT_IDS = { openai: 'settings-openai-effort', openai_codex: 'settings-codex-effort', anthropic: 'settings-anthropic-effort', perplexity: 'settings-perplexity-effort' };
+const LIVE_SPEED_IDS = { openai: 'settings-openai-speed', openai_codex: 'settings-codex-speed', anthropic: 'settings-anthropic-speed' };
+
+function modelsPageDeps() {
+  return {
+    api,
+    showToast,
+    getLlm: () => window._llmSettingsCache || {},
+    getCatalog: getProviderCatalogItems,
+    providerModelControl: getProviderModelControl,
+    liveEffortId: (provider) => LIVE_EFFORT_IDS[provider] || '',
+    liveSpeedId: (provider) => LIVE_SPEED_IDS[provider] || '',
+    normalizeAccounts: normalizeProviderAccountsForUI,
+    accountAware: (provider) => ACCOUNT_AWARE_PROVIDER_IDS.has(provider),
+    getUsage: () => window._modelsUsageById || {},
+    getContext: () => window._contextSelection || null,
+    listModels: (provider) => fetchProviderModelsForPicker(provider, { refreshOpenAI: provider === 'openai', includeLive: provider !== 'openai_codex' }),
+    fallbackModels: (provider) => uniqueStrings([...getProviderModelFallbacks(provider), ...getProviderStaticModels(provider)]),
+    amdProviderChange,
+    syncAmdReasoning,
+    syncAmdSpeed,
+    goalRoutingProviderChange,
+    syncGoalRoutingReasoning,
+    brainProviderChange,
+    syncBrainReasoning,
+    setBrainScheduleEnabled,
+    loadVoiceAgentDefaultOptions,
+    showProviderPanel: (provider) => {
+      const select = document.getElementById('settings-llm-provider');
+      if (select) {
+        ensureSelectOption(select, provider);
+        select.value = provider;
+      }
+      onProviderChange();
+    },
+    accountsHost: () => document.getElementById('settings-provider-accounts'),
+    refreshProviders: () => refreshCredentialedRoutingProviderChoices(),
+    templates: () => ({ list: amdTemplatesCache, activeId: amdActiveTemplateId, defaultId: amdDefaultTemplateId }),
+    templateOps: {
+      apply: async (id) => { setTemplateFormValue(id); await applyAgentModelDefaultTemplate(); },
+      saveNew: async (_id, name) => { setTemplateFormValue('', name); await saveAgentModelDefaultTemplate(); },
+      update: async (id, name) => { setTemplateFormValue(id, name); await saveAgentModelDefaultTemplate(); },
+      default: async (id) => { setTemplateFormValue(id); await applyAsDefaultTemplate(); },
+      delete: async (id) => { setTemplateFormValue(id); deleteAgentModelDefaultTemplate(); },
+    },
+    saveSettings,
+    reload: reloadModelsStore,
+    onChange: () => updateSettingsSaveBar(),
+  };
+}
 
 function providerAccountsForDefault(providerId) {
   const accounts = normalizeProviderAccountsForUI(providerId, getProviderConfigFromCache(providerId));
@@ -6127,7 +6304,7 @@ async function amdProviderChange(slotId) {
 
 function getAgentModelDefaultsFromForm() {
   const payload = {};
-  for (const [slotId, field] of Object.entries(AMD_SLOTS)) {
+  for (const [slotId, field] of amdSlotEntries()) {
     const prov  = document.getElementById('amd-' + slotId + '-prov')?.value?.trim()  || '';
     const model = document.getElementById('amd-' + slotId + '-model')?.value?.trim() || '';
     payload[field] = (prov && model) ? `${prov}/${model}` : '';
@@ -6137,7 +6314,7 @@ function getAgentModelDefaultsFromForm() {
 
 function getAgentAccountDefaultsFromForm() {
   const payload = {};
-  for (const [slotId, field] of Object.entries(AMD_SLOTS)) {
+  for (const [slotId, field] of amdSlotEntries()) {
     const provider = String(document.getElementById(`amd-${slotId}-prov`)?.value || '').trim();
     const accounts = provider ? providerAccountsForDefault(provider) : [];
     const accountId = String(document.getElementById(`amd-${slotId}-account`)?.value || '').trim();
@@ -6148,7 +6325,7 @@ function getAgentAccountDefaultsFromForm() {
 
 function getAgentReasoningDefaultsFromForm() {
   const payload = {};
-  for (const [slotId, field] of Object.entries(AMD_SLOTS)) {
+  for (const [slotId, field] of amdSlotEntries()) {
     const value = document.getElementById('amd-' + slotId + '-reasoning')?.value?.trim() || '';
     payload[field] = value;
   }
@@ -6157,7 +6334,7 @@ function getAgentReasoningDefaultsFromForm() {
 
 function getAgentSpeedDefaultsFromForm() {
   const payload = {};
-  for (const [slotId, field] of Object.entries(AMD_SLOTS)) {
+  for (const [slotId, field] of amdSlotEntries()) {
     const value = document.getElementById('amd-' + slotId + '-speed')?.value?.trim() || '';
     payload[field] = value === 'fast' ? 'fast' : '';
   }
@@ -6172,6 +6349,7 @@ async function applyAgentModelDefaultsToForm(defaults = {}, reasoning = {}, acco
   await fetchCredentialedModelProviderIds();
   renderProviderSelectors();
   const d = defaults || {};
+  amdSubagentLoadedValue = String(d.subagent || '').trim();
   for (const slotId of Object.keys(AMD_SLOTS)) {
     const provSel  = document.getElementById('amd-' + slotId + '-prov');
     const modelSel = document.getElementById('amd-' + slotId + '-model');
@@ -6258,6 +6436,7 @@ function updateAgentModelTemplateCache(data) {
   rememberAgentModelDefaultTemplates();
   renderAgentModelDefaultTemplates();
   updateApplyAsDefaultButtonState();
+  refreshModelsPage();
 }
 
 async function loadAgentModelDefaultTemplates() {

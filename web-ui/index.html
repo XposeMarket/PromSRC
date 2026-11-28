@@ -4262,6 +4262,9 @@
     </div>
 
     <div id="settings-panel-models" class="settings-models-page" style="display:none;padding:14px 16px">
+      <!-- The Models page (#settings-models-v2, web-ui/src/settings/models-page.js) is a view over
+           these controls. They stay mounted and hidden: every save still reads them unchanged. -->
+      <div id="settings-models-store" class="sk-store" hidden>
 
       <div class="settings-models-usage" id="settings-models-usage" style="display:none">
         <div class="settings-models-usage-title">Usage &amp; Limits <small role="status" id="settings-usage-freshness"></small></div>
@@ -4923,12 +4926,19 @@
           </div>
           <div id="brain-model-status" style="font-size:11px;min-height:16px;margin-bottom:8px;order:85"></div>
 
+          <!-- New agents (agent_model_defaults.subagent) -->
+          <div style="order:53">
+            <select id="amd-subagent-prov" class="settings-input" aria-label="New agents provider" onchange="amdProviderChange('subagent')"><option value="">- same as main agent -</option></select>
+            <select id="amd-subagent-model" class="settings-input" aria-label="New agents model"><option value="">select provider first</option></select>
+          </div>
+
           <div id="amd-status" style="font-size:11px;min-height:16px;margin-bottom:8px;order:90"></div>
 	          <div style="font-size:12px;color:var(--muted);margin-bottom:10px;order:91"></div>
 
 	    </div>
 	  </div>
 
+      </div><!-- /#settings-models-store -->
 	</div>
 
 	    <div id="settings-panel-channels" style="display:none;padding:14px 16px">
