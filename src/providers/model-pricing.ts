@@ -76,6 +76,11 @@ const BUILT_IN_RULES: PricingRule[] = [
   { provider: /^xai$/i, model: /^grok-4\.7/i, input: 2.00, output: 6.00, cacheRead: 0.20 },
   { provider: /^xai$/i, model: /^grok-4\.(?:3|20)|^grok-latest/i, input: 1.25, output: 2.50, cacheRead: 0.20 },
   { provider: /^xai$/i, model: /grok/i, input: 1.25, output: 2.50, cacheRead: 0.20 },
+  // Gemini 4, paid tier (ai.google.dev/gemini-api/docs/pricing, Nov 2026). Carbon and Argon double on Dec 1 2026
+  // (00:00 Pacific); the rate is picked when the gateway starts.
+  { provider: /^gemini$/i, model: /^gemini-4-neon/i, input: 3.00, output: 15.00, cacheRead: 0.15 },
+  { provider: /^gemini$/i, model: /^gemini-4-(?:carbon|argon)/i, ...(Date.now() < Date.UTC(2026, 11, 1, 8) ? { input: 2.00, output: 10.00, cacheRead: 0.10 } : { input: 4.00, output: 20.00, cacheRead: 0.20 }) },
+  { provider: /^gemini$/i, model: /^gemini-4-hydrogen/i, input: 1.50, output: 7.50, cacheRead: 0.075 },
   { provider: /^gemini$/i, model: /flash|lite/i, input: 0.35, output: 1.05 },
   { provider: /^gemini$/i, model: /pro/i, input: 1.25, output: 10.00 },
   { provider: /^perplexity$/i, model: /.*/, input: 1.00, output: 1.00 },

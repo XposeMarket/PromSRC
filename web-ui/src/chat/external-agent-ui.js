@@ -11,7 +11,7 @@
 // card go only to that exact upstream request (POST .../respond) and never
 // touch a Prometheus approval or permission.
 
-const AGENT_NAMES = { prometheus: 'Prometheus', codex: 'Codex', 'claude-code': 'Claude Code', openclaw: 'OpenClaw', hermes: 'Hermes', cursor: 'Cursor', 'openai-dots': 'OpenAI Dots' };
+const AGENT_NAMES = { prometheus: 'Prometheus', codex: 'Codex', 'claude-code': 'Claude Code', openclaw: 'OpenClaw', hermes: 'Hermes', cursor: 'Cursor', antigravity: 'Antigravity', 'openai-dots': 'OpenAI Dots' };
 
 const st = {
   request: null,

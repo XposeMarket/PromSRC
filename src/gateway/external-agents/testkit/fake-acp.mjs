@@ -2,10 +2,21 @@ import readline from 'node:readline';
 const send = (value) => process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', ...value })}\n`);
 const result = (id, value) => send({ id, result: value });
 let promptId; let sessionId = 'fixture-acp-session'; let mode = ''; let question = 900;
+// --antigravity: answer like Google's `agy acp` 1.5.14 (v1 handshake, choices as config options, -32000 when signed out).
+const antigravity = process.argv.includes('--antigravity'); const signedOut = process.argv.includes('--signed-out'); let agyModel = 'gemini-4-neon';
+const choice = (value) => ({ value, name: value });
+const agyOptions = () => [
+  { id: 'model', name: 'Model', type: 'select', currentValue: agyModel, options: [{ group: 'google', name: 'Google', options: [{ value: 'gemini-4-neon', name: 'Gemini 4 Neon' }, { value: 'gemini-4-hydrogen', name: 'Gemini 4 Hydrogen' }] }, { value: 'claude-fable-5-2', name: 'Claude Fable 5.2' }] },
+  ...(agyModel === 'claude-fable-5-2' ? [] : [{ id: 'thinking', name: 'Thinking', category: 'thought_level', type: 'select', currentValue: 'high', options: (agyModel === 'gemini-4-neon' ? ['low', 'medium', 'high', 'xhigh'] : ['low', 'high']).map(choice) }]),
+];
 function update(text, id = sessionId) { send({ method: 'session/update', params: { sessionId: id, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } } } }); }
 function finish() { update('Hello ACP'); result(promptId, { stopReason: 'end_turn' }); }
 readline.createInterface({ input: process.stdin }).on('line', (line) => {
  const m = JSON.parse(line);
+ if (antigravity && m.method === 'initialize') return result(m.id, { protocolVersion: 1, agentInfo: { name: 'Antigravity ACP Server', version: '1.5.14' }, agentCapabilities: { loadSession: true, sessionCapabilities: { close: {} }, auth: { logout: {} } }, authMethods: [{ id: 'oauth-personal', name: 'Log in with Google' }] });
+ if (antigravity && m.method === 'session/new') return signedOut ? send({ id: m.id, error: { code: -32000, message: 'Authentication required' } }) : result(m.id, { sessionId, configOptions: agyOptions() });
+ if (m.method === 'session/set_config_option') { if (m.params.configId === 'model') agyModel = m.params.value; return result(m.id, { configOptions: agyOptions() }); }
+ if (m.method === 'session/close') return result(m.id, {});
  if (m.method === 'initialize') return result(m.id, { protocolVersion: 1, agentInfo: { name: 'cursor', version: 'fixture' }, agentCapabilities: { loadSession: true } });
  const models = { currentModelId: 'fixture-a', availableModels: [{ modelId: 'fixture-a', name: 'Fixture A' }, { modelId: 'fixture-b', name: 'Fixture B' }] };
  if (m.method === 'session/new') return result(m.id, { sessionId, models });

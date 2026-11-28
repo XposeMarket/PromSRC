@@ -39,6 +39,8 @@ interface Pending {
 
 export class JsonRpcError extends Error {
   code?: number;
+  /** True when the process ended: the error is not an answer from the agent. */
+  processExited?: boolean;
   data?: unknown;
   constructor(message: string, code?: number, data?: unknown) {
     super(message);
@@ -106,7 +108,9 @@ export class JsonRpcStdioClient {
       || `${this.options.label || 'agent'} exited (${signal || code || 'unknown'}).`;
     for (const [, entry] of this.pending) {
       if (entry.timer) clearTimeout(entry.timer);
-      entry.reject(new JsonRpcError(reason.slice(0, 300), -32000));
+      const exited = new JsonRpcError(reason.slice(0, 300), -32000);
+      exited.processExited = true;
+      entry.reject(exited);
     }
     this.pending.clear();
     try { this.options.onExit?.({ code, signal, error, stderrTail: this.stderrTail }); } catch { /* listener errors are not fatal */ }

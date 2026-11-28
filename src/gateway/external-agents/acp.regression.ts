@@ -38,6 +38,35 @@ async function main() {
  assert.equal(outgoing.filter((m) => m.method === 'session/prompt').length, before, 'stop while binding sends no prompt');
  await adapter.shutdown(); assert.equal(adapter.isRunning(), false);
  assert.equal((await new AcpAdapter('hermes', { resolve: () => null }).verify()).status, 'not_installed');
+ // Antigravity (Google's `agy acp`). The fixture follows the real 1.5.14 binary: v1 handshake, and
+ // JSON-RPC -32000 "Authentication required" from session/new while signed out.
+ const agyOut: any[] = [];
+ const fixture = path.join(__dirname, 'testkit/fake-acp.mjs');
+ const agy = (...flags: string[]) => new AcpAdapter('antigravity', { resolve: () => ({ command: process.execPath, args: [fixture, '--antigravity', ...flags], source: 'fixture' }), onOutgoing: (message) => agyOut.push(message) });
+ const signedOut = await agy('--signed-out').verify();
+ assert.equal(signedOut.status, 'signed_out'); assert.match(signedOut.statusText, /acp --login/, 'names Google\'s own sign-in command');
+ const signedOutTurn = await agy('--signed-out').runTurn(base);
+ assert.equal(signedOutTurn.status, 'failed'); assert.match(String(signedOutTurn.error), /not signed in/i);
+ const google = agy();
+ assert.equal((await google.listModels({ cwd: process.cwd() })).models.length, 0, 'no choices before the connection check');
+ const ready = await google.verify(); assert.equal(ready.status, 'ready'); assert.equal(ready.version, '1.5.14');
+ assert.ok(agyOut.some((m) => m.method === 'session/close'), 'the connection check closes the session it opened');
+ assert.ok(!agyOut.some((m) => m.method === 'session/prompt'), 'the connection check never sends a prompt');
+ const offered = await google.listModels({ cwd: process.cwd() });
+ assert.deepEqual(offered.models.map((m) => m.id), ['gemini-4-neon', 'gemini-4-hydrogen', 'claude-fable-5-2'], 'grouped and flat choices, offered before the first message');
+ assert.deepEqual(offered.models[0].efforts, ['low', 'medium', 'high', 'xhigh'], 'reasoning levels belong to the current model');
+ agyOut.length = 0;
+ const hydrogen = await google.runTurn({ ...base, model: 'gemini-4-hydrogen', effort: 'low' });
+ assert.equal(hydrogen.status, 'completed'); assert.equal(hydrogen.finalText, 'Hello ACP');
+ assert.deepEqual(agyOut.filter((m) => m.method === 'session/set_config_option').map((m) => [m.params.configId, m.params.value]), [['model', 'gemini-4-hydrogen'], ['thinking', 'low']]);
+ assert.ok(!agyOut.some((m) => m.method === 'session/set_model'), 'config-option agents are not sent session/set_model');
+ agyOut.length = 0;
+ await google.runTurn({ ...base, model: 'gemini-4-hydrogen', effort: 'xhigh' });
+ assert.equal(agyOut.filter((m) => m.method === 'session/set_config_option').length, 1, 'a level the model does not offer is not sent');
+ assert.equal((await google.runTurn({ ...base, model: 'gemini-9' })).status, 'failed', 'a model the account does not list is refused');
+ await google.shutdown();
+ const impostor = new AcpAdapter('antigravity', { resolve: () => ({ command: process.execPath, args: [fixture], source: 'fixture' }) });
+ assert.equal((await impostor.verify()).status, 'unsupported', 'an unrelated program named agy is refused');
  // Real OpenClaw install (Nov 2026): the npm cmd-shim probes `%dp0%\node.exe` BEFORE naming the program.
  // Taking the first match launched bare node, which exited immediately and looked like "cannot connect".
  const shimDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prom-shim-'));
