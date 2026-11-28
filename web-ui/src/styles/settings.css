@@ -3751,7 +3751,8 @@ body:is(.electron-win32, .electron-linux):not(.pm-mobile-active) #settings-modal
   #settings-modal .sk-hint { display: block; margin: 2px 0 0; }
   #settings-modal .sk-row { grid-template-columns: minmax(0, 1fr); gap: 10px; padding: 12px 14px; }
   #settings-modal .sk-ctl { justify-content: flex-start; }
-  #settings-modal .sk-row:has(> .sk-ctl > .sk-switch) { grid-template-columns: minmax(0, 1fr) auto; }
+  #settings-modal .sk-row:has(> .sk-ctl > .sk-switch),
+  #settings-modal .sk-row.sk-fold { grid-template-columns: minmax(0, 1fr) auto; }
   #settings-modal .sk-row:has(> .sk-ctl > .sk-switch) .sk-ctl { justify-content: flex-end; }
   #settings-modal .sk-main-pick { width: 100%; }
   #settings-modal .sk-seg { max-width: 100%; }
