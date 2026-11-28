@@ -203,9 +203,14 @@ async function main(): Promise<void> {
     assert.match(handleChatSource, /undeliveredChatSteers\.push\(\.\.\.steers\)/);
     assert.match(handleChatSource, /if \(!abortSignal\?\.aborted && undeliveredChatSteers\.length\) \{\s*markRuntimeSteersDelivered\(undeliveredChatSteers\.splice\(0\)\);/);
     assert.ok(
-      handleChatSource.indexOf('markRuntimeSteersDelivered(undeliveredChatSteers') > handleChatSource.indexOf('const result = await generationPromise;'),
+      handleChatSource.indexOf('if (!abortSignal?.aborted && undeliveredChatSteers.length)') > handleChatSource.indexOf('const result = await generationPromise;'),
       'delivery is acknowledged after the provider call returns',
     );
+    // ChatGPT bridge tools run during the pending provider call: acknowledge before the first one executes.
+    const bridgeStart = handleChatSource.indexOf('executeTool: async (toolName: string, toolArgs: Record<string, unknown>) => {');
+    const bridgeAck = handleChatSource.indexOf('if (undeliveredChatSteers.length) markRuntimeSteersDelivered(undeliveredChatSteers.splice(0));', bridgeStart);
+    const bridgeExec = handleChatSource.indexOf('await executeToolWithTelemetry(toolName, toolArgs, toolCallId)', bridgeStart);
+    assert.ok(bridgeStart > 0 && bridgeAck > bridgeStart && bridgeAck < bridgeExec, 'bridge tool execution acknowledges steer delivery first');
     try { registry.finishLiveRuntime(runtimeId); } catch { /* best effort */ }
   }
 

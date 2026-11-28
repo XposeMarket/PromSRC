@@ -4184,6 +4184,11 @@ Do not produce prose. Use the canonical thread tool now.` });
               .map((fn: any) => ({ name: String(fn.name), description: String(fn.description || ''), parameters: fn.parameters })),
             executeTool: async (toolName: string, toolArgs: Record<string, unknown>) => {
               const toolCallId = `chatgpt_bridge_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+              // Bridge tools run while the provider call is still pending. A tool
+              // call proves the model received this request, including any steers
+              // in it, so acknowledge them now: a later Stop or provider error must
+              // not re-run a timer whose work already started here.
+              if (undeliveredChatSteers.length) markRuntimeSteersDelivered(undeliveredChatSteers.splice(0));
               // Bridge calls skip the provider tool_calls path, so apply the same
               // dispatch policy here: no un-offered, unknown or allowlist-breaking tool runs.
               const bridgeDecision = evaluateTurnToolDispatch(toolName, toolArgs);
