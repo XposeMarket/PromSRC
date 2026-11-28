@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { getConfig } from '../../config/config';
-import { normalizeAgentsForSave, sanitizeAgentId } from '../agents/agent-normalize';
+import { sanitizeAgentId } from '../agents/agent-normalize';
 import {
   deleteManagedTeam,
   getManagedTeam,
@@ -16,7 +16,7 @@ export interface DeleteAgentResult {
   agentId: string;
   removedPaths: string[];
   deletedScheduledJobs: number;
-  affectedTeams: Array<{ id: string; name: string; removedFromMembers: boolean; removedTeam: boolean }>;
+  affectedTeams: Array<{ id: string; name: string; removedFromMembers: boolean; removedTeam: boolean; deletedManagerAgentId?: string }>;
   error?: string;
 }
 
@@ -25,6 +25,8 @@ export interface DeleteTeamResult {
   teamId: string;
   teamName?: string;
   deletedAgents: string[];
+  /** The team's own manager agent, removed with the team. Absent when there was no manager record to remove. */
+  deletedManagerAgentId?: string;
   removedAgentPaths: string[];
   removedWorkspacePaths: string[];
   deletedScheduledJobs: number;
@@ -87,7 +89,61 @@ function removeSubagentFiles(agentId: string, agentEntry?: any): string[] {
   return removed;
 }
 
-function removeAgentFromTeams(agentId: string, broadcastTeamEvent?: (data: any) => void): DeleteAgentResult['affectedTeams'] {
+/**
+ * Remove the manager agent that belongs to a team being deleted.
+ *
+ * The manager is team infrastructure (`<teamId>_manager`, identity under
+ * teams/<teamId>/manager), not a member, so it was never in `subagentIds` and
+ * team delete left its agent record behind: an agent nobody can route to, shown
+ * in every agent list, whose identity directory the same delete had just removed.
+ *
+ * This deletes an agent record, so it only acts on a record that is provably
+ * this team's manager. A team record that merely points `managerAgentId` at
+ * some other agent (a member, a standalone agent, another team's manager) must
+ * never cause that agent to be deleted.
+ */
+function deleteTeamManagerAgent(
+  team: { id: string; managerAgentId?: string; subagentIds?: string[] },
+  cronScheduler?: any,
+): { agentId?: string; removedPaths: string[]; deletedScheduledJobs: number } {
+  const none = { removedPaths: [] as string[], deletedScheduledJobs: 0 };
+  const teamId = String(team.id || '').trim();
+  const managerId = sanitizeAgentId(team.managerAgentId || `${teamId}_manager`);
+  if (!teamId || !managerId || managerId === 'main') return none;
+  if ((team.subagentIds || []).some((id) => sanitizeAgentId(id) === managerId)) return none;
+
+  const agents = (getConfig().getConfig() as any).agents;
+  // deleteAgentCompletely() removes EVERY record whose sanitized id matches, so the
+  // ownership check below is only valid when exactly one record can match. Two
+  // records that collide after sanitizing (legacy raw ids such as differing case)
+  // are ambiguous: leave both.
+  const matches = (Array.isArray(agents) ? agents : []).filter((agent: any) => sanitizeAgentId(agent?.id) === managerId);
+  if (matches.length !== 1) return none;
+  const record = matches[0];
+
+  // ensureManagedTeamManagerAgent() stamps both fields on every manager record.
+  // A record without that link back to this team is left for a human to judge.
+  if (record.isTeamManager !== true || String(record.teamId || '').trim() !== teamId) return none;
+
+  // Belt and braces: never take an agent another live team still uses.
+  const usedElsewhere = listManagedTeams().some((other) => other.id !== teamId && (
+    sanitizeAgentId(other.managerAgentId || '') === managerId
+    || (other.subagentIds || []).some((id) => sanitizeAgentId(id) === managerId)
+  ));
+  if (usedElsewhere) return none;
+
+  const result = deleteAgentCompletely({ agentId: managerId, cronScheduler, updateTeamMembership: false });
+  if (!result.success) return none;
+  return { agentId: managerId, removedPaths: result.removedPaths, deletedScheduledJobs: result.deletedScheduledJobs };
+}
+
+function removeAgentFromTeams(
+  agentId: string,
+  broadcastTeamEvent?: (data: any) => void,
+  cronScheduler?: any,
+): { affectedTeams: DeleteAgentResult['affectedTeams']; removedPaths: string[]; deletedScheduledJobs: number } {
+  const removedPaths: string[] = [];
+  let deletedScheduledJobs = 0;
   const affectedTeams: DeleteAgentResult['affectedTeams'] = [];
   for (const team of listManagedTeams()) {
     let touched = false;
@@ -112,8 +168,13 @@ function removeAgentFromTeams(agentId: string, broadcastTeamEvent?: (data: any) 
 
     if (!touched) continue;
     if ((team.subagentIds || []).length === 0) {
+      // Last member gone: the team is deleted, so its manager goes with it
+      // (same rule as deleteTeamCompletely). The team workspace is left on disk here, as before.
+      const manager = deleteTeamManagerAgent(team, cronScheduler);
+      removedPaths.push(...manager.removedPaths);
+      deletedScheduledJobs += manager.deletedScheduledJobs;
       deleteManagedTeam(team.id);
-      affectedTeams.push({ id: team.id, name: team.name, removedFromMembers: true, removedTeam: true });
+      affectedTeams.push({ id: team.id, name: team.name, removedFromMembers: true, removedTeam: true, ...(manager.agentId ? { deletedManagerAgentId: manager.agentId } : {}) });
       broadcastTeamEvent?.({ type: 'team_deleted', teamId: team.id, teamName: team.name });
     } else {
       saveManagedTeam(team);
@@ -121,7 +182,7 @@ function removeAgentFromTeams(agentId: string, broadcastTeamEvent?: (data: any) 
       broadcastTeamEvent?.({ type: 'team_updated', teamId: team.id, teamName: team.name });
     }
   }
-  return affectedTeams;
+  return { affectedTeams, removedPaths, deletedScheduledJobs };
 }
 
 export function deleteAgentCompletely(input: {
@@ -142,13 +203,18 @@ export function deleteAgentCompletely(input: {
     return { success: false, agentId, removedPaths: [], deletedScheduledJobs: 0, affectedTeams: [], error: `Agent "${agentId}" not found` };
   }
 
+  // Write the surviving records back exactly as stored. This used to pass them
+  // through normalizeAgentsForSave(), which rebuilds each record from a fixed field
+  // list and so silently dropped settings it does not know (reasoning_effort,
+  // cronSchedule, voice, ...) from every OTHER agent whenever one agent was deleted.
   const nextAgents = explicitAgents.filter((agent: any) => sanitizeAgentId(agent.id) !== agentId);
-  cm.updateConfig({ agents: normalizeAgentsForSave(nextAgents) } as any);
-  const affectedTeams = input.updateTeamMembership === false
-    ? []
-    : removeAgentFromTeams(agentId, input.broadcastTeamEvent);
-  const deletedScheduledJobs = deleteBoundSubagentJobs(input.cronScheduler, agentId);
-  const removedPaths = removeSubagentFiles(agentId, target);
+  cm.updateConfig({ agents: nextAgents } as any);
+  const membership = input.updateTeamMembership === false
+    ? { affectedTeams: [] as DeleteAgentResult['affectedTeams'], removedPaths: [] as string[], deletedScheduledJobs: 0 }
+    : removeAgentFromTeams(agentId, input.broadcastTeamEvent, input.cronScheduler);
+  const affectedTeams = membership.affectedTeams;
+  const deletedScheduledJobs = deleteBoundSubagentJobs(input.cronScheduler, agentId) + membership.deletedScheduledJobs;
+  const removedPaths = [...removeSubagentFiles(agentId, target), ...membership.removedPaths];
   // Remove the live timer and persisted heartbeat override as part of deleting
   // the agent, rather than leaving a stale Settings > Heartbeat card behind.
   getHeartbeatRunnerInstance()?.unregisterAgent(agentId);
@@ -207,6 +273,13 @@ export function deleteTeamCompletely(input: {
     }
   }
 
+  // The manager belongs to the team itself, so it goes even when member agents
+  // are kept (delete_agents:false): its identity lives in the team directory
+  // removed just below, and a manager without a team cannot run.
+  const manager = deleteTeamManagerAgent(team, input.cronScheduler);
+  removedAgentPaths.push(...manager.removedPaths);
+  deletedScheduledJobs += manager.deletedScheduledJobs;
+
   const removedWorkspacePaths = removeTeamWorkspace(teamId);
   const ok = deleteManagedTeam(teamId);
   if (ok) input.broadcastTeamEvent?.({ type: 'team_deleted', teamId, teamName: team.name });
@@ -216,6 +289,7 @@ export function deleteTeamCompletely(input: {
     teamId,
     teamName: team.name,
     deletedAgents,
+    ...(manager.agentId ? { deletedManagerAgentId: manager.agentId } : {}),
     removedAgentPaths,
     removedWorkspacePaths,
     deletedScheduledJobs,
