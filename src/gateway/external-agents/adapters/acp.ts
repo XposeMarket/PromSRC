@@ -40,8 +40,9 @@ function selectValues(option: any): Array<{ value: string; name?: string }> {
  * Antigravity reports session config options instead: `model`, plus a `thought_level` option
  * whose levels belong to the currently selected model only.
  */
-export function readAcpCatalog(state: any): AcpCatalog {
-  const options: any[] = Array.isArray(state?.configOptions) ? state.configOptions : [];
+export function readAcpCatalog(state: any, useConfigOptions = true): AcpCatalog {
+  // Only Antigravity is read through config options; the other agents keep the `models` path unchanged.
+  const options: any[] = useConfigOptions && Array.isArray(state?.configOptions) ? state.configOptions : [];
   const modelOption = options.find((option) => option?.id === 'model' && option?.type === 'select');
   if (!modelOption) {
     const models = (state?.models?.availableModels || []).map((m: { modelId: string; name: string }) => ({ id: m.modelId, label: m.name || m.modelId }));
@@ -60,6 +61,8 @@ export function readAcpCatalog(state: any): AcpCatalog {
 
 /** Why the agent refused: not signed in, or signed in without access. Matched on text because a dead process also reports -32000. */
 function accountProblem(error: any): 'signed_out' | 'no_access' | null {
+  // A process that died is not an account answer, even if its last stderr line mentions sign-in.
+  if (error?.processExited) return null;
   const text = `${String(error?.message || '')} ${typeof error?.data === 'string' ? error.data : JSON.stringify(error?.data ?? '')}`;
   if (/SUBSCRIPTION_REQUIRED/i.test(text)) return 'no_access';
   if (/authentication required|not (?:signed|logged) in|unauthenticated/i.test(text)) return 'signed_out';
@@ -73,8 +76,9 @@ function resolveAgent(id: AcpAgentId): ResolvedCommand | null {
   const candidates = id === 'cursor'
     ? [...findOnPath('cursor-agent'), path.join(home, '.local', 'bin', 'agent')]
     : id === 'antigravity'
-      // Google's installer puts `agy` here; a gateway started before the install has a stale PATH.
-      ? [...findOnPath('agy'), ...(process.env.LOCALAPPDATA ? [path.join(process.env.LOCALAPPDATA, 'agy', 'bin', 'agy.exe')] : []), path.join(home, '.local', 'bin', 'agy')]
+      // Google's own install locations come first, so an unrelated `agy` earlier on PATH is never
+      // launched when the real one is installed (it also covers a gateway started before the install).
+      ? [...(process.env.LOCALAPPDATA ? [path.join(process.env.LOCALAPPDATA, 'agy', 'bin', 'agy.exe')] : []), path.join(home, '.local', 'bin', 'agy'), ...findOnPath('agy')]
     : [...findOnPath(id), ...(id === 'hermes' ? [
         // Official Windows installer location (a gateway started before install has a stale PATH).
         ...(process.env.LOCALAPPDATA ? [path.join(process.env.LOCALAPPDATA, 'hermes', 'bin', 'hermes.exe')] : []),
@@ -97,7 +101,8 @@ export class AcpAdapter implements ExternalAgentAdapter {
   private isExpectedAgent(info: any) { const want = IDENTITY[this.id]; return !want || want.test(String(info?.agentInfo?.name || '')); }
   /** Google's own sign-in command; Prometheus never handles the Google credentials. */
   private loginHint(command: ResolvedCommand) {
-    const program = findOnPath('agy').length ? 'agy' : `"${command.command}"`;
+    // Name the exact program that was checked, not whatever `agy` PATH resolves to.
+    const program = /[\\/]agy(?:\.exe)?$/i.test(command.command) ? `"${command.command}"` : 'agy';
     return `Run ${program} acp --login in a terminal on this computer and sign in with Google`;
   }
   async detect() { const command = this.resolve(); return { found: !!command, ...(command ? { executable: command.source } : {}) }; }
@@ -124,20 +129,28 @@ export class AcpAdapter implements ExternalAgentAdapter {
       const version = info.agentInfo?.version ? { version: String(info.agentInfo.version) } : {};
       if (this.id === 'antigravity') {
         // Signing in is the step people miss, so learn it now: open one session (no prompt, so no plan usage), read its models, close it.
+        // A failed check must not keep offering the previous account's choices.
+        this.defaultCatalog = null;
+        this.capabilities.modelList = false;
+        let opened = '';
         try {
           const scratch = path.join(os.tmpdir(), 'prometheus-antigravity-check');
           fs.mkdirSync(scratch, { recursive: true });
           const session = await client.request('session/new', { cwd: scratch, mcpServers: [] }, ACP_SESSION_TIMEOUT_MS);
-          this.defaultCatalog = readAcpCatalog(session);
-          this.capabilities.modelList = this.defaultCatalog.models.length > 0;
-          if (typeof session?.sessionId === 'string' && info.agentCapabilities?.sessionCapabilities?.close) {
-            await client.request('session/close', { sessionId: session.sessionId }, 5000).catch(() => undefined);
-          }
+          if (typeof session?.sessionId === 'string') opened = session.sessionId;
+          const catalog = readAcpCatalog(session);
+          this.defaultCatalog = catalog;
+          this.capabilities.modelList = catalog.models.length > 0;
         } catch (error) {
           const problem = accountProblem(error);
           if (problem === 'signed_out') return { status: 'signed_out', statusText: `${this.name} is installed but not signed in. ${this.loginHint(command)}, then Check again.`, ...version, capabilities: { ...this.capabilities } };
           if (problem === 'no_access') return { status: 'error', statusText: NO_ACCESS_TEXT, ...version, capabilities: { ...this.capabilities } };
           throw error;
+        } finally {
+          // Close the session on every path; the process itself is stopped below either way.
+          if (opened && info.agentCapabilities?.sessionCapabilities?.close) {
+            await client.request('session/close', { sessionId: opened }, 5000).catch(() => undefined);
+          }
         }
         return { status: 'ready', statusText: `${this.name} connected and signed in.`, ...version, capabilities: { ...this.capabilities } };
       }
@@ -234,7 +247,7 @@ export class AcpAdapter implements ExternalAgentAdapter {
         upstream = created.sessionId;
         modelState = created;
       }
-      let catalog = readAcpCatalog(modelState);
+      let catalog = readAcpCatalog(modelState, this.id === 'antigravity');
       const models = catalog.models;
       this.catalogs.set(upstream, catalog);
       if (this.catalogs.size > 200) this.catalogs.delete(this.catalogs.keys().next().value!);
