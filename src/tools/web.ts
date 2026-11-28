@@ -3033,7 +3033,12 @@ export function isBotWallHtml(html: string): boolean {
 /** Main image, buy-box price and availability from an Amazon product page (mobile or desktop). */
 export function extractAmazonProductFields(html: string): Pick<PagePreviewMetadata, 'imageUrl' | 'price' | 'availability'> {
   const text = String(html || '');
-  const imageUrl = /<img\b[^>]*\bdata-a-hires="(https:[^"]+)"/i.exec(text)?.[1]
+  // The landing image tag (#main-image on mobile, #landingImage on desktop)
+  // is the product photo; fall back to the first hires attribute / JSON.
+  const mainTag = /<img\b[^>]*\bid="(?:main-image|landingImage|imgBlkFront)"[^>]*>/i.exec(text)?.[0] || '';
+  const mainAttr = (name: string) => new RegExp(`\\b${name}="(https:[^"]+)"`, 'i').exec(mainTag)?.[1];
+  const imageUrl = mainAttr('data-a-hires') || mainAttr('data-old-hires') || mainAttr('src')
+    || /<img\b[^>]*\bdata-a-hires="(https:[^"]+)"/i.exec(text)?.[1]
     || /<img\b[^>]*\bdata-old-hires="(https:[^"]+)"/i.exec(text)?.[1]
     || /"hiRes":"(https:[^"]+)"/.exec(text)?.[1];
   // The first a-offscreen price on the page is often a sponsored listing, so
@@ -3461,6 +3466,41 @@ async function downloadProductImage(product: ShoppingProductResult, index: numbe
   });
 }
 
+/**
+ * Preview metadata from fetched page HTML (possibly partial). Amazon pages take
+ * image and price ONLY from Amazon's own product fields: a generic "largest
+ * image / first $ / first N out of 5" pick on a half-loaded Amazon page lands
+ * on unrelated or sponsored items, and a placeholder beats a wrong product photo.
+ */
+export function buildPagePreviewFromHtml(html: string, opts: { url: string; finalUrl: string; amazon: boolean }): PagePreviewMetadata {
+  const { url, finalUrl, amazon: isAmazon } = opts;
+  const meta = extractPagePreviewMetadataFromHtml(html, finalUrl);
+  const productJsonLd = parseJsonLdProductMetadata(html);
+  const amazon = isAmazon ? extractAmazonProductFields(html) : {};
+  const priceAmount = extractMetaTag(html, 'product:price:amount');
+  const priceCurrency = extractMetaTag(html, 'product:price:currency') || 'USD';
+  const fallbackRating = isAmazon ? {} as ReturnType<typeof fallbackProductPageRating> : fallbackProductPageRating(html);
+  return {
+    ...meta,
+    url,
+    canonicalUrl: isAmazon ? url : (meta.canonicalUrl || finalUrl),
+    imageUrl: isAmazon
+      ? absoluteHttpUrl(amazon.imageUrl, finalUrl)
+      : absoluteHttpUrl(productJsonLd.imageUrl || meta.imageUrl, finalUrl),
+    price: isAmazon
+      ? amazon.price
+      : productJsonLd.price
+        || (priceAmount ? `${priceCurrency === 'USD' ? '$' : `${priceCurrency} `}${priceAmount}` : undefined)
+        || fallbackProductPagePrice(html),
+    rating: productJsonLd.rating || fallbackRating.rating,
+    reviews: productJsonLd.reviews || fallbackRating.reviews,
+    reviewCount: productJsonLd.reviewCount || fallbackRating.reviewCount,
+    availability: amazon.availability || productJsonLd.availability,
+    seller: productJsonLd.seller,
+    sku: productJsonLd.sku,
+  };
+}
+
 export async function fetchPagePreviewMetadata(url: string, timeoutMs = 2500): Promise<PagePreviewMetadata> {
   const normalizedUrl = String(url || '').trim();
   const cached = pagePreviewCache.get(normalizedUrl);
@@ -3489,30 +3529,7 @@ export async function fetchPagePreviewMetadata(url: string, timeoutMs = 2500): P
     const { text: html, complete } = await readResponseTextWithBudget(res, { maxChars: 1_500_000, deadlineAt });
     if (!html || isBotWallHtml(html)) return empty;
     const finalUrl = amazonMobileUrl ? normalizedUrl : (res.url || normalizedUrl);
-    const meta = extractPagePreviewMetadataFromHtml(html, finalUrl);
-    const productJsonLd = parseJsonLdProductMetadata(html);
-    const amazon = amazonMobileUrl ? extractAmazonProductFields(html) : {};
-    const priceAmount = extractMetaTag(html, 'product:price:amount');
-    const priceCurrency = extractMetaTag(html, 'product:price:currency') || 'USD';
-    // Generic "first $ / first N out of 5 on the page" fallbacks pick up
-    // sponsored listings on Amazon, so Amazon only uses its buy-box fields.
-    const fallbackRating = amazonMobileUrl ? {} as ReturnType<typeof fallbackProductPageRating> : fallbackProductPageRating(html);
-    const enriched: PagePreviewMetadata = {
-      ...meta,
-      url: normalizedUrl,
-      canonicalUrl: amazonMobileUrl ? normalizedUrl : (meta.canonicalUrl || finalUrl),
-      imageUrl: absoluteHttpUrl(amazon.imageUrl || productJsonLd.imageUrl || meta.imageUrl, finalUrl),
-      price: amazon.price
-        || productJsonLd.price
-        || (priceAmount ? `${priceCurrency === 'USD' ? '$' : `${priceCurrency} `}${priceAmount}` : undefined)
-        || (amazonMobileUrl ? undefined : fallbackProductPagePrice(html)),
-      rating: productJsonLd.rating || fallbackRating.rating,
-      reviews: productJsonLd.reviews || fallbackRating.reviews,
-      reviewCount: productJsonLd.reviewCount || fallbackRating.reviewCount,
-      availability: amazon.availability || productJsonLd.availability,
-      seller: productJsonLd.seller,
-      sku: productJsonLd.sku,
-    };
+    const enriched = buildPagePreviewFromHtml(html, { url: normalizedUrl, finalUrl, amazon: !!amazonMobileUrl });
     // A page cut off before its image arrived is retried next time instead of
     // pinning "no image" for six hours.
     if (complete || enriched.imageUrl) pagePreviewCache.set(normalizedUrl, { at: Date.now(), meta: enriched });

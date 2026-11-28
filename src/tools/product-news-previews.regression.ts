@@ -11,6 +11,7 @@ import {
   readResponseTextWithBudget,
   raceDeadline,
   fetchPagePreviewMetadata,
+  buildPagePreviewFromHtml,
 } from './web.js';
 import { fillMissingNewsImages } from './ui-cards.js';
 
@@ -52,6 +53,21 @@ assert.equal(fields.price, '$7.99', 'twister price, not the sponsored $20.49');
 assert.equal(fields.availability, 'In Stock');
 const apexPage = `<span class="a-offscreen">$99.00</span><div id="apex_mobile_feature_div"><span class="a-price"><span class="a-offscreen">$21.99</span></span></div><input id="twister-plus-price-data-price" value="17.99">`;
 assert.equal(extractAmazonProductFields(apexPage).price, '$21.99', 'buy box wins over twister');
+
+// The landing image tag wins over an earlier hires attribute elsewhere on the page.
+const landingFirst = `<img class="brand" data-a-hires="https://m.media-amazon.com/images/I/brandlogo._SL100_.jpg"><img id="main-image" alt="Card" data-a-hires="https://m.media-amazon.com/images/I/51xG3n7pVGL._AC_UF894,1000_QL80_.jpg" src="https://m.media-amazon.com/images/I/51xG3n7pVGL._AC_UF350,350_QL50_.jpg">`;
+assert.equal(extractAmazonProductFields(landingFirst).imageUrl, 'https://m.media-amazon.com/images/I/51xG3n7pVGL._AC_SL1000_.jpg');
+
+// A half-loaded Amazon page (cut at the deadline before the product image)
+// must yield NO image rather than an unrelated large image or sponsored price.
+const partialAmazon = `<html><head><title>Amazon.com: SanDisk 64GB Ultra</title></head><body><img src="https://m.media-amazon.com/images/I/311NMjwB-pL.jpg" class="product hero" width="900" height="600"><span class="a-offscreen">$4.99</span><span>4.9 out of 5 stars</span>`;
+const partialPreview = buildPagePreviewFromHtml(partialAmazon, { url: 'https://amazon.com/dp/B08GYBBBBH', finalUrl: 'https://amazon.com/dp/B08GYBBBBH', amazon: true });
+assert.equal(partialPreview.imageUrl, undefined, 'no generic image on Amazon');
+assert.equal(partialPreview.price, undefined, 'no first-$ price on Amazon');
+assert.equal(partialPreview.rating, undefined, 'no first-rating on Amazon');
+assert.ok(String(partialPreview.title).includes('SanDisk'), 'title still extracted');
+// Non-Amazon pages keep the generic extractor.
+assert.equal(buildPagePreviewFromHtml(partialAmazon, { url: 'https://shop.example.com/p/1', finalUrl: 'https://shop.example.com/p/1', amazon: false }).imageUrl, 'https://m.media-amazon.com/images/I/311NMjwB-pL.jpg');
 
 // Generic extractor also understands data-a-hires (desktop and partner pages).
 const generic = extractPagePreviewMetadataFromHtml('<html><head><title>T</title></head><body><img data-a-hires="https://m.media-amazon.com/images/I/abc._AC_SX679_.jpg" width="600"></body></html>', 'https://www.amazon.com/dp/B000000000');
@@ -118,15 +134,20 @@ assert.equal(generic.imageUrl, 'https://m.media-amazon.com/images/I/abc._AC_SX67
 }
 
 if (process.env.PROMETHEUS_LIVE_NET === '1') {
-  const asins = ['B08Y1FS3YS', 'B00BD0T49Y', 'B0G8VZF2YS', 'B0042V6UWA'];
+  const asins = ['B08Y1FS3YS', 'B00BD0T49Y', 'B0G8VZF2YS', 'B0042V6UWA', 'B08GYBBBBH', 'B09B1JFY24'];
   let withImage = 0;
+  const images = new Map<string, string>();
   for (const asin of asins) {
     const started = Date.now();
     const meta = await fetchPagePreviewMetadata(`https://amazon.com/dp/${asin}`, 2500);
     const ms = Date.now() - started;
     console.log(`  live ${asin}: ${ms}ms image=${meta.imageUrl || '-'} price=${meta.price || '-'} title=${String(meta.title || '').slice(0, 60)}`);
     assert.ok(ms < 4000, `${asin} bounded`);
-    if (meta.imageUrl && /m\.media-amazon\.com\/images\/I\//.test(meta.imageUrl)) withImage += 1;
+    if (meta.imageUrl && /m\.media-amazon\.com\/images\/I\//.test(meta.imageUrl)) {
+      withImage += 1;
+      assert.ok(!images.has(meta.imageUrl), `${asin} got the same image as ${images.get(meta.imageUrl)} (wrong-product photo)`);
+      images.set(meta.imageUrl, asin);
+    }
   }
   assert.ok(withImage >= asins.length - 1, `live Amazon images: ${withImage}/${asins.length}`);
 }
