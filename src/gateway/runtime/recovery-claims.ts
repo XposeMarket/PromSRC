@@ -80,7 +80,7 @@ export function claimRuntimeRecovery(runtimeId: string, kind = 'recovery'): bool
 }
 
 /** True for this process and for any other process that still exists. */
-function isPidAlive(pid: number): boolean {
+export function isPidAlive(pid: number): boolean {
   if (!Number.isInteger(pid) || pid <= 0) return false;
   if (pid === process.pid) return true;
   try {

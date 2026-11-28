@@ -53,7 +53,7 @@
     "test:gateway-auth-fail-closed": "tsx src/gateway/gateway-auth-fail-closed.regression.ts",
     "test:final-action-gate": "tsx src/gateway/final-action-gate.regression.ts",
     "test:operation-ledger": "tsx src/gateway/operation-ledger.regression.ts",
-    "test:timer-stranded": "tsx src/gateway/timer-stranded.regression.ts",
+    "test:timer-stranded": "tsx src/gateway/timer-stranded.regression.ts && tsx src/gateway/timers/timer-turn-owner.regression.ts",
     "test:task-verifier": "tsx src/gateway/task-verifier.regression.ts",
     "test:restart-notice-encoding": "tsx src/gateway/restart-notice-encoding.regression.ts",
     "test:mobile-connection-budget": "node scripts/test-mobile-connection-budget.mjs",
