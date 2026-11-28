@@ -5,6 +5,9 @@
 //    (webhooks, remote access, heartbeat)
 //  - a cancelled General auto-settle confirmation keeps the edits, sends nothing
 //  - Channels: switching app with unsaved edits is refused; Save posts that app
+//    (also while the status request is still pending, and after it failed)
+//  - Models: a Brain failure after the first two requests saved names what
+//    saved, keeps only the Brain change, and a retry sends only Brain
 //  - Models: clearing the Main chat choice sends empty values
 //  - Models: saved models stay visible (unavailable) with no provider connected
 //  - Models: the per-job account choice is offered in the picker and sent
@@ -53,7 +56,7 @@ const browser = await chromium.launch();
  * Open Settings on `tab` with fixtures `fx`. `fail` maps "METHOD /path" to a
  * response: { status, json }. Returns { page, posts, errors, toasts }.
  */
-async function openSettings(tab, fx = baseFx, fail = {}) {
+async function openSettings(tab, fx = baseFx, fail = {}, hold = []) {
   const page = await browser.newPage({ viewport: { width: 1280, height: 860 } });
   const posts = [];
   const errors = [];
@@ -66,6 +69,7 @@ async function openSettings(tab, fx = baseFx, fail = {}) {
     if (url.pathname.startsWith('/api/')) {
       const key = `${req.method()} ${url.pathname}`;
       if (req.method() !== 'GET') { let body = null; try { body = req.postDataJSON(); } catch {} posts.push({ path: url.pathname, method: req.method(), body }); }
+      if (hold.includes(key)) return; // never answered: the request stays pending
       if (fail[key]) return route.fulfill({ status: fail[key].status || 200, json: fail[key].json || {} });
       if (fx[key]) return route.fulfill({ json: fx[key] });
       return route.fulfill({ json: (req.method() === 'GET' && fx[url.pathname]) || { success: true, models: [] } });
@@ -153,8 +157,11 @@ try {
   }
 
   // ── Channels: no silent loss when switching app ────────────────────────
-  {
-    const { page, posts, errors } = await openSettings('channels');
+  // status: 'loaded' | 'pending' (request never answered) | 'failed' (HTTP 500)
+  for (const status of ['loaded', 'pending', 'failed']) {
+    const fail = status === 'failed' ? { 'GET /api/channels/status': { status: 500, json: { error: 'gateway busy' } } } : {};
+    const hold = status === 'pending' ? ['GET /api/channels/status'] : [];
+    const { page, posts, errors } = await openSettings('channels', baseFx, fail, hold);
     try {
       await page.click('#settings-tg-userid');
       await page.keyboard.press('End');
@@ -162,7 +169,7 @@ try {
       assert.equal((await bar(page)).hidden, false, 'Channels: bar shows');
       await page.selectOption('#settings-channel-select', 'discord');
       await page.waitForTimeout(200);
-      assert.equal(await page.inputValue('#settings-channel-select'), 'telegram', 'Channels: stays on Telegram with unsaved edits');
+      assert.equal(await page.inputValue('#settings-channel-select'), 'telegram', `Channels (${status}): stays on Telegram with unsaved edits`);
       assert.equal(await page.isVisible('#channel-form-telegram'), true);
       const b = await bar(page);
       assert.match(b.text, /Save or discard your Telegram changes/);
@@ -170,7 +177,7 @@ try {
       await page.waitForTimeout(900);
       const sent = posts.filter((x) => x.path === '/api/channels/config');
       assert.equal(sent.length, 1);
-      assert.deepEqual(Object.keys(sent[0].body.channels), ['telegram'], 'Channels: Save posts the app that was edited');
+      assert.deepEqual(Object.keys(sent[0].body.channels), ['telegram'], `Channels (${status}): Save posts the app that was edited`);
       assert.match(JSON.stringify(sent[0].body.channels.telegram), /222/, 'Channels: the edit is in the request');
       assert.equal((await bar(page)).hidden, true, 'Channels: bar gone after a confirmed save');
       await page.selectOption('#settings-channel-select', 'discord');
@@ -234,6 +241,57 @@ try {
       await second.page.waitForSelector('#settings-models-v2 .sk-card-empty', { state: 'attached' });
       assert.equal(await second.page.locator('#settings-models-v2 [data-pick]').count(), 0, 'fresh install: empty state only');
     } finally { await second.page.close(); }
+  }
+
+  // ── Models: partial save (Brain fails after the first two requests) ────
+  {
+    const fx = {
+      ...modelsFx({
+        llm: { provider: 'anthropic', providers: { anthropic: { model: 'claude-sonnet-4-6', defaultAccountId: 'default', accounts: { default: acct('default', 'Personal') } }, openai_codex: { model: 'gpt-5.5', defaultAccountId: 'default', accounts: { default: acct('default', 'Personal') } } } },
+        connected: ['anthropic', 'openai_codex'],
+        defaults: { main_chat: 'openai_codex/gpt-5.5' },
+      }),
+      '/api/brain/status': { thought: { enabled: false }, dream: { enabled: false }, cleanup: { enabled: false }, thoughtModel: 'anthropic/claude-sonnet-4-6' },
+    };
+    const fail = { 'PATCH /api/brain/config': { status: 200, json: { success: false, error: 'Brain runner not initialized' } } };
+    const { page, posts, errors } = await openSettings('models', fx, fail);
+    const saves = (from = 0) => posts.slice(from).filter((x) => /^\/api\/(settings\/(bulk|agent-model-defaults|context-window)|brain\/config)$/.test(x.path)).map((x) => `${x.method} ${x.path}`);
+    try {
+      await page.waitForSelector('[data-pick="main"]', { state: 'attached' });
+      // Change one job-model value (agent defaults request) and one Brain value.
+      await page.click('[data-pick="main"]');
+      await page.click('.sk-pop .sk-opt[data-provider=""]');
+      await page.waitForTimeout(400);
+      await page.evaluate(() => document.querySelector('[data-pick="brain:thought"]').click());
+      await page.waitForSelector('.sk-pop .sk-opt[data-provider=""]');
+      await page.click('.sk-pop .sk-opt[data-provider=""]');
+      await page.waitForTimeout(400);
+      const dirty = await bar(page);
+      assert.match(dirty.text, /Main chat/);
+      assert.match(dirty.text, /Brain Thought/);
+      await page.click('[data-savebar="save"]');
+      await page.waitForTimeout(1200);
+      assert.deepEqual(saves(), ['POST /api/settings/bulk', 'POST /api/settings/agent-model-defaults', 'PATCH /api/brain/config'], 'first save sends all three requests in order');
+      const after = await bar(page);
+      if (process.env.DEBUG_SETTINGS) console.log(after);
+      assert.equal(after.hidden, false, 'partial: bar stays for what did not save');
+      assert.equal(after.state, 'error');
+      assert.match(after.text, /Part saved: Accounts, Main chat and Summaries, Job models/, 'partial: names what saved');
+      assert.match(after.text, /Not saved: Brain models \(Brain runner not initialized\)/, 'partial: names what did not save and why');
+      assert.doesNotMatch(after.text, /^Not saved\./, 'partial: does not claim nothing saved');
+      assert.match(after.text, /1 unsaved change/, 'partial: only the Brain change stays unsaved');
+      assert.doesNotMatch(after.text, /Main chat ·|Main chat,/, 'partial: Main chat is no longer listed as unsaved');
+      assert.doesNotMatch(await toastTitles(page), /settings saved/i, 'partial: no "Saved" toast');
+      // Retry once the Brain runner is up: only the Brain request goes out.
+      delete fail['PATCH /api/brain/config'];
+      const mark = posts.length;
+      await page.click('[data-savebar="save"]');
+      await page.waitForTimeout(1500);
+      assert.deepEqual(saves(mark), ['PATCH /api/brain/config'], 'retry sends only the Brain request');
+      assert.equal(posts.slice(mark).find((x) => x.path === '/api/brain/config').body.thoughtModel, '', 'retry carries the Brain change');
+      assert.equal((await bar(page)).hidden, true, 'bar gone after the retry saved');
+      assert.deepEqual(errors, []);
+    } finally { await page.close(); }
   }
 
   // ── Models: account choice per job ─────────────────────────────────────

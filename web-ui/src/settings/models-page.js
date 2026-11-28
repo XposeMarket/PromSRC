@@ -792,6 +792,23 @@ async function reloadAll() {
   render();
 }
 
+/** Which Models request carries a tracked change (see MODELS_SAVE_STAGES in SettingsPage.js). */
+function saveStageOf(key) {
+  if (key === 'ctx') return '';
+  if (key.startsWith('slot:brain:')) return 'brain';
+  if (key.startsWith('slot:amd:') || key === 'voice') return 'defaults';
+  return 'bulk'; // live:* Main chat reasoning/speed, field:* provider settings, slot:goal:* Summaries
+}
+
+function forgetSavedStages(stages = []) {
+  for (const key of tracker.keys()) {
+    if (!stages.includes(saveStageOf(key))) continue;
+    tracker.forget(key);
+    if (key.startsWith('field:')) fieldOriginals.delete(key.slice(6));
+  }
+  render();
+}
+
 export async function saveModelsPage() {
   const ctxChanged = tracker.has('ctx');
   const other = tracker.keys().some((key) => key !== 'ctx');
@@ -807,7 +824,20 @@ export async function saveModelsPage() {
     ctx.loaded = { mode: ctx.mode, tokens: ctxTokens(ctx.mode) };
   }
   if (other) {
-    const outcome = await deps.saveSettings({ stayOpen: true });
+    let outcome;
+    try {
+      outcome = await deps.saveSettings({ stayOpen: true });
+    } catch (err) {
+      // Part of the save went through: those changes are no longer unsaved, the
+      // rest stays on the bar and the next Save sends only that.
+      if (err?.partial) forgetSavedStages(err.savedStages);
+      if (!ctxChanged) throw err;
+      const partial = new Error(err?.partial
+        ? String(err.message).replace(/^Part saved: /, 'Part saved: Memory per chat, ')
+        : `Part saved: Memory per chat. Not saved: the other changes${err?.message ? ` (${err.message})` : ''}. Save again to retry them.`);
+      partial.partial = true;
+      throw partial;
+    }
     if (outcome?.cancelled) return outcome;
   }
   tracker.clear();

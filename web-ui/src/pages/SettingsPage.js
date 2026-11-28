@@ -632,7 +632,10 @@ function setSettingsTab(tab) {
           if (!window.heartbeatSettingsLoaded) pendingLoads.push(loadHeartbeatSettings());
           else if (window.heartbeatEditor) window.heartbeatEditor.refresh();
         }
-        if (t === 'channels') pendingLoads.push(loadChannelsStatus());
+        if (t === 'channels') {
+          armChannelSwitchGuard();
+          pendingLoads.push(loadChannelsStatus());
+        }
         if (t === 'models') {
           mountModelsPage(panel, modelsPageDeps());
           pendingLoads.push(loadModelSettings());
@@ -2024,6 +2027,8 @@ function scheduleModelStatusRefresh(prov) {
 }
 
 async function loadModelSettings() {
+  // Fresh values from the server: forget any half-finished save.
+  resetModelsSaveProgress();
   ensureModelsSections();
   window._llmSettingsLoadedToUI = false;
   const providerBoot = ensureProviderCatalogUIReady()
@@ -4861,13 +4866,27 @@ function getSelectedChannelType() {
 }
 
 let channelShownType = '';
+/** The app whose form is on screen right now (read from the page, not from the status load). */
+function shownChannelFromPage() {
+  for (const key of ['telegram', 'discord', 'whatsapp']) {
+    const form = document.getElementById(`channel-form-${key}`);
+    if (form && form.style.display !== 'none') return key;
+  }
+  return getSelectedChannelType();
+}
+/** Arms the app-switch guard as soon as Channels mounts, before any status request. */
+function armChannelSwitchGuard() {
+  if (!channelShownType) channelShownType = shownChannelFromPage();
+}
 function onChannelTypeChange() {
   let ch = getSelectedChannelType();
   // Save posts only the app that is shown, so switching apps with unsaved
   // edits would leave them unsaved while the bar said "Saved". Ask for Save or
-  // Discard first and keep the current app on screen.
+  // Discard first and keep the current app on screen. Works even if the status
+  // load is still pending or failed.
+  armChannelSwitchGuard();
   const pending = SETTINGS_PAGE_CONTROLLERS.channels?.changes?.() || [];
-  if (channelShownType && ch !== channelShownType && pending.length) {
+  if (ch !== channelShownType && pending.length) {
     const select = document.getElementById('settings-channel-select');
     if (select) select.value = channelShownType;
     ch = channelShownType;
@@ -4916,6 +4935,7 @@ async function sendSelectedChannelTest() {
 }
 
 async function loadChannelsStatus() {
+  armChannelSwitchGuard();
   const cached = _withSettingsCache({
     key: 'settings-channels',
     ttlMs: SETTINGS_DATA_CACHE_TTL_MS.channelsStatus,
@@ -5183,6 +5203,42 @@ function settingsTabLabel(tab) {
 /** Returned (not thrown) when the user cancels a confirmation: nothing was sent. */
 const SETTINGS_SAVE_CANCELLED = Object.freeze({ cancelled: true });
 
+// Models saves with up to three requests, in order. The bodies the server
+// accepted are remembered until the page saves fully, is discarded or reloads,
+// so a retry after a partial failure resends only the request that failed or
+// one whose content changed since. Bodies themselves are never altered.
+const MODELS_SAVE_STAGES = {
+  bulk: 'Accounts, Main chat and Summaries',
+  defaults: 'Job models',
+  brain: 'Brain models',
+};
+const modelsSaveAccepted = new Map();
+function resetModelsSaveProgress() { modelsSaveAccepted.clear(); }
+async function runModelsSaveStage(stage, body, send) {
+  if (!stage) return send();
+  if (modelsSaveAccepted.get(stage) === body) return null;
+  let result;
+  try {
+    result = await send();
+  } catch (err) {
+    if (err && typeof err === 'object') err.failedStage = stage;
+    throw err;
+  }
+  modelsSaveAccepted.set(stage, body);
+  return result;
+}
+/** A failure after earlier Models requests succeeded says plainly what saved and what did not. */
+function modelsPartialSaveError(err) {
+  const saved = Array.from(modelsSaveAccepted.keys());
+  if (!err?.failedStage || !saved.length) return err;
+  const reason = String(err.message || '').trim();
+  const out = new Error(`Part saved: ${saved.map((stage) => MODELS_SAVE_STAGES[stage]).join(', ')}. Not saved: ${MODELS_SAVE_STAGES[err.failedStage]}${reason ? ` (${reason})` : ''}. Save again to retry it.`);
+  out.partial = true;
+  out.savedStages = saved;
+  out.failedStage = err.failedStage;
+  return out;
+}
+
 async function saveSettings(options = {}) {
   // stayOpen: called by the page save bar. It keeps Settings open and lets the
   // bar show the error instead of the old footer. The request bodies are the same.
@@ -5208,15 +5264,20 @@ async function saveSettings(options = {}) {
     let savedAnything = false;
     let saveResponse = null;
     if (Object.keys(bulkPayload).length) {
-      saveResponse = await api('/api/settings/bulk', {
-        method: 'POST',
-        body: JSON.stringify(bulkPayload),
+      const bulkBody = JSON.stringify(bulkPayload);
+      await runModelsSaveStage(activeTab === 'models' ? 'bulk' : '', bulkBody, async () => {
+        saveResponse = await api('/api/settings/bulk', {
+          method: 'POST',
+          body: bulkBody,
+        });
+        if (saveResponse?.success === false) throw new Error(saveResponse.error || 'Settings were not saved.');
       });
-      if (saveResponse?.success === false) throw new Error(saveResponse.error || 'Settings were not saved.');
       savedAnything = true;
     }
     if (activeTab === 'models') {
-      await saveModelTabLiveSettings({ showStatus: false });
+      await saveModelTabLiveSettings({ showStatus: false, staged: true });
+      // Every Models request is now saved; a later save starts fresh.
+      resetModelsSaveProgress();
       savedAnything = true;
       // A newly saved credential becomes available to all right-side routing
       // selectors immediately, without changing the live main-chat provider.
@@ -5278,7 +5339,8 @@ async function saveSettings(options = {}) {
     setSettingsSaveFeedback('saved', 'Saved ✓');
     await waitForSettingsSaveFeedback();
     closeSettings();
-  } catch (err) {
+  } catch (caught) {
+    const err = getActiveSettingsTab() === 'models' ? modelsPartialSaveError(caught) : caught;
     addProcessEntry('error', `Failed to save settings: ${err.message}`);
     if (stayOpen) {
       resetBtn();
@@ -6006,7 +6068,10 @@ function ensureSettingsSaveBar() {
       } catch (err) {
         settingsSaveBar.busy(false);
         updateSettingsSaveBar();
-        settingsSaveBar.error(`Not saved. ${err?.message || 'Try again.'}`);
+        // A partial save already names what saved and what did not.
+        const message = err?.partial ? err.message : `Not saved. ${err?.message || 'Try again.'}`;
+        if (settingsSaveBar.el.hidden) showToast('Not everything saved', message, 'warning', 8000);
+        else settingsSaveBar.error(message);
         return;
       }
       settingsSaveBar.busy(false);
@@ -6670,16 +6735,22 @@ async function loadAgentModelDefaults() {
   } catch (e) { console.warn('loadAgentModelDefaults error:', e); }
 }
 
-async function persistAgentModelDefaultsFromForm({ showStatus = true } = {}) {
+async function persistAgentModelDefaultsFromForm({ showStatus = true, stage = '' } = {}) {
   const payload = getAgentModelDefaultsFromForm();
   const reasoning = getAgentReasoningDefaultsFromForm();
   const accounts = getAgentAccountDefaultsFromForm();
   const speed = getAgentSpeedDefaultsFromForm();
   const voiceAgent = getVoiceAgentDefaultFromForm();
   const status = document.getElementById('amd-status');
+  const body = JSON.stringify({ ...payload, reasoning, accounts, speed, voiceAgent });
+  // Already saved by an earlier attempt of this same save: nothing to resend.
+  if (stage && modelsSaveAccepted.get(stage) === body) return null;
   try {
-    const data = await api('/api/settings/agent-model-defaults', { method: 'POST', body: JSON.stringify({ ...payload, reasoning, accounts, speed, voiceAgent }) });
-    if (data?.success === false) throw new Error(data.error || 'Model choices were not saved.');
+    const data = await runModelsSaveStage(stage, body, async () => {
+      const response = await api('/api/settings/agent-model-defaults', { method: 'POST', body });
+      if (response?.success === false) throw new Error(response.error || 'Model choices were not saved.');
+      return response;
+    });
     if (showStatus && status) {
       status.style.color = 'var(--ok)';
       setSettingsStatus(status, 'success', 'Saved');
@@ -7030,12 +7101,17 @@ function getBrainModelConfigFromForm() {
   return payload;
 }
 
-async function persistBrainModelConfigFromForm({ showStatus = true } = {}) {
+async function persistBrainModelConfigFromForm({ showStatus = true, stage = '' } = {}) {
   const payload = getBrainModelConfigFromForm();
   const status = document.getElementById('brain-model-status');
+  const body = JSON.stringify(payload);
+  if (stage && modelsSaveAccepted.get(stage) === body) return null;
   try {
-    const result = await api('/api/brain/config', { method: 'PATCH', body: JSON.stringify(payload) });
-    if (result?.success === false) throw new Error(result.error || 'Failed to save brain models');
+    const result = await runModelsSaveStage(stage, body, async () => {
+      const response = await api('/api/brain/config', { method: 'PATCH', body });
+      if (response?.success === false) throw new Error(response.error || 'Failed to save brain models');
+      return response;
+    });
     if (showStatus && status) {
       status.style.color = 'var(--ok)';
       setSettingsStatus(status, 'success', 'Saved');
@@ -7055,9 +7131,9 @@ async function saveBrainModelConfig() {
   return persistBrainModelConfigFromForm({ showStatus: true });
 }
 
-async function saveModelTabLiveSettings({ showStatus = false } = {}) {
-  await persistAgentModelDefaultsFromForm({ showStatus });
-  await persistBrainModelConfigFromForm({ showStatus });
+async function saveModelTabLiveSettings({ showStatus = false, staged = false } = {}) {
+  await persistAgentModelDefaultsFromForm({ showStatus, stage: staged ? 'defaults' : '' });
+  await persistBrainModelConfigFromForm({ showStatus, stage: staged ? 'brain' : '' });
 }
 
 window.amdProviderChange = amdProviderChange;
