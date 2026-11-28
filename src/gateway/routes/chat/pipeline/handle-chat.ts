@@ -87,7 +87,7 @@ import { separateThinkingFromContent, sanitizeFinalReply, stripExplicitThinkTags
 import { handleTaskControlAction } from '../../../tasks/task-router';
 import { makeBroadcastForTask } from '../.././tasks.router';
 import { sanitizeAgentId, normalizeAgentsForSave } from '../../../agents/agent-normalize';
-import { markLiveRuntimeProgress, consumePendingRuntimeSteersForSession, type RuntimeSteerEvent } from '../../../live-runtime-registry';
+import { markLiveRuntimeProgress, consumePendingRuntimeSteersForSession, markRuntimeSteersDelivered, type RuntimeSteerEvent } from '../../../live-runtime-registry';
 import { pauseManagedTeamInternal, resumeManagedTeamInternal, buildTeamDispatchContext, runTeamAgentViaChat } from '../.././teams.router';
 import { addCanvasFile } from '../.././canvas-state';
 import { getMCPManager } from '../../../mcp-manager';
@@ -3550,9 +3550,13 @@ Do not produce prose. Use the canonical thread tool now.` });
     messages.push({ role: 'user', content: `${steerText}${nonVisionNotice}` });
   };
 
+  // Steers taken from the inbox but not yet carried by a provider call that
+  // returned. Acknowledged after the next successful model response.
+  const undeliveredChatSteers: RuntimeSteerEvent[] = [];
   const injectPendingChatSteers = async (): Promise<number> => {
     const steers = consumePendingRuntimeSteersForSession(sessionId, 16);
     if (!steers.length) return 0;
+    undeliveredChatSteers.push(...steers);
     for (const steer of steers) {
       if (steer.kind === 'background_agent_result' && steer.backgroundAgentId) {
         if (backgroundResultInjectedIds.has(steer.backgroundAgentId)) {
@@ -4361,6 +4365,11 @@ Do not produce prose. Use the canonical thread tool now.` });
 	          }
 	        }
 	      }
+
+      // The model has now received every steer injected before this call.
+      if (!abortSignal?.aborted && undeliveredChatSteers.length) {
+        markRuntimeSteersDelivered(undeliveredChatSteers.splice(0));
+      }
 
       const explicitThink = stripExplicitThinkTags(response?.content || '');
       if (explicitThink.thinking) {

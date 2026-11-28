@@ -1210,24 +1210,26 @@ export function addPendingRuntimeSteer(
   return { ok: true, runtime: toSnapshot(record), event };
 }
 
-type RuntimeSteersConsumedListener = (events: RuntimeSteerEvent[]) => void;
-const steersConsumedListeners = new Set<RuntimeSteersConsumedListener>();
+type RuntimeSteersDeliveredListener = (events: RuntimeSteerEvent[]) => void;
+const steersDeliveredListeners = new Set<RuntimeSteersDeliveredListener>();
 
 /**
- * Observe steer events as a running turn reads them. Producers that must not
- * lose an event (timers) use this to learn that delivery actually happened,
- * instead of assuming a queued steer is a delivered one. Returns unsubscribe.
+ * Observe steer events that reached the model: the chat turn calls
+ * markRuntimeSteersDelivered after a provider request containing them returned.
+ * Dequeuing alone is not delivery (a turn can drain steers and then stop before
+ * any model call). Producers that must not lose an event (timers) use this.
+ * Returns unsubscribe.
  */
-export function onRuntimeSteersConsumed(listener: RuntimeSteersConsumedListener): () => void {
-  steersConsumedListeners.add(listener);
-  return () => { steersConsumedListeners.delete(listener); };
+export function onRuntimeSteersDelivered(listener: RuntimeSteersDeliveredListener): () => void {
+  steersDeliveredListeners.add(listener);
+  return () => { steersDeliveredListeners.delete(listener); };
 }
 
-function notifyRuntimeSteersConsumed(events: RuntimeSteerEvent[]): void {
+export function markRuntimeSteersDelivered(events: RuntimeSteerEvent[]): void {
   if (!events.length) return;
-  for (const listener of steersConsumedListeners) {
+  for (const listener of steersDeliveredListeners) {
     try { listener(events); } catch (err: any) {
-      console.warn(`[live-runtime] steer-consumed listener failed: ${String(err?.message || err)}`);
+      console.warn(`[live-runtime] steer-delivered listener failed: ${String(err?.message || err)}`);
     }
   }
 }
@@ -1262,7 +1264,6 @@ export function consumePendingRuntimeSteersForSession(sessionId: string, limit =
     }
     if (out.length >= limit) break;
   }
-  notifyRuntimeSteersConsumed(out);
   return out;
 }
 

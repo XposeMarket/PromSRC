@@ -17,7 +17,7 @@ import {
   hasTerminalRuntimeCheckpoint,
   isSteerableChatRuntimeKind,
   listLiveRuntimes,
-  onRuntimeSteersConsumed,
+  onRuntimeSteersDelivered,
 } from '../live-runtime-registry';
 import type { ChatSteerInternalOptions } from '../routes/chat/steer';
 
@@ -73,8 +73,8 @@ export interface MainChatTimerRunnerDeps {
   steerActiveTurn?: (request: TimerSteerRequest) => TimerSteerResult;
   /** True while the runtime that holds a timer steer can still read it. */
   isRuntimeActive?: (runtimeId: string) => boolean;
-  /** Subscribe to steer reads; returns unsubscribe. */
-  onSteersConsumed?: (listener: (eventIds: string[]) => void) => () => void;
+  /** Subscribe to steers reaching the model (provider call returned); returns unsubscribe. */
+  onSteersDelivered?: (listener: (eventIds: string[]) => void) => () => void;
   /** Save a model-free reminder message in its chat. */
   postReminder?: (sessionId: string, message: TimerReminderMessage) => void;
   /** Push a reminder to the user's devices. Best effort. */
@@ -146,8 +146,8 @@ function defaultIsRuntimeActive(runtimeId: string): boolean {
   return !!runtime && !hasTerminalRuntimeCheckpoint(runtime);
 }
 
-function defaultOnSteersConsumed(listener: (eventIds: string[]) => void): () => void {
-  return onRuntimeSteersConsumed((events) => listener(events.map((event) => event.id)));
+function defaultOnSteersDelivered(listener: (eventIds: string[]) => void): () => void {
+  return onRuntimeSteersDelivered((events) => listener(events.map((event) => event.id)));
 }
 
 function defaultPostReminder(sessionId: string, message: TimerReminderMessage): void {
@@ -195,7 +195,7 @@ export class MainChatTimerRunner {
   private readonly hasSteerableTurn: (sessionId: string) => boolean;
   private readonly steerActiveTurn: ((request: TimerSteerRequest) => TimerSteerResult) | null;
   private readonly isRuntimeActive: (runtimeId: string) => boolean;
-  private readonly onSteersConsumed: (listener: (eventIds: string[]) => void) => () => void;
+  private readonly onSteersDelivered: (listener: (eventIds: string[]) => void) => () => void;
   private readonly postReminder: (sessionId: string, message: TimerReminderMessage) => void;
   private readonly pushReminder: (timer: MainChatTimer, text: string) => void | Promise<void>;
   private readonly broadcast: (payload: any) => void;
@@ -208,7 +208,7 @@ export class MainChatTimerRunner {
     this.hasSteerableTurn = deps.hasSteerableTurn || defaultHasSteerableTurn;
     this.steerActiveTurn = deps.steerActiveTurn || null;
     this.isRuntimeActive = deps.isRuntimeActive || defaultIsRuntimeActive;
-    this.onSteersConsumed = deps.onSteersConsumed || defaultOnSteersConsumed;
+    this.onSteersDelivered = deps.onSteersDelivered || defaultOnSteersDelivered;
     this.postReminder = deps.postReminder || defaultPostReminder;
     this.pushReminder = deps.pushReminder || defaultPushReminder;
   }
@@ -224,19 +224,29 @@ export class MainChatTimerRunner {
     console.log(`[TimerRunner] Started - ticking every ${this.tickMs}ms`);
   }
 
+  /**
+   * Stop firing timers. Keeps listening for timer steers already folded into a
+   * running turn: a draining gateway (warm handoff) stops its schedulers but
+   * still finishes its turns, and must still record those timers as delivered.
+   */
   stop(): void {
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
     }
+  }
+
+  /** stop() plus drop the delivery listener (tests / full teardown). */
+  dispose(): void {
+    this.stop();
     this.unsubscribeSteers?.();
     this.unsubscribeSteers = null;
   }
 
-  /** Listen for steer reads without starting the interval (tests drive tick() directly). */
+  /** Listen for steer delivery without starting the interval (tests drive tick() directly). */
   subscribeSteerReads(): void {
     if (this.unsubscribeSteers) return;
-    this.unsubscribeSteers = this.onSteersConsumed((eventIds) => this.handleSteersConsumed(eventIds));
+    this.unsubscribeSteers = this.onSteersDelivered((eventIds) => this.handleSteersDelivered(eventIds));
   }
 
   /** Timers folded into a running turn and not yet read by it. */
@@ -426,7 +436,7 @@ export class MainChatTimerRunner {
     return true;
   }
 
-  private handleSteersConsumed(eventIds: string[]): void {
+  private handleSteersDelivered(eventIds: string[]): void {
     for (const eventId of eventIds) {
       const entry = this.steered.get(eventId);
       if (!entry) continue;
