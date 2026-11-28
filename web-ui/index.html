@@ -4202,62 +4202,61 @@
       </section>
     </div>
 
-    <div id="settings-panel-security" style="display:none;padding:14px 16px">
-      <div id="settings-secure-access-host" style="margin-bottom:14px"></div>
-      <div style="border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:12px;padding:12px;margin-bottom:14px">
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px">
-          <div>
-            <div class="right-section-title" style="margin-bottom:4px">Tool Permissions</div>
-          </div>
+    <div id="settings-panel-security" class="sk-page sk-page-legacy" style="display:none;padding:14px 16px">
+      <p class="sk-lede">Decide what Prometheus may do on this computer without asking you first.</p>
+      <div id="settings-secure-access-host" class="sk-secure-host"></div>
+
+      <div class="sk-sec"><h2>Permissions</h2></div>
+      <div class="sk-card" role="radiogroup" aria-label="Permissions">
+        <label class="sk-row sk-choice-row" data-sk-label="Permissions" for="settings-terminal-permission-default">
+          <span class="sk-who"><span class="sk-copy"><span class="sk-name">Ask before risky actions</span>
+            <span class="sk-desc">Prometheus asks before it writes files, deletes things, acts outside this computer or runs commands. Recommended.</span></span></span>
+          <span class="sk-ctl"><input id="settings-terminal-permission-default" class="sk-radio" type="radio" name="settings-terminal-permission-mode" value="default" checked /></span>
+        </label>
+        <label class="sk-row sk-choice-row" data-sk-label="Permissions" for="settings-terminal-permission-lite">
+          <span class="sk-who"><span class="sk-copy"><span class="sk-name">Ask less (Lite)</span>
+            <span class="sk-desc">Everyday tools run without a pause. Approval cards you are shown, changes to Prometheus itself, admin commands and hard blocks still apply.</span></span></span>
+          <span class="sk-ctl"><input id="settings-terminal-permission-lite" class="sk-radio" type="radio" name="settings-terminal-permission-mode" value="lite" /></span>
+        </label>
+        <div class="sk-row">
+          <div class="sk-who"><div class="sk-copy"><label class="sk-name" for="settings-workspace-tools-enabled">Use Prometheus file tools</label>
+            <div class="sk-desc">Read and edit files with Prometheus's own tools instead of raw terminal commands</div></div></div>
+          <div class="sk-ctl"><input id="settings-workspace-tools-enabled" class="sk-toggle" type="checkbox" checked /></div>
         </div>
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px">
-          <label style="display:flex;gap:9px;align-items:flex-start;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:10px;cursor:pointer;background:var(--panel-2)">
-            <input id="settings-terminal-permission-default" type="radio" name="settings-terminal-permission-mode" value="default" checked style="margin-top:3px" />
-            <span>
-              <span style="display:block;font-size:13px;font-weight:700;color:var(--text)">Default Permissions</span>
-              <span style="display:block;font-size:11.5px;color:var(--muted);line-height:1.45;margin-top:2px">Apply capability-based approvals to writes, destructive actions, external actions, and terminal commands.</span>
-            </span>
-          </label>
-          <label style="display:flex;gap:9px;align-items:flex-start;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:10px;cursor:pointer;background:var(--panel-2)">
-            <input id="settings-terminal-permission-lite" type="radio" name="settings-terminal-permission-mode" value="lite" style="margin-top:3px" />
-            <span>
-              <span style="display:block;font-size:13px;font-weight:700;color:var(--text)">Lite Permissions</span>
-              <span style="display:block;font-size:11.5px;color:var(--muted);line-height:1.45;margin-top:2px">Run non-elevated tools without generic approval pauses. Explicit approval cards, dev edits, admin commands, and hard blocks still apply.</span>
-            </span>
-          </label>
-        </div>
-        <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--line)">
-          <label style="display:flex;gap:10px;align-items:flex-start;cursor:pointer">
-            <input id="settings-workspace-tools-enabled" type="checkbox" checked style="margin-top:3px" />
-            <span>
-              <span style="display:block;font-size:13px;font-weight:700;color:var(--text)">Use Prometheus File Tools</span>
-            </span>
-          </label>
-        </div>
-        <div id="settings-security-status" style="font-size:11px;color:var(--muted);margin-top:6px"></div>
+        <div id="settings-security-status" class="sk-note sk-status-line"></div>
       </div>
-      <div class="settings-command-permissions-panel" style="border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:12px;padding:12px;margin-bottom:14px">
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px">
-          <div>
-            <div class="right-section-title" style="margin-bottom:4px">Always-Allowed Commands</div>
-          </div>
-          <div class="settings-command-permissions-actions">
-            <button id="settings-command-permissions-toggle" type="button" class="btn btn-sm settings-command-permissions-toggle" aria-expanded="false" aria-controls="settings-command-permissions-details" onclick="toggleCommandPermissionList()">View commands</button>
-            <button class="btn btn-sm" onclick="loadSecuritySettings()" style="background:transparent;border:1px solid color-mix(in srgb, var(--text) 12%, transparent);color:var(--text);flex-shrink:0">Refresh</button>
+
+      <div class="sk-sec"><h2>Always-allowed commands</h2></div>
+      <div class="sk-card settings-command-permissions-panel">
+        <div class="sk-row" data-sk-instant>
+          <div class="sk-who"><div class="sk-copy"><div class="sk-name">Commands you approved for good</div><div class="sk-desc">Terminal commands that no longer ask first</div></div></div>
+          <div class="sk-ctl settings-command-permissions-actions">
+            <button class="sk-btn ghost" type="button" onclick="loadSecuritySettings()">Refresh</button>
+            <button id="settings-command-permissions-toggle" type="button" class="sk-btn settings-command-permissions-toggle" aria-expanded="false" aria-controls="settings-command-permissions-details" onclick="toggleCommandPermissionList()">View commands</button>
           </div>
         </div>
-        <div id="settings-command-permissions-details" class="settings-command-permissions-details" hidden>
+        <div id="settings-command-permissions-details" class="settings-command-permissions-details sk-sub" hidden data-sk-instant>
           <div id="settings-command-permissions-list" class="settings-command-permissions-list"></div>
         </div>
       </div>
-      <div style="border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:12px;padding:12px">
-        <div class="right-section-title" style="margin-bottom:8px">File Access</div>
-        <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px">Workspace Path</label>
-        <input id="settings-workspace-path" type="text" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:8px;font-family:'IBM Plex Mono',monospace;font-size:12px;margin-bottom:10px" placeholder="e.g. %APPDATA%\Prometheus\workspace" />
-        <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px">Allowed Paths (one per line)</label>
-        <textarea id="settings-allowed-paths" style="width:100%;min-height:120px;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:8px;font-family:'IBM Plex Mono',monospace;font-size:12px"></textarea>
-        <label style="display:block;font-size:12px;color:var(--muted);margin:10px 0 6px">Blocked Paths (one per line)</label>
-        <textarea id="settings-blocked-paths" style="width:100%;min-height:100px;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:8px;font-family:'IBM Plex Mono',monospace;font-size:12px"></textarea>
+
+      <div class="sk-sec"><h2>Files</h2></div>
+      <div class="sk-card">
+        <div class="sk-row sk-row-stack">
+          <div class="sk-who"><div class="sk-copy"><label class="sk-name" for="settings-workspace-path">Workspace folder</label><div class="sk-desc">Where Prometheus keeps its own files</div></div></div>
+          <div class="sk-ctl"><input id="settings-workspace-path" class="sk-input sk-grow sk-mono" type="text" placeholder="Default workspace folder" /></div>
+        </div>
+        <button type="button" class="sk-row sk-fold" data-fold="sec-paths" aria-expanded="false" aria-controls="sk-fold-sec-paths"><span class="sk-who"><span class="sk-copy"><span class="sk-name">Allowed and blocked folders</span><span class="sk-desc">Extra folders Prometheus may use, and folders it must never touch</span></span></span><svg class="sk-ico sk-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>
+        <div class="sk-sub" id="sk-fold-sec-paths" data-fold-body="sec-paths" hidden>
+          <div class="sk-row sk-row-stack">
+            <div class="sk-who"><div class="sk-copy"><label class="sk-name" for="settings-allowed-paths">Allowed folders</label><div class="sk-desc">One per line</div></div></div>
+            <div class="sk-ctl"><textarea id="settings-allowed-paths" class="sk-input sk-grow sk-mono" rows="5"></textarea></div>
+          </div>
+          <div class="sk-row sk-row-stack">
+            <div class="sk-who"><div class="sk-copy"><label class="sk-name" for="settings-blocked-paths">Blocked folders</label><div class="sk-desc">One per line</div></div></div>
+            <div class="sk-ctl"><textarea id="settings-blocked-paths" class="sk-input sk-grow sk-mono" rows="4"></textarea></div>
+          </div>
+        </div>
       </div>
     </div>
 

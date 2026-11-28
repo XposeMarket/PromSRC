@@ -5816,6 +5816,9 @@ const SETTINGS_PAGE_CONTROLLERS = {
   channels: createFieldPageController('settings-panel-channels', {
     reload: () => loadChannelsStatus(),
   }),
+  security: createFieldPageController('settings-panel-security', {
+    reload: () => loadSecuritySettings(),
+  }),
   // Only the webhook fields; the MCP server form keeps its own "Save server".
   integrations: createFieldPageController('settings-panel-integrations', {
     save: () => saveWebhookSettings(),
@@ -5834,8 +5837,14 @@ function createFieldPageController(panelId, { reload = null, save = null, labels
   const tracker = createChangeTracker();
   const originals = new Map();
   let wired = false;
-  const valueOf = (el) => (el.type === 'checkbox' || el.type === 'radio' ? el.checked : el.value);
-  const tracked = (el) => !!el?.id && /^(INPUT|SELECT|TEXTAREA)$/.test(el.tagName) && el.type !== 'file' && !el.closest('[data-sk-instant]');
+  // Radio groups are tracked by group name with the chosen value.
+  const keyOf = (el) => (el.type === 'radio' ? `radio:${el.name}` : el.id);
+  const valueOf = (el) => {
+    if (el.type === 'checkbox') return el.checked;
+    if (el.type === 'radio') return document.querySelector(`input[type="radio"][name="${CSS.escape(el.name)}"]:checked`)?.value ?? '';
+    return el.value;
+  };
+  const tracked = (el) => !!(el?.id || el?.name) && /^(INPUT|SELECT|TEXTAREA)$/.test(el.tagName) && el.type !== 'file' && !el.closest('[data-sk-instant]');
   const labelFor = (el) => labels[el.id]
     || el.closest('[data-sk-label]')?.getAttribute('data-sk-label')
     || el.closest('.sk-row')?.querySelector('.sk-name')?.textContent?.trim()
@@ -5843,13 +5852,13 @@ function createFieldPageController(panelId, { reload = null, save = null, labels
     || 'Setting';
   const remember = (event) => {
     const el = event.target;
-    if (tracked(el) && !originals.has(el.id)) originals.set(el.id, valueOf(el));
+    if (tracked(el) && !originals.has(keyOf(el))) originals.set(keyOf(el), valueOf(el));
   };
   const changed = (event) => {
     const el = event.target;
     if (!event.isTrusted || !tracked(el)) return;
-    if (!originals.has(el.id)) return;
-    tracker.track(el.id, labelFor(el), originals.get(el.id), valueOf(el));
+    if (!originals.has(keyOf(el))) return;
+    tracker.track(keyOf(el), labelFor(el), originals.get(keyOf(el)), valueOf(el));
     updateSettingsSaveBar();
   };
   const reset = () => { tracker.clear(); originals.clear(); };
@@ -5869,8 +5878,8 @@ function createFieldPageController(panelId, { reload = null, save = null, labels
     /** Record a change made by code on the user's behalf (e.g. "Use this address"). */
     note(el, before) {
       if (!tracked(el)) return;
-      if (!originals.has(el.id)) originals.set(el.id, before);
-      tracker.track(el.id, labelFor(el), originals.get(el.id), valueOf(el));
+      if (!originals.has(keyOf(el))) originals.set(keyOf(el), before);
+      tracker.track(keyOf(el), labelFor(el), originals.get(keyOf(el)), valueOf(el));
       updateSettingsSaveBar();
     },
     async save() {
@@ -5879,10 +5888,15 @@ function createFieldPageController(panelId, { reload = null, save = null, labels
       await reload?.();
     },
     async discard() {
-      for (const [id, value] of originals) {
-        const el = document.getElementById(id);
+      for (const [key, value] of originals) {
+        if (key.startsWith('radio:')) {
+          const radio = document.querySelector(`input[type="radio"][name="${CSS.escape(key.slice(6))}"][value="${CSS.escape(String(value))}"]`);
+          if (radio) radio.checked = true;
+          continue;
+        }
+        const el = document.getElementById(key);
         if (!el) continue;
-        if (el.type === 'checkbox' || el.type === 'radio') el.checked = !!value; else el.value = value;
+        if (el.type === 'checkbox') el.checked = !!value; else el.value = value;
       }
       reset();
       await reload?.();
