@@ -4,6 +4,7 @@ import crypto from 'crypto';
 import { getConfig } from '../../config/config';
 import { quarantineCorruptStateFile, writeFileAtomicSync } from '../state-file-quarantine';
 import { getMainChatGoal, getSessionExternalAgent } from '../session';
+import { isPidAlive } from '../runtime/recovery-claims';
 
 export type MainChatTimerStatus = 'pending' | 'due_waiting' | 'running' | 'completed' | 'cancelled' | 'failed';
 
@@ -22,6 +23,10 @@ export interface MainChatTimer {
   error?: string;
   origin?: Record<string, any>;
   delivery?: Record<string, any>;
+  /** Gateway process that marked this timer `running` (kept afterwards for diagnostics). */
+  ownerPid?: number;
+  /** ISO start time of that process, so a reused pid is not mistaken for the owner. */
+  ownerStartedAt?: string;
 }
 
 interface TimerStoreData {
@@ -29,10 +34,29 @@ interface TimerStoreData {
   updatedAt: string;
 }
 
-// A `running` timer is owned only by the process that fired it. On a fresh boot,
-// recover persisted running timers from an earlier process so they can be picked
-// up again instead of remaining stranded forever.
+// A `running` timer is owned by the process that fired it, recorded on the timer
+// as ownerPid + ownerStartedAt. A later process recovers a running timer only
+// once that owner is gone, so it is picked up again instead of remaining
+// stranded forever. Records without an owner (written by older builds) are
+// recovered on any fresh boot.
 const timerStoreProcessStartedAt = Date.now();
+const timerOwnerPid = process.pid;
+const timerOwnerStartedAt = new Date(Date.now() - Math.round(process.uptime() * 1000)).toISOString();
+
+/**
+ * Backstop for pid reuse: an unrelated process that took a dead owner's pid
+ * cannot be told apart from the owner, so a running timer fired longer ago than
+ * this is recovered even while its owner pid still answers.
+ */
+export const OWNED_RUNNING_TIMER_MAX_MS = 24 * 60 * 60 * 1000;
+
+/** Who is asking, and how to tell whether another process exists. Overridable in tests. */
+export interface TimerOwnerProbe {
+  pid: number;
+  startedAt: string;
+  isPidAlive: (pid: number) => boolean;
+  nowMs: number;
+}
 
 function getTimerDir(): string {
   return path.join(getConfig().getConfigDir(), 'timers');
@@ -68,19 +92,51 @@ function normalizeTimer(raw: any): MainChatTimer | null {
     error: raw?.error ? String(raw.error) : undefined,
     origin: raw?.origin && typeof raw.origin === 'object' ? raw.origin : undefined,
     delivery: raw?.delivery && typeof raw.delivery === 'object' ? raw.delivery : undefined,
+    ownerPid: Number.isInteger(Number(raw?.ownerPid)) && Number(raw.ownerPid) > 0 ? Number(raw.ownerPid) : undefined,
+    ownerStartedAt: raw?.ownerStartedAt ? String(raw.ownerStartedAt) : undefined,
   };
 }
 
-export function recoverStrandedMainChatTimers(timers: MainChatTimer[], processStartedAt: number = timerStoreProcessStartedAt): boolean {
+/**
+ * True when a `running` timer is being run by a process that still exists: this
+ * one, or another gateway that is alive (the draining host after a warm
+ * handoff). Records without an owner return false.
+ */
+function isTimerRunningInLiveProcess(timer: MainChatTimer, probe: TimerOwnerProbe): boolean {
+  const ownerPid = Number(timer.ownerPid);
+  if (!Number.isInteger(ownerPid) || ownerPid <= 0) return false;
+  // Same pid with a recorded start time is decisive: an exact match is this
+  // process (never recover, uncapped); a mismatch means this process reused a
+  // dead owner's pid.
+  if (ownerPid === probe.pid && timer.ownerStartedAt) return timer.ownerStartedAt === probe.startedAt;
+  // Everything else is unproven (another pid, or this pid with no start time
+  // recorded), so it is bounded by the age cap.
+  const firedAtMs = new Date(timer.firedAt || timer.updatedAt).getTime();
+  if (Number.isFinite(firedAtMs) && probe.nowMs - firedAtMs > OWNED_RUNNING_TIMER_MAX_MS) return false;
+  return ownerPid === probe.pid || probe.isPidAlive(ownerPid);
+}
+
+export function recoverStrandedMainChatTimers(
+  timers: MainChatTimer[],
+  processStartedAt: number = timerStoreProcessStartedAt,
+  ownerProbe: Partial<TimerOwnerProbe> = {},
+): boolean {
+  const probe: TimerOwnerProbe = { pid: timerOwnerPid, startedAt: timerOwnerStartedAt, isPidAlive, nowMs: Date.now(), ...ownerProbe };
   let recovered = false;
   for (const timer of timers) {
     const lastOwnedAt = new Date(timer.firedAt || timer.updatedAt).getTime();
     if (timer.status !== 'running' || !Number.isFinite(lastOwnedAt) || lastOwnedAt >= processStartedAt) continue;
+    // After a warm handoff the gateway that fired this timer is still alive as a
+    // draining host and still running the turn. Recovering the timer here would
+    // start a second copy of that turn (2026-11-27: one timer ran three times).
+    if (isTimerRunningInLiveProcess(timer, probe)) continue;
     // The original runner died with the previous process. Preserve its schedule
     // semantics: future timers wait pending; elapsed timers wait to be claimed.
     timer.status = new Date(timer.dueAt).getTime() <= processStartedAt ? 'due_waiting' : 'pending';
     timer.firedAt = undefined;
     timer.completedAt = undefined;
+    timer.ownerPid = undefined;
+    timer.ownerStartedAt = undefined;
     timer.error = 'Recovered after the process that owned this timer stopped.';
     timer.updatedAt = new Date().toISOString();
     recovered = true;
@@ -172,6 +228,31 @@ export function getDueMainChatTimers(now: Date = new Date()): MainChatTimer[] {
     .filter((timer) => timer.status === 'pending' || timer.status === 'due_waiting')
     .filter((timer) => new Date(timer.dueAt).getTime() <= nowMs)
     .sort((a, b) => new Date(a.dueAt).getTime() - new Date(b.dueAt).getTime());
+}
+
+/**
+ * Mark a due timer as running in this process and record this process as its
+ * owner. Returns null when the timer is no longer due (cancelled, or already
+ * claimed by another gateway process); the caller must not run it then.
+ */
+export function claimMainChatTimerForRun(id: string, firedAt: string = new Date().toISOString()): MainChatTimer | null {
+  const timerId = String(id || '').trim();
+  if (!timerId) return null;
+  const store = loadStore();
+  const idx = store.timers.findIndex((timer) => timer.id === timerId);
+  if (idx < 0) return null;
+  const current = store.timers[idx];
+  if (current.status !== 'pending' && current.status !== 'due_waiting') return null;
+  store.timers[idx] = {
+    ...current,
+    status: 'running',
+    firedAt,
+    ownerPid: timerOwnerPid,
+    ownerStartedAt: timerOwnerStartedAt,
+    updatedAt: new Date().toISOString(),
+  };
+  saveStore(store);
+  return store.timers[idx];
 }
 
 export function updateMainChatTimer(id: string, patch: Partial<MainChatTimer>): MainChatTimer | null {

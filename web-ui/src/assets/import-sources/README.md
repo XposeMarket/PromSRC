@@ -15,6 +15,8 @@ loaded from a remote URL at runtime.
 - `nous-research.png` is the Nous Research logo used by Hermes Agent, copied
   from the inspected Hermes Agent snapshot at
   `website/static/img/nous-logo.png`.
+- `antigravity.svg` is the Google Antigravity mark copied from the inspected
+  T3 Code snapshot (MIT) at `apps/marketing/public/harnesses/antigravity.svg`.
 - `openclaw.svg` is the OpenClaw source wordmark copied from the inspected
   OpenClaw snapshot at `docs/assets/openclaw-logo-text-dark.svg`.
 

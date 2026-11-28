@@ -30,7 +30,7 @@ import { getAgentById, getConfig } from '../../config/config';
 import { setWorkspace } from '../session';
 import { getTeamWorkspacePath } from './team-workspace';
 import { registerLiveRuntime, finishLiveRuntime, updateLiveRuntimeCheckpoint } from '../live-runtime-registry';
-import { readAgentPromptFile } from '../../agents/agent-prompt-file.js';
+import { readAgentPromptFile, stripLegacyGeneratedAgentPromptLines } from '../../agents/agent-prompt-file.js';
 import { parseProviderModelRef } from '../../agents/model-routing.js';
 import { setRuntimeActorContext } from '../runtime-actor.js';
 import { appendBackgroundSseTrace } from '../tasks/background-agent-trace.js';
@@ -626,7 +626,7 @@ function buildTeamCallerContext(teamId: string): string {
 
   const teamWsPath = getTeamWorkspacePath(team.id);
   const manager = ensureManagedTeamManagerAgent(team);
-  const managerPrompt = String(readAgentPromptFile(manager.identityPath, { migrateLegacy: true })?.content || '').trim();
+  const managerPrompt = stripLegacyGeneratedAgentPromptLines(String(readAgentPromptFile(manager.identityPath, { migrateLegacy: true })?.content || '')).trim();
 
   return [
     `=== MANAGER MODE ===`,

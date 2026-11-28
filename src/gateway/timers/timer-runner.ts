@@ -1,4 +1,5 @@
 import {
+  claimMainChatTimerForRun,
   getDueMainChatTimers,
   updateMainChatTimer,
   type MainChatTimer,
@@ -75,9 +76,11 @@ export class MainChatTimerRunner {
       updateMainChatTimer(timer.id, { status: 'cancelled', error: 'owning goal no longer active', completedAt: new Date().toISOString() });
       return;
     }
-    this.runningTimerId = timer.id;
     const firedAt = new Date().toISOString();
-    updateMainChatTimer(timer.id, { status: 'running', firedAt });
+    // Claim it for this process. Null means it is no longer due: cancelled, or
+    // already running in another gateway process (warm handoff). Do not run it.
+    if (!claimMainChatTimerForRun(timer.id, firedAt)) return;
+    this.runningTimerId = timer.id;
     setModelBusy(true);
 
     const firedUserMessage = [

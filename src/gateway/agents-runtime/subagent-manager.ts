@@ -617,21 +617,17 @@ export class SubagentManager {
    * Build system prompt file that user can edit
    */
   private buildAgentPromptFile(def: SubagentDefinition): string {
-    const hasTeamAssignment = !!(def.teamRole || def.teamAssignment);
-    const identityBlock = hasTeamAssignment
-      ? [
-          `## Team-Specific Role`,
-          def.teamRole || '(not recorded)',
-          ``,
-          `## Team-Specific Assignment`,
-          def.teamAssignment || '(not recorded)',
-        ]
-      : [
-          `## Standalone Subagent Identity`,
-          `You are a standalone one-off subagent, not a member of a managed team.`,
-          `You use the standard Prometheus runtime policies, tools, wrappers, and skill rules without inheriting the main chat's soul, user profile, or memory context.`,
-          `Answer as this named subagent and keep generated support artifacts separated in this subagent workspace when practical.`,
-        ];
+    // This file is read into every run of the agent, so it only states things that are true
+    // for every run. It does not say whether the agent is on a team (membership changes after
+    // creation; the runtime actor line states it per run), and it does not print max_steps or
+    // timeout_ms (stored, but nothing enforces them, so printing them told agents they had
+    // 20 steps and 5 minutes). Sections with nothing in them are left out.
+    const section = (heading: string, ...body: string[]): string[] => {
+      const text = body.map((line) => String(line || '').trim()).filter(Boolean);
+      return text.length ? ['', heading, ...text] : [];
+    };
+    const constraints = (def.constraints || []).map((c) => String(c || '').trim()).filter(Boolean);
+    const forbidden = (def.forbidden_tools || []).map((t: string) => String(t || '').trim()).filter(Boolean);
 
     return [
       `# ${def.name}`,
@@ -639,32 +635,24 @@ export class SubagentManager {
       def.description,
       ``,
       renderIdentityPrompt(def.identity),
+      ...section(
+        `## Base Preset Role`,
+        def.roleType ? `Role: ${def.roleType}` : '',
+        def.baseRolePrompt ? `Preset prompt:\n${def.baseRolePrompt}` : '',
+      ),
+      ...section(`## Team Role`, def.teamRole || ''),
+      ...section(`## Team Assignment`, def.teamAssignment || ''),
       ``,
-      `## Base Preset Role`,
-      def.roleType ? `Role: ${def.roleType}` : '(not recorded)',
-      def.baseRolePrompt ? `\nPreset prompt:\n${def.baseRolePrompt}` : '',
-      ``,
-      ...identityBlock,
+      `## How You Run`,
+      `You run as your own agent with the standard Prometheus tools and rules. You do not inherit the main chat's persona, user profile or memory; your private MEMORY.md is your long-term memory.`,
+      `Answer as this named agent and keep your own scratch files in your agent workspace when practical.`,
       ``,
       `## Instructions`,
       def.system_instructions,
+      ...section(`## Constraints (DO NOT VIOLATE)`, ...constraints.map((c) => `- ${c}`)),
+      ...section(`## Success Criteria`, def.success_criteria),
+      ...section(`## Forbidden Tools`, ...forbidden.map((t: string) => `- ${t}`)),
       ``,
-      `## Constraints (DO NOT VIOLATE)`,
-      def.constraints.map(c => `- ${c}`).join('\n'),
-      ``,
-      `## Success Criteria`,
-      def.success_criteria,
-      ``,
-      `## Forbidden Tools`,
-      def.forbidden_tools?.map((t: string) => `- ${t}`).join('\n') || '(none)',
-      ``,
-      `## Configuration`,
-      `- Max steps: ${def.max_steps}`,
-      `- Timeout: ${def.timeout_ms}ms`,
-      `- Model override: ${def.model || '(use default)'}`,
-      ``,
-      `---`,
-      `**Note:** Edit this file to modify the subagent. Changes take effect on next call.`,
     ].join('\n');
   }
 
@@ -713,9 +701,9 @@ export class SubagentManager {
       `ASSIGNMENT: ${taskPrompt}`,
       contextSection,
       ``,
-      `CONSTRAINTS:`,
-      def.constraints.map(c => `• ${c}`).join('\n'),
-      ``,
+      ...((def.constraints || []).length
+        ? [`CONSTRAINTS:`, def.constraints.map(c => `• ${c}`).join('\n'), ``]
+        : []),
       `SUCCESS CRITERIA: ${def.success_criteria}`,
     ].join('\n');
   }
@@ -803,6 +791,28 @@ export class SubagentManager {
     }
 
     const next: SubagentDefinition = { ...existing };
+
+    // The global config entry is what model routing reads and what Settings edits. This agent's
+    // own config.json can be older. When the patch does not set model or reasoning effort, mirror
+    // the global entry, including a missing value: Settings removes the field to mean "inherit",
+    // so absence is a choice too. Otherwise any unrelated update (new instructions, say) wrote the
+    // older file value back over what was chosen in Settings. The agent's own file is only the
+    // fallback when it has no global entry at all.
+    try {
+      const liveAgents: any[] = Array.isArray((getConfig().getConfig() as any).agents) ? (getConfig().getConfig() as any).agents : [];
+      const liveEntry = liveAgents.find((a: any) => a?.id === safeId);
+      const liveModel = String(liveEntry?.model || '').trim();
+      const liveEffort = String(liveEntry?.reasoning_effort || '').trim();
+      if (liveEntry) {
+        if (patch.model === undefined) next.model = liveModel || undefined;
+        if (patch.reasoning_effort === undefined && patch.reasoningEffort === undefined) {
+          next.reasoning_effort = liveEffort || undefined;
+        }
+      }
+    } catch {
+      // No readable global config: fall back to this agent's own saved values.
+    }
+
     const stringFields: Array<keyof SubagentDefinition> = [
       'description',
       'system_instructions',

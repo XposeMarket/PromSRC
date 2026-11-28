@@ -29,7 +29,7 @@ const DETECT_TTL_MS = 60_000;
 function ensureDefaults(): void {
   if (!adapters.has('codex')) adapters.set('codex', new CodexAdapter());
   if (!adapters.has('claude-code')) adapters.set('claude-code', new ClaudeCodeAdapter());
-  for (const id of ['hermes', 'cursor', 'openclaw'] as const) if (!adapters.has(id)) adapters.set(id, new AcpAdapter(id));
+  for (const id of ['hermes', 'cursor', 'openclaw', 'antigravity'] as const) if (!adapters.has(id)) adapters.set(id, new AcpAdapter(id));
   if (!adapters.has('openai-dots')) adapters.set('openai-dots', new OpenAIDotsAdapter());
 }
 

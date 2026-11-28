@@ -108,6 +108,11 @@
       "seconds": 1
     },
     {
+      "name": "Verify agent identity file generation, legacy read-time filter and model-preserving updates",
+      "run": "npm run test:agent-identity-file",
+      "seconds": 1
+    },
+    {
       "name": "Verify task acceptance verifier failure classification",
       "run": "npm run test:task-verifier",
       "seconds": 1

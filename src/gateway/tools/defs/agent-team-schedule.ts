@@ -800,7 +800,7 @@ export function getAgentTeamScheduleTools(): any[] {
             task: { type: 'string', description: 'For start: kickoff task for manager coordination. For dispatch: one-off task to execute now' },
             context: { type: 'string', description: 'For dispatch: optional extra context' },
             confirm: { type: 'boolean', description: 'For delete: must be true to confirm deletion' },
-            delete_agents: { type: 'boolean', description: 'For delete: defaults true. If true, also permanently delete all member agents, their workspaces/chats, and their scheduled jobs. Set false only when intentionally keeping members.' },
+            delete_agents: { type: 'boolean', description: 'For delete: defaults true. If true, also permanently delete all member agents, their workspaces/chats, and their scheduled jobs. Set false only when intentionally keeping members. The team manager agent is always deleted with its team.' },
             add_subagent_ids: { type: 'array', items: { type: 'string' }, description: 'For update: agent IDs to add to the team' },
             remove_subagent_ids: { type: 'array', items: { type: 'string' }, description: 'For update: agent IDs to remove from the team' },
             originating_session_id: { type: 'string', description: 'Internal: the main chat session that triggered team creation via ask_team_coordinator. Stored on the team so results route back to that session.' },

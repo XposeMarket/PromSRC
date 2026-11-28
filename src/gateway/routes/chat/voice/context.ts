@@ -6,7 +6,7 @@ import {
   ensureAgentWorkspace,
   resolveAgentWorkspace,
 } from '../../../../config/config';
-import { readAgentPromptFile } from '../../../../agents/agent-prompt-file.js';
+import { readAgentPromptFile, stripLegacyGeneratedAgentPromptLines } from '../../../../agents/agent-prompt-file.js';
 import {
   buildBootStartupSnapshot as _buildBootStartupSnapshot,
   loadFullMemoryProfile,
@@ -288,7 +288,7 @@ export function buildSubagentVoiceContextOverlay(target?: VoiceAgentTargetContex
   const resolved = resolveSubagentVoiceWorkspace(target);
   if (!resolved) return '';
   const { workspacePath, agent, agentId, label } = resolved;
-  const identityPrompt = String(readAgentPromptFile(workspacePath, { migrateLegacy: true })?.content || '').slice(0, 10000).trim();
+  const identityPrompt = stripLegacyGeneratedAgentPromptLines(String(readAgentPromptFile(workspacePath, { migrateLegacy: true })?.content || '')).slice(0, 10000).trim();
   const bits = [
     '[SUBAGENT_VOICE_IDENTITY]',
     `You are ${label}, the selected standalone subagent. The voice interface is only how the user is talking to you.`,

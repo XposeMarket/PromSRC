@@ -69,7 +69,7 @@ export type BindOutcome =
   | { ok: true; binding: ExternalAgentBinding | null; created: boolean }
   | { ok: false; status: 400 | 409; code: 'agent_locked' | 'agent_unavailable' | 'bad_cwd' | 'imported_chat'; error: string };
 
-const AGENT_NAMES: Record<string, string> = { codex: 'Codex', 'claude-code': 'Claude Code', openclaw: 'OpenClaw', hermes: 'Hermes', cursor: 'Cursor', 'openai-dots': 'OpenAI Dots' };
+const AGENT_NAMES: Record<string, string> = { codex: 'Codex', 'claude-code': 'Claude Code', openclaw: 'OpenClaw', hermes: 'Hermes', cursor: 'Cursor', antigravity: 'Antigravity', 'openai-dots': 'OpenAI Dots' };
 
 export function externalAgentName(id: string): string {
   return AGENT_NAMES[id] || id;

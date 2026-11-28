@@ -1,9 +1,31 @@
 import assert from 'node:assert/strict';
 import {
   normaliseGrokBillingWindows,
+  parseAnthropicUsageWindows,
   parseCodexLiveUsage,
   selectCodexUsageForModel,
 } from './provider-usage-limits';
+
+// Claude: per-model weekly windows are labelled from Anthropic's own keys, not hard-coded to Opus.
+const claudeWindows = parseAnthropicUsageWindows({
+  five_hour: { utilization: 4, resets_at: '2026-11-28T17:20:00Z' },
+  seven_day: { utilization: 63, resets_at: '2026-12-01T10:00:00Z' },
+  seven_day_oauth_apps: { utilization: 2, resets_at: null },
+  seven_day_opus: null,
+  seven_day_fable: { utilization: 81, resets_at: '2026-12-01T10:00:00Z' },
+  seven_day_sonnet: { utilization: 12, resets_at: null },
+  extra_usage: { is_enabled: false },
+});
+assert.deepEqual(
+  claudeWindows.map(window => [window.label, window.used_percent]),
+  [['5-hour', 4], ['Weekly', 63], ['Weekly · Fable', 81], ['Weekly · Sonnet', 12]],
+);
+assert.deepEqual(
+  parseAnthropicUsageWindows({ five_hour: { utilization: 4 }, seven_day: { utilization: 63 } }).map(window => window.label),
+  ['5-hour', 'Weekly'],
+  'no per-model line when Anthropic sends none',
+);
+assert.deepEqual(parseAnthropicUsageWindows(null), []);
 
 const live = parseCodexLiveUsage({
   plan_type: 'Plus',

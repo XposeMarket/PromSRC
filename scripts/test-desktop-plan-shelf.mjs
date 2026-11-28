@@ -26,7 +26,7 @@ try {
             ? { authenticated: true, accountRequired: false }
             : p === "/api/onboarding/status"
               ? { nextStep: "done", modelConnected: true }
-              : {},
+              : p === '/api/settings/security' ? { toolPermissionMode: 'lite' } : {},
       });
     const f = path.resolve(root, "." + (p === "/" ? "/index.html" : p));
     if (!f.startsWith(root + path.sep) || !existsSync(f))
@@ -104,7 +104,17 @@ try {
         await import("/src/chat/external-agent-composer.js");
       mountMinimalAgentComposer(enabled);
     }, enabled);
+  const access = area.locator('prom-chat-access #trigger');
+  const beside = async (selector) => {
+    const left = await area.locator(selector).boundingBox();
+    const right = await access.boundingBox();
+    assert.ok(left && right && right.width > 0);
+    const gap = right.x - left.x - left.width;
+    assert.ok(gap >= -1 && gap <= 12, `shield gap: ${gap}px`);
+    assert.ok(Math.abs(right.y + right.height / 2 - left.y - left.height / 2) <= 2, 'shield must be on the attachment row');
+  };
   await toolbar(true);
+  await beside('.ea-composer-plus');
   const integrated = async () => {
     const shell = await area.boundingBox(),
       plan = await slot.boundingBox();
@@ -168,6 +178,7 @@ try {
   await page.setViewportSize({ width: 900, height: 650 });
   await check();
   await toolbar(false);
+  await beside('.chat-attach-btn');
   await integrated();
   await check();
   await page.evaluate(() => {
@@ -206,7 +217,13 @@ try {
     0,
   );
   await toolbar(true);
+  await beside('.ea-composer-plus');
+  await area.getByRole('button', { name: 'Permissions: Lite', exact: true }).waitFor();
+  await access.click();
+  await area.getByRole('dialog', { name: 'Composer permissions' }).waitFor();
+  await page.keyboard.press('Escape');
   await shot("empty");
+  if (out) await area.screenshot({ path: path.join(out, 'composer.png') });
   const input = page.locator("#chat-input");
   const emptyHeight = (await area.boundingBox()).height;
   assert.ok(emptyHeight < 95, `empty composer is ${emptyHeight}px`);
@@ -224,6 +241,9 @@ try {
   console.log(
     `Empty ${emptyHeight}px, four lines ${grownHeight}px; + menu accessible`,
   );
+  await page.route('**/api/settings/security', route => route.fulfill({ json: { toolPermissionMode: 'default' } }));
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await area.getByRole('button', { name: 'Permissions: Default', exact: true }).waitFor();
   assert.deepEqual(errors, []);
   console.log(
     "PASS: desktop plan, queue, agent toggle, slash suggestions, narrow window, progress update and cleanup",

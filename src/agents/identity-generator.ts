@@ -203,19 +203,40 @@ function chooseDisplayName(input: BuildAgentIdentityInput): { name: string; gene
   return { name: bank[hashText(seed) % bank.length], generated: true };
 }
 
+// Keeps first occurrences only. An identity is rebuilt from its own saved copy on every
+// refresh, so without this the base quirks and GLOBAL_AVOID were appended again each time.
+function uniqueStrings(values: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const value of values) {
+    const key = String(value || '').trim().toLowerCase();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(value);
+  }
+  return out;
+}
+
+const GENERATED_VOICE_GUIDANCE = /^You are .{1,80} — a real, distinct working presence under Prometheus/;
+
+/** True for the default voice paragraph this module writes, as opposed to text a user supplied. */
+export function isGeneratedVoiceGuidance(text: unknown): boolean {
+  return GENERATED_VOICE_GUIDANCE.test(String(text || '').trim());
+}
+
 function mergePersonality(base: AgentPersonality, patch?: Partial<AgentPersonality>): AgentPersonality {
   return {
     ...base,
     ...(patch || {}),
-    quirks: [
+    quirks: uniqueStrings([
       ...(base.quirks || []),
       ...((patch?.quirks || []).map((v) => cleanText(v, 120)).filter(Boolean)),
-    ],
-    avoid: [
+    ]),
+    avoid: uniqueStrings([
       ...GLOBAL_AVOID,
       ...(base.avoid || []),
       ...((patch?.avoid || []).map((v) => cleanText(v, 160)).filter(Boolean)),
-    ],
+    ]),
   };
 }
 
@@ -230,7 +251,11 @@ export function buildAgentIdentity(input: BuildAgentIdentityInput): AgentIdentit
     personality.quirks = deriveQuirks(personality.archetype, input.id || chosen.name, personality.quirks);
   }
   const role = cleanText(input.teamRole || input.roleType || 'subagent', 100);
-  const voiceGuidelines = cleanText(input.identity?.voiceGuidelines, 1000) || [
+  // A saved copy of the generated default is rebuilt, never reused: it embeds the name and
+  // role it was generated for, so reusing it kept an old name after a rename.
+  const savedVoiceGuidelines = cleanText(input.identity?.voiceGuidelines, 1000);
+  const customVoiceGuidelines = isGeneratedVoiceGuidance(savedVoiceGuidelines) ? '' : savedVoiceGuidelines;
+  const voiceGuidelines = customVoiceGuidelines || [
     `You are ${chosen.name} — a real, distinct working presence under Prometheus, not a generic assistant and not just a role label.`,
     `Inhabit this personality: let it shape your word choice, how you open and close, what you notice first, and how you collaborate — consistently, so you are recognizably yourself across runs.`,
     `It must never override factual accuracy, tool use, verification, or task discipline; it shows in HOW you work, not whether you do the work well.`,
@@ -257,26 +282,25 @@ export function renderIdentityPrompt(identity?: AgentIdentity): string {
     `Name: ${identity.displayName}`,
   ];
   if (identity.shortName && identity.shortName !== identity.displayName) lines.push(`Short name: ${identity.shortName}`);
-  if (identity.namingRationale) lines.push(`Naming note: ${identity.namingRationale}`);
+  // Personality is a few lines on purpose. The identity file is read into every run, and the
+  // long form (seven attribute lines, two bullet lists, two paragraphs) was close to half of it.
   if (p) {
-    lines.push(
-      '',
-      '## Personality And Voice',
-      `Archetype: ${p.archetype}`,
-      `Tone: ${p.tone}`,
-      `Humor: ${p.humor}`,
-      `Seriousness: ${p.seriousness}`,
-      `Warmth: ${p.warmth}`,
-      `Directness: ${p.directness}`,
-    );
-    if (p.quirks?.length) lines.push('Subtle habits:', ...p.quirks.map((q) => `- ${q}`));
-    if (p.avoid?.length) lines.push('Avoid:', ...p.avoid.map((a) => `- ${a}`));
-    lines.push(
-      '',
-      'Embody this — it is who you are for this work, not a costume. Let it show in your voice, pacing, and judgment, subtly and consistently, without announcing it and without letting it slow or distort the actual work.',
-    );
+    const voice = [
+      p.tone,
+      p.humor ? `Humor: ${p.humor}.` : '',
+      p.warmth ? `Warmth: ${p.warmth}.` : '',
+      p.directness ? `Directness: ${p.directness}.` : '',
+    ].filter(Boolean).join(' ');
+    if (voice) lines.push(`Voice: ${voice}`);
+    const habits = uniqueStrings(p.quirks || []).slice(0, 3);
+    if (habits.length) lines.push(`Habits: ${habits.join('; ')}.`);
+    const globalAvoid = new Set(GLOBAL_AVOID.map((a) => a.toLowerCase()));
+    const ownAvoid = uniqueStrings(p.avoid || []).filter((a) => !globalAvoid.has(a.trim().toLowerCase()));
+    if (ownAvoid.length) lines.push(`Avoid: ${ownAvoid.join(' ')}`);
+    lines.push('Keep it subtle: no catchphrases, characters or gimmicks, and never at the cost of accuracy, tool use, verification or finishing the task.');
   }
-  if (identity.voiceGuidelines) {
+  // Only guidance someone wrote. The generated default repeats the lines above.
+  if (identity.voiceGuidelines && !isGeneratedVoiceGuidance(identity.voiceGuidelines)) {
     lines.push('', '## Voice Guidance', identity.voiceGuidelines);
   }
   return lines.join('\n');

@@ -15,7 +15,7 @@ import {
 import { agentLogoHtml } from './external-agent-logos.js';
 import './project-folder-field.js';
 
-const ORDER = ['prometheus', 'openai-dots', 'codex', 'claude-code', 'hermes', 'openclaw', 'cursor'];
+const ORDER = ['prometheus', 'openai-dots', 'codex', 'claude-code', 'antigravity', 'hermes', 'openclaw', 'cursor'];
 // Contacts have one ongoing chat each (shown in the chat list / Priority mode), no folders.
 const CONTACT_AGENTS = new Set(['openai-dots']);
 const FILTER_KEY = 'prometheus_harness_chat_filter';

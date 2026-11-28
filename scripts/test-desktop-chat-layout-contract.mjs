@@ -309,4 +309,27 @@ if (/760px|52px/.test(sideParityBlock)) {
   throw new Error('side composer parity must not reintroduce the legacy 760px / 52px geometry');
 }
 
+// Docked Canvas can leave a ~400px chat column. Its gutters must scale with the
+// column (cqw), not the window (vw), and must not keep 24px/48px floors, or the
+// composer collapses to ~180px and wraps its placeholder (Nov 25 2026).
+const canvasOpenBlocks = [...themes.matchAll(/body:not\(\.pm-mobile-active\):not\(\.side-chat-split-active\)\.right-canvas-open #chat-view \{([\s\S]*?)\}/g)].map(m => m[1]);
+const surfaceGutterDecls = canvasOpenBlocks.flatMap(b => b.match(/--chat-surface-gutter:[^;]*/g) || []);
+const inlineGutterDecls = canvasOpenBlocks.flatMap(b => b.match(/--chat-content-inline-gutter:[^;]*/g) || []);
+if (!surfaceGutterDecls.length || !inlineGutterDecls.length) {
+  throw new Error('Canvas-open chat column must declare its surface and inline gutters');
+}
+for (const decl of [...surfaceGutterDecls, ...inlineGutterDecls]) {
+  const floor = Number(decl.match(/clamp\(\s*(\d+)px/)?.[1] ?? NaN);
+  if (/\dvw\b/.test(decl) || !/cqw/.test(decl) || !(floor <= 16)) {
+    throw new Error(`Canvas-open gutters must be column-relative (cqw) with a floor <= 16px: ${decl.trim()}`);
+  }
+}
+// The new-chat composer stays 12px wider than the "Directed chat" shelf
+// (min(708px, 100% - 72px)) at every column width, Canvas open or not.
+if (!/body:not\(\.pm-mobile-active\):not\(\.side-chat-split-active\) #chat-view\.chat-empty:not\(\.desktop-voice-mode\) \{\s*--chat-column-width:\s*min\(720px,\s*calc\(100% - 60px\)\)\s*!important;/.test(themes)
+  || !/#chat-view > \.chat-new-context-dock \{[\s\S]*?width:\s*min\(708px,\s*calc\(100% - 72px\)\)/.test(sourceComponents)) {
+  throw new Error('empty-chat composer must track the Directed chat shelf width (shelf + 12px)');
+}
+
+
 console.log('desktop chat layout contract: browser-style tabs, native split reuse, no iframe runtime, native pane headers, split-scoped Sources, and composer parity ok');
