@@ -134,7 +134,53 @@ export async function buildGalleryCard(args: any): Promise<CardResult> {
   } catch (error: any) { return fail(`Image search failed: ${error?.message || error}`); }
 }
 
-export async function buildNewsCard(args: any): Promise<CardResult> {
+type NewsItem = { url: string; title: string; snippet: string; imageUrl: string; publisher: string; age: string };
+type PreviewLookup = (url: string, timeoutMs: number) => Promise<{ imageUrl?: string; title?: string; description?: string; publisher?: string } | null | undefined>;
+
+function defaultPreviewLookup(): PreviewLookup {
+  // Lazy require keeps ui-cards free of a load-time dependency on the web tool module.
+  const { fetchPagePreviewMetadata } = require('./web') as typeof import('./web');
+  return fetchPagePreviewMetadata;
+}
+
+/**
+ * Stories without a thumbnail (most model-supplied items, and Brave rows with
+ * no thumbnail) get the article's own Open Graph / JSON-LD image. Bounded:
+ * one parallel pass with a per-page timeout and a hard overall budget, so the
+ * card never waits on a slow publisher.
+ */
+export async function fillMissingNewsImages(
+  items: NewsItem[],
+  opts: { lookup?: PreviewLookup; perPageMs?: number; budgetMs?: number; max?: number } = {},
+): Promise<NewsItem[]> {
+  const out = items.slice();
+  const missing = out.map((item, index) => ({ item, index }))
+    .filter(({ item }) => !item.imageUrl && /^https?:\/\//i.test(item.url))
+    .slice(0, opts.max ?? 8);
+  if (!missing.length) return out;
+  let lookup: PreviewLookup;
+  try { lookup = opts.lookup || defaultPreviewLookup(); } catch { return out; }
+  const perPageMs = opts.perPageMs ?? 2500;
+  let timer: NodeJS.Timeout | undefined;
+  await Promise.race([
+    Promise.all(missing.map(async ({ item, index }) => {
+      const meta = await lookup(item.url, perPageMs).catch(() => null);
+      const imageUrl = str(meta?.imageUrl);
+      if (!/^https?:\/\//i.test(imageUrl)) return;
+      out[index] = {
+        ...item,
+        imageUrl,
+        title: item.title || str(meta?.title),
+        snippet: item.snippet || str(meta?.description),
+        publisher: item.publisher || str(meta?.publisher),
+      };
+    })),
+    new Promise<void>((resolve) => { timer = setTimeout(resolve, opts.budgetMs ?? 3500); }),
+  ]).finally(() => { if (timer) clearTimeout(timer); });
+  return out;
+}
+
+export async function buildNewsCard(args: any, lookup?: PreviewLookup): Promise<CardResult> {
   const query = str(args?.query);
   let items = itemsFromArgs(args)?.map((n: any) => ({ url: str(n.url), title: str(n.title), snippet: str(n.snippet || n.description), imageUrl: str(n.imageUrl || n.image), publisher: str(n.publisher || n.source), age: str(n.age || n.publishedAt) }));
   try {
@@ -145,6 +191,7 @@ export async function buildNewsCard(args: any): Promise<CardResult> {
     }
     items = items.filter((n) => /^https?:\/\//.test(n.url));
     if (!items.length) return fail(`No news found for "${query}".`);
+    items = await fillMissingNewsImages(items, { lookup });
     const lines = items.slice(0, 5).map((n, i) => `${i + 1}. ${n.title} (${n.publisher}${n.age ? `, ${n.age}` : ''}) ${n.url}`).join('\n');
     return ok(`News carousel shown:\n${lines}`, { id: id('news'), type: 'news', title: str(args?.title) || query, items });
   } catch (error: any) { return fail(`News search failed: ${error?.message || error}`); }
@@ -414,7 +461,7 @@ export const UI_CARD_BUILDERS: Record<string, (args: any) => Promise<CardResult>
   clock: buildClockCard,
   gallery: buildGalleryCard,
   images: buildGalleryCard,
-  news: buildNewsCard,
+  news: (args) => buildNewsCard(args),
   video: buildVideoCard,
   videos: buildVideoCard,
   sports: buildSportsCard,
