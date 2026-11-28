@@ -107,6 +107,26 @@ async function main() {
   assert.equal(stripLegacyGeneratedAgentPromptLines(handWritten), handWritten, 'a file with no exact generated lines is returned unchanged');
   assert.equal(stripLegacyGeneratedAgentPromptLines(''), '', 'empty input is returned unchanged');
 
+  // A Configuration section someone edited or wrote is not the generated block.
+  const partialConfig = '## Configuration\n- Timeout: 5000ms\n\nRetry once.\n';
+  assert.equal(stripLegacyGeneratedAgentPromptLines(partialConfig), partialConfig, 'a partial Configuration section is kept whole');
+  const extendedConfig = '## Configuration\n- Max steps: 20\n- Timeout: 300000ms\n- Model override: (use default)\n\nAlways retry once before reporting.\n';
+  assert.equal(stripLegacyGeneratedAgentPromptLines(extendedConfig), extendedConfig, 'a generated block someone added to is kept whole');
+  const fenced = [
+    '## Instructions',
+    'Older files looked like this:',
+    '```',
+    '## Configuration',
+    '- Max steps: 20',
+    '- Timeout: 300000ms',
+    '- Model override: (use default)',
+    '',
+    'You are a standalone one-off subagent, not a member of a managed team.',
+    '```',
+    'Do not copy that.',
+  ].join('\n');
+  assert.equal(stripLegacyGeneratedAgentPromptLines(fenced), fenced, 'nothing inside a fenced block is touched');
+
   const constraintsWithBody = '## Constraints (DO NOT VIOLATE)\n\n- Never delete records.\n\n## Forbidden Tools\n- shell\n';
   assert.equal(stripLegacyGeneratedAgentPromptLines(constraintsWithBody), constraintsWithBody, 'sections with real content are kept');
 
@@ -193,11 +213,24 @@ async function main() {
   manager.updateSubagent('fixture_builder', { reasoning_effort: '' });
   assert.ok(!entry('fixture_builder').reasoning_effort, 'an empty effort clears it');
 
-  // When the global entry has no effort (wiped), the agent's own saved effort is used.
-  manager.updateSubagent('fixture_builder', { reasoning_effort: 'high' });
-  setGlobal('fixture_builder', { reasoning_effort: undefined });
+  // Settings removes the field to mean "inherit". An unrelated update must not bring the
+  // agent's own older value back, for the model or for the effort.
+  manager.updateSubagent('fixture_builder', { model: 'anthropic/claude-opus-5-5', reasoning_effort: 'high' });
+  const clearGlobal = (id: string, keys: string[]) => {
+    const agents = [...(((cm.getConfig() as any).agents || []) as any[])];
+    const i = agents.findIndex((a) => a.id === id);
+    const copy = { ...agents[i] };
+    for (const key of keys) delete copy[key];
+    agents[i] = copy;
+    cm.updateConfig({ agents } as any);
+  };
+  clearGlobal('fixture_builder', ['model', 'reasoning_effort']);
+  assert.ok(!entry('fixture_builder').model && !entry('fixture_builder').reasoning_effort, 'fixture: Settings cleared both fields');
   manager.updateSubagent('fixture_builder', { success_criteria: 'The fixture runs twice.' });
-  assert.equal(entry('fixture_builder').reasoning_effort, 'high', "a missing global effort is restored from the agent's own file");
+  assert.ok(!entry('fixture_builder').model, 'a model cleared in Settings stays cleared after an unrelated update');
+  assert.ok(!entry('fixture_builder').reasoning_effort, 'an effort cleared in Settings stays cleared after an unrelated update');
+  assert.ok(!(manager as any).loadSubagent('fixture_builder').model, "the agent's own file no longer carries the cleared model");
+  assert.ok(!(manager as any).loadSubagent('fixture_builder').reasoning_effort, "the agent's own file no longer carries the cleared effort");
 
   console.log('agent identity file regression passed');
 }

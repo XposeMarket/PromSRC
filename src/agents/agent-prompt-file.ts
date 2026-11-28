@@ -127,7 +127,8 @@ export function writeAgentPromptFile(workspacePath: string, content: string): st
 
 const LEGACY_STANDALONE_SENTENCE = 'You are a standalone one-off subagent, not a member of a managed team.';
 const LEGACY_EDIT_NOTE = '**Note:** Edit this file to modify the subagent. Changes take effect on next call.';
-const LEGACY_CONFIG_LINE = /^- (?:Max steps: \d+|Timeout: \d+ms|Model override: .+)$/;
+// The generated block was always exactly these three lines, in this order.
+const LEGACY_CONFIG_BLOCK = [/^- Max steps: \d+$/, /^- Timeout: \d+ms$/, /^- Model override: .+$/];
 
 /**
  * Removes lines that older builds generated into AGENT.md and that are false or empty when
@@ -141,8 +142,10 @@ const LEGACY_CONFIG_LINE = /^- (?:Max steps: \d+|Timeout: \d+ms|Model override: 
  *    personality section
  *
  * Read-time only: the file on disk is never rewritten, so hand edits are safe. Only whole
- * lines that match the generated text exactly are dropped. Text a user wrote that merely
- * mentions timeouts, teams or configuration is kept, and a file with no generated legacy
+ * lines that match the generated text exactly are dropped, and the Configuration block only
+ * when it is the complete three-line generated block. Text a user wrote that merely mentions
+ * timeouts, teams or configuration is kept, a partial or edited Configuration section is
+ * kept, nothing inside a fenced code block is touched, and a file with no generated legacy
  * lines is returned unchanged.
  */
 export function stripLegacyGeneratedAgentPromptLines(content: string): string {
@@ -152,6 +155,7 @@ export function stripLegacyGeneratedAgentPromptLines(content: string): string {
   const out: string[] = [];
   let changed = false;
   let inPersonality = false;
+  let inFence = false;
   let seenBullets = new Set<string>();
 
   const nextContentIndex = (from: number): number => {
@@ -163,6 +167,17 @@ export function stripLegacyGeneratedAgentPromptLines(content: string): string {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     const trimmed = line.trim();
+
+    // Fenced examples are the user's content, whatever they look like.
+    if (/^(?:```|~~~)/.test(trimmed)) {
+      inFence = !inFence;
+      out.push(line);
+      continue;
+    }
+    if (inFence) {
+      out.push(line);
+      continue;
+    }
 
     if (/^## /.test(trimmed)) {
       inPersonality = trimmed === '## Personality And Voice';
@@ -181,11 +196,13 @@ export function stripLegacyGeneratedAgentPromptLines(content: string): string {
     }
 
     if (trimmed === '## Configuration') {
-      let j = i + 1;
-      while (j < lines.length && LEGACY_CONFIG_LINE.test(lines[j].trim())) j++;
-      const generatedLines = j - (i + 1);
-      const endsCleanly = j >= lines.length || lines[j].trim() === '' || /^(?:## |---$)/.test(lines[j].trim());
-      if (generatedLines > 0 && endsCleanly) {
+      const isGeneratedBlock = LEGACY_CONFIG_BLOCK.every((pattern, k) => pattern.test(String(lines[i + 1 + k] ?? '').trim()));
+      const j = i + 1 + LEGACY_CONFIG_BLOCK.length;
+      // Followed by nothing, or only by the generated note / another heading: anything else
+      // means someone added to the section, so it stays.
+      const after = nextContentIndex(j);
+      const endsCleanly = after >= lines.length || /^(?:## |---$)/.test(lines[after].trim());
+      if (isGeneratedBlock && endsCleanly) {
         changed = true;
         i = j - 1;
         continue;

@@ -793,17 +793,21 @@ export class SubagentManager {
     const next: SubagentDefinition = { ...existing };
 
     // The global config entry is what model routing reads and what Settings edits. This agent's
-    // own config.json can be older. When the patch does not set model or reasoning effort, keep
-    // the global entry's value; otherwise any unrelated update (new instructions, say) wrote the
-    // older file value back over a model chosen in Settings.
+    // own config.json can be older. When the patch does not set model or reasoning effort, mirror
+    // the global entry, including a missing value: Settings removes the field to mean "inherit",
+    // so absence is a choice too. Otherwise any unrelated update (new instructions, say) wrote the
+    // older file value back over what was chosen in Settings. The agent's own file is only the
+    // fallback when it has no global entry at all.
     try {
       const liveAgents: any[] = Array.isArray((getConfig().getConfig() as any).agents) ? (getConfig().getConfig() as any).agents : [];
       const liveEntry = liveAgents.find((a: any) => a?.id === safeId);
       const liveModel = String(liveEntry?.model || '').trim();
       const liveEffort = String(liveEntry?.reasoning_effort || '').trim();
-      if (patch.model === undefined && liveModel) next.model = liveModel;
-      if (patch.reasoning_effort === undefined && patch.reasoningEffort === undefined && liveEffort) {
-        next.reasoning_effort = liveEffort;
+      if (liveEntry) {
+        if (patch.model === undefined) next.model = liveModel || undefined;
+        if (patch.reasoning_effort === undefined && patch.reasoningEffort === undefined) {
+          next.reasoning_effort = liveEffort || undefined;
+        }
       }
     } catch {
       // No readable global config: fall back to this agent's own saved values.

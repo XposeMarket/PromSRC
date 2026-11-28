@@ -21,7 +21,7 @@ import fs from 'fs';
 import path from 'path';
 import { getConfig } from '../../config/config';
 import { mainChatRoutePatch } from '../../config/main-chat-route.js';
-import { readAgentPromptFile, writeAgentPromptFile } from '../../agents/agent-prompt-file.js';
+import { readAgentPromptFile, stripLegacyGeneratedAgentPromptLines, writeAgentPromptFile } from '../../agents/agent-prompt-file.js';
 import { getVault } from '../../security/vault';
 import {
   getProviderStaticModels,
@@ -5229,7 +5229,9 @@ export class TelegramChannel {
       const agentId = idResolve(data.slice('ag:run:'.length));
       if (!agentId) { await edit('❌ Session expired. Use /agents again.', []); return; }
       if (!this.spawnAgentFn) { await edit('❌ Agent dispatch is not available.', []); return; }
-      const prompt = readAgentPrompt(agentId).trim();
+      // The file becomes the task text here, so generated legacy lines are dropped. The edit and
+      // preview paths above keep reading the file as it is on disk.
+      const prompt = stripLegacyGeneratedAgentPromptLines(readAgentPrompt(agentId)).trim();
       if (!prompt) { await edit('❌ No instruction prompt found for this agent.', []); return; }
       const { getAgentById } = require('../../config/config.js');
       const ag = getAgentById(agentId);
