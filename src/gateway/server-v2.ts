@@ -70,7 +70,7 @@ import {
 } from './desktop-tools';
 import { CronScheduler, setCronSchedulerInstance } from './scheduling/cron-scheduler';
 import { HeartbeatRunner, setHeartbeatRunnerInstance } from './scheduling/heartbeat-runner';
-import { MainChatTimerRunner } from './timers/timer-runner';
+import { MainChatTimerRunner, timerChatSteerBody, timerChatSteerOptions, timerSteerResultFromChatSteer } from './timers/timer-runner';
 import { startGatewayRestartQueueRunner } from './runtime/gateway-restart-queue';
 import { initSessionWake } from './session-wake';
 import { listLiveRuntimes as listLiveRuntimesForWake } from './live-runtime-registry';
@@ -796,6 +796,17 @@ const mainChatTimerRunner = new MainChatTimerRunner({
   runInteractiveTurn: (message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, reasoningOptions, attachments, modelOverride) =>
     runInteractiveTurn(message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, reasoningOptions, attachments, undefined, modelOverride),
   telegramChannel,
+  // A timer that fires while its chat has a turn running joins that turn as a
+  // live steer instead of costing a second turn.
+  steerActiveTurn: (request) => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { applyChatSteer } = require('./routes/chat/steer') as typeof import('./routes/chat/steer');
+    return timerSteerResultFromChatSteer(applyChatSteer(
+      timerChatSteerBody(request),
+      getChatRouterModule().getMainChatStream,
+      timerChatSteerOptions(request),
+    ));
+  },
 });
 if (!skipInPreview('main-chat-timers')) mainChatTimerRunner.start();
 if (!skipInPreview('gateway-restart-queue')) {

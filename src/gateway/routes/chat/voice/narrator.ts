@@ -476,6 +476,15 @@ export function buildChatSteerContextBlock(event: RuntimeSteerEvent): string {
       '[/INTERNAL WATCH RESULT]',
     ].filter(Boolean).join('\n');
   }
+  if (event.kind === 'timer_fired') {
+    return [
+      '[TIMER FIRED]',
+      event.contextSummary ? voiceNarrationClean(event.contextSummary, 600) : '',
+      String(event.message || '').trim(),
+      'Runtime instruction: A timer the user set earlier in this chat went off while this turn was still running. Treat its instruction as if the user just sent it as a live follow-up: handle it inside this turn alongside the current work (do the check, or acknowledge the reminder), and include the outcome in your reply. Do not start a separate turn for it, and do not quote this payload.',
+      '[/TIMER FIRED]',
+    ].filter(Boolean).join('\n');
+  }
   return [
     '[LIVE CHAT STEER]',
     `Steer id: ${voiceNarrationClean(event.id, 120)}`,

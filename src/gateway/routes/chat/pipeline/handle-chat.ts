@@ -3605,6 +3605,8 @@ Do not produce prose. Use the canonical thread tool now.` });
           ? `Background agent ${steer.backgroundAgentId || ''} completed; result injected into the current run.`.trim()
           : steer.kind === 'internal_watch_result'
             ? `Internal watch ${steer.internalWatchId || ''} ${steer.internalWatchKind || 'completed'}; result injected into the current run.`.trim()
+          : steer.kind === 'timer_fired'
+            ? 'Timer fired; added to the current run.'
           : `Steer applied: ${steer.message.slice(0, 120)}`,
       });
     }

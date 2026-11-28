@@ -47789,7 +47789,10 @@ wsEventBus.on('timer_created', (msg) => {
 wsEventBus.on('timer_waiting', (msg) => {
   const timer = msg?.timer || {};
   const sid = String(msg?.sessionId || timer.sessionId || '').trim();
-  appendTimerProcessEntry(sid, 'info', `Timer due and waiting for the current turn: ${String(timer.label || timer.id || 'timer')}.`);
+  const label = String(timer.label || timer.id || 'timer');
+  appendTimerProcessEntry(sid, 'info', msg?.reason === 'turn_ended_before_reading_timer'
+    ? `Timer ${label}: the turn ended before reading it, so it runs on its own next.`
+    : `Timer due and waiting for the current turn: ${label}.`);
 });
 
 wsEventBus.on('timer_cancelled', (msg) => {
@@ -47800,7 +47803,13 @@ wsEventBus.on('timer_cancelled', (msg) => {
 
 wsEventBus.on('timer_fired', (msg) => {
   const sid = String(msg?.sessionId || msg?.timer?.sessionId || '').trim();
-  appendTimerProcessEntry(sid, 'info', `Timer fired: ${String(msg?.timer?.label || msg?.timerId || 'timer')}.`);
+  const label = String(msg?.timer?.label || msg?.timerId || 'timer');
+  const delivery = String(msg?.delivery || '');
+  appendTimerProcessEntry(sid, 'info', delivery === 'live_steer'
+    ? `Timer fired: ${label}. Added to the turn already running.`
+    : delivery === 'notify'
+      ? `Reminder: ${label}.`
+      : `Timer fired: ${label}.`);
 });
 
 wsEventBus.on('timer_sse', (msg) => {
@@ -47818,7 +47827,10 @@ wsEventBus.on('timer_sse', (msg) => {
 wsEventBus.on('timer_done', (msg) => {
   const sid = String(msg?.sessionId || msg?.timer?.sessionId || '').trim();
   appendTimerMessageToSession(sid, msg?.message);
-  appendTimerProcessEntry(sid, 'info', `Timer complete: ${String(msg?.timer?.label || msg?.timerId || 'timer')}.`);
+  const doneLabel = String(msg?.timer?.label || msg?.timerId || 'timer');
+  appendTimerProcessEntry(sid, 'info', String(msg?.delivery || '') === 'live_steer'
+    ? `Timer read by the running turn: ${doneLabel}.`
+    : `Timer complete: ${doneLabel}.`);
   if (msg?.voiceIfActive === true && sid && sid === window.activeChatSessionId) {
     const text = String(msg?.result || msg?.message?.content || '').trim();
     if (text && (realtimeVoiceRepliesEnabled || voiceRepliesEnabled)) {

@@ -110,7 +110,7 @@ export interface RuntimeSteerEvent {
   source?: string;
   createdAt: number;
   clientRequestId?: string;
-  kind?: 'correction' | 'question' | 'status' | 'constraint' | 'cancel' | 'pause' | 'continue' | 'clarification' | 'background_agent_result' | 'internal_watch_result' | 'unknown';
+  kind?: 'correction' | 'question' | 'status' | 'constraint' | 'cancel' | 'pause' | 'continue' | 'clarification' | 'background_agent_result' | 'internal_watch_result' | 'timer_fired' | 'unknown';
   requiresWorkerResponse?: boolean;
   backgroundAgentId?: string;
   backgroundAgentState?: 'completed' | 'failed';
@@ -1210,6 +1210,28 @@ export function addPendingRuntimeSteer(
   return { ok: true, runtime: toSnapshot(record), event };
 }
 
+type RuntimeSteersConsumedListener = (events: RuntimeSteerEvent[]) => void;
+const steersConsumedListeners = new Set<RuntimeSteersConsumedListener>();
+
+/**
+ * Observe steer events as a running turn reads them. Producers that must not
+ * lose an event (timers) use this to learn that delivery actually happened,
+ * instead of assuming a queued steer is a delivered one. Returns unsubscribe.
+ */
+export function onRuntimeSteersConsumed(listener: RuntimeSteersConsumedListener): () => void {
+  steersConsumedListeners.add(listener);
+  return () => { steersConsumedListeners.delete(listener); };
+}
+
+function notifyRuntimeSteersConsumed(events: RuntimeSteerEvent[]): void {
+  if (!events.length) return;
+  for (const listener of steersConsumedListeners) {
+    try { listener(events); } catch (err: any) {
+      console.warn(`[live-runtime] steer-consumed listener failed: ${String(err?.message || err)}`);
+    }
+  }
+}
+
 export function consumePendingRuntimeSteersForSession(sessionId: string, limit = 4): RuntimeSteerEvent[] {
   const sid = String(sessionId || '').trim();
   if (!sid) return [];
@@ -1240,6 +1262,7 @@ export function consumePendingRuntimeSteersForSession(sessionId: string, limit =
     }
     if (out.length >= limit) break;
   }
+  notifyRuntimeSteersConsumed(out);
   return out;
 }
 
