@@ -5837,6 +5837,7 @@ const SETTINGS_PAGE_CONTROLLERS = {
   // footer Save (which saved nothing there) is hidden.
   agents: { changes: () => [] },
   shortcuts: { changes: () => [] },
+  appearance: { changes: () => [] },
   // Only the webhook fields; the MCP server form keeps its own "Save server".
   integrations: createFieldPageController('settings-panel-integrations', {
     save: () => saveWebhookSettings(),
