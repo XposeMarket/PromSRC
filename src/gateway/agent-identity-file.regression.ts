@@ -134,6 +134,11 @@ async function main() {
   // A tilde fence is not closed by backticks, and a closing fence cannot carry text.
   const mixedDelimiters = ['~~~', '```', legacySentence, '~~~ not a close', legacySentence, '~~~', 'After.'].join('\n');
   assert.equal(stripLegacyGeneratedAgentPromptLines(mixedDelimiters), mixedDelimiters, 'a tilde fence only closes on a bare tilde fence');
+  // Only spaces and tabs may follow a closing fence; a non-breaking space does not close it.
+  const nbspClose = ['```', '```\u00a0', legacySentence, '```', 'After.'].join('\n');
+  assert.equal(stripLegacyGeneratedAgentPromptLines(nbspClose), nbspClose, 'a fence line followed by a non-breaking space does not close the fence');
+  const tabClose = ['```', legacySentence, '```\t', legacySentence, 'Kept.'].join('\n');
+  assert.equal(stripLegacyGeneratedAgentPromptLines(tabClose), ['```', legacySentence, '```\t', 'Kept.'].join('\n') + '\n', 'a closing fence may be followed by a tab');
   // An unclosed fence protects the rest of the file.
   const unclosed = ['```', legacySentence, '## Configuration', '- Max steps: 20', '- Timeout: 300000ms', '- Model override: (use default)'].join('\n');
   assert.equal(stripLegacyGeneratedAgentPromptLines(unclosed), unclosed, 'an unclosed fence protects to the end of the file');

@@ -178,7 +178,7 @@ export function stripLegacyGeneratedAgentPromptLines(content: string): string {
         fenceMatch
         && fenceMatch[1][0] === fence.char
         && fenceMatch[1].length >= fence.length
-        && fenceMatch[2].trim() === ''
+        && /^[ \t]*$/.test(fenceMatch[2])
       ) {
         fence = null;
       }
