@@ -124,3 +124,104 @@ export function writeAgentPromptFile(workspacePath: string, content: string): st
   fs.writeFileSync(filePath, String(content || ''), 'utf-8');
   return filePath;
 }
+
+const LEGACY_STANDALONE_SENTENCE = 'You are a standalone one-off subagent, not a member of a managed team.';
+const LEGACY_EDIT_NOTE = '**Note:** Edit this file to modify the subagent. Changes take effect on next call.';
+const LEGACY_CONFIG_LINE = /^- (?:Max steps: \d+|Timeout: \d+ms|Model override: .+)$/;
+
+/**
+ * Removes lines that older builds generated into AGENT.md and that are false or empty when
+ * the file is read into a run:
+ *  - "You are a standalone one-off subagent, not a member of a managed team." (written for
+ *    every agent, including team members)
+ *  - the "## Configuration" block of Max steps / Timeout / Model override (nothing enforces
+ *    the first two, so agents were told limits that do not exist)
+ *  - the user-facing "Edit this file" note
+ *  - generated sections with nothing in them, and repeated bullets inside the generated
+ *    personality section
+ *
+ * Read-time only: the file on disk is never rewritten, so hand edits are safe. Only whole
+ * lines that match the generated text exactly are dropped. Text a user wrote that merely
+ * mentions timeouts, teams or configuration is kept, and a file with no generated legacy
+ * lines is returned unchanged.
+ */
+export function stripLegacyGeneratedAgentPromptLines(content: string): string {
+  const source = String(content || '');
+  if (!source) return source;
+  const lines = source.split(/\r?\n/);
+  const out: string[] = [];
+  let changed = false;
+  let inPersonality = false;
+  let seenBullets = new Set<string>();
+
+  const nextContentIndex = (from: number): number => {
+    let j = from;
+    while (j < lines.length && lines[j].trim() === '') j++;
+    return j;
+  };
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trim();
+
+    if (/^## /.test(trimmed)) {
+      inPersonality = trimmed === '## Personality And Voice';
+      seenBullets = new Set<string>();
+    }
+
+    if (trimmed === LEGACY_STANDALONE_SENTENCE || trimmed === LEGACY_EDIT_NOTE) {
+      changed = true;
+      continue;
+    }
+
+    // A rule line that only introduced the edit note.
+    if (trimmed === '---' && lines[nextContentIndex(i + 1)]?.trim() === LEGACY_EDIT_NOTE) {
+      changed = true;
+      continue;
+    }
+
+    if (trimmed === '## Configuration') {
+      let j = i + 1;
+      while (j < lines.length && LEGACY_CONFIG_LINE.test(lines[j].trim())) j++;
+      const generatedLines = j - (i + 1);
+      const endsCleanly = j >= lines.length || lines[j].trim() === '' || /^(?:## |---$)/.test(lines[j].trim());
+      if (generatedLines > 0 && endsCleanly) {
+        changed = true;
+        i = j - 1;
+        continue;
+      }
+    }
+
+    // Generated headings whose body is empty or a placeholder.
+    if (trimmed === '## Constraints (DO NOT VIOLATE)') {
+      const j = nextContentIndex(i + 1);
+      if (j >= lines.length || /^## /.test(lines[j].trim())) {
+        changed = true;
+        continue;
+      }
+    }
+    if (trimmed === '## Forbidden Tools' || trimmed === '## Base Preset Role') {
+      const placeholder = trimmed === '## Forbidden Tools' ? '(none)' : '(not recorded)';
+      const j = nextContentIndex(i + 1);
+      const after = nextContentIndex(j + 1);
+      if (lines[j]?.trim() === placeholder && (after >= lines.length || /^(?:## |---$)/.test(lines[after].trim()))) {
+        changed = true;
+        i = j;
+        continue;
+      }
+    }
+
+    if (inPersonality && trimmed.startsWith('- ')) {
+      if (seenBullets.has(trimmed)) {
+        changed = true;
+        continue;
+      }
+      seenBullets.add(trimmed);
+    }
+
+    out.push(line);
+  }
+
+  if (!changed) return source;
+  return out.join('\n').replace(/\n{3,}/g, '\n\n').replace(/\s+$/, '') + '\n';
+}

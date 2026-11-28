@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { readAgentPromptFile } from './agent-prompt-file.js';
+import { readAgentPromptFile, stripLegacyGeneratedAgentPromptLines } from './agent-prompt-file.js';
 
 export const SUBAGENT_IDENTITY_OPEN = '[AGENT_IDENTITY - PRIVATE TO THIS AGENT]';
 export const SUBAGENT_IDENTITY_CLOSE = '[/AGENT_IDENTITY]';
@@ -41,7 +41,7 @@ export function buildSubagentIdentityMemoryContext(options: {
   const identityRoot = String(options.identityRoot || '').trim();
   const memoryRoot = String(options.memoryRoot || identityRoot).trim();
   const identity = identityRoot
-    ? String(readAgentPromptFile(identityRoot, { migrateLegacy: true })?.content || '').trim()
+    ? stripLegacyGeneratedAgentPromptLines(String(readAgentPromptFile(identityRoot, { migrateLegacy: true })?.content || '')).trim()
     : '';
   const identityContent = identity || (options.includeIdentityStub === false ? '' : SUBAGENT_IDENTITY_STUB);
   const memory = memoryRoot
