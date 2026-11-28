@@ -279,7 +279,7 @@ try {
       assert.match(after.text, /Part saved: Accounts, Main chat and Summaries, Job models/, 'partial: names what saved');
       assert.match(after.text, /Not saved: Brain models \(Brain runner not initialized\)/, 'partial: names what did not save and why');
       assert.doesNotMatch(after.text, /^Not saved\./, 'partial: does not claim nothing saved');
-      assert.match(after.text, /2 unsaved changes/, 'partial: every change stays on the bar');
+      assert.match(after.text, /\d unsaved changes/, 'partial: every change stays on the bar');
       assert.match(after.text, /Your changes are kept/, 'partial: says nothing was dropped');
       assert.doesNotMatch(await toastTitles(page), /settings saved/i, 'partial: no "Saved" toast');
       // A second failed retry resends everything and still keeps every change (no stale record).
@@ -289,14 +289,26 @@ try {
       assert.deepEqual(saves(mark), ['POST /api/settings/bulk', 'POST /api/settings/agent-model-defaults', 'PATCH /api/brain/config'], 'failed retry resends all three');
       const again = await bar(page);
       assert.equal(again.hidden, false, 'failed retry: bar stays');
-      assert.match(again.text, /2 unsaved changes/, 'failed retry: changes are still tracked');
+      assert.match(again.text, /\d unsaved changes/, 'failed retry: changes are still tracked');
+      // Re-edit both changes back to their starting values: the server already holds part of the
+      // first save, so Save must stay available (review of 5eea453e4).
+      await page.click('[data-pick="main"]');
+      await page.click('.sk-pop .sk-opt[data-provider="openai_codex"][data-model="gpt-5.5"]');
+      await page.waitForTimeout(400);
+      await page.evaluate(() => document.querySelector('[data-pick="brain:thought"]').click());
+      await page.waitForSelector('.sk-pop .sk-opt[data-provider="anthropic"][data-model="claude-sonnet-4-6"]');
+      await page.click('.sk-pop .sk-opt[data-provider="anthropic"][data-model="claude-sonnet-4-6"]');
+      await page.waitForTimeout(400);
+      const reverted = await bar(page);
+      assert.equal(reverted.hidden, false, 're-edit back after a partial save: Save stays available');
+      assert.match(reverted.text, /Unfinished save/, 're-edit back: bar says a save is unfinished');
       // Retry once the Brain runner is up: all three requests go out again and the bar closes.
       delete fail['PATCH /api/brain/config'];
       mark = posts.length;
       await page.click('[data-savebar="save"]');
       await page.waitForTimeout(1500);
       assert.deepEqual(saves(mark), ['POST /api/settings/bulk', 'POST /api/settings/agent-model-defaults', 'PATCH /api/brain/config'], 'retry resends all three requests');
-      assert.equal(posts.slice(mark).find((x) => x.path === '/api/brain/config').body.thoughtModel, '', 'retry carries the Brain change');
+      assert.match(String(posts.slice(mark).find((x) => x.path === '/api/brain/config').body.thoughtModel), /claude-sonnet-4-6/, 'retry carries the current Brain value');
       assert.equal((await bar(page)).hidden, true, 'bar gone after the retry saved');
       assert.deepEqual(errors, []);
     } finally { await page.close(); }

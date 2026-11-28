@@ -830,6 +830,10 @@ export async function saveModelsPage() {
     } catch (err) {
       // Part of the save may have gone through. Every change stays on the bar
       // and the next Save resends all of them; the message says what saved.
+      // The server now differs from the page's starting point, so a re-edit back
+      // to an old value must not hide Save: keep an "unfinished save" entry until
+      // a full save or Discard.
+      if (err?.partial) { tracker.track('retry', 'Unfinished save', false, true); render(); }
       if (!ctxChanged) throw err;
       const partial = new Error(err?.partial
         ? String(err.message).replace(/^Part saved: /, 'Part saved: Memory per chat, ')
