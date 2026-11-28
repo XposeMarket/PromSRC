@@ -6,9 +6,9 @@
  * and sessions. See workspace plans/connected-agents-unified-devices/live/LIVE-CONTRACT.md.
  */
 
-export type ExternalAgentId = 'codex' | 'claude-code' | 'openclaw' | 'hermes' | 'cursor' | 'openai-dots';
+export type ExternalAgentId = 'codex' | 'claude-code' | 'openclaw' | 'hermes' | 'cursor' | 'antigravity' | 'openai-dots';
 
-export const EXTERNAL_AGENT_IDS: readonly ExternalAgentId[] = ['codex', 'claude-code', 'openclaw', 'hermes', 'cursor', 'openai-dots'];
+export const EXTERNAL_AGENT_IDS: readonly ExternalAgentId[] = ['codex', 'claude-code', 'openclaw', 'hermes', 'cursor', 'antigravity', 'openai-dots'];
 
 /**
  * harness = an agent you start new chats with (Codex, Claude Code...).

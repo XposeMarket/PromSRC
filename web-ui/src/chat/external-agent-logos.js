@@ -10,6 +10,7 @@ const LOGOS = {
   // Nous Research mark, same as Settings > Agents & imports.
   hermes: '/static/assets/import-sources/nous-research.png',
   openclaw: '/static/assets/import-sources/openclaw.svg',
+  antigravity: '/static/assets/import-sources/antigravity.svg',
   'openai-dots': '/static/assets/import-sources/openai.svg',
 };
 
