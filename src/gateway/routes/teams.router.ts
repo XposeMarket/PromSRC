@@ -38,7 +38,7 @@ import { abortLiveRuntime, listLiveRuntimes } from '../live-runtime-registry';
 import { deleteTeamCompletely } from '../agents-runtime/entity-delete';
 import { teamExecutionQueue } from '../teams/team-execution-queue';
 import { listTeamRunReceipts } from '../teams/team-run-receipts';
-import { summarizeTeamForList } from '../teams/team-list-summary';
+import { summarizeTeamForList, summarizeTeamControlResponse } from '../teams/team-list-summary';
 
 export const router = Router();
 
@@ -677,6 +677,15 @@ function _resumeManagedTeamInternal(teamId: string): { success: boolean; team?: 
   return { success: true, team };
 }
 
+/** Start time of the team's newest live run (0 when idle), same rule as the list route. */
+function _liveTeamRunStartedAt(teamId: string): number {
+  let startedAt = 0;
+  for (const r of listLiveRuntimes()) {
+    if (r.teamId === teamId && r.status === 'running' && !r.abortRequestedAt) startedAt = Math.max(startedAt, r.startedAt);
+  }
+  return startedAt;
+}
+
 router.get('/api/teams', (req, res) => {
   // List payload stays small; see summarizeTeamForList.
   try {
@@ -939,11 +948,11 @@ router.post('/api/teams/:id/pause', (req, res) => {
     if (req.body?.abortOnly === true) {
       const out = _abortManagedTeamLiveRuntimes(req.params.id, reason);
       if (!out.success) return res.status(404).json(out);
-      return res.json(out);
+      return res.json(summarizeTeamControlResponse(out, _liveTeamRunStartedAt(req.params.id)));
     }
     const out = _pauseManagedTeamInternal(req.params.id, reason);
     if (!out.success) return res.status(404).json(out);
-    res.json(out);
+    res.json(summarizeTeamControlResponse(out, _liveTeamRunStartedAt(req.params.id)));
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -953,7 +962,7 @@ router.post('/api/teams/:id/resume', (req, res) => {
   try {
     const out = _resumeManagedTeamInternal(req.params.id);
     if (!out.success) return res.status(404).json(out);
-    res.json(out);
+    res.json(summarizeTeamControlResponse(out, _liveTeamRunStartedAt(req.params.id)));
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }
