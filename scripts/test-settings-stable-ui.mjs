@@ -24,6 +24,9 @@ try {
     document.querySelector('#settings-modal').style.display = 'flex';
     const nav = await import('/src/settings/settings-mobile-nav.js'); nav.initSettingsMobileNav(); nav.showMobileSettingsPage();
     document.querySelectorAll('.settings-page-main > [id^="settings-panel-"]').forEach(el => el.style.display = el.id === 'settings-panel-models' ? 'block' : 'none');
+    // The legacy Models controls now live in a hidden store (the Manage sheet borrows
+    // them); show it so their own refresh/disconnect behavior is still exercised.
+    const store = document.getElementById('settings-models-store'); if (store) store.hidden = false;
     document.querySelector('#prov-fields-openai_codex').style.display = 'block';
     document.querySelector('#codex-connected-state').style.display = 'block';
     document.querySelector('#codex-disconnected-state').style.display = 'none';

@@ -30,6 +30,9 @@ import { formatModelDisplayName, relabelModelSelect } from '../model-display.js'
 import { mountProviderAccountsList } from '../settings/provider-accounts-list.js';
 import { initSettingsMobileNav, showMobileSettingsPage } from '../settings/settings-mobile-nav.js';
 import { mountAgentsImports } from '../settings/agents-imports.js';
+import { createSaveBar, createChangeTracker, openSheet, closeSheets, wireKit, esc as skEsc, skIcon } from '../settings/settings-kit.js';
+import { mountModelsPage, refreshModelsPage, modelsChanges, modelsSaveNote, saveModelsPage, discardModelsPage } from '../settings/models-page.js';
+import { pairingAdminApi, refreshPairingQR, refreshPairingPending, refreshPairedDevices, _startPairingPolling, pairingChallenge, pairingBrowserAdminToken, setPairingBrowserAdminToken } from '../settings/pairing-devices.js';
 
 // SettingsPage is an ES module, so an unqualified `addProcessEntry` lookup
 // does not fall through to the legacy global in Safari. Keep the existing
@@ -67,6 +70,7 @@ const SETTINGS_ICON_PATHS = {
   zap: '<path d="M13 2 3 14h7l-1 8 10-12h-7l1-8Z"></path>',
   send: '<path d="M22 2 11 13"></path><path d="M22 2 15 22l-4-9-9-4 20-7Z"></path>',
   moon: '<path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8Z"></path>',
+  mic: '<rect x="9" y="3" width="6" height="11" rx="3"></rect><path d="M5 11a7 7 0 0 0 14 0"></path><path d="M12 18v3"></path>',
   palette: '<path d="M12 3a9 9 0 1 0 0 18h1.2a1.8 1.8 0 0 0 1.3-3.05 1.8 1.8 0 0 1 1.28-3.07H18A3 3 0 0 0 21 12C21 7.03 16.97 3 12 3Z"></path><circle cx="7.5" cy="10" r=".8" fill="currentColor" stroke="none"></circle><circle cx="10" cy="7" r=".8" fill="currentColor" stroke="none"></circle><circle cx="14" cy="7" r=".8" fill="currentColor" stroke="none"></circle><circle cx="16.5" cy="10" r=".8" fill="currentColor" stroke="none"></circle>',
 };
 
@@ -575,8 +579,16 @@ function setSettingsTab(tab) {
     window.settingsLegacyMigrationNotice = true;
     tab = 'system';
   }
+  const previousTab = window.settingsTab;
   window.settingsTab = tab;
   ensureVoiceSettingsTab();
+  // A newly opened section starts at its top, not at the previous section's scroll offset.
+  if (previousTab !== tab) {
+    const main = document.querySelector('#settings-modal .settings-page-main');
+    if (main) main.scrollTop = 0;
+  }
+  document.getElementById('settings-modal')?.classList.toggle('sk-rebuilt', Object.prototype.hasOwnProperty.call(SETTINGS_PAGE_CONTROLLERS, tab));
+  SETTINGS_PAGE_CONTROLLERS[tab]?.wire?.();
   // A programmatic tab switch (command palette, "open Models" links) while a
   // phone is showing the Settings home list must reveal that section.
   if (document.getElementById('settings-modal')?.classList.contains('smh-home')) showMobileSettingsPage();
@@ -621,8 +633,14 @@ function setSettingsTab(tab) {
           if (!window.heartbeatSettingsLoaded) pendingLoads.push(loadHeartbeatSettings());
           else if (window.heartbeatEditor) window.heartbeatEditor.refresh();
         }
-        if (t === 'channels') pendingLoads.push(loadChannelsStatus());
-        if (t === 'models') pendingLoads.push(loadModelSettings());
+        if (t === 'channels') {
+          armChannelSwitchGuard();
+          pendingLoads.push(loadChannelsStatus());
+        }
+        if (t === 'models') {
+          mountModelsPage(panel, modelsPageDeps());
+          pendingLoads.push(loadModelSettings());
+        }
         if (t === 'voice') pendingLoads.push(loadVoiceSettings());
         if (t === 'agents') pendingLoads.push(loadAgentsTab());
         if (t === 'integrations') pendingLoads.push(loadIntegrationsTab());
@@ -649,6 +667,7 @@ function setSettingsTab(tab) {
   if (pendingLoads.length) {
     Promise.allSettled(pendingLoads).catch(() => {});
   }
+  updateSettingsSaveBar();
   if (tab === 'system' && window.settingsLegacyMigrationNotice) {
     window.settingsLegacyMigrationNotice = false;
     setTimeout(() => {
@@ -668,7 +687,8 @@ function ensureVoiceSettingsTab() {
   tab.id = 'settings-tab-voice';
   tab.className = modelTab?.className || 'settings-tab';
   tab.type = 'button';
-  tab.textContent = 'Voice';
+  tab.dataset.settingsSearch = 'voice talk speak realtime microphone';
+  tab.innerHTML = `<span class="settings-nav-icon" data-settings-nav-icon="mic" aria-hidden="true">${renderSettingsIcon('mic', 15)}</span><span>Voice</span>`;
   tab.addEventListener('click', () => setSettingsTab('voice'));
   if (modelTab?.parentElement) modelTab.parentElement.insertBefore(tab, modelTab.nextSibling);
   const panel = document.createElement('div');
@@ -738,6 +758,9 @@ function ensureHeartbeatEditor() {
     theme: 'default',
   });
   window.heartbeatEditor.setSize('100%', 340);
+  window.heartbeatEditor.on('change', (_cm, change) => {
+    if (change?.origin && change.origin !== 'setValue') SETTINGS_PAGE_CONTROLLERS.heartbeat?.mark?.('hb-instructions', 'Instructions');
+  });
   setTimeout(() => { if (window.heartbeatEditor) window.heartbeatEditor.refresh(); }, 200);
 }
 
@@ -813,7 +836,10 @@ async function refreshHeartbeatSummary() {
   }
 }
 
-async function saveHeartbeatSettings() {
+// throwOnError: the page save bar needs the real outcome. These save functions
+// still show their own message; with throwOnError they also rethrow so the bar
+// keeps the edits and does not say "Saved".
+async function saveHeartbeatSettings({ throwOnError = false } = {}) {
   const statusEl = document.getElementById('settings-hb-status');
   const enabledEl = document.getElementById('settings-hb-enabled');
   const intervalEl = document.getElementById('settings-hb-interval');
@@ -846,9 +872,12 @@ async function saveHeartbeatSettings() {
     loadSubagentHeartbeatList().catch(() => {});
     if (statusEl) statusEl.textContent = 'Saved.';
     addProcessEntry('final', 'Heartbeat settings saved.');
+    return data;
   } catch (err) {
     if (statusEl) statusEl.textContent = `Save failed: ${err.message}`;
     addProcessEntry('error', `Heartbeat settings save failed: ${err.message}`);
+    if (throwOnError) throw err;
+    return null;
   }
 }
 
@@ -1644,7 +1673,13 @@ function setProviderModelOptions(providerId, models) {
   if (control.tagName === 'SELECT') {
     control.innerHTML = unique.map(m => `<option value="${escHtml(m)}">${escHtml(formatModelDisplayName(m, providerId))}</option>`).join('');
     if (current && unique.includes(current)) control.value = current;
-    else control.value = unique[0];
+    else if (current) {
+      // Never swap a saved model for the first listed one; keep it (shown as unavailable).
+      ensureSelectOption(control, current);
+      const kept = Array.from(control.options).find((option) => option.value === current);
+      if (kept) kept.dataset.injected = 'saved';
+      control.value = current;
+    } else control.value = unique[0];
   } else if (!current) {
     control.value = unique[0];
   }
@@ -1653,7 +1688,7 @@ function setProviderModelOptions(providerId, models) {
 function getProviderModelsFromUI(providerId) {
   const control = getProviderModelControl(providerId);
   const controlModels = control?.tagName === 'SELECT'
-    ? Array.from(control.options || []).map(o => o.value).filter(Boolean)
+    ? Array.from(control.options || []).filter(o => o.dataset?.injected !== 'saved').map(o => o.value).filter(Boolean)
     : (control?.value ? [String(control.value).trim()] : []);
   return uniqueStrings([...getProviderStaticModels(providerId), ...controlModels]);
 }
@@ -1781,8 +1816,13 @@ function renderProviderSelectors() {
     const emptyState = credentialedProviders.length
       ? ''
       : '<option value="" disabled>No connected model providers</option>';
-    select.innerHTML = `<option value="">- ${escHtml(placeholder)} -</option>${providerOptions}${emptyState}`;
-    if (current && credentialedProviders.some(provider => provider.id === current)) select.value = current;
+    // A saved choice whose provider is no longer connected stays selected (shown
+    // as unavailable on the page) so saving never silently erases it.
+    const keepSaved = current && !credentialedProviders.some(provider => provider.id === current)
+      ? `<option value="${escHtml(current)}">${escHtml(providers.find(provider => provider.id === current)?.name || current)} (not connected)</option>`
+      : '';
+    select.innerHTML = `<option value="">- ${escHtml(placeholder)} -</option>${providerOptions}${keepSaved}${emptyState}`;
+    if (current) select.value = current;
   });
 }
 
@@ -1862,9 +1902,11 @@ function ensureProviderAccountsContainer() {
   if (!host) {
     host = document.createElement('div');
     host.id = 'settings-provider-accounts';
+    // The accounts list lives in the hidden Models store; the Manage sheet borrows it.
+    const store = document.getElementById('settings-models-store') || panel;
     const usage = document.getElementById('settings-models-usage');
-    if (usage?.parentElement === panel) panel.insertBefore(host, usage.nextSibling);
-    else panel.insertBefore(host, panel.firstChild);
+    if (usage?.parentElement === store) store.insertBefore(host, usage.nextSibling);
+    else store.insertBefore(host, store.firstChild);
   }
   return host;
 }
@@ -1986,6 +2028,8 @@ function scheduleModelStatusRefresh(prov) {
 }
 
 async function loadModelSettings() {
+  // Fresh values from the server: forget any half-finished save.
+  resetModelsSaveProgress();
   ensureModelsSections();
   window._llmSettingsLoadedToUI = false;
   const providerBoot = ensureProviderCatalogUIReady()
@@ -2051,6 +2095,17 @@ async function loadModelSettings() {
       { const s = document.getElementById('settings-perplexity-effort'); if (s) s.value = pc.perplexity?.reasoning_effort || ''; }
       v('settings-gemini-key',        pc.gemini?.api_key);
       if (pc.gemini?.model) { const s = document.getElementById('settings-gemini-model'); if (s) s.value = pc.gemini.model; }
+      // A saved model the static list no longer offers stays selected (shown as
+      // "unavailable" on the Models page) instead of silently falling back on save.
+      for (const [providerId, selectId] of [['openai', 'settings-openai-model'], ['openai_codex', 'settings-codex-model'], ['anthropic', 'settings-anthropic-model'], ['perplexity', 'settings-perplexity-model'], ['gemini', 'settings-gemini-model']]) {
+        const saved = String(pc[providerId]?.model || '').trim();
+        const select = document.getElementById(selectId);
+        if (!saved || !select || getSelectOptionValues(select).includes(saved)) continue;
+        ensureSelectOption(select, saved);
+        const option = Array.from(select.options).find((item) => item.value === saved);
+        if (option) option.dataset.injected = 'saved';
+        select.value = saved;
+      }
 
       if (pc.anthropic) {
         const chk = document.getElementById('settings-anthropic-extended-thinking');
@@ -2082,11 +2137,12 @@ async function loadModelSettings() {
       window.syncProviderReasoningControls?.('anthropic');
       syncProviderStateSummary(prov);
 
-      Promise.allSettled([
+      modelsDeferredLoad = Promise.allSettled([
         loadAgentModelDefaults(),
         loadBrainModelConfig(),
         loadSessionCompactionSettings(),
-      ]).then(() => { renderModelsUsage(); }).catch(() => {});
+      ]).then(() => { refreshModelsPage(); renderModelsUsage(); }).catch(() => {});
+      refreshModelsPage();
       scheduleModelStatusRefresh(prov);
     } catch (e) {
       console.warn('loadModelSettings apply failed:', e);
@@ -2202,6 +2258,8 @@ async function refreshModelsUsage() {
   // A connected account may be used by a per-chat model route even when it
   // is absent from the global main/agent defaults shown in this form.
   if (freshness) freshness.textContent = '';
+  window._modelsUsageById = byId;
+  refreshModelsPage();
   const inUse = collectInUseProviders().filter(id => !MODELS_USAGE_LOCAL.has(id));
   const visibleIds = [...new Set([...inUse, ...Object.keys(byId)])];
   grid.dataset.usageLoaded = 'true';
@@ -2254,6 +2312,7 @@ async function loadSessionCompactionSettings() {
     if (wordsEl) wordsEl.value = String(Number(s.rollingCompactionSummaryMaxWords) || 900);
     if (modelEl) modelEl.value = String(s.rollingCompactionModel || '');
     await applyGoalRoutingToForm('compactor', s?.mainChatGoals?.compactionModel || '', s?.mainChatGoals?.compactionReasoning || '');
+    window._contextSelection = s.contextProfile ? { profile: s.contextProfile, budget: s.contextBudget || {} } : null;
     const contextWrap = document.getElementById('settings-context-budget-summary');
     if (contextWrap) {
       contextWrap.innerHTML = renderContextSelection(s.contextProfile, s.contextBudget, 'desktop-context');
@@ -4807,8 +4866,37 @@ function getSelectedChannelType() {
   return String(document.getElementById('settings-channel-select')?.value || 'telegram');
 }
 
+let channelShownType = '';
+/** The app whose form is on screen right now (read from the page, not from the status load). */
+function shownChannelFromPage() {
+  for (const key of ['telegram', 'discord', 'whatsapp']) {
+    const form = document.getElementById(`channel-form-${key}`);
+    if (form && form.style.display !== 'none') return key;
+  }
+  return getSelectedChannelType();
+}
+/** Arms the app-switch guard as soon as Channels mounts, before any status request. */
+function armChannelSwitchGuard() {
+  if (!channelShownType) channelShownType = shownChannelFromPage();
+}
 function onChannelTypeChange() {
-  const ch = getSelectedChannelType();
+  let ch = getSelectedChannelType();
+  // Save posts only the app that is shown, so switching apps with unsaved
+  // edits would leave them unsaved while the bar said "Saved". Ask for Save or
+  // Discard first and keep the current app on screen. Works even if the status
+  // load is still pending or failed.
+  armChannelSwitchGuard();
+  const pending = SETTINGS_PAGE_CONTROLLERS.channels?.changes?.() || [];
+  if (ch !== channelShownType && pending.length) {
+    const select = document.getElementById('settings-channel-select');
+    if (select) select.value = channelShownType;
+    ch = channelShownType;
+    const name = { telegram: 'Telegram', discord: 'Discord', whatsapp: 'WhatsApp' }[ch] || ch;
+    updateSettingsSaveBar();
+    settingsSaveBar?.error(`Save or discard your ${name} changes before switching apps.`);
+    return;
+  }
+  channelShownType = ch;
   const formMap = {
     telegram: 'channel-form-telegram',
     discord: 'channel-form-discord',
@@ -4835,8 +4923,8 @@ function onChannelTypeChange() {
   applyCompletionNotificationFields(channelsStatusCache?.[ch] || null);
 }
 
-async function saveSelectedChannelSettings() {
-  await saveChannelSettings(getSelectedChannelType());
+async function saveSelectedChannelSettings(options = {}) {
+  return saveChannelSettings(getSelectedChannelType(), options);
 }
 
 async function testSelectedChannel() {
@@ -4848,6 +4936,7 @@ async function sendSelectedChannelTest() {
 }
 
 async function loadChannelsStatus() {
+  armChannelSwitchGuard();
   const cached = _withSettingsCache({
     key: 'settings-channels',
     ttlMs: SETTINGS_DATA_CACHE_TTL_MS.channelsStatus,
@@ -4910,7 +4999,7 @@ async function loadChannelsStatus() {
   });
 }
 
-async function saveChannelSettings(channel) {
+async function saveChannelSettings(channel, { throwOnError = false } = {}) {
   const payload = readChannelPayload(channel);
   try {
     const data = await api('/api/channels/config', {
@@ -4918,16 +5007,16 @@ async function saveChannelSettings(channel) {
       headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ channels: { [channel]: payload } }),
     });
-    if (data?.success) {
-      addProcessEntry('final', `${channel} settings saved.`);
-      channelsStatusLoaded = false;
-      _markSettingsCacheBusted('settings-channels');
-      await loadChannelsStatus();
-    } else {
-      alert('Save failed: ' + (data?.error || 'unknown error'));
-    }
+    if (!data?.success) throw new Error(data?.error || 'unknown error');
+    addProcessEntry('final', `${channel} settings saved.`);
+    channelsStatusLoaded = false;
+    _markSettingsCacheBusted('settings-channels');
+    await loadChannelsStatus();
+    return data;
   } catch (err) {
+    if (throwOnError) throw err;
     alert('Save failed: ' + err.message);
+    return null;
   }
 }
 
@@ -5112,9 +5201,52 @@ function settingsTabLabel(tab) {
   return String(tab || 'settings').replace(/-/g, ' ').replace(/^./, c => c.toUpperCase());
 }
 
-async function saveSettings() {
+/** Returned (not thrown) when the user cancels a confirmation: nothing was sent. */
+const SETTINGS_SAVE_CANCELLED = Object.freeze({ cancelled: true });
+
+// Models saves with up to three requests, in order. Only the current attempt is
+// tracked, so a failure can say which requests went through. Nothing is skipped
+// on a retry: all three requests are resent (each one writes the whole form, so
+// resending is safe), and every change stays on the save bar until a full save.
+// An earlier design skipped requests it believed were already saved; a preset
+// applied in between or a re-edit made that record wrong (review of PR #973).
+const MODELS_SAVE_STAGES = {
+  bulk: 'Accounts, Main chat and Summaries',
+  defaults: 'Job models',
+  brain: 'Brain models',
+};
+const modelsSaveDone = [];
+function resetModelsSaveProgress() { modelsSaveDone.length = 0; }
+async function runModelsSaveStage(stage, body, send) {
+  if (!stage) return send();
+  let result;
+  try {
+    result = await send();
+  } catch (err) {
+    if (err && typeof err === 'object') err.failedStage = stage;
+    throw err;
+  }
+  if (!modelsSaveDone.includes(stage)) modelsSaveDone.push(stage);
+  return result;
+}
+/** A failure after earlier Models requests succeeded says plainly what saved and what did not. */
+function modelsPartialSaveError(err) {
+  const saved = modelsSaveDone.slice();
+  if (!err?.failedStage || !saved.length) return err;
+  const reason = String(err.message || '').trim();
+  const out = new Error(`Part saved: ${saved.map((stage) => MODELS_SAVE_STAGES[stage]).join(', ')}. Not saved: ${MODELS_SAVE_STAGES[err.failedStage]}${reason ? ` (${reason})` : ''}. Your changes are kept; Save again to retry.`);
+  out.partial = true;
+  out.savedStages = saved;
+  out.failedStage = err.failedStage;
+  return out;
+}
+
+async function saveSettings(options = {}) {
+  // stayOpen: called by the page save bar. It keeps Settings open and lets the
+  // bar show the error instead of the old footer. The request bodies are the same.
+  const stayOpen = options?.stayOpen === true;
   const btn = document.getElementById('settings-save-btn');
-  if (btn?.disabled) return; // prevent double-submit
+  if (btn?.disabled && !stayOpen) return; // prevent double-submit
   setSettingsSaveFeedback('saving', 'Saving…');
 
   const resetBtn = () => setSettingsSaveFeedback();
@@ -5122,26 +5254,33 @@ async function saveSettings() {
   const safetyTimer = setTimeout(resetBtn, 15000);
   try {
     const activeTab = getActiveSettingsTab();
+    resetModelsSaveProgress();
     const bulkPayload = buildSettingsBulkPayloadForTab(activeTab);
     if (activeTab === 'system' && bulkPayload.session?.autoSettle?.afterDays === 'custom') {
       const activationMode = await askAutoSettleActivationMode();
       if (!activationMode) {
         resetBtn();
-        return;
+        return SETTINGS_SAVE_CANCELLED;
       }
       bulkPayload.session.autoSettle.activationMode = activationMode;
     }
     let savedAnything = false;
     let saveResponse = null;
     if (Object.keys(bulkPayload).length) {
-      saveResponse = await api('/api/settings/bulk', {
-        method: 'POST',
-        body: JSON.stringify(bulkPayload),
+      const bulkBody = JSON.stringify(bulkPayload);
+      await runModelsSaveStage(activeTab === 'models' ? 'bulk' : '', bulkBody, async () => {
+        saveResponse = await api('/api/settings/bulk', {
+          method: 'POST',
+          body: bulkBody,
+        });
+        if (saveResponse?.success === false) throw new Error(saveResponse.error || 'Settings were not saved.');
       });
       savedAnything = true;
     }
     if (activeTab === 'models') {
-      await saveModelTabLiveSettings({ showStatus: false });
+      await saveModelTabLiveSettings({ showStatus: false, staged: true });
+      // Every Models request is now saved; a later save starts fresh.
+      resetModelsSaveProgress();
       savedAnything = true;
       // A newly saved credential becomes available to all right-side routing
       // selectors immediately, without changing the live main-chat provider.
@@ -5151,13 +5290,13 @@ async function saveSettings() {
         window.applyReasoningPrefsFromProviderConfig(bulkPayload.llm, window._llmSettingsCache?.provider || bulkPayload.llm.provider);
       }
     } else if (activeTab === 'heartbeat' && typeof saveHeartbeatSettings === 'function') {
-      await saveHeartbeatSettings();
+      await saveHeartbeatSettings({ throwOnError: true });
       savedAnything = true;
     } else if (activeTab === 'channels' && typeof saveSelectedChannelSettings === 'function') {
-      await saveSelectedChannelSettings();
+      await saveSelectedChannelSettings({ throwOnError: true });
       savedAnything = true;
     } else if (activeTab === 'pairing' && typeof _saveRemoteAccess === 'function') {
-      await _saveRemoteAccess();
+      await _saveRemoteAccess({ throwOnError: true });
       savedAnything = true;
     }
     if (activeTab === 'system') {
@@ -5196,11 +5335,20 @@ async function saveSettings() {
     if (activeTab === 'security' && securityStatus) setSettingsStatus(securityStatus, 'success', 'Saved');
     updateQuickModeUI();
     addProcessEntry('final', `${settingsTabLabel(activeTab)} settings saved.`);
+    if (stayOpen) {
+      resetBtn();
+      return;
+    }
     setSettingsSaveFeedback('saved', 'Saved ✓');
     await waitForSettingsSaveFeedback();
     closeSettings();
-  } catch (err) {
+  } catch (caught) {
+    const err = getActiveSettingsTab() === 'models' ? modelsPartialSaveError(caught) : caught;
     addProcessEntry('error', `Failed to save settings: ${err.message}`);
+    if (stayOpen) {
+      resetBtn();
+      throw err;
+    }
     setSettingsSaveFeedback('error', 'Try again');
     setTimeout(resetBtn, 1800);
   } finally {
@@ -5277,9 +5425,8 @@ function setIntegTab(tab) {
     const btn = document.getElementById('itab-' + t);
     const panel = document.getElementById('itab-panel-' + t);
     if (btn) {
-      btn.style.background = t === tab ? 'color-mix(in srgb, var(--text) 10%, transparent)' : 'transparent';
-      btn.style.color = t === tab ? 'var(--text)' : 'var(--muted)';
-      btn.style.border = '0';
+      btn.classList.toggle('on', t === tab);
+      btn.setAttribute('aria-selected', t === tab ? 'true' : 'false');
     }
     if (panel) panel.style.display = t === tab ? 'block' : 'none';
   });
@@ -5363,28 +5510,42 @@ function generateWebhookToken() {
   crypto.getRandomValues(arr);
   const token = Array.from(arr).map(b => b.toString(16).padStart(2,'0')).join('');
   const inp = document.getElementById('wh-token');
-  if (inp) { inp.value = token; inp.type = 'text'; setTimeout(() => { inp.type = 'password'; }, 4000); }
+  if (inp) {
+    const before = inp.value;
+    inp.value = token; inp.type = 'text'; setTimeout(() => { inp.type = 'password'; }, 4000);
+    SETTINGS_PAGE_CONTROLLERS.integrations?.note?.(inp, before);
+  }
 }
 
-async function saveWebhookSettings() {
+async function saveWebhookSettings({ throwOnError = false } = {}) {
   const enabled = document.getElementById('wh-enabled')?.checked ?? false;
   const rawToken = document.getElementById('wh-token')?.value?.trim() || '';
   const hookPath = document.getElementById('wh-path')?.value?.trim() || '/hooks';
+  let r;
   try {
-    const r = await api('/api/settings/hooks', {
+    r = await api('/api/settings/hooks', {
       method: 'POST',
       body: JSON.stringify({ enabled, token: rawToken, path: hookPath }),
     });
-    if (r.success) {
-      _markSettingsCacheBusted('settings-webhooks');
-      await loadWebhookSettings();
-      showIntegMsg('? Webhook settings saved — restart gateway to apply', '#166534', '#f0fdf4');
-    } else {
-      showIntegMsg('Error: ' + (r.error || 'Unknown error'), '#991b1b', '#fef2f2');
-    }
   } catch(e) {
     showIntegMsg('Save failed: ' + e.message, '#991b1b', '#fef2f2');
+    if (throwOnError) throw e;
+    return null;
   }
+  if (!r?.success) {
+    showIntegMsg('Error: ' + (r?.error || 'Unknown error'), '#991b1b', '#fef2f2');
+    if (throwOnError) throw new Error(r?.error || 'Webhook settings were not saved.');
+    return null;
+  }
+  try {
+    _markSettingsCacheBusted('settings-webhooks');
+    await loadWebhookSettings();
+    showIntegMsg('? Webhook settings saved — restart gateway to apply', '#166534', '#f0fdf4');
+  } catch(e) {
+    // Saved on the gateway; only the refresh after it failed.
+    showIntegMsg('Saved. Reload failed: ' + e.message, '#991b1b', '#fef2f2');
+  }
+  return r;
 }
 
 async function testWebhookEndpoint() {
@@ -5725,7 +5886,19 @@ const AMD_SLOTS = {
   // Switch model tiers
   'switch-model-low':       'switch_model_low',
   'switch-model-medium':    'switch_model_medium',
+  // "New agents": the generic subagent default the backend already resolves.
+  'subagent':               'subagent',
 };
+
+// The subagent slot is sent only when it was saved before or the user set it,
+// so a page that never touched it sends the same body as before the rebuild.
+let amdSubagentLoadedValue = '';
+function amdSlotEntries() {
+  return Object.entries(AMD_SLOTS).filter(([slotId]) => {
+    if (slotId !== 'subagent') return true;
+    return !!amdSubagentLoadedValue || !!String(document.getElementById('amd-subagent-prov')?.value || '').trim();
+  });
+}
 
 const AMD_STATIC_MODELS = {
   openai:       ['gpt-6.2-astra', 'gpt-6.2-sol', 'gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-pro', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5-pro', 'gpt-5', 'gpt-5-mini', 'gpt-5-nano', 'gpt-5-chat-latest', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
@@ -5739,6 +5912,274 @@ const AMD_TEMPLATE_CACHE_KEY = 'prometheus_agent_model_default_templates_v1';
 let amdTemplatesCache = [];
 let amdActiveTemplateId = '';
 let amdDefaultTemplateId = '';
+
+// ─── Rebuilt pages: one save bar per page ─────────────────────────────────
+// Each rebuilt page reports its unsaved changes; the bar at the bottom of the
+// settings column saves or discards them through that page's existing code.
+const SETTINGS_PAGE_CONTROLLERS = {
+  models: { changes: modelsChanges, note: modelsSaveNote, save: saveModelsPage, discard: discardModelsPage },
+  pairing: createFieldPageController('settings-panel-pairing', {
+    reload: () => loadRemoteAccessSettings(),
+  }),
+  channels: createFieldPageController('settings-panel-channels', {
+    reload: () => loadChannelsStatus(),
+  }),
+  heartbeat: createFieldPageController('settings-panel-heartbeat', {
+    reload: () => loadHeartbeatSettings(true),
+  }),
+  search: createFieldPageController('settings-panel-search', {
+    reload: () => loadCredFields(),
+  }),
+  system: createFieldPageController('settings-panel-system', {
+    reload: () => loadAutoSettleSettings(),
+    labels: { 'settings-busy-composer-mode': 'Messages while Prom is working', 'settings-auto-settle-after': 'Auto-settle', 'settings-auto-settle-custom-date': 'Auto-settle date' },
+  }),
+  security: createFieldPageController('settings-panel-security', {
+    reload: () => loadSecuritySettings(),
+  }),
+  // Pages whose settings all apply instantly or through their own editors
+  // (agent editor, shortcut list, theme picker): no page save bar, and the old
+  // footer Save (which saved nothing there) is hidden.
+  agents: { changes: () => [] },
+  shortcuts: { changes: () => [] },
+  appearance: { changes: () => [] },
+  // Only the webhook fields; the MCP server form keeps its own "Save server".
+  integrations: createFieldPageController('settings-panel-integrations', {
+    save: () => saveWebhookSettings({ throwOnError: true }),
+    reload: () => loadWebhookSettings(),
+  }),
+};
+
+/**
+ * Save bar for pages whose fields are plain inputs/selects/checkboxes saved by
+ * the existing saveSettings() path. It records each field's value before the
+ * user first touches it, lists changed fields by their row label, and on
+ * Discard puts the old values back and reloads the page. Fields inside
+ * [data-sk-instant] apply on their own (as today) and are not tracked.
+ */
+function createFieldPageController(panelId, { reload = null, save = null, labels = {} } = {}) {
+  const tracker = createChangeTracker();
+  const originals = new Map();
+  let wired = false;
+  // Radio groups are tracked by group name with the chosen value.
+  const keyOf = (el) => (el.type === 'radio' ? `radio:${el.name}` : el.id);
+  const isSwitchButton = (el) => el?.tagName === 'BUTTON' && el.getAttribute('role') === 'switch' && !!el.id;
+  const valueOf = (el) => {
+    if (isSwitchButton(el)) return el.getAttribute('aria-checked') === 'true';
+    if (el.type === 'checkbox') return el.checked;
+    if (el.type === 'radio') return document.querySelector(`input[type="radio"][name="${CSS.escape(el.name)}"]:checked`)?.value ?? '';
+    return el.value;
+  };
+  const tracked = (el) => !!(el?.id || el?.name) && (/^(INPUT|SELECT|TEXTAREA)$/.test(el.tagName) || isSwitchButton(el)) && el.type !== 'file' && !el.closest('[data-sk-instant]');
+  const labelFor = (el) => labels[el.id]
+    || el.closest('[data-sk-label]')?.getAttribute('data-sk-label')
+    || el.closest('.sk-row')?.querySelector('.sk-name')?.textContent?.trim()
+    || (() => {
+      const row = el.closest('.settings-row, .settings-credential-row, .settings-search-row');
+      return (row?.querySelector('label > span:first-child') || row?.querySelector('label, .settings-row-label'))?.textContent?.trim();
+    })()
+    || el.getAttribute('aria-label')
+    || 'Setting';
+  const remember = (event) => {
+    const el = event.target;
+    if (tracked(el) && !originals.has(keyOf(el))) originals.set(keyOf(el), valueOf(el));
+  };
+  const changed = (event) => {
+    const el = event.target;
+    if (!event.isTrusted || !tracked(el)) return;
+    if (!originals.has(keyOf(el))) return;
+    tracker.track(keyOf(el), labelFor(el), originals.get(keyOf(el)), valueOf(el));
+    updateSettingsSaveBar();
+  };
+  const reset = () => { tracker.clear(); originals.clear(); };
+  return {
+    wire() {
+      const panel = document.getElementById(panelId);
+      if (!panel || wired) return;
+      wired = true;
+      wireKit(panel);
+      panel.addEventListener('focusin', remember, true);
+      panel.addEventListener('pointerdown', remember, true);
+      panel.addEventListener('keydown', remember, true);
+      panel.addEventListener('input', changed, true);
+      panel.addEventListener('change', changed, true);
+      // Switch buttons (role=switch) flip in their own onclick; read them after it ran.
+      panel.addEventListener('click', (event) => {
+        const el = event.target.closest?.('button[role="switch"][id]');
+        if (el && panel.contains(el)) changed({ target: el, isTrusted: event.isTrusted });
+      });
+    },
+    /** Mark a change that has no form field (e.g. a code editor). */
+    mark(key, label) {
+      tracker.track(key, label, 'saved', 'edited');
+      updateSettingsSaveBar();
+    },
+    changes: () => tracker.labels(),
+    /** Record a change made by code on the user's behalf (e.g. "Use this address"). */
+    note(el, before) {
+      if (!tracked(el)) return;
+      if (!originals.has(keyOf(el))) originals.set(keyOf(el), before);
+      tracker.track(keyOf(el), labelFor(el), originals.get(keyOf(el)), valueOf(el));
+      updateSettingsSaveBar();
+    },
+    // Resets and reloads only after a confirmed save. A failed save throws (the
+    // bar keeps the edits and shows the error); a cancelled confirmation
+    // returns { cancelled } and leaves everything exactly as it was.
+    async save() {
+      const outcome = await (save ? save() : saveSettings({ stayOpen: true }));
+      if (outcome?.cancelled) return outcome;
+      reset();
+      await reload?.();
+      return outcome;
+    },
+    async discard() {
+      for (const [key, value] of originals) {
+        const node = document.getElementById(key);
+        if (node && isSwitchButton(node)) {
+          if (valueOf(node) !== !!value) node.click();
+          continue;
+        }
+        if (key.startsWith('radio:')) {
+          const radio = document.querySelector(`input[type="radio"][name="${CSS.escape(key.slice(6))}"][value="${CSS.escape(String(value))}"]`);
+          if (radio) radio.checked = true;
+          continue;
+        }
+        const el = document.getElementById(key);
+        if (!el) continue;
+        if (el.type === 'checkbox') el.checked = !!value; else el.value = value;
+      }
+      reset();
+      await reload?.();
+    },
+  };
+}
+let settingsSaveBar = null;
+let modelsDeferredLoad = null;
+
+function ensureSettingsSaveBar() {
+  if (settingsSaveBar) return settingsSaveBar;
+  const main = document.querySelector('#settings-modal .settings-page-main');
+  settingsSaveBar = createSaveBar(main);
+  settingsSaveBar?.bind({
+    save: async () => {
+      const controller = SETTINGS_PAGE_CONTROLLERS[getActiveSettingsTab()];
+      if (!controller) return;
+      settingsSaveBar.busy(true);
+      let outcome = null;
+      try {
+        outcome = await controller.save();
+      } catch (err) {
+        settingsSaveBar.busy(false);
+        updateSettingsSaveBar();
+        // A partial save already names what saved and what did not.
+        const message = err?.partial ? err.message : `Not saved. ${err?.message || 'Try again.'}`;
+        if (settingsSaveBar.el.hidden) showToast('Not everything saved', message, 'warning', 8000);
+        else settingsSaveBar.error(message);
+        return;
+      }
+      settingsSaveBar.busy(false);
+      updateSettingsSaveBar();
+      if (outcome?.cancelled) return;
+      showToast('Saved', `${settingsTabLabel(getActiveSettingsTab())} settings saved.`, 'success', 2500);
+    },
+    discard: async () => {
+      const controller = SETTINGS_PAGE_CONTROLLERS[getActiveSettingsTab()];
+      if (!controller) return;
+      settingsSaveBar.busy(true, 'Discarding…');
+      try { await controller.discard(); } finally {
+        settingsSaveBar.busy(false);
+        updateSettingsSaveBar();
+      }
+    },
+  });
+  return settingsSaveBar;
+}
+
+function updateSettingsSaveBar() {
+  const bar = ensureSettingsSaveBar();
+  if (!bar) return;
+  const controller = SETTINGS_PAGE_CONTROLLERS[getActiveSettingsTab()];
+  const labels = controller ? controller.changes() : [];
+  if (!labels.length) { bar.hide(); return; }
+  const wasHidden = bar.el.hidden;
+  bar.show(labels, controller.note?.() || '');
+  // The page has room below its last row while the bar shows; if the control
+  // just changed sits under the bar, move it clear.
+  if (wasHidden) {
+    const main = bar.el.parentElement;
+    const active = document.activeElement;
+    if (main && active && main.contains(active) && !bar.el.contains(active)) {
+      const overlap = active.getBoundingClientRect().bottom - (bar.el.getBoundingClientRect().top - 12);
+      if (overlap > 0) main.scrollTop += overlap;
+    }
+  }
+}
+
+async function reloadModelsStore() {
+  await loadModelSettings();
+  await (modelsDeferredLoad || Promise.resolve());
+}
+
+function setTemplateFormValue(id, name) {
+  const select = document.getElementById('amd-template-select');
+  const nameInput = document.getElementById('amd-template-name');
+  if (select) {
+    if (id && !Array.from(select.options).some((option) => option.value === id)) renderAgentModelDefaultTemplates();
+    select.value = id || '';
+  }
+  if (nameInput && name !== undefined) nameInput.value = name;
+}
+
+const LIVE_EFFORT_IDS = { openai: 'settings-openai-effort', openai_codex: 'settings-codex-effort', anthropic: 'settings-anthropic-effort', perplexity: 'settings-perplexity-effort' };
+const LIVE_SPEED_IDS = { openai: 'settings-openai-speed', openai_codex: 'settings-codex-speed', anthropic: 'settings-anthropic-speed' };
+
+function modelsPageDeps() {
+  return {
+    api,
+    showToast,
+    getLlm: () => window._llmSettingsCache || {},
+    getCatalog: getProviderCatalogItems,
+    providerModelControl: getProviderModelControl,
+    liveEffortId: (provider) => LIVE_EFFORT_IDS[provider] || '',
+    liveSpeedId: (provider) => LIVE_SPEED_IDS[provider] || '',
+    normalizeAccounts: normalizeProviderAccountsForUI,
+    accountAware: (provider) => ACCOUNT_AWARE_PROVIDER_IDS.has(provider),
+    getUsage: () => window._modelsUsageById || {},
+    getContext: () => window._contextSelection || null,
+    listModels: (provider) => fetchProviderModelsForPicker(provider, { refreshOpenAI: provider === 'openai', includeLive: provider !== 'openai_codex' }),
+    fallbackModels: (provider) => uniqueStrings([...getProviderModelFallbacks(provider), ...getProviderStaticModels(provider)]),
+    amdProviderChange,
+    syncAmdReasoning,
+    syncAmdSpeed,
+    goalRoutingProviderChange,
+    syncGoalRoutingReasoning,
+    brainProviderChange,
+    syncBrainReasoning,
+    setBrainScheduleEnabled,
+    loadVoiceAgentDefaultOptions,
+    showProviderPanel: (provider) => {
+      const select = document.getElementById('settings-llm-provider');
+      if (select) {
+        ensureSelectOption(select, provider);
+        select.value = provider;
+      }
+      onProviderChange();
+    },
+    accountsHost: () => document.getElementById('settings-provider-accounts'),
+    refreshProviders: () => refreshCredentialedRoutingProviderChoices(),
+    templates: () => ({ list: amdTemplatesCache, activeId: amdActiveTemplateId, defaultId: amdDefaultTemplateId }),
+    templateOps: {
+      apply: async (id) => { setTemplateFormValue(id); await applyAgentModelDefaultTemplate(); },
+      saveNew: async (_id, name) => { setTemplateFormValue('', name); await saveAgentModelDefaultTemplate(); },
+      update: async (id, name) => { setTemplateFormValue(id, name); await saveAgentModelDefaultTemplate(); },
+      default: async (id) => { setTemplateFormValue(id); await applyAsDefaultTemplate(); },
+      delete: async (id) => { setTemplateFormValue(id); deleteAgentModelDefaultTemplate(); },
+    },
+    saveSettings,
+    reload: reloadModelsStore,
+    onChange: () => updateSettingsSaveBar(),
+  };
+}
 
 function providerAccountsForDefault(providerId) {
   const accounts = normalizeProviderAccountsForUI(providerId, getProviderConfigFromCache(providerId));
@@ -6127,7 +6568,7 @@ async function amdProviderChange(slotId) {
 
 function getAgentModelDefaultsFromForm() {
   const payload = {};
-  for (const [slotId, field] of Object.entries(AMD_SLOTS)) {
+  for (const [slotId, field] of amdSlotEntries()) {
     const prov  = document.getElementById('amd-' + slotId + '-prov')?.value?.trim()  || '';
     const model = document.getElementById('amd-' + slotId + '-model')?.value?.trim() || '';
     payload[field] = (prov && model) ? `${prov}/${model}` : '';
@@ -6137,7 +6578,7 @@ function getAgentModelDefaultsFromForm() {
 
 function getAgentAccountDefaultsFromForm() {
   const payload = {};
-  for (const [slotId, field] of Object.entries(AMD_SLOTS)) {
+  for (const [slotId, field] of amdSlotEntries()) {
     const provider = String(document.getElementById(`amd-${slotId}-prov`)?.value || '').trim();
     const accounts = provider ? providerAccountsForDefault(provider) : [];
     const accountId = String(document.getElementById(`amd-${slotId}-account`)?.value || '').trim();
@@ -6148,7 +6589,7 @@ function getAgentAccountDefaultsFromForm() {
 
 function getAgentReasoningDefaultsFromForm() {
   const payload = {};
-  for (const [slotId, field] of Object.entries(AMD_SLOTS)) {
+  for (const [slotId, field] of amdSlotEntries()) {
     const value = document.getElementById('amd-' + slotId + '-reasoning')?.value?.trim() || '';
     payload[field] = value;
   }
@@ -6157,7 +6598,7 @@ function getAgentReasoningDefaultsFromForm() {
 
 function getAgentSpeedDefaultsFromForm() {
   const payload = {};
-  for (const [slotId, field] of Object.entries(AMD_SLOTS)) {
+  for (const [slotId, field] of amdSlotEntries()) {
     const value = document.getElementById('amd-' + slotId + '-speed')?.value?.trim() || '';
     payload[field] = value === 'fast' ? 'fast' : '';
   }
@@ -6172,6 +6613,7 @@ async function applyAgentModelDefaultsToForm(defaults = {}, reasoning = {}, acco
   await fetchCredentialedModelProviderIds();
   renderProviderSelectors();
   const d = defaults || {};
+  amdSubagentLoadedValue = String(d.subagent || '').trim();
   for (const slotId of Object.keys(AMD_SLOTS)) {
     const provSel  = document.getElementById('amd-' + slotId + '-prov');
     const modelSel = document.getElementById('amd-' + slotId + '-model');
@@ -6258,6 +6700,7 @@ function updateAgentModelTemplateCache(data) {
   rememberAgentModelDefaultTemplates();
   renderAgentModelDefaultTemplates();
   updateApplyAsDefaultButtonState();
+  refreshModelsPage();
 }
 
 async function loadAgentModelDefaultTemplates() {
@@ -6295,15 +6738,20 @@ async function loadAgentModelDefaults() {
   } catch (e) { console.warn('loadAgentModelDefaults error:', e); }
 }
 
-async function persistAgentModelDefaultsFromForm({ showStatus = true } = {}) {
+async function persistAgentModelDefaultsFromForm({ showStatus = true, stage = '' } = {}) {
   const payload = getAgentModelDefaultsFromForm();
   const reasoning = getAgentReasoningDefaultsFromForm();
   const accounts = getAgentAccountDefaultsFromForm();
   const speed = getAgentSpeedDefaultsFromForm();
   const voiceAgent = getVoiceAgentDefaultFromForm();
   const status = document.getElementById('amd-status');
+  const body = JSON.stringify({ ...payload, reasoning, accounts, speed, voiceAgent });
   try {
-    const data = await api('/api/settings/agent-model-defaults', { method: 'POST', body: JSON.stringify({ ...payload, reasoning, accounts, speed, voiceAgent }) });
+    const data = await runModelsSaveStage(stage, body, async () => {
+      const response = await api('/api/settings/agent-model-defaults', { method: 'POST', body });
+      if (response?.success === false) throw new Error(response.error || 'Model choices were not saved.');
+      return response;
+    });
     if (showStatus && status) {
       status.style.color = 'var(--ok)';
       setSettingsStatus(status, 'success', 'Saved');
@@ -6654,12 +7102,16 @@ function getBrainModelConfigFromForm() {
   return payload;
 }
 
-async function persistBrainModelConfigFromForm({ showStatus = true } = {}) {
+async function persistBrainModelConfigFromForm({ showStatus = true, stage = '' } = {}) {
   const payload = getBrainModelConfigFromForm();
   const status = document.getElementById('brain-model-status');
+  const body = JSON.stringify(payload);
   try {
-    const result = await api('/api/brain/config', { method: 'PATCH', body: JSON.stringify(payload) });
-    if (result?.success === false) throw new Error(result.error || 'Failed to save brain models');
+    const result = await runModelsSaveStage(stage, body, async () => {
+      const response = await api('/api/brain/config', { method: 'PATCH', body });
+      if (response?.success === false) throw new Error(response.error || 'Failed to save brain models');
+      return response;
+    });
     if (showStatus && status) {
       status.style.color = 'var(--ok)';
       setSettingsStatus(status, 'success', 'Saved');
@@ -6679,9 +7131,9 @@ async function saveBrainModelConfig() {
   return persistBrainModelConfigFromForm({ showStatus: true });
 }
 
-async function saveModelTabLiveSettings({ showStatus = false } = {}) {
-  await persistAgentModelDefaultsFromForm({ showStatus });
-  await persistBrainModelConfigFromForm({ showStatus });
+async function saveModelTabLiveSettings({ showStatus = false, staged = false } = {}) {
+  await persistAgentModelDefaultsFromForm({ showStatus, stage: staged ? 'defaults' : '' });
+  await persistBrainModelConfigFromForm({ showStatus, stage: staged ? 'brain' : '' });
 }
 
 window.amdProviderChange = amdProviderChange;
@@ -6785,52 +7237,6 @@ window.setQuickThinkingEffort = setQuickThinkingEffort;
 // every 3s as a fallback for the pairing_pending WS event so an approval
 // prompt always appears, even if the WS dropped.
 
-let _pairingPollTimer = null;
-let _pairingCurrentChallenge = null;
-let _pairingBrowserAdminToken = '';
-
-async function pairingAdminApi(path, opts = {}) {
-  const bridge = window.prometheusPairingAdmin;
-  // Electron desktop app: trusted IPC bridge injects the pairing-admin token.
-  // Browser / dev gateway UI: fall through to same-origin api(). This works
-  // without a credential only for loopback-bound gateways; LAN/wildcard binds
-  // require PROMETHEUS_PAIRING_ADMIN_TOKEN or another explicit authority.
-  if (bridge && typeof bridge.request === 'function') {
-    let body = opts.body;
-    if (typeof body === 'string' && body.trim()) {
-      try { body = JSON.parse(body); }
-      catch { throw new Error('Invalid pairing administration request body.'); }
-    }
-    return bridge.request({
-      path,
-      method: String(opts.method || 'GET').toUpperCase(),
-      body,
-    });
-  }
-
-  try {
-    const browserHeaders = _pairingBrowserAdminToken
-      ? { 'X-Prometheus-Pairing-Admin': _pairingBrowserAdminToken }
-      : {};
-    return await api(path, {
-      ...opts,
-      headers: { ...(opts.headers || {}), ...browserHeaders },
-    });
-  } catch (err) {
-    const raw = String(err?.message || err || '');
-    if (/API 403|Trusted desktop pairing authority required/i.test(raw)) {
-      throw new Error(
-        'Pairing admin blocked on this browser session. A standalone browser may manage pairing without a credential only on a loopback-bound gateway. For a LAN/wildcard gateway, enter the configured PROMETHEUS_PAIRING_ADMIN_TOKEN in the Pairing panel or open the desktop app.'
-      );
-    }
-    if (/API 404|Cannot GET|Cannot POST|<!DOCTYPE html>/i.test(raw)) {
-      throw new Error(
-        'Pairing API route missing or returned HTML instead of JSON. Confirm the running gateway includes pairing routes and you are on the local Settings UI, not a stale bundle.'
-      );
-    }
-    throw err;
-  }
-}
 
 async function loadPairingPanel() {
   const browserAdminPanel = document.getElementById('pairing-browser-admin');
@@ -6840,13 +7246,13 @@ async function loadPairingPanel() {
   const electronBridge = window.prometheusPairingAdmin;
   if (browserAdminPanel) browserAdminPanel.style.display = electronBridge ? 'none' : '';
   if (browserAdminInput) browserAdminInput.value = '';
-  if (browserAdminStatus && _pairingBrowserAdminToken) browserAdminStatus.textContent = 'Credential active for this tab only.';
+  if (browserAdminStatus && pairingBrowserAdminToken()) browserAdminStatus.textContent = 'Credential active for this tab only.';
   if (browserAdminApply && !browserAdminApply.__wired) {
     browserAdminApply.__wired = true;
     browserAdminApply.addEventListener('click', async () => {
       const enteredToken = String(browserAdminInput?.value || '').trim();
-      if (enteredToken) _pairingBrowserAdminToken = enteredToken;
-      if (!_pairingBrowserAdminToken) {
+      if (enteredToken) setPairingBrowserAdminToken(enteredToken);
+      if (!pairingBrowserAdminToken()) {
         if (browserAdminStatus) browserAdminStatus.textContent = 'Enter the configured credential to continue.';
         return;
       }
@@ -6871,6 +7277,7 @@ async function loadPairingPanel() {
   await refreshPairingPending();
   await refreshPairedDevices();
   _startPairingPolling();
+  _startFunnelStatusPoll();
 
   _wireRemoteAccessHandlers();
 
@@ -6881,8 +7288,8 @@ async function loadPairingPanel() {
   if (copyLink && !copyLink.__wired) {
     copyLink.__wired = true;
     copyLink.addEventListener('click', async () => {
-      if (!_pairingCurrentChallenge?.pairUrl) return;
-      try { await navigator.clipboard.writeText(_pairingCurrentChallenge.pairUrl); showToast?.('Link copied', '', 'success'); }
+      if (!pairingChallenge()?.pairUrl) return;
+      try { await navigator.clipboard.writeText(pairingChallenge().pairUrl); showToast?.('Link copied', '', 'success'); }
       catch { showToast?.('Copy failed', '', 'error'); }
     });
   }
@@ -6891,8 +7298,8 @@ async function loadPairingPanel() {
   if (copyCode && !copyCode.__wired) {
     copyCode.__wired = true;
     copyCode.addEventListener('click', async () => {
-      if (!_pairingCurrentChallenge?.pairCode) return;
-      try { await navigator.clipboard.writeText(_pairingCurrentChallenge.pairCode); showToast?.('Pair code copied', '', 'success'); }
+      if (!pairingChallenge()?.pairCode) return;
+      try { await navigator.clipboard.writeText(pairingChallenge().pairCode); showToast?.('Pair code copied', '', 'success'); }
       catch { showToast?.('Copy failed', '', 'error'); }
     });
   }
@@ -6908,31 +7315,13 @@ let _funnelStatusPollTimer = null;
 // Updates BOTH the top header pill (Funnel live/offline) and the right-panel
 // mini-pill, and shows/hides the Enable/Disable buttons based on real funnel state.
 function _applyFunnelLiveStatus(funnelActive) {
-  // Top header pill
-  const pill = document.getElementById('pairing-remote-status-pill');
-  if (pill) {
-    if (funnelActive) {
-      pill.textContent = 'Funnel live';
-      pill.style.background = '#dcfce7';
-      pill.style.color = '#15803d';
-    } else {
-      pill.textContent = 'Funnel offline';
-      pill.style.background = '#fff7ed';
-      pill.style.color = '#b45309';
-    }
-  }
-  // Right-panel mini-pill
-  const livePill = document.getElementById('pairing-funnel-live-pill');
-  if (livePill) {
-    if (funnelActive) {
-      livePill.textContent = 'Live';
-      livePill.style.background = '#dcfce7';
-      livePill.style.color = '#15803d';
-    } else {
-      livePill.textContent = 'Offline';
-      livePill.style.background = '#fff7ed';
-      livePill.style.color = '#b45309';
-    }
+  // Both pills show the state the gateway reported (they used to start as
+  // "Funnel offline" and only update after Detect, so a live Funnel read as off).
+  for (const id of ['pairing-remote-status-pill', 'pairing-funnel-live-pill']) {
+    const pill = document.getElementById(id);
+    if (!pill) continue;
+    pill.textContent = funnelActive ? 'On' : 'Off';
+    pill.dataset.state = funnelActive ? 'on' : 'off';
   }
   // Show/hide action buttons
   const enableBtn  = document.getElementById('pairing-funnel-enable-btn');
@@ -6985,7 +7374,7 @@ async function loadRemoteAccessSettings() {
   }
 }
 
-async function _saveRemoteAccess() {
+async function _saveRemoteAccess({ throwOnError = false } = {}) {
   const enabledEl = document.getElementById('pairing-remote-enabled');
   const modeEl    = document.getElementById('pairing-remote-mode');
   const urlEl     = document.getElementById('pairing-remote-url');
@@ -7003,9 +7392,12 @@ async function _saveRemoteAccess() {
     if (msg) msg.innerHTML = `<span style="color:#15803d">Saved. Generate a new QR to use the ${r.remoteAccess?.enabled ? 'public' : 'local'} URL.</span>`;
     refreshPairingQR().catch(() => {});
     showToast?.('Remote access updated', '', 'success');
+    return r;
   } catch (err) {
     if (msg) msg.innerHTML = `<span style="color:#f87171">${escHtml(err.message || 'Save failed')}</span>`;
+    if (throwOnError) throw err;
     showToast?.('Save failed', String(err.message || err), 'error');
+    return null;
   }
 }
 
@@ -7077,9 +7469,10 @@ async function _detectTailscale() {
     const apply = document.getElementById('pairing-ts-apply-btn');
     if (apply && r.suggestedUrl) {
       apply.addEventListener('click', () => {
-        if (urlEl) urlEl.value = r.suggestedUrl;
-        if (modeEl) modeEl.value = 'tailscale-funnel';
-        showToast?.('URL applied — click Save', '', 'success');
+        const controller = SETTINGS_PAGE_CONTROLLERS.pairing;
+        if (urlEl) { const before = urlEl.value; urlEl.value = r.suggestedUrl; controller?.note?.(urlEl, before); }
+        if (modeEl) { const before = modeEl.value; modeEl.value = 'tailscale-funnel'; controller?.note?.(modeEl, before); }
+        showToast?.('Address filled in', 'Save to use it.', 'success');
       });
     }
   } catch (err) {
@@ -7136,256 +7529,6 @@ function _wireRemoteAccessHandlers() {
   if (disableBtn && !disableBtn.__wired) { disableBtn.__wired = true; disableBtn.addEventListener('click', _disableFunnel); }
 }
 
-function _stopPairingPolling() {
-  if (_pairingPollTimer) { clearInterval(_pairingPollTimer); _pairingPollTimer = null; }
-}
-function _startPairingPolling() {
-  _stopPairingPolling();
-  _pairingPollTimer = setInterval(() => {
-    if (window.settingsTab !== 'pairing') { _stopPairingPolling(); return; }
-    refreshPairingPending().catch(() => {});
-  }, 3000);
-}
-
-async function refreshPairingQR() {
-  const wrap = document.getElementById('pairing-qr-wrap');
-  const meta = document.getElementById('pairing-qr-meta');
-  if (wrap) wrap.innerHTML = '<div style="color:var(--muted);font-size:12px">Generating QR…</div>';
-  try {
-    const r = await pairingAdminApi('/api/pairing/qr', { method: 'POST', body: JSON.stringify({}) });
-    if (r?.code === 'lan_access_off') {
-      if (wrap) wrap.style.display = 'none';
-      const disabled = document.getElementById('pairing-lan-disabled');
-      if (disabled) { disabled.textContent = r.error || 'Local network pairing is off. Enable LAN access above, then restart Prometheus.'; disabled.style.display = ''; }
-      return;
-    }
-    if (!r?.success) throw new Error(r?.error || 'Failed to generate QR');
-    _pairingCurrentChallenge = r;
-    if (wrap) {
-      const pairCode = String(r.pairCode || '').trim();
-      let pairingOrigin = String(r.pairingOrigin || '').trim();
-      if (!pairingOrigin) {
-        try { pairingOrigin = new URL(String(r.pairUrl || '')).origin; } catch {}
-      }
-      wrap.innerHTML = `
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:18px;align-items:center;">
-          <div style="display:flex;justify-content:center;max-width:288px;width:100%;margin:0 auto;">${r.qrSvg || ''}</div>
-          <div style="display:flex;flex-direction:column;gap:10px;min-width:0;text-align:left;">
-            <div style="font-size:12px;font-weight:800;color:var(--text);text-transform:uppercase;letter-spacing:.06em;">Pair code</div>
-            <div style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:clamp(22px,4vw,34px);font-weight:900;letter-spacing:.08em;line-height:1.15;color:var(--text);background:color-mix(in srgb, var(--text) 6%, transparent);border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:14px 16px;text-align:center;word-break:break-word;">
-              ${escHtml(pairCode || 'PAIR-....-....')}
-            </div>
-            <div style="font-size:11px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;">Gateway address</div>
-            <div style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;color:var(--text);background:color-mix(in srgb, var(--text) 4%, transparent);border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:8px;padding:8px 9px;word-break:break-all;">${escHtml(pairingOrigin || 'Unavailable')}</div>
-            <div style="font-size:12px;color:var(--muted);line-height:1.45;">Scan the QR from Safari, or open this gateway address on the phone first and enter the pair code. You can also paste the full pairing link.</div>
-            ${renderSettingsIconButton('copy', 'Copy code', 'id="pairing-copy-code-btn"')}
-          </div>
-        </div>`;
-      const copyCode = document.getElementById('pairing-copy-code-btn');
-      if (copyCode) {
-        copyCode.__wired = true;
-        copyCode.addEventListener('click', async () => {
-          if (!_pairingCurrentChallenge?.pairCode) return;
-          try { await navigator.clipboard.writeText(_pairingCurrentChallenge.pairCode); showToast?.('Pair code copied', '', 'success'); }
-          catch { showToast?.('Copy failed', '', 'error'); }
-        });
-      }
-    }
-    if (meta) {
-      const expires = new Date(r.expiresAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      const warning = r.warning
-        ? `<div style="margin-top:6px;color:#f5c46b;background:color-mix(in srgb, #f5b544 12%, transparent);border:none;border-radius:8px;padding:6px 8px">${escHtml(r.warning)}</div>`
-        : '';
-      const lan = Array.isArray(r.lanOrigins) && r.lanOrigins.length
-        ? `<div style="margin-top:4px;color:var(--muted);font-size:11px">LAN: ${r.lanOrigins.map(x => `<span style="word-break:break-all">${escHtml(x)}</span>`).join(', ')}</div>`
-        : '';
-      const remoteBadge = r.remoteAccess && r.remoteAccess.active
-        ? `<div style="margin-top:6px;color:var(--brand);background:color-mix(in srgb, var(--brand) 14%, transparent);border:1px solid color-mix(in srgb, var(--brand) 30%, transparent);border-radius:8px;padding:6px 8px;font-size:11px">Remote access ON — QR uses public URL (${escHtml(String(r.remoteAccess.mode || 'custom'))})</div>`
-        : '';
-      meta.innerHTML = `Expires at <strong>${escHtml(expires)}</strong> · <span style="word-break:break-all">${escHtml(r.pairUrl)}</span>${remoteBadge}${warning}${lan}`;
-    }
-  } catch (err) {
-    if (wrap) wrap.innerHTML = `<div style="color:#f87171;font-size:12px">${escHtml(err.message || 'Failed to generate QR')}</div>`;
-  }
-}
-
-async function refreshPairingPending() {
-  const list = document.getElementById('pairing-pending-list');
-  const count = document.getElementById('pairing-pending-count');
-  const tabBadge = document.getElementById('settings-pairing-pending-badge');
-  if (!list) return;
-  try {
-    const r = await pairingAdminApi('/api/pairing/pending');
-    const reqs = Array.isArray(r?.requests) ? r.requests : [];
-    if (count) count.textContent = String(reqs.length);
-    if (tabBadge) {
-      tabBadge.textContent = String(reqs.length);
-      tabBadge.style.display = reqs.length > 0 ? 'inline-flex' : 'none';
-    }
-    if (!reqs.length) {
-      list.innerHTML = '<div style="color:var(--muted);font-size:12px;font-style:italic">No incoming pairing requests.</div>';
-      return;
-    }
-    list.innerHTML = reqs.map(req => `
-      <div style="border:none;background:color-mix(in srgb, #f5b544 12%, transparent);border-radius:10px;padding:10px 12px" data-pairing-req="${escHtml(req.id)}">
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
-          <strong style="flex:1;font-size:13px">${escHtml(req.deviceName || 'Mobile device')}</strong>
-          <span style="font-size:10px;font-weight:800;color:#f5c46b;background:color-mix(in srgb, #f5b544 12%, transparent);padding:2px 7px;border-radius:6px">pending</span>
-        </div>
-        <div style="font-size:11px;color:var(--muted);line-height:1.5;margin-bottom:8px">
-          ${escHtml(_summarizeUA(req.userAgent))} · ${escHtml(req.ipHint || 'unknown ip')}
-        </div>
-        <div style="display:flex;gap:6px">
-          <button class="btn btn-sm" style="flex:1;background:#16a34a;color:#fff;border:none" data-pairing-action="approve" data-id="${escHtml(req.id)}">✓ Allow</button>
-          <button class="btn btn-sm" style="flex:1;background:transparent;color:#f87171;border:none" data-pairing-action="deny" data-id="${escHtml(req.id)}">✕ Deny</button>
-        </div>
-      </div>
-    `).join('');
-
-    list.querySelectorAll('[data-pairing-action]').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        const id = btn.getAttribute('data-id');
-        const act = btn.getAttribute('data-pairing-action');
-        btn.disabled = true; btn.style.opacity = '0.6';
-        try {
-          if (act === 'approve') {
-            const ok = await pairingAdminApi('/api/pairing/approve', { method: 'POST', body: JSON.stringify({ requestId: id }) });
-            if (!ok?.success) throw new Error(ok?.error || 'Approve failed');
-            showToast?.('Device paired', '', 'success');
-          } else {
-            const ok = await pairingAdminApi('/api/pairing/deny', { method: 'POST', body: JSON.stringify({ requestId: id }) });
-            if (!ok?.success) throw new Error(ok?.error || 'Deny failed');
-            showToast?.('Pairing denied', '', 'success');
-          }
-          await refreshPairingPending();
-          await refreshPairedDevices();
-        } catch (err) {
-          showToast?.('Pairing action failed', err.message, 'error');
-          btn.disabled = false; btn.style.opacity = '';
-        }
-      });
-    });
-  } catch (err) {
-    list.innerHTML = `<div style="color:#f87171;font-size:12px">${escHtml(err.message || 'Failed to load pending requests')}</div>`;
-  }
-}
-
-async function refreshPairedDevices() {
-  const list  = document.getElementById('pairing-device-list');
-  const count = document.getElementById('pairing-device-count');
-  if (!list) return;
-  try {
-    const r = await pairingAdminApi('/api/pairing/devices');
-    const devices = Array.isArray(r?.devices) ? r.devices : [];
-    if (count) count.textContent = String(devices.length);
-    if (!devices.length) {
-      list.innerHTML = '<div style="color:var(--muted);font-size:12px;font-style:italic">No devices paired yet.</div>';
-      return;
-    }
-    list.innerHTML = devices.map(d => {
-      const lastSeen = d.lastSeenAt ? `last seen ${_pairingTimeAgo(d.lastSeenAt)}` : 'never';
-      const enabled = d.enabled !== false;
-      return `
-        <div style="border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:10px 12px;background:color-mix(in srgb, var(--text) 4%, transparent)" data-pairing-device="${escHtml(d.id)}">
-          <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
-            <strong style="flex:1;font-size:13px">📱 ${escHtml(d.name || 'Device')}</strong>
-            <span style="font-size:10px;font-weight:800;padding:2px 8px;border-radius:6px;background:${enabled ? '#d9f7ed' : '#ffe0e0'};color:${enabled ? '#066046' : '#8b0000'}">${enabled ? 'enabled' : 'disabled'}</span>
-          </div>
-          <div style="font-size:11px;color:var(--muted);line-height:1.5;margin-bottom:8px">
-            ${escHtml(_summarizeUA(d.lastUserAgent))} · ${escHtml(d.lastIpHint || 'unknown ip')} · ${escHtml(lastSeen)}
-          </div>
-          <div style="display:flex;gap:6px">
-            <button class="btn btn-sm" style="flex:1;background:${enabled ? '#fff' : '#16a34a'};color:${enabled ? 'var(--muted)' : '#fff'};border:1px solid ${enabled ? 'var(--line)' : '#16a34a'}" data-device-action="toggle" data-id="${escHtml(d.id)}" data-next="${enabled ? 'false' : 'true'}">${enabled ? 'Disable' : 'Enable'}</button>
-            ${enabled && window.prometheusOwnerConsent ? `<button class="btn btn-sm" style="flex:1" data-device-action="owner" data-id="${escHtml(d.id)}" data-next="${d.ownerApproval ? 'false' : 'true'}" title="${d.ownerApproval ? 'This phone can save and approve protected access. Click to stop.' : 'Let this phone save and approve protected access (asks for a code on this computer).'}">${d.ownerApproval ? 'Stop owner approvals' : 'Allow owner approvals'}</button>` : ''}
-            ${renderSettingsIconButton('trash', 'Remove', `data-device-action="remove" data-id="${escHtml(d.id)}"`, 'is-danger')}
-          </div>
-        </div>
-      `;
-    }).join('');
-
-    list.querySelectorAll('[data-device-action]').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        const id = btn.getAttribute('data-id');
-        const act = btn.getAttribute('data-device-action');
-        btn.disabled = true; btn.style.opacity = '0.6';
-        try {
-          if (act === 'toggle') {
-            const next = btn.getAttribute('data-next') === 'true';
-            const ok = await pairingAdminApi(`/api/pairing/devices/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ enabled: next }) });
-            if (!ok?.success) throw new Error(ok?.error || 'Update failed');
-            showToast?.(next ? 'Device enabled' : 'Device disabled', '', 'success');
-          } else if (act === 'owner') {
-            // PR821 I2: granting opens the native owner-approval window (code typed by the owner).
-            const next = btn.getAttribute('data-next') === 'true';
-            const ok = await pairingAdminApi(`/api/pairing/devices/${encodeURIComponent(id)}/owner-approval`, { method: next ? 'POST' : 'DELETE', body: next ? JSON.stringify({}) : undefined });
-            if (!ok?.success) throw new Error(ok?.error || 'Update failed');
-            showToast?.(next ? 'Phone can approve protected access' : 'Phone owner approvals stopped', '', 'success');
-          } else if (act === 'remove') {
-            if (!confirm('Remove this device? The user will need to scan a new QR to pair again.')) { btn.disabled = false; btn.style.opacity = ''; return; }
-            const ok = await pairingAdminApi(`/api/pairing/devices/${encodeURIComponent(id)}`, { method: 'DELETE' });
-            if (!ok?.success) throw new Error(ok?.error || 'Remove failed');
-            showToast?.('Device removed', '', 'success');
-          }
-          await refreshPairedDevices();
-        } catch (err) {
-          showToast?.('Action failed', err.message, 'error');
-          btn.disabled = false; btn.style.opacity = '';
-        }
-      });
-    });
-  } catch (err) {
-    list.innerHTML = `<div style="color:#f87171;font-size:12px">${escHtml(err.message || 'Failed to load devices')}</div>`;
-  }
-}
-
-function _summarizeUA(ua) {
-  if (!ua) return 'unknown device';
-  const s = String(ua);
-  if (/iPhone/i.test(s))  return 'iPhone';
-  if (/iPad/i.test(s))    return 'iPad';
-  if (/Android/i.test(s)) return /Mobile/i.test(s) ? 'Android phone' : 'Android tablet';
-  if (/Macintosh/i.test(s)) return 'Mac';
-  if (/Windows/i.test(s)) return 'Windows';
-  return s.slice(0, 60);
-}
-function _pairingTimeAgo(ms) {
-  const delta = Date.now() - ms;
-  if (delta < 60000)        return 'just now';
-  if (delta < 3600000)      return `${Math.floor(delta / 60000)}m ago`;
-  if (delta < 86400000)     return `${Math.floor(delta / 3600000)}h ago`;
-  return `${Math.floor(delta / 86400000)}d ago`;
-}
-
-// WS listener: when a phone claims a QR, refresh the pending list immediately
-// (3s polling is fallback). Imported lazily via window.wsEventBus which is
-// already wired in the main shell.
-if (typeof window !== 'undefined') {
-  const _hookWs = () => {
-    if (!window.wsEventBus || window.__pairingWsHooked) return;
-    window.__pairingWsHooked = true;
-    window.wsEventBus.on('pairing_pending',        () => { if (window.settingsTab === 'pairing') refreshPairingPending(); else _bumpPairingBadge(); });
-    window.wsEventBus.on('pairing_approved',       () => { refreshPairedDevices().catch(() => {}); refreshPairingPending().catch(() => {}); });
-    window.wsEventBus.on('pairing_denied',         () => { if (window.settingsTab === 'pairing') refreshPairingPending(); });
-    window.wsEventBus.on('pairing_device_removed', () => { if (window.settingsTab === 'pairing') refreshPairedDevices(); });
-    window.wsEventBus.on('pairing_device_changed', () => { if (window.settingsTab === 'pairing') refreshPairedDevices(); });
-  };
-  _hookWs();
-  // Re-try once after a tick — wsEventBus may not be loaded yet at module init time.
-  setTimeout(_hookWs, 500);
-}
-
-function _bumpPairingBadge() {
-  // Fire-and-forget refresh so the tab badge updates even when the user is
-  // looking at a different settings tab.
-  pairingAdminApi('/api/pairing/pending').then(r => {
-    const count = (r?.requests || []).length;
-    const tabBadge = document.getElementById('settings-pairing-pending-badge');
-    if (tabBadge) {
-      tabBadge.textContent = String(count);
-      tabBadge.style.display = count > 0 ? 'inline-flex' : 'none';
-    }
-  }).catch(() => {});
-}
 
 window.loadPairingPanel = loadPairingPanel;
   window.loadSecuritySettings = loadSecuritySettings;
