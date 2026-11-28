@@ -5203,20 +5203,21 @@ function settingsTabLabel(tab) {
 /** Returned (not thrown) when the user cancels a confirmation: nothing was sent. */
 const SETTINGS_SAVE_CANCELLED = Object.freeze({ cancelled: true });
 
-// Models saves with up to three requests, in order. The bodies the server
-// accepted are remembered until the page saves fully, is discarded or reloads,
-// so a retry after a partial failure resends only the request that failed or
-// one whose content changed since. Bodies themselves are never altered.
+// Models saves with up to three requests, in order. Only the current attempt is
+// tracked, so a failure can say which requests went through. Nothing is skipped
+// on a retry: all three requests are resent (each one writes the whole form, so
+// resending is safe), and every change stays on the save bar until a full save.
+// An earlier design skipped requests it believed were already saved; a preset
+// applied in between or a re-edit made that record wrong (review of PR #973).
 const MODELS_SAVE_STAGES = {
   bulk: 'Accounts, Main chat and Summaries',
   defaults: 'Job models',
   brain: 'Brain models',
 };
-const modelsSaveAccepted = new Map();
-function resetModelsSaveProgress() { modelsSaveAccepted.clear(); }
+const modelsSaveDone = [];
+function resetModelsSaveProgress() { modelsSaveDone.length = 0; }
 async function runModelsSaveStage(stage, body, send) {
   if (!stage) return send();
-  if (modelsSaveAccepted.get(stage) === body) return null;
   let result;
   try {
     result = await send();
@@ -5224,15 +5225,15 @@ async function runModelsSaveStage(stage, body, send) {
     if (err && typeof err === 'object') err.failedStage = stage;
     throw err;
   }
-  modelsSaveAccepted.set(stage, body);
+  if (!modelsSaveDone.includes(stage)) modelsSaveDone.push(stage);
   return result;
 }
 /** A failure after earlier Models requests succeeded says plainly what saved and what did not. */
 function modelsPartialSaveError(err) {
-  const saved = Array.from(modelsSaveAccepted.keys());
+  const saved = modelsSaveDone.slice();
   if (!err?.failedStage || !saved.length) return err;
   const reason = String(err.message || '').trim();
-  const out = new Error(`Part saved: ${saved.map((stage) => MODELS_SAVE_STAGES[stage]).join(', ')}. Not saved: ${MODELS_SAVE_STAGES[err.failedStage]}${reason ? ` (${reason})` : ''}. Save again to retry it.`);
+  const out = new Error(`Part saved: ${saved.map((stage) => MODELS_SAVE_STAGES[stage]).join(', ')}. Not saved: ${MODELS_SAVE_STAGES[err.failedStage]}${reason ? ` (${reason})` : ''}. Your changes are kept; Save again to retry.`);
   out.partial = true;
   out.savedStages = saved;
   out.failedStage = err.failedStage;
@@ -5252,6 +5253,7 @@ async function saveSettings(options = {}) {
   const safetyTimer = setTimeout(resetBtn, 15000);
   try {
     const activeTab = getActiveSettingsTab();
+    resetModelsSaveProgress();
     const bulkPayload = buildSettingsBulkPayloadForTab(activeTab);
     if (activeTab === 'system' && bulkPayload.session?.autoSettle?.afterDays === 'custom') {
       const activationMode = await askAutoSettleActivationMode();
@@ -6743,8 +6745,6 @@ async function persistAgentModelDefaultsFromForm({ showStatus = true, stage = ''
   const voiceAgent = getVoiceAgentDefaultFromForm();
   const status = document.getElementById('amd-status');
   const body = JSON.stringify({ ...payload, reasoning, accounts, speed, voiceAgent });
-  // Already saved by an earlier attempt of this same save: nothing to resend.
-  if (stage && modelsSaveAccepted.get(stage) === body) return null;
   try {
     const data = await runModelsSaveStage(stage, body, async () => {
       const response = await api('/api/settings/agent-model-defaults', { method: 'POST', body });
@@ -7105,7 +7105,6 @@ async function persistBrainModelConfigFromForm({ showStatus = true, stage = '' }
   const payload = getBrainModelConfigFromForm();
   const status = document.getElementById('brain-model-status');
   const body = JSON.stringify(payload);
-  if (stage && modelsSaveAccepted.get(stage) === body) return null;
   try {
     const result = await runModelsSaveStage(stage, body, async () => {
       const response = await api('/api/brain/config', { method: 'PATCH', body });

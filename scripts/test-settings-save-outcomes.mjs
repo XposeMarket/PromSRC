@@ -279,15 +279,23 @@ try {
       assert.match(after.text, /Part saved: Accounts, Main chat and Summaries, Job models/, 'partial: names what saved');
       assert.match(after.text, /Not saved: Brain models \(Brain runner not initialized\)/, 'partial: names what did not save and why');
       assert.doesNotMatch(after.text, /^Not saved\./, 'partial: does not claim nothing saved');
-      assert.match(after.text, /1 unsaved change/, 'partial: only the Brain change stays unsaved');
-      assert.doesNotMatch(after.text, /Main chat ·|Main chat,/, 'partial: Main chat is no longer listed as unsaved');
+      assert.match(after.text, /2 unsaved changes/, 'partial: every change stays on the bar');
+      assert.match(after.text, /Your changes are kept/, 'partial: says nothing was dropped');
       assert.doesNotMatch(await toastTitles(page), /settings saved/i, 'partial: no "Saved" toast');
-      // Retry once the Brain runner is up: only the Brain request goes out.
+      // A second failed retry resends everything and still keeps every change (no stale record).
+      let mark = posts.length;
+      await page.click('[data-savebar="save"]');
+      await page.waitForTimeout(1200);
+      assert.deepEqual(saves(mark), ['POST /api/settings/bulk', 'POST /api/settings/agent-model-defaults', 'PATCH /api/brain/config'], 'failed retry resends all three');
+      const again = await bar(page);
+      assert.equal(again.hidden, false, 'failed retry: bar stays');
+      assert.match(again.text, /2 unsaved changes/, 'failed retry: changes are still tracked');
+      // Retry once the Brain runner is up: all three requests go out again and the bar closes.
       delete fail['PATCH /api/brain/config'];
-      const mark = posts.length;
+      mark = posts.length;
       await page.click('[data-savebar="save"]');
       await page.waitForTimeout(1500);
-      assert.deepEqual(saves(mark), ['PATCH /api/brain/config'], 'retry sends only the Brain request');
+      assert.deepEqual(saves(mark), ['POST /api/settings/bulk', 'POST /api/settings/agent-model-defaults', 'PATCH /api/brain/config'], 'retry resends all three requests');
       assert.equal(posts.slice(mark).find((x) => x.path === '/api/brain/config').body.thoughtModel, '', 'retry carries the Brain change');
       assert.equal((await bar(page)).hidden, true, 'bar gone after the retry saved');
       assert.deepEqual(errors, []);
