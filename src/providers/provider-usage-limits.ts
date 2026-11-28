@@ -201,6 +201,28 @@ type GrokAuth = {
   raw?: any;
 };
 
+/** Weekly buckets Anthropic reports that are not a model family. */
+const ANTHROPIC_NON_MODEL_WEEKLY = new Set(['oauth_apps']);
+
+/**
+ * Claude limit windows from the OAuth usage body: the account-wide 5-hour and weekly windows, then
+ * every per-model weekly window Anthropic sends (`seven_day_opus`, `seven_day_sonnet`, ...).
+ * The model name comes from Anthropic's key, so a new family is labelled without a code change.
+ */
+export function parseAnthropicUsageWindows(body: any): UsageWindow[] {
+  const isBucket = (raw: unknown) => !!raw && typeof raw === 'object' && !Array.isArray(raw);
+  const windows: UsageWindow[] = [];
+  if (isBucket(body?.five_hour)) windows.push(win('5-hour', body.five_hour));
+  if (isBucket(body?.seven_day)) windows.push(win('Weekly', body.seven_day));
+  for (const [key, raw] of Object.entries(body || {})) {
+    const family = /^seven_day_([a-z][a-z0-9_]*)$/.exec(key)?.[1];
+    if (!family || ANTHROPIC_NON_MODEL_WEEKLY.has(family) || !isBucket(raw)) continue;
+    const name = family.replace(/_/g, ' ');
+    windows.push(win(`Weekly · ${name[0].toUpperCase()}${name.slice(1)}`, raw));
+  }
+  return windows;
+}
+
 async function fetchAnthropicLive(configDir: string): Promise<LiveResult | null> {
   // The usage endpoint requires the `user:profile` scope, which the main
   // setup-token (inference-only) does NOT carry. We use a separate, opt-in
@@ -232,11 +254,7 @@ async function fetchAnthropicLive(configDir: string): Promise<LiveResult | null>
   if (!res.ok) return { windows: [], plan_label: null, error: `Anthropic usage ${res.status}` };
 
   const body: any = await res.json().catch(() => ({}));
-  const windows: UsageWindow[] = [];
-  if (body.five_hour) windows.push(win('5-hour', body.five_hour));
-  if (body.seven_day) windows.push(win('Weekly', body.seven_day));
-  if (body.seven_day_opus) windows.push(win('Weekly · Opus', body.seven_day_opus));
-  return { windows, plan_label: null, error: null };
+  return { windows: parseAnthropicUsageWindows(body), plan_label: null, error: null };
 }
 
 async function fetchCodexLive(configDir: string, accountId?: string): Promise<LiveResult | null> {
