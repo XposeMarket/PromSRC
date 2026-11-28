@@ -5477,128 +5477,104 @@
     </div>
 
     <!-- Pairing Panel -->
-    <div id="settings-panel-pairing" style="display:none;padding:14px 16px">
+    <div id="settings-panel-pairing" class="sk-page sk-page-legacy" style="display:none;padding:14px 16px">
+      <p class="sk-lede">Use Prometheus from your phone. Pair it once with a QR code; you approve every new device here.</p>
 
-      <div id="pairing-browser-admin" style="border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:12px;padding:12px 14px;background:var(--panel-2);margin-bottom:14px">
-        <div style="font-size:13px;font-weight:800;color:var(--text);margin-bottom:4px">Browser pairing authority</div>
-        <div style="font-size:12px;color:var(--muted);line-height:1.5;margin-bottom:9px">
-          This is required when a manually launched gateway is bound to the LAN. Paste the configured <code>PROMETHEUS_PAIRING_ADMIN_TOKEN</code>; it is kept in memory for this tab only and is never placed in a QR code or URL.
-        </div>
-        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-          <input id="pairing-browser-admin-token" type="password" autocomplete="off" spellcheck="false" placeholder="Pairing admin credential" style="flex:1;min-width:220px;box-sizing:border-box;padding:8px 10px;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:8px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;background:var(--panel);color:var(--text)" />
-          <button id="pairing-browser-admin-apply" class="btn btn-sm" style="background:var(--brand);color:#fff;border:none">Use for this tab</button>
-        </div>
-        <div id="pairing-browser-admin-status" style="margin-top:7px;font-size:11px;color:var(--muted)">Electron desktop uses its protected authority automatically.</div>
-      </div>
-
-      <div style="border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:12px;padding:14px 16px;background:color-mix(in srgb, var(--text) 4%, transparent);margin-bottom:14px">
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
-          <div><div class="right-section-title" style="margin:0 0 4px">Local network pairing</div><div style="font-size:12px;color:var(--muted);line-height:1.45">Allow phones on this Wi-Fi/LAN to open a local pairing link. This can be turned off again at any time.</div></div>
-          <label style="display:flex;align-items:center;gap:7px;font-size:12px;font-weight:700;white-space:nowrap"><input type="checkbox" id="pairing-lan-enabled" /> Enable LAN</label>
-        </div>
-        <div id="pairing-lan-msg" style="margin-top:8px;font-size:11px;color:var(--muted);line-height:1.45"></div>
-      </div>
-
-      <!-- Remote Access (Tailscale Funnel) -->
-      <div style="border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:12px;padding:14px 16px;background:color-mix(in srgb, var(--text) 4%, transparent);margin-bottom:14px">
-        <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
-          <div class="right-section-title" style="margin:0;flex:1">Remote access</div>
-          <span id="pairing-remote-status-pill" style="font-size:11px;font-weight:800;padding:2px 8px;border-radius:999px;background:#eee;color:#555">Funnel offline</span>
-        </div>
-        <div style="font-size:12px;color:var(--muted);line-height:1.55;margin-bottom:10px">
-          Off by default — local Wi-Fi pairing still works exactly as before. Turn this on to make the QR code encode a public HTTPS URL (e.g. a Tailscale Funnel address) so phones can pair from cellular or any other network. Desktop approval is still required for every new device.
-        </div>
-
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;align-items:start">
-          <div style="border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:10px 12px;background:color-mix(in srgb, var(--text) 4%, transparent)">
-            <label style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:700;color:var(--text);cursor:pointer">
-              <input type="checkbox" id="pairing-remote-enabled" />
-              <span>Enable remote access</span>
-            </label>
-            <div style="margin-top:10px">
-              <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Mode</div>
-              <select id="pairing-remote-mode" class="btn btn-sm" style="width:100%;background:color-mix(in srgb, var(--text) 4%, transparent);border:1px solid color-mix(in srgb, var(--text) 8%, transparent);color:var(--text);padding:6px 8px;border-radius:8px">
-                <option value="tailscale-funnel">Tailscale Funnel</option>
-                <option value="custom">Custom HTTPS URL</option>
-              </select>
-            </div>
-            <div style="margin-top:10px">
-              <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Public URL</div>
-              <input type="text" id="pairing-remote-url" placeholder="https://your-machine.tail1234.ts.net" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:8px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px" />
-              <div id="pairing-remote-url-hint" style="margin-top:4px;font-size:11px;color:var(--muted);line-height:1.45">Paste the HTTPS address Tailscale assigned your machine. Multiple Prometheus instances can use separate Funnel HTTPS ports such as 443, 8443, and 10000.</div>
-            </div>
-            <div style="display:flex;gap:8px;margin-top:12px">
-              <button id="pairing-remote-save-btn" class="btn btn-sm" style="background:var(--brand);color:#fff;border:none;flex:1">Save</button>
-              <button id="pairing-remote-detect-btn" class="btn btn-sm" style="background:transparent;border:1px solid color-mix(in srgb, var(--text) 12%, transparent);color:var(--text)">Detect Tailscale</button>
-            </div>
-            <div id="pairing-remote-msg" style="margin-top:8px;font-size:11px;color:var(--muted);line-height:1.45"></div>
-          </div>
-
-          <div style="border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:10px 12px;background:color-mix(in srgb, var(--text) 4%, transparent)">
-            <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
-              <div style="font-size:12px;font-weight:800;color:var(--text);flex:1">Tailscale Funnel</div>
-              <span id="pairing-funnel-live-pill" style="font-size:10px;font-weight:800;padding:2px 8px;border-radius:999px;background:#eee;color:#555">Checking…</span>
-            </div>
-            <div id="pairing-ts-status" style="font-size:12px;color:var(--muted);line-height:1.55">Click <strong>Detect Tailscale</strong> to check installation and login state.</div>
-            <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
-              <button id="pairing-funnel-enable-btn" class="btn btn-sm" style="background:#15803d;color:#fff;border:none;display:none">Enable Funnel</button>
-              <button id="pairing-funnel-disable-btn" class="btn btn-sm" style="background:transparent;border:1px solid color-mix(in srgb, var(--text) 12%, transparent);color:#f87171;display:none">Disable Funnel</button>
-            </div>
-            <div id="pairing-funnel-msg" style="margin-top:6px;font-size:11px;color:var(--muted);line-height:1.45"></div>
-            <div style="margin-top:10px;border-top:1px solid var(--line);padding-top:8px;font-size:11px;color:var(--muted);line-height:1.55">
-              <strong>One-time setup</strong>: Install Tailscale from <span style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace">tailscale.com</span> and sign in, then use <strong>Enable Funnel</strong> above.
-              <div style="margin-top:4px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;background:color-mix(in srgb, var(--text) 4%, transparent);border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:6px;padding:6px 8px;word-break:break-all;display:none"><span id="pairing-ts-funnel-cmd">tailscale funnel 18789</span></div>
+      <div id="pairing-browser-admin">
+        <div class="sk-sec"><h2>Pairing credential</h2></div>
+        <div class="sk-card">
+          <div class="sk-row sk-row-stack" data-sk-instant>
+            <div class="sk-who"><div class="sk-copy"><div class="sk-name">Admin credential</div>
+              <div class="sk-desc">Needed when Prometheus was started by hand on your network. Paste the value set as <code>PROMETHEUS_PAIRING_ADMIN_TOKEN</code>. It stays in this tab only and is never put in a QR code or link.</div></div></div>
+            <div class="sk-ctl">
+              <input id="pairing-browser-admin-token" class="sk-input sk-grow" type="password" autocomplete="off" spellcheck="false" placeholder="Pairing admin credential" aria-label="Pairing admin credential" />
+              <button id="pairing-browser-admin-apply" class="sk-btn" type="button">Use for this tab</button>
             </div>
           </div>
+          <div id="pairing-browser-admin-status" class="sk-note">The desktop app uses its own protected credential automatically.</div>
         </div>
       </div>
 
-      <div style="display:grid;grid-template-columns:320px 1fr;gap:16px;align-items:start">
-
-        <!-- LEFT: QR + status -->
-        <div style="border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:12px;padding:16px;background:color-mix(in srgb, var(--text) 4%, transparent);text-align:center">
-          <div class="right-section-title" style="margin-bottom:10px;text-align:left">Gateway Connections · Pair a phone</div>
-          <div id="pairing-lan-disabled" style="display:none;margin:0 0 12px;padding:12px 14px;border:1px solid color-mix(in srgb, var(--warning, #d97706) 40%, transparent);border-radius:10px;background:color-mix(in srgb, var(--warning, #d97706) 10%, transparent);font-size:12px;color:var(--text);line-height:1.5">Local network pairing is off. Enable LAN access above to generate a local pairing QR code.</div>
-      <div id="pairing-qr-wrap" style="display:flex;align-items:center;justify-content:center;background:#f7f1e6;border-radius:12px;padding:14px;min-height:280px">
-            <div style="color:var(--muted);font-size:12px">Loading QR…</div>
-          </div>
-          <div id="pairing-qr-meta" style="margin-top:10px;font-size:12px;color:var(--muted);line-height:1.5"></div>
-          <div style="display:flex;gap:8px;margin-top:10px;justify-content:center">
-            <button id="pairing-regen-btn" class="btn btn-sm" style="background:var(--brand);color:#fff;border:none">↻ New QR</button>
-            <button id="pairing-copy-link-btn" class="btn btn-sm" style="background:var(--panel-2);border:1px solid color-mix(in srgb, var(--text) 12%, transparent);color:var(--muted)">Copy link</button>
-          </div>
-          <div style="margin-top:12px;font-size:11px;color:var(--muted);line-height:1.55;text-align:left;border-top:1px solid var(--line);padding-top:10px">
-            Scan this one-time QR with your phone's Gateway Connections camera action. It contains only a short-lived pairing challenge; after it opens, you'll see an approval prompt below.
-            <br><strong>QR codes expire in 5 minutes.</strong> Generate a new one anytime.
+      <div class="sk-sec"><h2>Pair a phone</h2></div>
+      <div class="sk-card sk-pair-card">
+        <div id="pairing-lan-disabled" class="sk-note sk-note-warn" style="display:none">Local network pairing is off. Turn on "Pair over Wi-Fi" below to make a local pairing QR code.</div>
+        <div id="pairing-qr-wrap" class="sk-qr-wrap">
+          <div class="sk-muted">Loading QR…</div>
+        </div>
+        <div class="sk-row sk-pair-actions">
+          <div id="pairing-qr-meta" class="sk-desc sk-pair-meta"></div>
+          <div class="sk-ctl">
+            <button id="pairing-copy-link-btn" class="sk-btn ghost" type="button">Copy link</button>
+            <button id="pairing-regen-btn" class="sk-btn" type="button">New QR</button>
           </div>
         </div>
+        <div class="sk-note">Scan the QR with your phone's camera, or open the address on the phone and type the pair code. Each QR works once and expires after 5 minutes.</div>
+      </div>
 
-        <!-- RIGHT: pending + devices -->
-        <div style="display:flex;flex-direction:column;gap:14px;min-width:0">
-          <div style="border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:12px;padding:14px;background:color-mix(in srgb, var(--text) 4%, transparent)">
-            <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
-              <div class="right-section-title" style="margin:0;flex:1">Awaiting approval</div>
-              <span id="pairing-pending-count" style="font-size:11px;font-weight:800;background:color-mix(in srgb, #f5b544 12%, transparent);color:#f5c46b;padding:2px 8px;border-radius:999px">0</span>
-            </div>
-            <div id="pairing-pending-list" style="display:flex;flex-direction:column;gap:8px">
-              <div style="color:var(--muted);font-size:12px;font-style:italic">No incoming pairing requests.</div>
-            </div>
-          </div>
-          <div style="border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:12px;padding:14px;background:color-mix(in srgb, var(--text) 4%, transparent)">
-            <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
-              <div class="right-section-title" style="margin:0;flex:1">Trusted devices</div>
-              <span id="pairing-device-count" style="font-size:11px;font-weight:800;background:color-mix(in srgb, var(--brand) 14%, transparent);color:var(--brand);padding:2px 8px;border-radius:999px">0</span>
-            </div>
-            <div id="pairing-device-list" style="display:flex;flex-direction:column;gap:8px">
-              <div style="color:var(--muted);font-size:12px;font-style:italic">No devices paired yet.</div>
-            </div>
-            <div style="margin-top:10px;font-size:11px;color:var(--muted);line-height:1.55;border-top:1px solid var(--line);padding-top:8px">
-              <strong>Disable</strong> instantly revokes a device's access without forgetting it — re-enable anytime.
-              <strong>Remove</strong> deletes it; the user will have to re-scan a QR.
-            </div>
+      <div class="sk-sec"><h2>Waiting for approval <span id="pairing-pending-count" class="sk-count">0</span></h2></div>
+      <div class="sk-card">
+        <div id="pairing-pending-list" class="sk-list">
+          <div class="sk-empty-row">No phones are waiting.</div>
+        </div>
+      </div>
+
+      <div class="sk-sec"><h2>Your devices <span id="pairing-device-count" class="sk-count">0</span></h2></div>
+      <div class="sk-card">
+        <div id="pairing-device-list" class="sk-list">
+          <div class="sk-empty-row">No devices paired yet.</div>
+        </div>
+        <div class="sk-note">Turning a device off blocks it right away and you can turn it back on later. Removing it means pairing again with a new QR.</div>
+      </div>
+
+      <div class="sk-sec"><h2>Connection</h2></div>
+      <div class="sk-card">
+        <div class="sk-row" data-sk-instant>
+          <div class="sk-who"><div class="sk-copy"><label class="sk-name" for="pairing-lan-enabled">Pair over Wi-Fi</label>
+            <div class="sk-desc">Phones on the same Wi-Fi can pair with this computer. Applies right away.</div>
+            <div id="pairing-lan-msg" class="sk-desc sk-status-line"></div></div></div>
+          <div class="sk-ctl"><input type="checkbox" class="sk-toggle" id="pairing-lan-enabled" /></div>
+        </div>
+        <div class="sk-row" data-sk-label="Pair from anywhere">
+          <div class="sk-who"><div class="sk-copy"><label class="sk-name" for="pairing-remote-enabled">Pair from anywhere</label>
+            <div class="sk-desc">The QR code uses a public HTTPS address (for example Tailscale Funnel) so phones can pair over mobile data. You still approve every device.</div></div></div>
+          <div class="sk-ctl"><input type="checkbox" class="sk-toggle" id="pairing-remote-enabled" /></div>
+        </div>
+        <div class="sk-row" data-sk-instant>
+          <div class="sk-who"><div class="sk-copy"><div class="sk-name">Tailscale Funnel <span id="pairing-remote-status-pill" class="sk-pill">Checking…</span></div>
+            <div class="sk-desc">Publishes this computer at a public address through Tailscale. Turns on or off right away.</div>
+            <div id="pairing-funnel-msg" class="sk-desc sk-status-line"></div></div></div>
+          <div class="sk-ctl">
+            <span id="pairing-funnel-live-pill" class="sk-pill" hidden>Checking…</span>
+            <button id="pairing-funnel-enable-btn" class="sk-btn" type="button" style="display:none">Turn on</button>
+            <button id="pairing-funnel-disable-btn" class="sk-btn danger" type="button" style="display:none">Turn off</button>
           </div>
         </div>
-
+        <button type="button" class="sk-row sk-fold" data-fold="pairing-address" aria-expanded="false" aria-controls="sk-fold-pairing-address">
+          <span class="sk-who"><span class="sk-copy"><span class="sk-name">Public address</span><span class="sk-desc">How the public address is set up, and Tailscale detection</span></span></span>
+          <svg class="sk-ico sk-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+        </button>
+        <div class="sk-sub" id="sk-fold-pairing-address" data-fold-body="pairing-address" hidden>
+          <div class="sk-row" data-sk-label="Address type">
+            <div class="sk-who"><div class="sk-copy"><label class="sk-name" for="pairing-remote-mode">Address type</label><div class="sk-desc">Tailscale Funnel, or any HTTPS address you run yourself</div></div></div>
+            <div class="sk-ctl"><select id="pairing-remote-mode" class="sk-select sk-w-md">
+              <option value="tailscale-funnel">Tailscale Funnel</option>
+              <option value="custom">Custom HTTPS address</option>
+            </select></div>
+          </div>
+          <div class="sk-row sk-row-stack" data-sk-label="Public address">
+            <div class="sk-who"><div class="sk-copy"><label class="sk-name" for="pairing-remote-url">Address</label>
+              <div id="pairing-remote-url-hint" class="sk-desc">The HTTPS address Tailscale gave this computer. Several Prometheus copies can use separate Funnel ports such as 443, 8443 and 10000.</div></div></div>
+            <div class="sk-ctl"><input type="text" id="pairing-remote-url" class="sk-input sk-grow sk-mono" placeholder="https://your-computer.your-tailnet.ts.net" /></div>
+          </div>
+          <div class="sk-row sk-row-stack" data-sk-instant>
+            <div class="sk-who"><div class="sk-copy"><div class="sk-name">Detect Tailscale</div>
+              <div id="pairing-ts-status" class="sk-desc">Checks that Tailscale is installed and signed in, and suggests the address.</div>
+              <div id="pairing-remote-msg" class="sk-desc sk-status-line"></div></div></div>
+            <div class="sk-ctl"><button id="pairing-remote-detect-btn" class="sk-btn" type="button">Detect</button></div>
+          </div>
+          <div class="sk-note">One-time setup: install Tailscale from tailscale.com and sign in, then turn on Tailscale Funnel above.
+            <span style="display:none"><span id="pairing-ts-funnel-cmd">tailscale funnel 18789</span></span></div>
+        </div>
       </div>
     </div>
 

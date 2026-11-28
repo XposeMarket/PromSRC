@@ -30,7 +30,7 @@ import { formatModelDisplayName, relabelModelSelect } from '../model-display.js'
 import { mountProviderAccountsList } from '../settings/provider-accounts-list.js';
 import { initSettingsMobileNav, showMobileSettingsPage } from '../settings/settings-mobile-nav.js';
 import { mountAgentsImports } from '../settings/agents-imports.js';
-import { createSaveBar } from '../settings/settings-kit.js';
+import { createSaveBar, createChangeTracker, openSheet, closeSheets, wireKit, esc as skEsc, skIcon } from '../settings/settings-kit.js';
 import { mountModelsPage, refreshModelsPage, modelsChanges, modelsSaveNote, saveModelsPage, discardModelsPage } from '../settings/models-page.js';
 
 // SettingsPage is an ES module, so an unqualified `addProcessEntry` lookup
@@ -587,6 +587,7 @@ function setSettingsTab(tab) {
     if (main) main.scrollTop = 0;
   }
   document.getElementById('settings-modal')?.classList.toggle('sk-rebuilt', Object.prototype.hasOwnProperty.call(SETTINGS_PAGE_CONTROLLERS, tab));
+  SETTINGS_PAGE_CONTROLLERS[tab]?.wire?.();
   // A programmatic tab switch (command palette, "open Models" links) while a
   // phone is showing the Settings home list must reveal that section.
   if (document.getElementById('settings-modal')?.classList.contains('smh-home')) showMobileSettingsPage();
@@ -5806,7 +5807,77 @@ let amdDefaultTemplateId = '';
 // settings column saves or discards them through that page's existing code.
 const SETTINGS_PAGE_CONTROLLERS = {
   models: { changes: modelsChanges, note: modelsSaveNote, save: saveModelsPage, discard: discardModelsPage },
+  pairing: createFieldPageController('settings-panel-pairing', {
+    reload: () => loadRemoteAccessSettings(),
+  }),
 };
+
+/**
+ * Save bar for pages whose fields are plain inputs/selects/checkboxes saved by
+ * the existing saveSettings() path. It records each field's value before the
+ * user first touches it, lists changed fields by their row label, and on
+ * Discard puts the old values back and reloads the page. Fields inside
+ * [data-sk-instant] apply on their own (as today) and are not tracked.
+ */
+function createFieldPageController(panelId, { reload = null, save = null, labels = {} } = {}) {
+  const tracker = createChangeTracker();
+  const originals = new Map();
+  let wired = false;
+  const valueOf = (el) => (el.type === 'checkbox' || el.type === 'radio' ? el.checked : el.value);
+  const tracked = (el) => !!el?.id && /^(INPUT|SELECT|TEXTAREA)$/.test(el.tagName) && el.type !== 'file' && !el.closest('[data-sk-instant]');
+  const labelFor = (el) => labels[el.id]
+    || el.closest('[data-sk-label]')?.getAttribute('data-sk-label')
+    || el.closest('.sk-row')?.querySelector('.sk-name')?.textContent?.trim()
+    || el.getAttribute('aria-label')
+    || 'Setting';
+  const remember = (event) => {
+    const el = event.target;
+    if (tracked(el) && !originals.has(el.id)) originals.set(el.id, valueOf(el));
+  };
+  const changed = (event) => {
+    const el = event.target;
+    if (!event.isTrusted || !tracked(el)) return;
+    if (!originals.has(el.id)) return;
+    tracker.track(el.id, labelFor(el), originals.get(el.id), valueOf(el));
+    updateSettingsSaveBar();
+  };
+  const reset = () => { tracker.clear(); originals.clear(); };
+  return {
+    wire() {
+      const panel = document.getElementById(panelId);
+      if (!panel || wired) return;
+      wired = true;
+      wireKit(panel);
+      panel.addEventListener('focusin', remember, true);
+      panel.addEventListener('pointerdown', remember, true);
+      panel.addEventListener('keydown', remember, true);
+      panel.addEventListener('input', changed, true);
+      panel.addEventListener('change', changed, true);
+    },
+    changes: () => tracker.labels(),
+    /** Record a change made by code on the user's behalf (e.g. "Use this address"). */
+    note(el, before) {
+      if (!tracked(el)) return;
+      if (!originals.has(el.id)) originals.set(el.id, before);
+      tracker.track(el.id, labelFor(el), originals.get(el.id), valueOf(el));
+      updateSettingsSaveBar();
+    },
+    async save() {
+      await (save ? save() : saveSettings({ stayOpen: true }));
+      reset();
+      await reload?.();
+    },
+    async discard() {
+      for (const [id, value] of originals) {
+        const el = document.getElementById(id);
+        if (!el) continue;
+        if (el.type === 'checkbox' || el.type === 'radio') el.checked = !!value; else el.value = value;
+      }
+      reset();
+      await reload?.();
+    },
+  };
+}
 let settingsSaveBar = null;
 let modelsDeferredLoad = null;
 
@@ -7050,6 +7121,7 @@ async function loadPairingPanel() {
   await refreshPairingPending();
   await refreshPairedDevices();
   _startPairingPolling();
+  _startFunnelStatusPoll();
 
   _wireRemoteAccessHandlers();
 
@@ -7087,31 +7159,13 @@ let _funnelStatusPollTimer = null;
 // Updates BOTH the top header pill (Funnel live/offline) and the right-panel
 // mini-pill, and shows/hides the Enable/Disable buttons based on real funnel state.
 function _applyFunnelLiveStatus(funnelActive) {
-  // Top header pill
-  const pill = document.getElementById('pairing-remote-status-pill');
-  if (pill) {
-    if (funnelActive) {
-      pill.textContent = 'Funnel live';
-      pill.style.background = '#dcfce7';
-      pill.style.color = '#15803d';
-    } else {
-      pill.textContent = 'Funnel offline';
-      pill.style.background = '#fff7ed';
-      pill.style.color = '#b45309';
-    }
-  }
-  // Right-panel mini-pill
-  const livePill = document.getElementById('pairing-funnel-live-pill');
-  if (livePill) {
-    if (funnelActive) {
-      livePill.textContent = 'Live';
-      livePill.style.background = '#dcfce7';
-      livePill.style.color = '#15803d';
-    } else {
-      livePill.textContent = 'Offline';
-      livePill.style.background = '#fff7ed';
-      livePill.style.color = '#b45309';
-    }
+  // Both pills show the state the gateway reported (they used to start as
+  // "Funnel offline" and only update after Detect, so a live Funnel read as off).
+  for (const id of ['pairing-remote-status-pill', 'pairing-funnel-live-pill']) {
+    const pill = document.getElementById(id);
+    if (!pill) continue;
+    pill.textContent = funnelActive ? 'On' : 'Off';
+    pill.dataset.state = funnelActive ? 'on' : 'off';
   }
   // Show/hide action buttons
   const enableBtn  = document.getElementById('pairing-funnel-enable-btn');
@@ -7256,9 +7310,10 @@ async function _detectTailscale() {
     const apply = document.getElementById('pairing-ts-apply-btn');
     if (apply && r.suggestedUrl) {
       apply.addEventListener('click', () => {
-        if (urlEl) urlEl.value = r.suggestedUrl;
-        if (modeEl) modeEl.value = 'tailscale-funnel';
-        showToast?.('URL applied — click Save', '', 'success');
+        const controller = SETTINGS_PAGE_CONTROLLERS.pairing;
+        if (urlEl) { const before = urlEl.value; urlEl.value = r.suggestedUrl; controller?.note?.(urlEl, before); }
+        if (modeEl) { const before = modeEl.value; modeEl.value = 'tailscale-funnel'; controller?.note?.(modeEl, before); }
+        showToast?.('Address filled in', 'Save to use it.', 'success');
       });
     }
   } catch (err) {
@@ -7401,22 +7456,20 @@ async function refreshPairingPending() {
       tabBadge.textContent = String(reqs.length);
       tabBadge.style.display = reqs.length > 0 ? 'inline-flex' : 'none';
     }
+    list.closest('.sk-card')?.classList.toggle('sk-card-attn', reqs.length > 0);
     if (!reqs.length) {
-      list.innerHTML = '<div style="color:var(--muted);font-size:12px;font-style:italic">No incoming pairing requests.</div>';
+      list.innerHTML = '<div class="sk-empty-row">No phones are waiting.</div>';
       return;
     }
     list.innerHTML = reqs.map(req => `
-      <div style="border:none;background:color-mix(in srgb, #f5b544 12%, transparent);border-radius:10px;padding:10px 12px" data-pairing-req="${escHtml(req.id)}">
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
-          <strong style="flex:1;font-size:13px">${escHtml(req.deviceName || 'Mobile device')}</strong>
-          <span style="font-size:10px;font-weight:800;color:#f5c46b;background:color-mix(in srgb, #f5b544 12%, transparent);padding:2px 7px;border-radius:6px">pending</span>
-        </div>
-        <div style="font-size:11px;color:var(--muted);line-height:1.5;margin-bottom:8px">
-          ${escHtml(_summarizeUA(req.userAgent))} · ${escHtml(req.ipHint || 'unknown ip')}
-        </div>
-        <div style="display:flex;gap:6px">
-          <button class="btn btn-sm" style="flex:1;background:#16a34a;color:#fff;border:none" data-pairing-action="approve" data-id="${escHtml(req.id)}">✓ Allow</button>
-          <button class="btn btn-sm" style="flex:1;background:transparent;color:#f87171;border:none" data-pairing-action="deny" data-id="${escHtml(req.id)}">✕ Deny</button>
+      <div class="sk-row" data-pairing-req="${escHtml(req.id)}">
+        <div class="sk-who"><span class="sk-tile" aria-hidden="true">${skIcon('device')}</span><div class="sk-copy">
+          <div class="sk-name">${escHtml(req.deviceName || 'Phone')}</div>
+          <div class="sk-desc">${escHtml(_summarizeUA(req.userAgent))}${req.ipHint ? ` · ${escHtml(req.ipHint)}` : ''} · wants to pair</div>
+        </div></div>
+        <div class="sk-ctl">
+          <button type="button" class="sk-btn ghost" data-pairing-action="deny" data-id="${escHtml(req.id)}">Deny</button>
+          <button type="button" class="sk-btn primary" data-pairing-action="approve" data-id="${escHtml(req.id)}">Allow</button>
         </div>
       </div>
     `).join('');
@@ -7458,58 +7511,83 @@ async function refreshPairedDevices() {
     const devices = Array.isArray(r?.devices) ? r.devices : [];
     if (count) count.textContent = String(devices.length);
     if (!devices.length) {
-      list.innerHTML = '<div style="color:var(--muted);font-size:12px;font-style:italic">No devices paired yet.</div>';
+      list.innerHTML = '<div class="sk-empty-row">No devices paired yet.</div>';
       return;
     }
+    const byId = new Map(devices.map((d) => [String(d.id), d]));
+    // One quiet "Manage" per row; the actions (turn off/on, owner approvals,
+    // remove) live in a small sheet instead of a row of loud buttons per device.
     list.innerHTML = devices.map(d => {
-      const lastSeen = d.lastSeenAt ? `last seen ${_pairingTimeAgo(d.lastSeenAt)}` : 'never';
       const enabled = d.enabled !== false;
+      const seen = d.lastSeenAt ? `Last seen ${_pairingTimeAgo(d.lastSeenAt)}` : 'Not used yet';
       return `
-        <div style="border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:10px 12px;background:color-mix(in srgb, var(--text) 4%, transparent)" data-pairing-device="${escHtml(d.id)}">
-          <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
-            <strong style="flex:1;font-size:13px">📱 ${escHtml(d.name || 'Device')}</strong>
-            <span style="font-size:10px;font-weight:800;padding:2px 8px;border-radius:6px;background:${enabled ? '#d9f7ed' : '#ffe0e0'};color:${enabled ? '#066046' : '#8b0000'}">${enabled ? 'enabled' : 'disabled'}</span>
-          </div>
-          <div style="font-size:11px;color:var(--muted);line-height:1.5;margin-bottom:8px">
-            ${escHtml(_summarizeUA(d.lastUserAgent))} · ${escHtml(d.lastIpHint || 'unknown ip')} · ${escHtml(lastSeen)}
-          </div>
-          <div style="display:flex;gap:6px">
-            <button class="btn btn-sm" style="flex:1;background:${enabled ? '#fff' : '#16a34a'};color:${enabled ? 'var(--muted)' : '#fff'};border:1px solid ${enabled ? 'var(--line)' : '#16a34a'}" data-device-action="toggle" data-id="${escHtml(d.id)}" data-next="${enabled ? 'false' : 'true'}">${enabled ? 'Disable' : 'Enable'}</button>
-            ${enabled && window.prometheusOwnerConsent ? `<button class="btn btn-sm" style="flex:1" data-device-action="owner" data-id="${escHtml(d.id)}" data-next="${d.ownerApproval ? 'false' : 'true'}" title="${d.ownerApproval ? 'This phone can save and approve protected access. Click to stop.' : 'Let this phone save and approve protected access (asks for a code on this computer).'}">${d.ownerApproval ? 'Stop owner approvals' : 'Allow owner approvals'}</button>` : ''}
-            ${renderSettingsIconButton('trash', 'Remove', `data-device-action="remove" data-id="${escHtml(d.id)}"`, 'is-danger')}
-          </div>
+        <div class="sk-row${enabled ? '' : ' sk-row-off'}" data-pairing-device="${escHtml(d.id)}">
+          <div class="sk-who"><span class="sk-tile" aria-hidden="true">${skIcon('device')}</span><div class="sk-copy">
+            <div class="sk-name">${escHtml(d.name || 'Device')}${enabled ? '' : ' <span class="sk-pill" data-state="off">Turned off</span>'}${d.ownerApproval ? ' <span class="sk-pill">Can approve</span>' : ''}</div>
+            <div class="sk-desc">${escHtml(_summarizeUA(d.lastUserAgent))} · ${escHtml(seen)}</div>
+          </div></div>
+          <div class="sk-ctl"><button type="button" class="sk-btn ghost" data-device-menu="${escHtml(d.id)}" aria-label="Manage ${escHtml(d.name || 'device')}">Manage</button></div>
         </div>
       `;
     }).join('');
 
-    list.querySelectorAll('[data-device-action]').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        const id = btn.getAttribute('data-id');
-        const act = btn.getAttribute('data-device-action');
-        btn.disabled = true; btn.style.opacity = '0.6';
-        try {
-          if (act === 'toggle') {
-            const next = btn.getAttribute('data-next') === 'true';
-            const ok = await pairingAdminApi(`/api/pairing/devices/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ enabled: next }) });
-            if (!ok?.success) throw new Error(ok?.error || 'Update failed');
-            showToast?.(next ? 'Device enabled' : 'Device disabled', '', 'success');
-          } else if (act === 'owner') {
-            // PR821 I2: granting opens the native owner-approval window (code typed by the owner).
-            const next = btn.getAttribute('data-next') === 'true';
-            const ok = await pairingAdminApi(`/api/pairing/devices/${encodeURIComponent(id)}/owner-approval`, { method: next ? 'POST' : 'DELETE', body: next ? JSON.stringify({}) : undefined });
-            if (!ok?.success) throw new Error(ok?.error || 'Update failed');
-            showToast?.(next ? 'Phone can approve protected access' : 'Phone owner approvals stopped', '', 'success');
-          } else if (act === 'remove') {
-            if (!confirm('Remove this device? The user will need to scan a new QR to pair again.')) { btn.disabled = false; btn.style.opacity = ''; return; }
-            const ok = await pairingAdminApi(`/api/pairing/devices/${encodeURIComponent(id)}`, { method: 'DELETE' });
-            if (!ok?.success) throw new Error(ok?.error || 'Remove failed');
-            showToast?.('Device removed', '', 'success');
-          }
-          await refreshPairedDevices();
-        } catch (err) {
-          showToast?.('Action failed', err.message, 'error');
-          btn.disabled = false; btn.style.opacity = '';
+    const runDeviceAction = async (btn) => {
+      const id = btn.getAttribute('data-id');
+      const act = btn.getAttribute('data-device-action');
+      btn.disabled = true; btn.style.opacity = '0.6';
+      try {
+        if (act === 'toggle') {
+          const next = btn.getAttribute('data-next') === 'true';
+          const ok = await pairingAdminApi(`/api/pairing/devices/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ enabled: next }) });
+          if (!ok?.success) throw new Error(ok?.error || 'Update failed');
+          showToast?.(next ? 'Device enabled' : 'Device disabled', '', 'success');
+        } else if (act === 'owner') {
+          // PR821 I2: granting opens the native owner-approval window (code typed by the owner).
+          const next = btn.getAttribute('data-next') === 'true';
+          const ok = await pairingAdminApi(`/api/pairing/devices/${encodeURIComponent(id)}/owner-approval`, { method: next ? 'POST' : 'DELETE', body: next ? JSON.stringify({}) : undefined });
+          if (!ok?.success) throw new Error(ok?.error || 'Update failed');
+          showToast?.(next ? 'Phone can approve protected access' : 'Phone owner approvals stopped', '', 'success');
+        } else if (act === 'remove') {
+          if (!confirm('Remove this device? The user will need to scan a new QR to pair again.')) { btn.disabled = false; btn.style.opacity = ''; return false; }
+          const ok = await pairingAdminApi(`/api/pairing/devices/${encodeURIComponent(id)}`, { method: 'DELETE' });
+          if (!ok?.success) throw new Error(ok?.error || 'Remove failed');
+          showToast?.('Device removed', '', 'success');
         }
+        await refreshPairedDevices();
+        return true;
+      } catch (err) {
+        showToast?.('Action failed', err.message, 'error');
+        btn.disabled = false; btn.style.opacity = '';
+        return false;
+      }
+    };
+
+    list.querySelectorAll('[data-device-menu]').forEach(menuBtn => {
+      menuBtn.addEventListener('click', () => {
+        const d = byId.get(menuBtn.getAttribute('data-device-menu'));
+        if (!d) return;
+        const enabled = d.enabled !== false;
+        const id = escHtml(d.id);
+        const seen = d.lastSeenAt ? `last seen ${_pairingTimeAgo(d.lastSeenAt)}` : 'not used yet';
+        const owner = enabled && window.prometheusOwnerConsent
+          ? `<div class="sk-row"><div class="sk-who"><div class="sk-copy"><div class="sk-name">Owner approvals</div><div class="sk-desc">${d.ownerApproval ? 'This phone can save and approve protected access.' : 'Let this phone save and approve protected access. Asks for a code on this computer.'}</div></div></div><div class="sk-ctl"><button type="button" class="sk-btn" data-device-action="owner" data-id="${id}" data-next="${d.ownerApproval ? 'false' : 'true'}">${d.ownerApproval ? 'Stop' : 'Allow'}</button></div></div>`
+          : '';
+        const sheet = openSheet({
+          title: d.name || 'Device',
+          sub: `${_summarizeUA(d.lastUserAgent)} · ${seen}${d.lastIpHint ? ` · ${d.lastIpHint}` : ''}`,
+          body: `<div class="sk-card">
+            <div class="sk-row"><div class="sk-who"><div class="sk-copy"><div class="sk-name">Access</div><div class="sk-desc">${enabled ? 'This device can use Prometheus.' : 'Turned off. This device is blocked until you turn it back on.'}</div></div></div>
+              <div class="sk-ctl"><button type="button" class="sk-btn" data-device-action="toggle" data-id="${id}" data-next="${enabled ? 'false' : 'true'}">${enabled ? 'Turn off' : 'Turn on'}</button></div></div>
+            ${owner}
+            <div class="sk-row"><div class="sk-who"><div class="sk-copy"><div class="sk-name">Remove device</div><div class="sk-desc">Forget this device. It has to pair again with a new QR.</div></div></div>
+              <div class="sk-ctl"><button type="button" class="sk-btn danger" data-device-action="remove" data-id="${id}">Remove</button></div></div>
+          </div>`,
+          cls: 'sk-sheet-device',
+        });
+        sheet.body.addEventListener('click', async (event) => {
+          const btn = event.target.closest('[data-device-action]');
+          if (btn && await runDeviceAction(btn)) sheet.close();
+        });
       });
     });
   } catch (err) {
